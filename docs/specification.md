@@ -40,8 +40,8 @@ Exemple d'une représentation en trigrammes:
 
 ```JSON
 [
-  [["la", "1 2 3 1 1 1 6 433 1"], ["fonctionnalité": "1 2 3 1 1 1 6 435 1"], ["recherché", "1 2 3 1 1 1 6 450 1"]],
-  [["fonctionnalité": "1 2 3 1 1 1 6 435 1"], ["recherché", "1 2 3 1 1 1 6 450 1"], ["tant", "1 2 3 1 1 1 6 460 1"]],
+  [["la", "1 2 3 1 1 1 6 433 1"], ["fonctionnalité", "1 2 3 1 1 1 6 435 1"], ["recherché", "1 2 3 1 1 1 6 450 1"]],
+  [["fonctionnalité", "1 2 3 1 1 1 6 435 1"], ["recherché", "1 2 3 1 1 1 6 450 1"], ["tant", "1 2 3 1 1 1 6 460 1"]],
   [["recherché", "1 2 3 1 1 1 6 450 1"], ["tant", "1 2 3 1 1 1 6 460 1"], ["par", "1 2 3 1 1 1 6 460 1"]]
   ...
  ]
