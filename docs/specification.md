@@ -51,7 +51,7 @@ Exemple d'une représentation en trigrammes:
  Pour l'index de ngrams, on sauvegarde une liste de ngrams ordonné par fréquence, comme par exemple:
  
  ```JSON
- [["tout", "ce", "que"], ["il", "faut", "que"], ["que", "je", "vous"], ["ce", "qu", "il"], ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]...]
+ [["tout", "ce", "que"], ["il", "faut", "que"], ["que", "je", "vous"], ["ce", "qu", "il"], ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]] ...
  ```
  
  ### Comparaison ###
