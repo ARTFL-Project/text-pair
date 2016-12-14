@@ -45,14 +45,12 @@ Exemple d'une représentation en trigrammes:
   [["recherché", "1 2 3 1 1 1 6 450 1"], ["tant", "1 2 3 1 1 1 6 460 1"], ["par", "1 2 3 1 1 1 6 460 1"]]
  ]
  ```
+ 
  Il s'agit d'une liste de ngram où chaque ngram est constitué d'une liste d'objet contenant le token et sa position dans le texte. Chaque fichier est sauvegardé au format JSON.
  
  Pour l'index de ngrams, on sauvegarde une liste de ngrams ordonné par fréquence, comme par exemple:
  
- ```JSON
- [["tout", "ce", "que"], ["il", "faut", "que"], ["que", "je", "vous"], ["ce", "qu", "il"], 
- ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]]
- ```
+
  
  #### Note ####
  On ne transforme pas à cette étape les ngrams en chiffre afin de pouvoir conserver une trace des mots jusqu'au dernier moment. Utile pour le débuggage...
@@ -63,6 +61,7 @@ Exemple d'une représentation en trigrammes:
  Pour l'étape de la comparaison, on propose deux étapes dans la construction des passages communs:
  - une première étape où l'on constitue les passages communs retrouvés entre chaque texte selon un système d'analyse par fenêtre de ngrams que l'on étant au fer et à mesure que l'on obtient des ngrams communs entre deux passages.
  - une deuxième étape où l'on raboute les passages séparé par moins de N nombres de ngrams selon une heuristique prédéterminé. Par exemple, si deux passages sont sépararés par 15 ngrams, et que ces deux passages sont constitués 30 ngrams chacun, on va déterminer qu'il faut un écart de maximum 20 ngrams entre ces deux passages pour que l'on les raboute ensemble.
+ 
  
  #### Format de sortie ####
  À déterminer...
