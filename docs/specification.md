@@ -51,7 +51,7 @@ Exemple d'une représentation en trigrammes:
  
  ```JSON
  [["tout", "ce", "que"], ["il", "faut", "que"], ["que", "je", "vous"], ["ce", "qu", "il"], 
- ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]] ...
+ ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]]
  ```
  
  #### Note ####
