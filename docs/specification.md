@@ -50,9 +50,21 @@ Exemple d'une représentation en trigrammes:
  Pour l'index de ngrams, on sauvegarde une liste de ngrams ordonné par fréquence, comme par exemple:
  
  ```JSON
- [["tout", "ce", "que"], ["il", "faut", "que"], ["que", "je", "vous"], ["ce", "qu", "il"], ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]] ...
+ [["tout", "ce", "que"], ["il", "faut", "que"], ["que", "je", "vous"], ["ce", "qu", "il"], 
+ ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]] ...
  ```
  
+ #### Note ####
+ On ne transforme pas à cette étape les ngrams en chiffre afin de pouvoir conserver une trace des mots jusqu'au dernier moment. Utile pour le débuggage...
+ 
  ### Comparaison ###
+ Avant de comparer, on charge tous les fichiers transformés en ngrams, filtrant si nécessaire les ngrams les plus communs grâce à l'index de ngrams créé à l'étape précédente. On convertit chaque ngram en un chiffre grâce à l'index de ngrams, ce qui permet de réduire la mémoire nécessaire pour la comparaison.
+ 
+ Pour l'étape de la comparaison, on propose deux étapes dans la construction des passages communs:
+ - une première étape où l'on constitue les passages communs retrouvés entre chaque texte selon un système d'analyse par fenêtre de ngrams que l'on étant au fer et à mesure que l'on obtient des ngrams communs entre deux passages.
+ - une deuxième étape où l'on raboute les passages séparé par moins de N nombres de ngrams selon une heuristique prédéterminé. Par exemple, si deux passages sont sépararés par 15 ngrams, et que ces deux passages sont constitués 30 ngrams chacun, on va déterminer qu'il faut un écart de maximum 20 ngrams entre ces deux passages pour que l'on les raboute ensemble.
+ 
+ #### Format de sortie ####
+ À déterminer...
  
  
