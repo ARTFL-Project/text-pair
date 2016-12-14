@@ -1,11 +1,11 @@
 # Specifications #
 
-### Parsage des fichiers XML ###
+## Parsage des fichiers XML ##
 Pour le moment, on propose d'utiliser le parseur XML intégré à PhiloLogic4 et 
 qui permet de transformer tout fichier XML dans le format précisé ci-dessous 
 pour la transformation en ngrams.
 
-### Format des textes à traiter ###
+## Format des textes à traiter ##
 Un fichier contenant un objet en JSON par ligne, ex:
 
 ```JSON
@@ -19,7 +19,7 @@ Seul les champs "token" et "position" sont nécessaires, le premier indiquant
 le mot traité, le deuxième indiquant la position dans le document, dans le cas
 ci-dessus l'identifiant philologic permettant de revenir au texte de départ.
 
-### Prétraitement ###
+## Prétraitement ##
 Plusieurs étapes de prétraitement avec une contrainte: toute modification du texte doit donner en sortie le même format que celui précisé en dessus, avec bien-entendu des infos supplémentaires si nécessaire. C'est à cette étape que l'on procède au filtrage par stopword list, à la racinisation (stemming), lemmatisation...etc
 
 Par exemple, le fichier ci-dessus pourrait être transformé en ajoutant les POS:
@@ -32,7 +32,7 @@ Par exemple, le fichier ci-dessus pourrait être transformé en ajoutant les POS
 ...
 ```
 
-### Création des ngrams ###
+## Création des ngrams ##
 À cette étape, on va créer la représentation en ngrams de chaque texte, et un index de tous les ngrams ordonné par fréquence des ngrams à travers tout le corpus (afin de pouvoir filtrer par fréquence à l'étape suivante)
 Le format proposé pour cette transformation est le suivant:
 
@@ -45,17 +45,21 @@ Exemple d'une représentation en trigrammes:
   [["recherché", "1 2 3 1 1 1 6 450 1"], ["tant", "1 2 3 1 1 1 6 460 1"], ["par", "1 2 3 1 1 1 6 460 1"]]
  ]
  ```
- 
- Il s'agit d'une liste de ngram où chaque ngram est constitué d'une liste d'objet contenant le token et sa position dans le texte. Chaque fichier est sauvegardé au format JSON.
- 
- Pour l'index de ngrams, on sauvegarde une liste de ngrams ordonné par fréquence, comme par exemple:
- 
 
+Il s'agit d'une liste de ngram où chaque ngram est constitué d'une liste d'objet contenant 
+le token et sa position dans le texte. Chaque fichier est sauvegardé au format JSON.
+
+Pour l'index de ngrams, on sauvegarde une liste de ngrams ordonné par fréquence, comme par exemple:
+
+ ```JSON
+ [["tout", "ce", "que"], ["il", "faut", "que"], ["que", "je", "vous"], ["ce", "qu", "il"], 
+ ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]]
+ ```
  
- #### Note ####
- On ne transforme pas à cette étape les ngrams en chiffre afin de pouvoir conserver une trace des mots jusqu'au dernier moment. Utile pour le débuggage...
+#### Note ####
+On ne transforme pas à cette étape les ngrams en chiffre afin de pouvoir conserver une trace des mots jusqu'au dernier moment. Utile pour le débuggage...
  
- ### Comparaison ###
+## Comparaison ##
  Avant de comparer, on charge tous les fichiers transformés en ngrams, filtrant si nécessaire les ngrams les plus communs grâce à l'index de ngrams créé à l'étape précédente. On convertit chaque ngram en un chiffre grâce à l'index de ngrams, ce qui permet de réduire la mémoire nécessaire pour la comparaison.
  
  Pour l'étape de la comparaison, on propose deux étapes dans la construction des passages communs:
@@ -63,7 +67,7 @@ Exemple d'une représentation en trigrammes:
  - une deuxième étape où l'on raboute les passages séparé par moins de N nombres de ngrams selon une heuristique prédéterminé. Par exemple, si deux passages sont sépararés par 15 ngrams, et que ces deux passages sont constitués 30 ngrams chacun, on va déterminer qu'il faut un écart de maximum 20 ngrams entre ces deux passages pour que l'on les raboute ensemble.
  
  
- #### Format de sortie ####
+#### Format de sortie ####
  À déterminer...
  
  
