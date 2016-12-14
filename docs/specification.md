@@ -69,6 +69,6 @@ On ne transforme pas à cette étape les ngrams en chiffre afin de pouvoir conse
  
  
 #### Format de sortie ####
- À déterminer... (XML sans doute)
+ À déterminer... (XML et/ou JSON sans doute)
  
  
