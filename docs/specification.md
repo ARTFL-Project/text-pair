@@ -68,7 +68,10 @@ On ne transforme pas à cette étape les ngrams en chiffre afin de pouvoir conse
  - une deuxième étape où l'on raboute les passages séparé par moins de N nombres de ngrams selon une heuristique prédéterminé (utilisant d'autres variable, ainsi que la taille des passages raboutés). Par exemple, si deux passages sont séparés par 15 ngrams, et que ces deux passages sont constitués 30 ngrams chacun, on va déterminer qu'il faut un écart de maximum 20 ngrams entre ces deux passages pour que l'on les raboute ensemble. Ceci afin de regrouper une reprise où l'auteur aurait inséré une ou plusieurs phrases à l'intérieur (une description ou une remarque par exemple.)
  
  
-#### Format de sortie ####
- À déterminer... (XML et/ou JSON sans doute)
- 
+## Format de sortie ##
+
+2 formats de sortie: JSON et XML
+
+### JSON ###
+Ficher texte où chaque ligne représente un alignement au format JSON. Le décodage du fichier doit donc se faire ligne par ligne.
  
