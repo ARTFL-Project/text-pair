@@ -70,7 +70,10 @@ On ne transforme pas à cette étape les ngrams en chiffre afin de pouvoir conse
  
 ## Format de sortie ##
 
-2 formats de sortie: JSON et XML
+3 formats de sortie: HTML, JSON, XML
+
+### HTML ###
+Une représentation basique des résultats sous HTML.
 
 ### JSON ###
 Ficher texte où chaque ligne représente un alignement au format JSON. Le décodage du fichier doit donc se faire ligne par ligne.
