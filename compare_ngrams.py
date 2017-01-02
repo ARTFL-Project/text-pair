@@ -17,7 +17,9 @@ ngramMatch = namedtuple("ngramMatch", "source, target, ngram_index")
 docObject = namedtuple("docObject", "doc_id, ngrams")
 
 SourceDB = sqlite3.connect("/var/www/html/philologic/racine/data/toms.db")
+SourceDB.row_factory = sqlite3.Row
 TargetDB = sqlite3.connect("/var/www/html/philologic/littre/data/toms.db")
+TargetDB.row_factory = sqlite3.Row
 SourcePath = "/var/www/html/philologic/racine/data/"
 TargetPath = "/var/www/html/philologic/littre/data/"
 
@@ -32,7 +34,8 @@ class SequenceAligner(object):
 
     def __init__(self, source_ngram_index, target_ngram_index=None, filtered_ngrams=500,
                  minimum_matching_ngrams_in_docs=3, matching_window=20, max_gap=10,
-                 minimum_matching_ngrams=5, minimum_matching_ngrams_in_window=5, context=300, debug=False):
+                 minimum_matching_ngrams=5, minimum_matching_ngrams_in_window=5, context=300,
+                 output="HTML", debug=False):
         # Set global variables
         self.filtered_ngrams = filtered_ngrams
         self.minimum_matching_ngrams_in_docs = minimum_matching_ngrams_in_docs
@@ -46,6 +49,8 @@ class SequenceAligner(object):
 
         self.source_files = []
         self.target_files = []
+
+        self.output = output
 
         self.debug = debug
 
@@ -215,21 +220,53 @@ class SequenceAligner(object):
 
     def __write_alignments(self, source_doc_id, target_doc_id, alignments):
         """Write results to file"""
-        source_author, source_title, source_filename = get_metadata_from_position(source_doc_id, provenance="source")
-        target_author, target_title, target_filename = get_metadata_from_position(target_doc_id, provenance="target")
+        metadata = {}
+        metadata["source"] = get_metadata_from_position(source_doc_id, provenance="source")
+        metadata["target"] = get_metadata_from_position(target_doc_id, provenance="target")
+        if self.output == "HTML":
+            self.__html_output(metadata, alignments, source_doc_id, target_doc_id)
+
+    def __html_output(self, metadata, alignments, source_doc_id, target_doc_id):
+        """HTML output"""
         output = open("%s-%s.html" % (source_doc_id, target_doc_id), "w")
         for alignment in alignments:
-            output.write("<h3>New alignment</h3>")
-            source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"], source_filename, self.source_path)
-            target_context_before, target_passage, target_context_after = self.__alignment_to_text(alignment["target"], target_filename, self.target_path)
+            output.write("<div><h1>===================</h1>")
+            source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"], metadata["source"]["filename"], self.source_path)
+            target_context_before, target_passage, target_context_after = self.__alignment_to_text(alignment["target"], metadata["target"]["filename"], self.target_path)
             source_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (source_context_before, source_passage, source_context_after)
             target_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (target_context_before, target_passage, target_context_after)
             output.write('<h4>====== Source ======</h4>')
-            output.write('<h5>%s, (%s)</h5>' % (source_title, source_author))
+            output.write('<h5>%s, (%s)</h5>' % (metadata["source"]["title"], metadata["source"]["author"]))
             output.write(source_print)
             output.write('<h4>====== Target ======</h4>')
-            output.write('<h5>%s, (%s)</h5>' % (target_title, target_author))
+            output.write('<h5>%s, (%s)</h5>' % (metadata["target"]["title"], metadata["target"]["author"]))
             output.write(target_print)
+            output.write("</div>")
+        output.close()
+
+    def __json_output(self, metadata, alignments, source_doc_id, target_doc_id):
+        """Text output where each line is a separate JSON object"""
+        output = open("%s-%s.json" % (source_doc_id, target_doc_id), "w")
+        for alignment in alignments:
+            source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
+                                                                                                   metadata["source"]["filename"],
+                                                                                                   self.source_path)
+            source = {"metadata": metadata["source"], "context_before": source_context_before, "context_after": source_context_after,
+                      "matching_passage": source_passage}
+            target_context_before, target_passage, target_context_after = self.__alignment_to_text(alignment["target"],
+                                                                                                   metadata["target"]["filename"],
+                                                                                                   self.target_path)
+            target = {"metadata": metadata["target"], "context_before": target_context_before, "context_after": target_context_after,
+                      "matching_passage": target_passage}
+            json_obj = json.dumps({"source": source, "target": target})
+            print(json_obj, file=output)
+        output.close()
+
+
+
+    def __xml_output(self, metadata, alignments, source_doc_id, target_doc_id):
+        """XML output"""
+        pass
 
     def __alignment_to_text(self, alignment, filename, path):
         """Fetches aligned passages using philo IDs.
@@ -264,60 +301,15 @@ def get_metadata_from_position(position, provenance="source"):
     position = position.split()[0] + ' 0 0 0 0 0 0'
     if provenance == "source":
         cursor = SourceDB.cursor()
-        cursor.execute("select author, title, filename from toms where philo_id=? limit 1", (position,))
-        author, title, filename = cursor.fetchone()
+        cursor.execute("select * from toms where philo_id=? limit 1", (position,))
     else:
         cursor = TargetDB.cursor()
-        cursor.execute("select author, title, filename from toms where philo_id=? limit 1", (position,))
-        author, title, filename = cursor.fetchone()
-    return author, title, filename
-
-# def find_matches_in_window(current_match, source_ngrams, target_ngrams, source_index, target_index, matches_in_current_window=0, current_gap_span=0):
-#     for window_position in range(1, MatchingWindow+1):
-#         source_index += window_position
-#         try:
-#             next_source = source_ngrams[source_index]
-#         except IndexError:
-#             break
-#         for gap in range(1, MaxGap+1):
-#             if next_source.ngram == target_ngrams[target_index+gap].ngram:
-#                 current_gap_span = 0
-#                 matches_in_current_window += 1
-#                 target_index += gap # start from the next target ngram since last one was found
-#                 current_match.append((next_source, target_ngrams[target_index+gap]))
-#                 break
-#             current_gap_span += 1
-#         if current_gap_span >= MaxGapInWindow:
-#             return current_match, source_index, target_index
-#     if matches_in_current_window >= MinimumMatchingNgrams:
-#         print(len(current_match), "so far...")
-#         current_match, source_index, target_index = find_matches_in_window(current_match, source_ngrams, target_ngrams, source_index, target_index, current_gap_span=current_gap_span)
-#     else:
-#         return current_match, source_index, target_index
-
-# def compare_files(source_ngrams, target_files, index_to_ngram):
-#     source_set = set(i.ngram for i in source_file)
-#     count = 0
-#     all_matches = []
-#     for doc_id, target_ngrams in target_files:
-#         target_set = set(i.ngram for i in target_ngrams)
-#         count += 1
-#         if len(source_set.intersection(target_set)) < MinimumMatchingNgramsInDocs:
-#             continue
-#         matches = []
-#         source_position = 0
-#         for source_index, source_obj in enumerate(source_ngrams):
-#             if source_obj.ngram in target_set and source_index >= source_position: # skip ngrams already visited
-#                 for target_index, target_obj in enumerate(target_ngrams):
-#                     if source_obj.ngram == target_obj.ngram:
-#                         current_match = [(source_obj, target_obj)]
-#                         current_match, source_position, target_position = find_matches_in_window(current_match, source_ngrams, target_ngrams, source_index, target_index, matches_in_current_window=1)
-#                         if len(current_match) >= MinimumMatchingNgrams:
-#                             matches.append(current_match)
-#         if matches:
-#             all_matches.append({"doc_id": doc_id, "matches": matches})
-#     print(all_matches)
-#     return all_matches
+        cursor.execute("select * from toms where philo_id=? limit 1", (position,))
+    results = cursor.fetchone()
+    metadata = {}
+    for field in results.keys():
+        metadata[field] = results[field]
+    return metadata
 
 def file_arg_to_files(file_arg):
     """Interpret file argument on command line"""
@@ -340,11 +332,14 @@ def parse_command_line():
                         type=str)
     parser.add_argument("--target_ngram_index", help="path to ngram index built from the target files",
                         type=str)
+    parser.add_argument("--output", help="output format: HTML, JSON (see docs for proper decoding), or XML", default="HTML",
+                        type=str)
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
     args = parser.parse_args()
     return args
 
 if __name__ == '__main__':
     args = parse_command_line()
-    aligner = SequenceAligner(source_ngram_index=args.source_ngram_index, target_ngram_index=args.target_ngram_index, debug=args.debug)
+    aligner = SequenceAligner(source_ngram_index=args.source_ngram_index, target_ngram_index=args.target_ngram_index,
+                              output=args.output, debug=args.debug)
     aligner.compare(args.source_files, args.target_files)
