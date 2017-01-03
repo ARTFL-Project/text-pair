@@ -35,7 +35,7 @@ class SequenceAligner(object):
     def __init__(self, source_ngram_index, target_ngram_index=None, filtered_ngrams=500,
                  minimum_matching_ngrams_in_docs=3, matching_window=20, max_gap=10,
                  minimum_matching_ngrams=5, minimum_matching_ngrams_in_window=5, context=300,
-                 output="HTML", debug=False):
+                 output="html", debug=False):
         # Set global variables
         self.filtered_ngrams = filtered_ngrams
         self.minimum_matching_ngrams_in_docs = minimum_matching_ngrams_in_docs
@@ -50,7 +50,7 @@ class SequenceAligner(object):
         self.source_files = []
         self.target_files = []
 
-        self.output = output
+        self.output = output.lower()
 
         self.debug = debug
 
@@ -223,8 +223,10 @@ class SequenceAligner(object):
         metadata = {}
         metadata["source"] = get_metadata_from_position(source_doc_id, provenance="source")
         metadata["target"] = get_metadata_from_position(target_doc_id, provenance="target")
-        if self.output == "HTML":
+        if self.output == "html":
             self.__html_output(metadata, alignments, source_doc_id, target_doc_id)
+        elif self.output == "json":
+            self.__json_output(metadata, alignments, source_doc_id, target_doc_id)
 
     def __html_output(self, metadata, alignments, source_doc_id, target_doc_id):
         """HTML output"""
@@ -245,8 +247,9 @@ class SequenceAligner(object):
         output.close()
 
     def __json_output(self, metadata, alignments, source_doc_id, target_doc_id):
-        """Text output where each line is a separate JSON object"""
+        """JSON output"""
         output = open("%s-%s.json" % (source_doc_id, target_doc_id), "w")
+        all_alignments = []
         for alignment in alignments:
             source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
                                                                                                    metadata["source"]["filename"],
@@ -258,11 +261,9 @@ class SequenceAligner(object):
                                                                                                    self.target_path)
             target = {"metadata": metadata["target"], "context_before": target_context_before, "context_after": target_context_after,
                       "matching_passage": target_passage}
-            json_obj = json.dumps({"source": source, "target": target})
-            print(json_obj, file=output)
+            all_alignments.append({"source": source, "target": target})
+        json.dump(all_alignments, output)
         output.close()
-
-
 
     def __xml_output(self, metadata, alignments, source_doc_id, target_doc_id):
         """XML output"""
@@ -273,10 +274,22 @@ class SequenceAligner(object):
         Returns context before match, matching passage, context after match."""
         start_byte = int(alignment[0].split()[7])
         end_byte = self.__get_end_byte(alignment[1], path)
-        matching_passage = get_text(filename, start_byte, end_byte, path)
-        context_before = get_text(filename, start_byte-self.context, start_byte, path)
-        context_after = get_text(filename, end_byte, end_byte+self.context, path)
+        matching_passage = self.__get_text(filename, start_byte, end_byte, path)
+        context_before = self.__get_text(filename, start_byte-self.context, start_byte, path)
+        context_after = self.__get_text(filename, end_byte, end_byte+self.context, path)
         return context_before, matching_passage, context_after
+
+    def __get_text(self, filename, start_byte, end_byte, path):
+        """Get text"""
+        file_path = os.path.join(path, "TEXT", filename)
+        text_file = open(file_path, encoding="utf8", errors="ignore")
+        text_file.seek(start_byte)
+        text = text_file.read(end_byte-start_byte)
+        # text = BrokenBeginTag.sub('', text)
+        # text = BrokenEndTag.sub('', text)
+        if self.output != "json":
+            text = RemoveAllTags.sub('', text)
+        return text
 
     def __get_end_byte(self, philo_id, path):
         """Get end byte of word given a philo ID."""
@@ -285,16 +298,6 @@ class SequenceAligner(object):
         cursor.execute("SELECT end_byte from words where philo_id=?", (" ".join(philo_id.split()[:7]),))
         return int(cursor.fetchone()[0])
 
-def get_text(filename, start_byte, end_byte, path):
-    """Get text"""
-    file_path = os.path.join(path, "TEXT", filename)
-    text_file = open(file_path, encoding="utf8", errors="ignore")
-    text_file.seek(start_byte)
-    text = text_file.read(end_byte-start_byte)
-    # text = BrokenBeginTag.sub('', text)
-    # text = BrokenEndTag.sub('', text)
-    text = RemoveAllTags.sub('', text)
-    return text
 
 def get_metadata_from_position(position, provenance="source"):
     """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
@@ -332,7 +335,7 @@ def parse_command_line():
                         type=str)
     parser.add_argument("--target_ngram_index", help="path to ngram index built from the target files",
                         type=str)
-    parser.add_argument("--output", help="output format: HTML, JSON (see docs for proper decoding), or XML", default="HTML",
+    parser.add_argument("--output", help="output format: HTML, JSON (see docs for proper decoding), or XML", default="html",
                         type=str)
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
     args = parser.parse_args()
