@@ -34,7 +34,8 @@ class SequenceAligner(object):
 
     def __init__(self, source_ngram_index, target_ngram_index=None, filtered_ngrams=500,
                  minimum_matching_ngrams_in_docs=3, matching_window=20, max_gap=10,
-                 minimum_matching_ngrams=5, minimum_matching_ngrams_in_window=5, context=300,
+                 minimum_matching_ngrams=2, minimum_matching_ngrams_in_window=5, minimum_contiguous_ngrams=2,
+                 context=300,
                  output="html", debug=False):
         # Set global variables
         self.filtered_ngrams = filtered_ngrams
@@ -43,6 +44,7 @@ class SequenceAligner(object):
         self.minimum_matching_ngrams = minimum_matching_ngrams
         self.matching_window = matching_window
         self.max_grap = max_gap
+        self.minimum_contiguous_ngrams = minimum_contiguous_ngrams
         self.context = context
         self.source_path = SourcePath
         self.target_path = TargetPath
@@ -51,6 +53,8 @@ class SequenceAligner(object):
         self.target_files = []
 
         self.output = output.lower()
+
+        self.alignment_count = defaultdict(int)
 
         self.debug = debug
 
@@ -76,6 +80,7 @@ class SequenceAligner(object):
             for source_file in source_files:
                 source_file = self.build_doc_object(source_file)
                 self.__find_matches_in_docs(source_file[0])
+        print("Found a total of %d" % sum([i for i in self.alignment_count.values()]))
 
     def build_doc_object(self, files):
         """Build a file representation used for ngram comparisons"""
@@ -145,6 +150,8 @@ class SequenceAligner(object):
             alignments = []
             last_source_position = 0
             break_out = False
+            in_alignment = False
+            last_match = tuple()
             while matches:
                 current_anchor = matches.popleft()
                 while current_anchor[0].index < last_source_position:
@@ -156,6 +163,7 @@ class SequenceAligner(object):
                 if break_out:
                     break
                 source_anchor = current_anchor.source.index
+
                 last_source_position = source_anchor
                 target_anchor = current_anchor.target.index
                 last_target_position = target_anchor
@@ -164,7 +172,8 @@ class SequenceAligner(object):
                 current_alignment = {"source": [current_anchor.source.position[0]], "target": [current_anchor.target.position[0]]}
                 matches_in_current_alignment = 1
                 matches_in_current_window = 1
-                last_match = (current_anchor.source, current_anchor.target) # This holds the last match and will be added as the last element in the alignment
+                # This holds the last match and will be added as the last element in the alignment
+                last_match = (current_anchor.source, current_anchor.target)
                 if self.debug:
                     debug_alignment = [(current_anchor.source.index, current_anchor.target.index, self.index_to_ngram[current_anchor.ngram_index])]
                 for source, target, ngram in matches:
@@ -187,6 +196,10 @@ class SequenceAligner(object):
                             current_alignment["source"].append(last_match[0].position[-1])
                             current_alignment["target"].append(last_match[1].position[-1])
                             alignments.append(current_alignment)
+                        elif (last_match[0].index - current_anchor[0].index) >= self.minimum_contiguous_ngrams and (last_match[1].index - current_anchor[1].index) >= self.minimum_contiguous_ngrams:
+                            current_alignment["source"].append(last_match[0].position[-1])
+                            current_alignment["target"].append(last_match[1].position[-1])
+                            alignments.append(current_alignment)
                         last_source_position = last_match[0].index + 1 # Make sure we start the next match at index that follows last source match
                         if self.debug:
                             if matches_in_current_alignment >= self.minimum_matching_ngrams:
@@ -194,7 +207,7 @@ class SequenceAligner(object):
                             else:
                                 debug_output.write("\n\n## Failed passage ##\n")
                             for match in debug_alignment:
-                                print(" ".join(match[2]) + ": " + str(match[0]) + " => " + str(match[1]), file=debug_output)
+                                print("%s: %s => %s" % (" ".join(match[2]), str(match[0]), str(match[1])), file=debug_output)
                         break
                     last_source_position = source.index
                     last_target_position = target.index
@@ -206,17 +219,20 @@ class SequenceAligner(object):
                         debug_alignment.append((source.index, target.index, self.index_to_ngram[ngram]))
 
             # Add current alignment if not already done
-            if len(current_alignment) >= self.minimum_matching_ngrams:
+            if in_alignment and current_alignment["source"][0] != last_match[0].position[-1]:
+                current_alignment["source"].append(last_match[0].position[-1])
+                current_alignment["target"].append(last_match[1].position[-1])
                 alignments.append(current_alignment)
                 if self.debug:
                     debug_output.write("\n\n## Matching passage ##\n")
                     for match in debug_alignment:
-                        print(" ".join(match[2]) + ": " + str(match[0]) + " => " + str(match[1]), file=debug_output)
+                        print("%s: %s => %s" % (" ".join(match[2]), str(match[0]), str(match[1])), file=debug_output)
 
             if self.debug:
                 debug_output.close()
-            print("Done comparing with", target_doc_id, len(alignments), "matches")
+            self.alignment_count[source_file.doc_id] += len(alignments)
             self.__write_alignments(source_file.doc_id, target_doc_id, alignments)
+        print("Found %d alignments" % self.alignment_count[source_file.doc_id])
 
     def __write_alignments(self, source_doc_id, target_doc_id, alignments):
         """Write results to file"""
@@ -227,6 +243,8 @@ class SequenceAligner(object):
             self.__html_output(metadata, alignments, source_doc_id, target_doc_id)
         elif self.output == "json":
             self.__json_output(metadata, alignments, source_doc_id, target_doc_id)
+        elif self.output == "tab":
+            self.__tab_output(metadata, alignments, source_doc_id, target_doc_id)
 
     def __html_output(self, metadata, alignments, source_doc_id, target_doc_id):
         """HTML output"""
@@ -265,6 +283,20 @@ class SequenceAligner(object):
         json.dump(all_alignments, output)
         output.close()
 
+    def __tab_output(self, metadata, alignments, source_doc_id, target_doc_id):
+        """Tab delimited output."""
+        output = open("%s-%s.tab" % (source_doc_id, target_doc_id), "w")
+        first_line = list(metadata["source"].keys()) + ["source_context_before", "source_passage", "source_context_after"]
+        first_line += list(metadata["target"].keys()) + ["target_context_before", "target_passage", "target_context_after"]
+        print("\t".join(first_line), file=output)
+        for alignment in alignments:
+            fields = list(metadata["source"].values())
+            fields.extend(self.__alignment_to_text(alignment["source"], metadata["source"]["filename"], self.source_path))
+            fields.extend(list(metadata["target"].values()))
+            fields.extend(self.__alignment_to_text(alignment["target"], metadata["target"]["filename"], self.target_path))
+            print("\t".join(str(i) for i in fields), file=output)
+        output.close()
+
     def __xml_output(self, metadata, alignments, source_doc_id, target_doc_id):
         """XML output"""
         pass
@@ -289,6 +321,7 @@ class SequenceAligner(object):
         # text = BrokenEndTag.sub('', text)
         if self.output != "json":
             text = RemoveAllTags.sub('', text)
+            text = ' '.join(text.split()) # remove all tabs, newlines, and replace with spaces
         return text
 
     def __get_end_byte(self, philo_id, path):
@@ -296,7 +329,8 @@ class SequenceAligner(object):
         conn = sqlite3.connect(os.path.join(path, "toms.db"))
         cursor = conn.cursor()
         cursor.execute("SELECT end_byte from words where philo_id=?", (" ".join(philo_id.split()[:7]),))
-        return int(cursor.fetchone()[0])
+        result = int(cursor.fetchone()[0])
+        return result
 
 
 def get_metadata_from_position(position, provenance="source"):
@@ -311,7 +345,7 @@ def get_metadata_from_position(position, provenance="source"):
     results = cursor.fetchone()
     metadata = {}
     for field in results.keys():
-        metadata[field] = results[field]
+        metadata[field] = results[field] or ""
     return metadata
 
 def file_arg_to_files(file_arg):
@@ -335,7 +369,7 @@ def parse_command_line():
                         type=str)
     parser.add_argument("--target_ngram_index", help="path to ngram index built from the target files",
                         type=str)
-    parser.add_argument("--output", help="output format: HTML, JSON (see docs for proper decoding), or XML", default="html",
+    parser.add_argument("--output", help="output format: html, json (see docs for proper decoding), xml, or tab", default="html",
                         type=str)
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
     args = parser.parse_args()
