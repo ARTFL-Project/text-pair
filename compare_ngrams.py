@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sqlite3
+import msgpack
 import re
 from ast import literal_eval
 from collections import deque, namedtuple, defaultdict
@@ -32,10 +33,9 @@ class SequenceAligner(object):
     """Base class for running sequence alignment tasks from ngram
     representation of text."""
 
-    def __init__(self, source_ngram_index, target_ngram_index=None, filtered_ngrams=500,
-                 minimum_matching_ngrams_in_docs=3, matching_window=20, max_gap=10,
-                 minimum_matching_ngrams=2, minimum_matching_ngrams_in_window=5, minimum_contiguous_ngrams=2,
-                 context=300,
+    def __init__(self, source_ngram_index, target_ngram_index=None, filtered_ngrams=100,
+                 minimum_matching_ngrams_in_docs=2, matching_window=30, max_gap=15,
+                 minimum_matching_ngrams=2, minimum_matching_ngrams_in_window=3, context=300,
                  output="html", debug=False):
         # Set global variables
         self.filtered_ngrams = filtered_ngrams
@@ -44,7 +44,6 @@ class SequenceAligner(object):
         self.minimum_matching_ngrams = minimum_matching_ngrams
         self.matching_window = matching_window
         self.max_grap = max_gap
-        self.minimum_contiguous_ngrams = minimum_contiguous_ngrams
         self.context = context
         self.source_path = SourcePath
         self.target_path = TargetPath
@@ -133,15 +132,15 @@ class SequenceAligner(object):
         for target_doc_id, target_ngrams in self.target_files:
             matches = []
             target_set = set(target_ngrams)
-            if len(source_set.intersection(target_set)) < self.minimum_matching_ngrams_in_docs:
+            ngram_intersection = source_set.intersection(target_set)
+            if len(ngram_intersection) < self.minimum_matching_ngrams_in_docs:
                 continue
             if self.debug:
                 debug_output = open("aligner_debug_%s-%s.log" % (source_file.doc_id, target_doc_id), "w")
-            for source_ngram in source_file.ngrams:
-                if source_ngram in target_set:
-                    for source_obj in source_file.ngrams[source_ngram]:
-                        for target_obj in target_ngrams[source_ngram]:
-                            matches.append(ngramMatch(source_obj, target_obj, source_ngram))
+            for ngram in ngram_intersection:
+                for source_obj in source_file.ngrams[ngram]:
+                    for target_obj in target_ngrams[ngram]:
+                        matches.append(ngramMatch(source_obj, target_obj, ngram))
 
             matches.sort(key=lambda x: x[0][0])
             matches = deque(matches)
@@ -163,7 +162,6 @@ class SequenceAligner(object):
                 if break_out:
                     break
                 source_anchor = current_anchor.source.index
-
                 last_source_position = source_anchor
                 target_anchor = current_anchor.target.index
                 last_target_position = target_anchor
@@ -181,22 +179,27 @@ class SequenceAligner(object):
                         continue
                     if target.index <= last_target_position: # we only want targets that are after last target match
                         continue
-                    if source.index >= last_source_position+self.max_grap or target.index >= last_target_position+self.max_grap:
+                    if source.index > last_source_position+self.max_grap or target.index > last_target_position+self.max_grap:
                         in_alignment = False
                     if source.index > source_anchor+self.matching_window or target.index > target_anchor+self.matching_window:
                         # should we have different numbers for source window and target window?
                         if matches_in_current_window < self.minimum_matching_ngrams_in_window:
                             in_alignment = False
-                        else: # open new window
-                            source_anchor = source.index
-                            target_anchor = target.index
-                            matches_in_current_window = 0
+                        else:
+                            # Check size of gap before opening new window
+                            if source.index > last_source_position+self.max_grap or target.index > last_target_position+self.max_grap:
+                                in_alignment = False
+                            else:  # open new window
+                                source_anchor = source.index
+                                target_anchor = target.index
+                                matches_in_current_window = 0
                     if not in_alignment:
-                        if matches_in_current_alignment >= self.minimum_matching_ngrams:
+                        if matches_in_current_alignment >= self.minimum_matching_ngrams_in_window:
                             current_alignment["source"].append(last_match[0].position[-1])
                             current_alignment["target"].append(last_match[1].position[-1])
                             alignments.append(current_alignment)
-                        elif (last_match[0].index - current_anchor[0].index) >= self.minimum_contiguous_ngrams and (last_match[1].index - current_anchor[1].index) >= self.minimum_contiguous_ngrams:
+                        # Looking for small match within max_gap
+                        elif (last_match[0].index - current_anchor[0].index) <= self.max_grap and matches_in_current_alignment >= self.minimum_matching_ngrams:
                             current_alignment["source"].append(last_match[0].position[-1])
                             current_alignment["target"].append(last_match[1].position[-1])
                             alignments.append(current_alignment)
@@ -219,7 +222,7 @@ class SequenceAligner(object):
                         debug_alignment.append((source.index, target.index, self.index_to_ngram[ngram]))
 
             # Add current alignment if not already done
-            if in_alignment and current_alignment["source"][0] != last_match[0].position[-1]:
+            if in_alignment and matches_in_current_alignment >= self.minimum_matching_ngrams:
                 current_alignment["source"].append(last_match[0].position[-1])
                 current_alignment["target"].append(last_match[1].position[-1])
                 alignments.append(current_alignment)
@@ -227,7 +230,6 @@ class SequenceAligner(object):
                     debug_output.write("\n\n## Matching passage ##\n")
                     for match in debug_alignment:
                         print("%s: %s => %s" % (" ".join(match[2]), str(match[0]), str(match[1])), file=debug_output)
-
             if self.debug:
                 debug_output.close()
             self.alignment_count[source_file.doc_id] += len(alignments)
