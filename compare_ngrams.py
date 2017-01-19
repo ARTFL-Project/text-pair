@@ -4,25 +4,29 @@
 import argparse
 import json
 import os
-import sqlite3
-import msgpack
+import pickle
 import re
+import sqlite3
+import sys
+import timeit
 from ast import literal_eval
-from collections import deque, namedtuple, defaultdict
+from collections import Counter, defaultdict, deque, namedtuple
 from glob import glob
 from operator import itemgetter
+
+from multiprocess import Pool
 
 ngramObject = namedtuple("ngramObject", "ngram, position")
 indexedNgram = namedtuple("indexedNgram", "index, position")
 ngramMatch = namedtuple("ngramMatch", "source, target, ngram_index")
-docObject = namedtuple("docObject", "doc_id, ngrams")
+docObject = namedtuple("docObject", "doc_id, ngram_object")
 
-SourceDB = sqlite3.connect("/var/www/html/philologic/racine/data/toms.db")
+SourceDB = sqlite3.connect("/var/www/html/philologic/montesquieu/data/toms.db")
 SourceDB.row_factory = sqlite3.Row
-TargetDB = sqlite3.connect("/var/www/html/philologic/littre/data/toms.db")
+TargetDB = sqlite3.connect("/var/www/html/philologic/encyc/data/toms.db")
 TargetDB.row_factory = sqlite3.Row
-SourcePath = "/var/www/html/philologic/racine/data/"
-TargetPath = "/var/www/html/philologic/littre/data/"
+SourcePath = "/var/www/html/philologic/montesquieu/data/"
+TargetPath = "/var/www/html/philologic/encyc/data/"
 
 RemoveAllTags = re.compile(r'<[^>]*?>')
 # BrokenBeginTag = re.compile(r'^[^>]*?>')
@@ -33,10 +37,9 @@ class SequenceAligner(object):
     """Base class for running sequence alignment tasks from ngram
     representation of text."""
 
-    def __init__(self, source_ngram_index, target_ngram_index=None, filtered_ngrams=100,
-                 minimum_matching_ngrams_in_docs=2, matching_window=30, max_gap=15,
-                 minimum_matching_ngrams=2, minimum_matching_ngrams_in_window=3, context=300,
-                 output="html", debug=False):
+    def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, filtered_ngrams=1000,
+                 minimum_matching_ngrams_in_docs=4, matching_window=20, max_gap=10, minimum_matching_ngrams=4,
+                 minimum_matching_ngrams_in_window=4, context=300, output="html", workers=4, debug=False):
         # Set global variables
         self.filtered_ngrams = filtered_ngrams
         self.minimum_matching_ngrams_in_docs = minimum_matching_ngrams_in_docs
@@ -53,55 +56,78 @@ class SequenceAligner(object):
 
         self.output = output.lower()
 
-        self.alignment_count = defaultdict(int)
+        self.workers = workers
 
         self.debug = debug
 
-        # Build data representations of index
-        self.ngram_index, self.index_to_ngram = self.__load_ngram_index(source_ngram_index, target_ngram_index)
-        if not self.ngram_index:
-            self.filtered_ngrams = 0
+        os.system("rm -rf tmp/source && mkdir -p tmp/source")
+        os.system("rm -rf tmp/target && mkdir -p tmp/target")
 
-    def compare(self, source_files, target_files=None, matching_algorithm="default"):
+        # Build data representations of index
+        print("\n## Loading ngram index ##")
+        self.ngram_index = self.__load_ngram_index(source_ngram_index, target_ngram_index)
+        if self.debug:
+            self.index_to_ngram = {value: key for key, value in self.ngram_index.items()}
+
+        # Build document representation
+        source_files = file_arg_to_files(source_files)
+        self.global_doc_index = {"source": {}, "target": {}}
+        self.global_intersection = {os.path.basename(file).replace("_ngrams.json", "").strip(): {} for file in source_files}
+        print("\n## Indexing source docs ##")
+        self.source_files = [self.__build_doc_object(f, "source") for f in source_files]
+        if target_files is None:
+            self.target_files = self.source_files
+            for source_doc_id in self.global_intersection:
+                for target_doc_id, ngrams in self.target_files:
+                    if target_doc_id != source_doc_id:
+                        self.global_intersection[source_doc_id][target_doc_id] = self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["source"][target_doc_id])
+        else:
+            print("\n## Indexing target docs ##")
+            target_files = file_arg_to_files(target_files)
+            self.target_files = [self.__build_doc_object(f, "target") for f in target_files]
+            for source_doc_id in self.global_intersection:
+                for target_doc_id, ngrams in self.target_files:
+                    self.global_intersection[source_doc_id][target_doc_id] = self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["target"][target_doc_id])
+                    # print(source_doc_id, target_doc_id, len(self.global_intersection[source_doc_id][target_doc_id]))
+        self.ngram_index = {} # release memory since we no longer need it
+        self.global_doc_index = {}
+
+    def compare(self, matching_algorithm="default"):
         """Run comparison between source and target files.
         If no target is defined, it will compare source files against themselves."""
-        # We only build the target files as we compare source files to target files
-        # one by one.
-        if target_files is None:
-            source_files = file_arg_to_files(source_files)
-            self.target_files = self.build_doc_object(source_files)
-            for source_file in self.target_files:
-                self.__find_matches_in_docs(source_file)
-        else:
-            target_files = file_arg_to_files(target_files)
-            self.target_files = self.build_doc_object(target_files)
-            source_files = file_arg_to_files(source_files)
-            for source_file in source_files:
-                source_file = self.build_doc_object(source_file)
-                self.__find_matches_in_docs(source_file[0])
-        print("Found a total of %d" % sum([i for i in self.alignment_count.values()]))
+        print("\n## Running sequence alignment ##")
+        start_time = timeit.default_timer()
+        pool = Pool(4)
+        count = list(pool.map(self.__find_matches_in_docs, self.source_files))
+        print("\n## Results ##")
+        print("Found a total of %d" % sum(count))
+        print("Comparison took %f" % (timeit.default_timer() - start_time))
 
-    def build_doc_object(self, files):
+    def __build_doc_object(self, file, direction):
         """Build a file representation used for ngram comparisons"""
-        if isinstance(files, str):
-            files = [files]
-        files_with_ngrams = []
-        for file in files:
-            with open(file) as fh:
-                ngrams = json.load(fh)
-                doc_index = defaultdict(list)
-                index_pos = 0
-                for ngram_obj in ngrams:
-                    ngram = tuple(i[0] for i in ngram_obj)
-                    philo_ids = tuple(i[1] for i in ngram_obj)
-                    if ngram in self.ngram_index:
-                        ngram_int = self.ngram_index[ngram]
-                        doc_index[ngram_int].append(indexedNgram(index_pos, philo_ids))
-                        index_pos += 1
-                print("%s:" % file, index_pos+1, "ngrams remaining out of", len(ngrams))
-            doc_id = os.path.basename(file).replace("_ngrams.json", "").strip()
-            files_with_ngrams.append(docObject(doc_id, doc_index))
-        return files_with_ngrams
+        doc_id = os.path.basename(file).replace("_ngrams.json", "").strip()
+        print("Processing doc %s..." % doc_id)
+        with open(file) as fh:
+            ngrams = json.load(fh)
+            doc_index = defaultdict(list)
+            index_pos = 0
+            for ngram_obj in ngrams:
+                ngram = tuple(i[0] for i in ngram_obj)
+                philo_ids = tuple(i[1] for i in ngram_obj)
+                if ngram in self.ngram_index:
+                    ngram_int = self.ngram_index[ngram]
+                    doc_index[ngram_int].append(indexedNgram(index_pos, philo_ids))
+                    index_pos += 1
+        if self.debug:
+            print(index_pos, "ngrams remaining out of", len(ngrams))
+        self.global_doc_index[direction][doc_id] = set(doc_index)
+        with open("tmp/%s/%s.pickle" % (direction, doc_id), "wb") as file_to_pickle:
+            pickle.dump(doc_index, file_to_pickle, pickle.HIGHEST_PROTOCOL)
+        def unpickle_file():
+            """Unpickle file"""
+            with open("tmp/%s/%s.pickle" % (direction, doc_id), "rb") as pickled_file:
+                return pickle.load(pickled_file)
+        return docObject(doc_id, unpickle_file)
 
     def __load_ngram_index(self, source_index, target_index):
         """Load ngram index"""
@@ -109,7 +135,7 @@ class SequenceAligner(object):
         try:
             all_ngrams = json.load(open(source_index))
         except TypeError:
-            print("Error: No JSON file (or an invalid JSON file) was provided for the ngram index.")
+            print("Error: No JSON file (or an invalid JSON file) was provided for the ngram index.", file=sys.stderr)
             exit()
         if target_index is not None:
             target_ngrams = json.load(open(target_index))
@@ -120,25 +146,30 @@ class SequenceAligner(object):
                 all_ngrams[target_ngram] += target_ngrams[target_ngram]
             else:
                 all_ngrams[target_ngram] = target_ngrams[target_ngram]
-        sorted_ngrams = [literal_eval(i[0]) for i in sorted(all_ngrams.items(), key=itemgetter(1), reverse=True)]
+        # Sort and eliminate hapax ngrams
+        sorted_ngrams = [literal_eval(i[0]) for i in sorted(all_ngrams.items(), key=itemgetter(1), reverse=True) if i[1] > 1]
         ngram_index = {tuple(ngram): n for n, ngram in enumerate(sorted_ngrams[self.filtered_ngrams:])}
-        index_to_ngram = {value: key for key, value in ngram_index.items()}
-        return ngram_index, index_to_ngram
+        return ngram_index
 
     def __find_matches_in_docs(self, source_file):
         """Default matching algorithm"""
-        source_set = set(source_file.ngrams)
-        print("Comparing doc ID %s to all" % source_file.doc_id)
-        for target_doc_id, target_ngrams in self.target_files:
-            matches = []
-            target_set = set(target_ngrams)
-            ngram_intersection = source_set.intersection(target_set)
+        source_doc_id, source_pickle = source_file
+        source_ngrams = source_pickle()
+        source_set = set(source_ngrams)
+        alignment_count = Counter()
+        print("Comparing source doc %s to all target docs..." % source_file.doc_id)
+        for target_doc_id, target_ngram_object in self.target_files:
+            ngram_intersection = self.global_intersection[source_doc_id][target_doc_id]
             if len(ngram_intersection) < self.minimum_matching_ngrams_in_docs:
+                if self.debug:
+                    print("Skipping source doc %s to target doc %s comparison: not enough matching ngrams" % (source_doc_id, target_doc_id))
                 continue
+            target_ngrams = target_ngram_object()
             if self.debug:
                 debug_output = open("aligner_debug_%s-%s.log" % (source_file.doc_id, target_doc_id), "w")
+            matches = []
             for ngram in ngram_intersection:
-                for source_obj in source_file.ngrams[ngram]:
+                for source_obj in source_ngrams[ngram]:
                     for target_obj in target_ngrams[ngram]:
                         matches.append(ngramMatch(source_obj, target_obj, ngram))
 
@@ -232,9 +263,9 @@ class SequenceAligner(object):
                         print("%s: %s => %s" % (" ".join(match[2]), str(match[0]), str(match[1])), file=debug_output)
             if self.debug:
                 debug_output.close()
-            self.alignment_count[source_file.doc_id] += len(alignments)
-            self.__write_alignments(source_file.doc_id, target_doc_id, alignments)
-        print("Found %d alignments" % self.alignment_count[source_file.doc_id])
+            alignment_count[source_doc_id] += len(alignments)
+            self.__write_alignments(source_doc_id, target_doc_id, alignments)
+        return alignment_count[source_doc_id]
 
     def __write_alignments(self, source_doc_id, target_doc_id, alignments):
         """Write results to file"""
@@ -379,6 +410,6 @@ def parse_command_line():
 
 if __name__ == '__main__':
     args = parse_command_line()
-    aligner = SequenceAligner(source_ngram_index=args.source_ngram_index, target_ngram_index=args.target_ngram_index,
-                              output=args.output, debug=args.debug)
-    aligner.compare(args.source_files, args.target_files)
+    aligner = SequenceAligner(args.source_files, args.source_ngram_index, target_files=args.target_files,
+                              target_ngram_index=args.target_ngram_index, output=args.output, debug=args.debug)
+    aligner.compare()
