@@ -13,6 +13,8 @@ from ast import literal_eval
 from collections import Counter, defaultdict, deque, namedtuple
 from glob import glob
 from operator import itemgetter
+from dicttoxml import dicttoxml
+from xml.dom.minidom import parseString
 
 from multiprocess import Pool
 
@@ -29,8 +31,9 @@ SourcePath = "/var/www/html/philologic/montesquieu/data/"
 TargetPath = "/var/www/html/philologic/encyc/data/"
 
 RemoveAllTags = re.compile(r'<[^>]*?>')
-# BrokenBeginTag = re.compile(r'^[^>]*?>')
-# BrokenEndTag = re.compile(r'<[^>]*?$')
+BrokenBeginTag = re.compile(r'^[^<]*?>')
+start_cutoff_match = re.compile(r'^[^ <]+')
+BrokenEndTag = re.compile(r'<[^>]*?$')
 
 
 class SequenceAligner(object):
@@ -63,7 +66,7 @@ class SequenceAligner(object):
         os.system("rm -rf tmp/source && mkdir -p tmp/source")
         os.system("rm -rf tmp/target && mkdir -p tmp/target")
 
-        # Build data representations of index
+        # Build data representation of index
         print("\n## Loading ngram index ##")
         self.ngram_index = self.__load_ngram_index(source_ngram_index, target_ngram_index)
         if self.debug:
@@ -88,8 +91,9 @@ class SequenceAligner(object):
             for source_doc_id in self.global_intersection:
                 for target_doc_id, ngrams in self.target_files:
                     self.global_intersection[source_doc_id][target_doc_id] = self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["target"][target_doc_id])
-                    # print(source_doc_id, target_doc_id, len(self.global_intersection[source_doc_id][target_doc_id]))
-        self.ngram_index = {} # release memory since we no longer need it
+
+        # release memory since we no longer need those
+        self.ngram_index = {}
         self.global_doc_index = {}
 
     def compare(self, matching_algorithm="default"):
@@ -97,7 +101,7 @@ class SequenceAligner(object):
         If no target is defined, it will compare source files against themselves."""
         print("\n## Running sequence alignment ##")
         start_time = timeit.default_timer()
-        pool = Pool(4)
+        pool = Pool(6)
         count = list(pool.map(self.__find_matches_in_docs, self.source_files))
         print("\n## Results ##")
         print("Found a total of %d" % sum(count))
@@ -278,6 +282,8 @@ class SequenceAligner(object):
             self.__json_output(metadata, alignments, source_doc_id, target_doc_id)
         elif self.output == "tab":
             self.__tab_output(metadata, alignments, source_doc_id, target_doc_id)
+        else:
+            self.__xml_output(metadata, alignments, source_doc_id, target_doc_id)
 
     def __html_output(self, metadata, alignments, source_doc_id, target_doc_id):
         """HTML output"""
@@ -332,7 +338,24 @@ class SequenceAligner(object):
 
     def __xml_output(self, metadata, alignments, source_doc_id, target_doc_id):
         """XML output"""
-        pass
+        output = open("%s-%s.xml" % (source_doc_id, target_doc_id), "w")
+        all_alignments = []
+        for alignment in alignments:
+            source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
+                                                                                                   metadata["source"]["filename"],
+                                                                                                   self.source_path)
+            source = {"metadata": metadata["source"], "context_before": source_context_before, "context_after": source_context_after,
+                      "matching_passage": source_passage}
+            target_context_before, target_passage, target_context_after = self.__alignment_to_text(alignment["target"],
+                                                                                                   metadata["target"]["filename"],
+                                                                                                   self.target_path)
+            target = {"metadata": metadata["target"], "context_before": target_context_before, "context_after": target_context_after,
+                      "matching_passage": target_passage}
+            all_alignments.append({"source": source, "target": target})
+        xml = dicttoxml(all_alignments)
+        dom = parseString(xml)
+        output.write(dom.toprettyxml())
+        output.close()
 
     def __alignment_to_text(self, alignment, filename, path):
         """Fetches aligned passages using philo IDs.
@@ -347,14 +370,14 @@ class SequenceAligner(object):
     def __get_text(self, filename, start_byte, end_byte, path):
         """Get text"""
         file_path = os.path.join(path, "TEXT", filename)
-        text_file = open(file_path, encoding="utf8", errors="ignore")
+        text_file = open(file_path, 'rb')
         text_file.seek(start_byte)
         text = text_file.read(end_byte-start_byte)
-        # text = BrokenBeginTag.sub('', text)
-        # text = BrokenEndTag.sub('', text)
-        if self.output != "json":
-            text = RemoveAllTags.sub('', text)
-            text = ' '.join(text.split()) # remove all tabs, newlines, and replace with spaces
+        text = text.decode("utf8", errors="ignore")
+        text = RemoveAllTags.sub('', text)
+        text = BrokenBeginTag.sub('', text)
+        text = BrokenEndTag.sub('', text)
+        text = ' '.join(text.split()).strip() # remove all tabs, newlines, and replace with spaces
         return text
 
     def __get_end_byte(self, philo_id, path):
