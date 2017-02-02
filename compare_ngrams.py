@@ -29,11 +29,12 @@ start_cutoff_match = re.compile(r'^[^ <]+')
 BrokenEndTag = re.compile(r'<[^>]*?$')
 
 MATCHING_DEFAULTS = {
-    "matching_window": 20,
+    "matching_window_size": 20,
     "max_gap": 10,
     "minimum_matching_ngrams":4,
     "minimum_matching_ngrams_in_window":4,
-    "common_ngrams_limit": .5
+    "common_ngrams_limit": .5,
+    "percent_matching": 10
 }
 
 diff_js = ""
@@ -42,8 +43,8 @@ class SequenceAligner(object):
     """Base class for running sequence alignment tasks from ngram
     representation of text."""
 
-    def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, filtered_ngrams=1000,
-                 minimum_matching_ngrams_in_docs=4, context=300, output="html", workers=6, debug=False, matching_algorithm="default",
+    def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, filtered_ngrams=50,
+                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=6, debug=False, matching_algorithm="default",
                  source_db_path="", target_db_path="", cached=True, **matching_args):
 
         # Set global variables
@@ -51,6 +52,7 @@ class SequenceAligner(object):
         self.context = context
         self.matching_algorithm = matching_algorithm
         self.cached = cached
+        self.banal_ngrams = filtered_ngrams
 
         # Set matching args
         for matching_arg, value in matching_args.items():
@@ -104,7 +106,7 @@ class SequenceAligner(object):
                 for target_doc_id, ngrams in self.target_files:
                     if target_doc_id != source_doc_id:
                         if len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["source"][target_doc_id])) >= self.minimum_matching_ngrams_in_docs:
-                             self.docs_to_compare[source_doc_id].add(target_doc_id)
+                            self.docs_to_compare[source_doc_id].add(target_doc_id)
         else:
             print("\n## Indexing target docs ##")
             target_files = file_arg_to_files(target_files)
@@ -200,17 +202,22 @@ class SequenceAligner(object):
                 continue
             target_ngrams = target_ngram_object()
             matches = []
-            for ngram in source_set.intersection(target_ngrams):
+            ngram_intersection = {ngram: source_ngrams[ngram] + target_ngrams[ngram] for ngram in source_set.intersection(target_ngrams)}
+            common_ngrams = sorted(ngram_intersection.items(), key=lambda x: x[0], reverse=True)[:self.banal_ngrams]
+            for ngram in ngram_intersection:
                 for source_obj in source_ngrams[ngram]:
                     for target_obj in target_ngrams[ngram]:
                         matches.append(ngramMatch(source_obj, target_obj, ngram))
             if self.matching_algorithm == "default":
-                alignments = self.__default_algorithm(source_doc_id, target_doc_id, matches)
+                alignments = self.__default_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
+            else:
+                alignments = self.__out_of_order_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
             alignment_count[source_doc_id] += len(alignments)
-            self.__write_alignments(source_doc_id, target_doc_id, alignments)
+            if alignment_count[source_doc_id] > 0:
+                self.__write_alignments(source_doc_id, target_doc_id, alignments)
         return alignment_count[source_doc_id]
 
-    def __default_algorithm(self, source_doc_id, target_doc_id, matches):
+    def __default_algorithm(self, source_doc_id, target_doc_id, matches, common_ngrams):
         """Default matching algorithm. Algorithm modeled after the following example
         # ex: [(5, 12), (5, 78), (7, 36), (7, 67), (9, 14)]"""
         if self.debug:
@@ -242,7 +249,7 @@ class SequenceAligner(object):
             matches_in_current_alignment = 1
             matches_in_current_window = 1
             common_ngram_matches = 0
-            if current_anchor.ngram_index in self.common_ngrams:
+            if current_anchor.ngram_index in common_ngrams:
                 common_ngram_matches += 1
             # This holds the last match and will be added as the last element in the alignment
             last_match = (current_anchor.source, current_anchor.target)
@@ -255,7 +262,7 @@ class SequenceAligner(object):
                     continue
                 if source.index > last_source_position+self.max_gap or target.index > last_target_position+self.max_gap:
                     in_alignment = False
-                if source.index > source_anchor+self.matching_window or target.index > target_anchor+self.matching_window:
+                if source.index > source_anchor+self.matching_window_size or target.index > target_anchor+self.matching_window_size:
                     # should we have different numbers for source window and target window?
                     if matches_in_current_window < self.minimum_matching_ngrams_in_window:
                         in_alignment = False
@@ -288,7 +295,7 @@ class SequenceAligner(object):
                 matches_in_current_window += 1
                 matches_in_current_alignment += 1
                 last_match = (source, target) # save last matching ngrams in case it ends the match
-                if ngram in self.common_ngrams:
+                if ngram in common_ngrams:
                     common_ngram_matches += 1
                 if self.debug:
                     debug_alignment.append((source.index, target.index, self.index_to_ngram[ngram]))
@@ -304,7 +311,7 @@ class SequenceAligner(object):
             debug_output.close()
         return alignments
 
-    def __out_of_order_algorithm(self, source_doc_id, target_doc_id, matches):
+    def __out_of_order_algorithm(self, source_doc_id, target_doc_id, matches, common_ngrams):
         """Out of order matching algorithm does not take order of matching ngrams into account.
         Algorithm modeled after the following example
         # ex: [(5, 12), (5, 78), (7, 36), (7, 67), (9, 14)]"""
@@ -317,6 +324,7 @@ class SequenceAligner(object):
         break_out = False
         in_alignment = False
         last_match = tuple()
+        current_match = []
         while matches:
             current_anchor = matches.popleft()
             while current_anchor[0].index < last_source_position:
@@ -333,62 +341,132 @@ class SequenceAligner(object):
             last_target_position = target_anchor
             in_alignment = True
             previous_source_index = source_anchor
-            current_alignment = {"source": [current_anchor.source.position[0]], "target": [current_anchor.target.position[0]]}
             matches_in_current_alignment = 1
             matches_in_current_window = 1
-            # This holds the last match and will be added as the last element in the alignment
-            last_match = (current_anchor.source, current_anchor.target)
+            last_match = current_anchor.source
+            common_ngram_matches = 0
+            if current_anchor.ngram_index in self.common_ngrams:
+                common_ngram_matches += 1
+            current_match = []
             if self.debug:
                 debug_alignment = [(current_anchor.source.index, current_anchor.target.index, self.index_to_ngram[current_anchor.ngram_index])]
             for source, target, ngram in matches:
-                if source.index == previous_source_index: # we skip source_match if the same as before
-                    continue
-                if target.index <= last_target_position: # we only want targets that are after last target match
-                    continue
-                if source.index > last_source_position+self.max_gap or target.index > last_target_position+self.max_gap:
+                if source.index > last_source_position+self.max_gap:
                     in_alignment = False
-                if source.index > source_anchor+self.matching_window or target.index > target_anchor+self.matching_window:
-                    # should we have different numbers for source window and target window?
-                    if matches_in_current_window < self.minimum_matching_ngrams_in_window:
+                if source.index > source_anchor+self.matching_window_size:
+                    if (matches_in_current_window/self.matching_window_size*100) < self.percent_matching:
                         in_alignment = False
                     else:
                         # Check size of gap before opening new window
-                        if source.index > last_source_position+self.max_gap or target.index > last_target_position+self.max_gap:
+                        if source.index > last_source_position+self.max_gap:
                             in_alignment = False
                         else:  # open new window
                             source_anchor = source.index
                             target_anchor = target.index
                             matches_in_current_window = 0
                 if not in_alignment:
-                    if matches_in_current_alignment >= self.minimum_matching_ngrams_in_window:
-                        current_alignment["source"].append(last_match[0].position[-1])
-                        current_alignment["target"].append(last_match[1].position[-1])
-                        alignments.append(current_alignment)
-                    # Looking for small match within max_gap
-                    elif (last_match[0].index - current_anchor[0].index) <= self.max_gap and matches_in_current_alignment >= self.minimum_matching_ngrams:
-                        current_alignment["source"].append(last_match[0].position[-1])
-                        current_alignment["target"].append(last_match[1].position[-1])
-                        alignments.append(current_alignment)
-                    last_source_position = last_match[0].index + 1 # Make sure we start the next match at index that follows last source match
+                    current_match.sort(key=lambda x: x[1][0])
+                    current_match = deque(current_match)
+                    target_start = 0
+                    target_end = target_start
+                    source_matches = []
+                    target_matches = []
+                    while current_match:
+                        local_anchor_match = current_match.popleft()
+                        while local_anchor_match[1].index < last_target_position:
+                            try:
+                                local_anchor_match = current_match.popleft()
+                            except IndexError:
+                                break_out = True
+                                break
+                        if break_out:
+                            break
+                        target_start = local_anchor_match[1].index
+                        target_end = target_start
+                        local_matches = 1
+                        common_ngram_matches = 0
+                        if local_anchor_match[2] in self.common_ngrams:
+                            common_ngram_matches += 1
+                        for source, target, ngram in current_match:
+                            if target.index <= (target_end+self.max_gap):
+                                target_end = target.index
+                                local_matches += 1
+                                source_matches.append(source)
+                                target_matches.append(target)
+                                if ngram in self.common_ngrams:
+                                    common_ngram_matches += 1
+                                continue
+                            break
+                        if common_ngram_matches/local_matches < self.common_ngrams_limit:
+                            try:
+                                if (local_matches/(target_end-target_start)*100) > self.percent_matching:
+                                    sorted_source = sorted(source_matches, key=lambda x: x.index)
+                                    sorted_target = sorted(target_matches, key=lambda x: x.index)
+                                    current_alignment = {
+                                        "source": [sorted_source[0].position[0], sorted_source[-1].position[-1]],
+                                        "target": [sorted_target[0].position[0], sorted_target[-1].position[-1]]
+                                    }
+                                    alignments.append(current_alignment)
+                            except ZeroDivisionError:
+                                pass
+                            local_matches = 0
+                            last_target_position = target_end
+                    last_source_position = last_match.index + 1 # Make sure we start the next match at index that follows last source match
                     if self.debug:
-                        self.__debug_output(debug_output, matches_in_current_alignment, match)
+                        self.__debug_output(debug_output, matches_in_current_alignment, match, last_match, current_anchor, common_ngram_matches)
                     break
                 last_source_position = source.index
                 last_target_position = target.index
                 previous_source_index = source.index
                 matches_in_current_window += 1
                 matches_in_current_alignment += 1
-                last_match = (source, target) # save last matching ngrams in case it ends the match
+                last_match = source
+                current_match.append((source, target, ngram))
+                if ngram in self.common_ngrams:
+                    common_ngram_matches += 1
                 if self.debug:
                     debug_alignment.append((source.index, target.index, self.index_to_ngram[ngram]))
 
         # Add current alignment if not already done
-        if in_alignment and matches_in_current_alignment >= self.minimum_matching_ngrams:
-            current_alignment["source"].append(last_match[0].position[-1])
-            current_alignment["target"].append(last_match[1].position[-1])
-            alignments.append(current_alignment)
+        if in_alignment:
+            current_match.sort(key=lambda x: x[1][0])
+            current_match = deque(current_match)
+            target_start = 0
+            target_end = target_start
+            source_matches = []
+            target_matches = []
+            while current_match:
+                local_anchor_match = current_match.popleft()
+                target_start = local_anchor_match[1].index
+                target_end = target_start
+                local_matches = 1
+                common_ngram_matches = 0
+                if local_anchor_match[2] in self.common_ngrams:
+                    common_ngram_matches += 1
+                for source, target, ngram in current_match:
+                    if target.index <= (target_end+self.max_gap):
+                        target_end = target.index
+                        local_matches += 1
+                        source_matches.append(source)
+                        target_matches.append(target)
+                        if ngram in self.common_ngrams:
+                            common_ngram_matches += 1
+                        continue
+                    break
+                if common_ngram_matches/local_matches < self.common_ngrams_limit:
+                    try:
+                        if (local_matches/(target_end-target_start)*100) > self.percent_matching:
+                            sorted_source = sorted(source_matches, key=lambda x: x.index)
+                            sorted_target = sorted(target_matches, key=lambda x: x.index)
+                            current_alignment = {
+                                "source": [sorted_source[0].position[0], sorted_source[-1].position[-1]],
+                                "target": [sorted_target[0].position[0], sorted_target[-1].position[-1]]
+                            }
+                            alignments.append(current_alignment)
+                    except ZeroDivisionError:
+                        pass
             if self.debug:
-                self.__debug_output(debug_output, matches_in_current_alignment, match)
+                self.__debug_output(debug_output, matches_in_current_alignment, match, last_match, current_anchor, common_ngram_matches)
         if self.debug:
             debug_output.close()
         return alignments
@@ -424,8 +502,8 @@ class SequenceAligner(object):
         """HTML output"""
         output = open("%s-%s.html" % (source_doc_id, target_doc_id), "w")
         for alignment in alignments:
-            output.write("""<div><button type="button">Diff alignments</button>""")
             output.write("<h1>===================</h1>")
+            output.write("""<div><button type="button">Diff alignments</button>""")
             source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"], metadata["source"]["filename"], self.source_path)
             target_context_before, target_passage, target_context_after = self.__alignment_to_text(alignment["target"], metadata["target"]["filename"], self.target_path)
             source_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (source_context_before, source_passage, source_context_after)
