@@ -13,20 +13,18 @@ from ast import literal_eval
 from collections import Counter, defaultdict, deque, namedtuple
 from glob import glob
 from operator import itemgetter
-from dicttoxml import dicttoxml
 from xml.dom.minidom import parseString
 
+from dicttoxml import dicttoxml
 from multiprocess import Pool
 
-ngramObject = namedtuple("ngramObject", "ngram, position")
-indexedNgram = namedtuple("indexedNgram", "index, position")
-ngramMatch = namedtuple("ngramMatch", "source, target, ngram_index")
-docObject = namedtuple("docObject", "doc_id, ngram_object")
+IndexedNgram = namedtuple("IndexedNgram", "index, position")
+NgramMatch = namedtuple("NgramMatch", "source, target, ngram_index")
+DocObject = namedtuple("DocObject", "doc_id, ngram_object")
 
-RemoveAllTags = re.compile(r'<[^>]*?>')
-BrokenBeginTag = re.compile(r'^[^<]*?>')
-start_cutoff_match = re.compile(r'^[^ <]+')
-BrokenEndTag = re.compile(r'<[^>]*?$')
+REMOVE_ALL_TAGS = re.compile(r'<[^>]*?>')
+BROKEN_BEGIN_TAG = re.compile(r'^[^<]*?>')
+BROKEN_END_TAG = re.compile(r'<[^>]*?$')
 
 MATCHING_DEFAULTS = {
     "matching_window_size": 20,
@@ -37,7 +35,6 @@ MATCHING_DEFAULTS = {
     "percent_matching": 10
 }
 
-diff_js = ""
 
 class SequenceAligner(object):
     """Base class for running sequence alignment tasks from ngram
@@ -105,7 +102,11 @@ class SequenceAligner(object):
             for source_doc_id in self.docs_to_compare:
                 for target_doc_id, ngrams in self.target_files:
                     if target_doc_id != source_doc_id:
-                        if len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["source"][target_doc_id])) >= self.minimum_matching_ngrams_in_docs:
+                        if (
+                                len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["source"][target_doc_id]))
+                                >=
+                                self.minimum_matching_ngrams_in_docs
+                        ):
                             self.docs_to_compare[source_doc_id].add(target_doc_id)
         else:
             print("\n## Indexing target docs ##")
@@ -113,7 +114,11 @@ class SequenceAligner(object):
             self.target_files = [self.__build_doc_object(f, "target") for f in target_files]
             for source_doc_id in self.docs_to_compare:
                 for target_doc_id, ngrams in self.target_files:
-                    if len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["target"][target_doc_id])) >= self.minimum_matching_ngrams_in_docs:
+                    if (
+                            len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["target"][target_doc_id]))
+                            >=
+                            self.minimum_matching_ngrams_in_docs
+                    ):
                         self.docs_to_compare[source_doc_id].add(target_doc_id)
 
         # release memory since we no longer need those
@@ -155,8 +160,8 @@ class SequenceAligner(object):
         """Build a file representation used for ngram comparisons"""
         doc_id = os.path.basename(file).replace("_ngrams.json", "").strip()
         print("Processing doc %s..." % doc_id)
-        with open(file) as fh:
-            ngrams = json.load(fh)
+        with open(file) as filehandle:
+            ngrams = json.load(filehandle)
             doc_index = defaultdict(list)
             index_pos = 0
             for ngram_obj in ngrams:
@@ -164,7 +169,7 @@ class SequenceAligner(object):
                 philo_ids = tuple(i[1] for i in ngram_obj)
                 try:
                     ngram_int = self.ngram_index[ngram]
-                    doc_index[ngram_int].append(indexedNgram(index_pos, philo_ids))
+                    doc_index[ngram_int].append(IndexedNgram(index_pos, philo_ids))
                     index_pos += 1
                 except KeyError:
                     pass
@@ -175,7 +180,7 @@ class SequenceAligner(object):
             """Unpickle file"""
             with open("tmp/%s/%s.pickle" % (direction, doc_id), "rb") as pickled_file:
                 return pickle.load(pickled_file)
-        return docObject(doc_id, unpickle_file)
+        return DocObject(doc_id, unpickle_file)
 
     def compare(self):
         """Run comparison between source and target files.
@@ -207,7 +212,7 @@ class SequenceAligner(object):
             for ngram in ngram_intersection:
                 for source_obj in source_ngrams[ngram]:
                     for target_obj in target_ngrams[ngram]:
-                        matches.append(ngramMatch(source_obj, target_obj, ngram))
+                        matches.append(NgramMatch(source_obj, target_obj, ngram))
             if self.matching_algorithm == "default":
                 alignments = self.__default_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
             else:
@@ -287,7 +292,7 @@ class SequenceAligner(object):
                             alignments.append(current_alignment)
                     last_source_position = last_match[0].index + 1 # Make sure we start the next match at index that follows last source match
                     if self.debug:
-                        self.__debug_output(debug_output, matches_in_current_alignment, match, last_match, current_anchor, common_ngram_matches)
+                        self.__debug_output(debug_alignment, debug_output, matches_in_current_alignment, last_match, current_anchor, common_ngram_matches)
                     break
                 last_source_position = source.index
                 last_target_position = target.index
@@ -306,7 +311,7 @@ class SequenceAligner(object):
             current_alignment["target"].append(last_match[1].position[-1])
             alignments.append(current_alignment)
             if self.debug:
-                self.__debug_output(debug_output, matches_in_current_alignment, match, last_match, current_anchor, common_ngram_matches)
+                self.__debug_output(debug_alignment, debug_output, matches_in_current_alignment, last_match, current_anchor, common_ngram_matches)
         if self.debug:
             debug_output.close()
         return alignments
@@ -413,7 +418,7 @@ class SequenceAligner(object):
                             last_target_position = target_end
                     last_source_position = last_match.index + 1 # Make sure we start the next match at index that follows last source match
                     if self.debug:
-                        self.__debug_output(debug_output, matches_in_current_alignment, match, last_match, current_anchor, common_ngram_matches)
+                        self.__debug_output(debug_alignment, debug_output, matches_in_current_alignment, last_match, current_anchor, common_ngram_matches)
                     break
                 last_source_position = source.index
                 last_target_position = target.index
@@ -466,12 +471,12 @@ class SequenceAligner(object):
                     except ZeroDivisionError:
                         pass
             if self.debug:
-                self.__debug_output(debug_output, matches_in_current_alignment, match, last_match, current_anchor, common_ngram_matches)
+                self.__debug_output(debug_alignment, debug_output, matches_in_current_alignment, last_match, current_anchor, common_ngram_matches)
         if self.debug:
             debug_output.close()
         return alignments
 
-    def __debug_output(self, debug_output, matches_in_current_alignment, match, last_match, current_anchor, common_ngram_matches):
+    def __debug_output(self, debug_alignment, debug_output, matches_in_current_alignment, last_match, current_anchor, common_ngram_matches):
         if common_ngram_matches/matches_in_current_alignment >= self.common_ngrams_limit:
             debug_output.write("\n\n## Failed passage ##\n")
             debug_output.write('Too many common ngrams: %d out of %d matches\n' % (common_ngram_matches, matches_in_current_alignment))
@@ -504,8 +509,10 @@ class SequenceAligner(object):
         for alignment in alignments:
             output.write("<h1>===================</h1>")
             output.write("""<div><button type="button">Diff alignments</button>""")
-            source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"], metadata["source"]["filename"], self.source_path)
-            target_context_before, target_passage, target_context_after = self.__alignment_to_text(alignment["target"], metadata["target"]["filename"], self.target_path)
+            source_context_before, source_passage, source_context_after = \
+                self.__alignment_to_text(alignment["source"], metadata["source"]["filename"], self.source_path)
+            target_context_before, target_passage, target_context_after = \
+                self.__alignment_to_text(alignment["target"], metadata["target"]["filename"], self.target_path)
             source_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (source_context_before, source_passage, source_context_after)
             target_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (target_context_before, target_passage, target_context_after)
             output.write('<h4>====== Source ======</h4>')
@@ -588,9 +595,9 @@ class SequenceAligner(object):
         text_file.seek(start_byte)
         text = text_file.read(end_byte-start_byte)
         text = text.decode("utf8", errors="ignore")
-        text = RemoveAllTags.sub('', text)
-        text = BrokenBeginTag.sub('', text)
-        text = BrokenEndTag.sub('', text)
+        text = REMOVE_ALL_TAGS.sub('', text)
+        text = BROKEN_BEGIN_TAG.sub('', text)
+        text = BROKEN_END_TAG.sub('', text)
         text = ' '.join(text.split()).strip() # remove all tabs, newlines, and replace with spaces
         return text
 
@@ -624,6 +631,8 @@ class SequenceAligner(object):
 
 def file_arg_to_files(file_arg):
     """Interpret file argument on command line"""
+    if isinstance(file_arg, list):
+        return file_arg
     if file_arg.endswith('/') or os.path.isdir(file_arg):
         files = glob(file_arg + '/*')
     elif file_arg.endswith('*'):
@@ -647,15 +656,15 @@ def parse_command_line():
                         type=str, default="")
     parser.add_argument("--target_db_path", help="path to PhiloLogic4 DB built from the target files",
                         type=str, default="")
-    parser.add_argument("--output", help="output format: html, json (see docs for proper decoding), xml, or tab", default="html",
-                        type=str)
+    parser.add_argument("--output", help="output format: html, json (see docs for proper decoding), xml, or tab",
+                        type=str, default="html")
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
     args = parser.parse_args()
     return args
 
 if __name__ == '__main__':
-    args = parse_command_line()
-    aligner = SequenceAligner(args.source_files, args.source_ngram_index, target_files=args.target_files,
-                              target_ngram_index=args.target_ngram_index, output=args.output, debug=args.debug,
-                              source_db_path=args.source_db_path, target_db_path=args.target_db_path)
-    aligner.compare()
+    ARGS = parse_command_line()
+    ALIGNER = SequenceAligner(ARGS.source_files, ARGS.source_ngram_index, target_files=ARGS.target_files,
+                              target_ngram_index=ARGS.target_ngram_index, output=ARGS.output, debug=ARGS.debug,
+                              source_db_path=ARGS.source_db_path, target_db_path=ARGS.target_db_path)
+    ALIGNER.compare()
