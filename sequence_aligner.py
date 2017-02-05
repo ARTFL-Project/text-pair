@@ -55,7 +55,7 @@ def parse_command_line():
                 else:
                     args["preprocessing"][key] = value
             for key, value in dict(config["Matching"]).items():
-                if key == "matching_window_size" or key == "minimum_matching_ngrams_in_window = 4" or key == "max_gap" \
+                if key == "matching_window_size" or key == "minimum_matching_ngrams_in_window" or key == "max_gap" \
                 or key == "minimum_matching_ngrams" or key == "common_ngrams_in_docs":
                     args["matching"][key] = config.getint("Matching", key)
                 elif key == "common_ngrams_limit":

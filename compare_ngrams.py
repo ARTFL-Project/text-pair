@@ -41,7 +41,7 @@ class SequenceAligner(object):
     representation of text."""
 
     def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, filtered_ngrams=50,
-                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=6, debug=False, matching_algorithm="default",
+                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=10, debug=False, matching_algorithm="default",
                  source_db_path="", target_db_path="", cached=True, **matching_args):
 
         # Set global variables
