@@ -6,7 +6,6 @@ import json
 import os
 import pickle
 import re
-import sqlite3
 import sys
 import timeit
 from ast import literal_eval
@@ -17,6 +16,10 @@ from xml.dom.minidom import parseString
 
 from dicttoxml import dicttoxml
 from multiprocess import Pool
+try:
+    from philologic.DB import DB
+except ImportError:
+    pass
 
 IndexedNgram = namedtuple("IndexedNgram", "index, position")
 NgramMatch = namedtuple("NgramMatch", "source, target, ngram_index")
@@ -31,7 +34,7 @@ MATCHING_DEFAULTS = {
     "max_gap": 10,
     "minimum_matching_ngrams":4,
     "minimum_matching_ngrams_in_window":4,
-    "common_ngrams_limit": .5,
+    "common_ngrams_limit": 50,
     "percent_matching": 10
 }
 
@@ -41,7 +44,7 @@ class SequenceAligner(object):
     representation of text."""
 
     def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, filtered_ngrams=50,
-                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=10, debug=False, matching_algorithm="default",
+                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=4, debug=False, matching_algorithm="default",
                  source_db_path="", target_db_path="", cached=True, **matching_args):
 
         # Set global variables
@@ -57,6 +60,7 @@ class SequenceAligner(object):
         for default_matching_arg, value in MATCHING_DEFAULTS.items():
             if default_matching_arg not in self:
                 setattr(self, default_matching_arg, value)
+        self.common_ngrams_limit /= 100
 
         # Setting PhiloLogic DB paths
         if not source_db_path:
@@ -491,86 +495,85 @@ class SequenceAligner(object):
 
     def __write_alignments(self, source_doc_id, target_doc_id, alignments):
         """Write results to file"""
-        metadata = {}
-        metadata["source"] = self.get_metadata_from_position(source_doc_id, direction="source")
-        metadata["target"] = self.get_metadata_from_position(target_doc_id, direction="target")
+        source_metadata = get_metadata_from_position(source_doc_id, self.source_path)
+        target_metadata = get_metadata_from_position(target_doc_id, self.target_path)
         if self.output == "html":
-            self.__html_output(metadata, alignments, source_doc_id, target_doc_id)
+            self.__html_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id)
         elif self.output == "json":
-            self.__json_output(metadata, alignments, source_doc_id, target_doc_id)
+            self.__json_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id)
         elif self.output == "tab":
-            self.__tab_output(metadata, alignments, source_doc_id, target_doc_id)
+            self.__tab_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id)
         else:
-            self.__xml_output(metadata, alignments, source_doc_id, target_doc_id)
+            self.__xml_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id)
 
-    def __html_output(self, metadata, alignments, source_doc_id, target_doc_id):
+    def __html_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """HTML output"""
         output = open("%s-%s.html" % (source_doc_id, target_doc_id), "w")
         for alignment in alignments:
             output.write("<h1>===================</h1>")
             output.write("""<div><button type="button">Diff alignments</button>""")
             source_context_before, source_passage, source_context_after = \
-                self.__alignment_to_text(alignment["source"], metadata["source"]["filename"], self.source_path)
+                self.__alignment_to_text(alignment["source"], source_metadata["filename"], self.source_path)
             target_context_before, target_passage, target_context_after = \
-                self.__alignment_to_text(alignment["target"], metadata["target"]["filename"], self.target_path)
+                self.__alignment_to_text(alignment["target"], target_metadata["filename"], self.target_path)
             source_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (source_context_before, source_passage, source_context_after)
             target_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (target_context_before, target_passage, target_context_after)
             output.write('<h4>====== Source ======</h4>')
-            output.write('<h5>%s, (%s)</h5>' % (metadata["source"]["title"], metadata["source"]["author"]))
+            output.write('<h5>%s, (%s)</h5>' % (source_metadata["title"], source_metadata["author"]))
             output.write(source_print)
             output.write('<h4>====== Target ======</h4>')
-            output.write('<h5>%s, (%s)</h5>' % (metadata["target"]["title"], metadata["target"]["author"]))
+            output.write('<h5>%s, (%s)</h5>' % (target_metadata["title"], target_metadata["author"]))
             output.write(target_print)
             output.write("</div>")
         output.close()
 
-    def __json_output(self, metadata, alignments, source_doc_id, target_doc_id):
+    def __json_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """JSON output"""
         output = open("%s-%s.json" % (source_doc_id, target_doc_id), "w")
         all_alignments = []
         for alignment in alignments:
             source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
-                                                                                                   metadata["source"]["filename"],
+                                                                                                   source_metadata["filename"],
                                                                                                    self.source_path)
-            source = {"metadata": metadata["source"], "context_before": source_context_before, "context_after": source_context_after,
+            source = {"metadata": source_metadata, "context_before": source_context_before, "context_after": source_context_after,
                       "matching_passage": source_passage}
             target_context_before, target_passage, target_context_after = self.__alignment_to_text(alignment["target"],
-                                                                                                   metadata["target"]["filename"],
+                                                                                                   target_metadata["filename"],
                                                                                                    self.target_path)
-            target = {"metadata": metadata["target"], "context_before": target_context_before, "context_after": target_context_after,
+            target = {"metadata": target_metadata, "context_before": target_context_before, "context_after": target_context_after,
                       "matching_passage": target_passage}
             all_alignments.append({"source": source, "target": target})
         json.dump(all_alignments, output)
         output.close()
 
-    def __tab_output(self, metadata, alignments, source_doc_id, target_doc_id):
+    def __tab_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """Tab delimited output."""
         output = open("%s-%s.tab" % (source_doc_id, target_doc_id), "w")
-        first_line = list(metadata["source"].keys()) + ["source_context_before", "source_passage", "source_context_after"]
-        first_line += list(metadata["target"].keys()) + ["target_context_before", "target_passage", "target_context_after"]
+        first_line = list(source_metadata.keys()) + ["source_context_before", "source_passage", "source_context_after"]
+        first_line += list(target_metadata.keys()) + ["target_context_before", "target_passage", "target_context_after"]
         print("\t".join(first_line), file=output)
         for alignment in alignments:
-            fields = list(metadata["source"].values())
-            fields.extend(self.__alignment_to_text(alignment["source"], metadata["source"]["filename"], self.source_path))
-            fields.extend(list(metadata["target"].values()))
-            fields.extend(self.__alignment_to_text(alignment["target"], metadata["target"]["filename"], self.target_path))
+            fields = list(source_metadata.values())
+            fields.extend(self.__alignment_to_text(alignment["source"], source_metadata["filename"], self.source_path))
+            fields.extend(list(target_metadata.values()))
+            fields.extend(self.__alignment_to_text(alignment["target"], target_metadata["filename"], self.target_path))
             print("\t".join(str(i) for i in fields), file=output)
         output.close()
 
-    def __xml_output(self, metadata, alignments, source_doc_id, target_doc_id):
+    def __xml_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """XML output"""
         output = open("%s-%s.xml" % (source_doc_id, target_doc_id), "w")
         all_alignments = []
         for alignment in alignments:
             source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
-                                                                                                   metadata["source"]["filename"],
+                                                                                                   source_metadata["filename"],
                                                                                                    self.source_path)
-            source = {"metadata": metadata["source"], "context_before": source_context_before, "context_after": source_context_after,
+            source = {"metadata": source_metadata, "context_before": source_context_before, "context_after": source_context_after,
                       "matching_passage": source_passage}
             target_context_before, target_passage, target_context_after = self.__alignment_to_text(alignment["target"],
-                                                                                                   metadata["target"]["filename"],
+                                                                                                   target_metadata["filename"],
                                                                                                    self.target_path)
-            target = {"metadata": metadata["target"], "context_before": target_context_before, "context_after": target_context_after,
+            target = {"metadata": target_metadata, "context_before": target_context_before, "context_after": target_context_after,
                       "matching_passage": target_passage}
             all_alignments.append({"source": source, "target": target})
         xml = dicttoxml(all_alignments)
@@ -603,31 +606,21 @@ class SequenceAligner(object):
 
     def __get_end_byte(self, philo_id, path):
         """Get end byte of word given a philo ID."""
-        conn = sqlite3.connect(os.path.join(path, "data/toms.db"))
-        cursor = conn.cursor()
+        conn = DB(os.path.join(path, "data"))
+        cursor = conn.dbh.cursor()
         cursor.execute("SELECT end_byte from words where philo_id=?", (" ".join(philo_id.split()[:7]),))
         result = int(cursor.fetchone()[0])
         return result
 
 
-    def get_metadata_from_position(self, position, direction="source"):
-        """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
-        position = position.split()[0] + ' 0 0 0 0 0 0'
-        if direction == "source":
-            source_db = sqlite3.connect(os.path.join(self.source_path, "data/toms.db"))
-            source_db.row_factory = sqlite3.Row
-            cursor = source_db.cursor()
-            cursor.execute("select * from toms where philo_id=? limit 1", (position,))
-        else:
-            target_db = sqlite3.connect(os.path.join(self.target_path, "data/toms.db"))
-            target_db.row_factory = sqlite3.Row
-            cursor = target_db.cursor()
-            cursor.execute("select * from toms where philo_id=? limit 1", (position,))
-        results = cursor.fetchone()
-        metadata = {}
-        for field in results.keys():
-            metadata[field] = results[field] or ""
-        return metadata
+def get_metadata_from_position(passage_id, path):
+    """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
+    metadata = {}
+    philo_db = DB(os.path.join(path, "data"), cached=False)
+    text_object = philo_db[passage_id]
+    for field in philo_db.locals["metadata_fields"]:
+        metadata[field] = text_object[field]
+    return metadata
 
 def file_arg_to_files(file_arg):
     """Interpret file argument on command line"""
