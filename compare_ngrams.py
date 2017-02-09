@@ -519,10 +519,10 @@ class SequenceAligner(object):
             source_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (source_context_before, source_passage, source_context_after)
             target_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (target_context_before, target_passage, target_context_after)
             output.write('<h4>====== Source ======</h4>')
-            output.write('<h5>%s, (%s)</h5>' % (source_metadata["title"], source_metadata["author"]))
+            output.write('<h5>%s, (%s) &gt; %s</h5>' % (source_metadata["title"], source_metadata["author"], source_metadata["head"]))
             output.write(source_print)
             output.write('<h4>====== Target ======</h4>')
-            output.write('<h5>%s, (%s)</h5>' % (target_metadata["title"], target_metadata["author"]))
+            output.write('<h5>%s, (%s) &gt; %s</h5>' % (target_metadata["title"], target_metadata["author"], target_metadata["head"]))
             output.write(target_print)
             output.write("</div>")
         output.close()
@@ -617,7 +617,7 @@ def get_metadata_from_position(passage_id, path):
     """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
     metadata = {}
     philo_db = DB(os.path.join(path, "data"), cached=False)
-    text_object = philo_db[passage_id]
+    text_object = philo_db[passage_id.split('_')]
     for field in philo_db.locals["metadata_fields"]:
         metadata[field] = text_object[field]
     return metadata
