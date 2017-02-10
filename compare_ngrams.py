@@ -151,16 +151,10 @@ class SequenceAligner(object):
             exit()
         if target_index is not None:
             target_ngrams = json.load(open(target_index))
-        else:
-            target_ngrams = []
-        for target_ngram in target_ngrams:
-            if target_ngram in all_ngrams:
-                all_ngrams[target_ngram] += target_ngrams[target_ngram]
-            else:
-                all_ngrams[target_ngram] = target_ngrams[target_ngram]
-        # Sort and eliminate hapax ngrams
-        sorted_ngrams = [literal_eval(i[0]) for i in sorted(all_ngrams.items(), key=itemgetter(1), reverse=True) if i[1] > 1]
-        ngram_index = {tuple(ngram): n for n, ngram in enumerate(sorted_ngrams)}
+            for target_ngram in target_ngrams:
+                all_ngrams[target_ngram] = all_ngrams.get(target_ngram, 0) + target_ngrams[target_ngram]
+        ngrams = [literal_eval(key) for key, value in all_ngrams.items() if value > 1]
+        ngram_index = {tuple(ngram): n for n, ngram in enumerate(ngrams)}
         return ngram_index
 
     def __build_doc_object(self, file, direction):
@@ -172,8 +166,7 @@ class SequenceAligner(object):
             doc_index = defaultdict(list)
             index_pos = 0
             for ngram_obj in ngrams:
-                ngram = tuple(i[0] for i in ngram_obj)
-                philo_ids = tuple(i[1] for i in ngram_obj)
+                ngram, philo_ids = zip(*ngram_obj)
                 try:
                     ngram_int = self.ngram_index[ngram]
                     doc_index[ngram_int].append(IndexedNgram(index_pos, philo_ids))
