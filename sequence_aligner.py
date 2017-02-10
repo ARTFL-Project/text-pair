@@ -81,6 +81,6 @@ if __name__ == '__main__':
         TARGET_INDEX = None
     print("\n### Starting sequence alignment ###")
     ALIGNER = SequenceAligner(SOURCE_JSON, SOURCE_INDEX, target_files=TARGET_JSON, target_ngram_index=TARGET_INDEX,
-                              output=ARGS["output_type"], debug=ARGS["debug"], source_db_path=ARGS["source_path"],
-                              target_db_path=ARGS["target_path"], **ARGS["matching"])
+                              output=ARGS["output_type"], output_path=ARGS["output_path"], source_db_path=ARGS["source_path"],
+                              target_db_path=ARGS["target_path"], debug=ARGS["debug"], **ARGS["matching"])
     ALIGNER.compare()

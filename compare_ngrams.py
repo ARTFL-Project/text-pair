@@ -14,6 +14,7 @@ from glob import glob
 from operator import itemgetter
 from xml.dom.minidom import parseString
 
+from alignment_algorithms import default_algorithm
 from dicttoxml import dicttoxml
 from multiprocess import Pool
 try:
@@ -44,8 +45,8 @@ class SequenceAligner(object):
     representation of text."""
 
     def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, filtered_ngrams=50,
-                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=4, debug=False, matching_algorithm="default",
-                 source_db_path="", target_db_path="", cached=True, **matching_args):
+                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=6, debug=False, matching_algorithm="default",
+                 source_db_path="", target_db_path="", output_path="./", cached=True, **matching_args):
 
         # Set global variables
         self.minimum_matching_ngrams_in_docs = minimum_matching_ngrams_in_docs
@@ -85,8 +86,9 @@ class SequenceAligner(object):
 
         self.debug = debug
 
-        os.system("rm -rf tmp/source && mkdir -p tmp/source")
-        os.system("rm -rf tmp/target && mkdir -p tmp/target")
+        os.system("rm -rf %s/tmp/source && mkdir -p %s/tmp/source" % (output_path, output_path))
+        os.system("rm -rf %s/tmp/target && mkdir -p %s/tmp/target" % (output_path, output_path))
+        self.output_path = output_path
 
         # Build data representation of index
         print("\n## Loading ngram index ##")
@@ -178,11 +180,11 @@ class SequenceAligner(object):
                 except KeyError:
                     pass
         self.global_doc_index[direction][doc_id] = set(doc_index)
-        with open("tmp/%s/%s.pickle" % (direction, doc_id), "wb") as file_to_pickle:
+        with open("%s/tmp/%s/%s.pickle" % (self.output_path, direction, doc_id), "wb") as file_to_pickle:
             pickle.dump(doc_index, file_to_pickle, pickle.HIGHEST_PROTOCOL)
         def unpickle_file():
             """Unpickle file"""
-            with open("tmp/%s/%s.pickle" % (direction, doc_id), "rb") as pickled_file:
+            with open("%s/tmp/%s/%s.pickle" % (self.output_path, direction, doc_id), "rb") as pickled_file:
                 return pickle.load(pickled_file)
         return DocObject(doc_id, unpickle_file)
 
@@ -212,13 +214,15 @@ class SequenceAligner(object):
             target_ngrams = target_ngram_object()
             matches = []
             ngram_intersection = {ngram: source_ngrams[ngram] + target_ngrams[ngram] for ngram in source_set.intersection(target_ngrams)}
-            common_ngrams = sorted(ngram_intersection.items(), key=lambda x: x[0], reverse=True)[:self.banal_ngrams]
+            common_ngrams = set(i for i, j in sorted(ngram_intersection.items(), key=lambda x: x[0], reverse=True)[:self.banal_ngrams])
+            # print(common_ngrams)
             for ngram in ngram_intersection:
                 for source_obj in source_ngrams[ngram]:
                     for target_obj in target_ngrams[ngram]:
                         matches.append(NgramMatch(source_obj, target_obj, ngram))
             if self.matching_algorithm == "default":
-                alignments = self.__default_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
+                #alignments = self.__default_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
+                alignments = default_algorithm(self, source_doc_id, target_doc_id, matches, common_ngrams)
             else:
                 alignments = self.__out_of_order_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
             alignment_count[source_doc_id] += len(alignments)
@@ -230,7 +234,7 @@ class SequenceAligner(object):
         """Default matching algorithm. Algorithm modeled after the following example
         # ex: [(5, 12), (5, 78), (7, 36), (7, 67), (9, 14)]"""
         if self.debug:
-            debug_output = open("aligner_debug_%s-%s.log" % (source_doc_id, target_doc_id), "w")
+            debug_output = open("%s/aligner_debug_%s-%s.log" % (self.output_path, source_doc_id, target_doc_id), "w")
         matches.sort(key=lambda x: x[0][0])
         matches = deque(matches)
         alignments = []
@@ -325,7 +329,7 @@ class SequenceAligner(object):
         Algorithm modeled after the following example
         # ex: [(5, 12), (5, 78), (7, 36), (7, 67), (9, 14)]"""
         if self.debug:
-            debug_output = open("aligner_debug_%s-%s.log" % (source_doc_id, target_doc_id), "w")
+            debug_output = open("%s/aligner_debug_%s-%s.log" % (self.output_path, source_doc_id, target_doc_id), "w")
         matches.sort(key=lambda x: x[0][0])
         matches = deque(matches)
         alignments = []
@@ -508,7 +512,7 @@ class SequenceAligner(object):
 
     def __html_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """HTML output"""
-        output = open("%s-%s.html" % (source_doc_id, target_doc_id), "w")
+        output = open("%s/%s-%s.html" % (self.output_path, source_doc_id, target_doc_id), "w")
         for alignment in alignments:
             output.write("<h1>===================</h1>")
             output.write("""<div><button type="button">Diff alignments</button>""")
@@ -529,7 +533,7 @@ class SequenceAligner(object):
 
     def __json_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """JSON output"""
-        output = open("%s-%s.json" % (source_doc_id, target_doc_id), "w")
+        output = open("%s/%s-%s.json" % (self.output_path, source_doc_id, target_doc_id), "w")
         all_alignments = []
         for alignment in alignments:
             source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
@@ -548,7 +552,7 @@ class SequenceAligner(object):
 
     def __tab_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """Tab delimited output."""
-        output = open("%s-%s.tab" % (source_doc_id, target_doc_id), "w")
+        output = open("%s/%s-%s.tab" % (self.output_path, source_doc_id, target_doc_id), "w")
         first_line = list(source_metadata.keys()) + ["source_context_before", "source_passage", "source_context_after"]
         first_line += list(target_metadata.keys()) + ["target_context_before", "target_passage", "target_context_after"]
         print("\t".join(first_line), file=output)
@@ -562,7 +566,7 @@ class SequenceAligner(object):
 
     def __xml_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """XML output"""
-        output = open("%s-%s.xml" % (source_doc_id, target_doc_id), "w")
+        output = open("%s/%s-%s.xml" % (self.output_path, source_doc_id, target_doc_id), "w")
         all_alignments = []
         for alignment in alignments:
             source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
