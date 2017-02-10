@@ -9,7 +9,7 @@ import re
 import sys
 import timeit
 from ast import literal_eval
-from collections import Counter, defaultdict, deque, namedtuple, OrderedDict
+from collections import defaultdict, deque, namedtuple, OrderedDict
 from glob import glob
 from operator import itemgetter
 from xml.dom.minidom import parseString
@@ -44,7 +44,7 @@ class SequenceAligner(object):
     representation of text."""
 
     def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, banal_ngrams=25,
-                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=10, debug=False, matching_algorithm="default",
+                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=6, debug=False, matching_algorithm="default",
                  source_db_path="", target_db_path="", output_path="./", cached=True, **matching_args):
 
         # Set global variables
@@ -101,11 +101,12 @@ class SequenceAligner(object):
         self.global_doc_index = {"source": {}, "target": {}}
         self.docs_to_compare = {os.path.basename(file).replace("_ngrams.json", "").strip(): set([]) for file in source_files}
         print("\n## Indexing source docs ##")
-        self.source_files = [self.__build_doc_object(f, "source") for f in source_files]
+        self.global_doc_index["source"] = dict([self.__build_doc_object(f, "source") for f in source_files])
+        self.source_files = list(self.global_doc_index["source"].keys())
         if target_files is None:
             self.target_files = self.source_files
             for source_doc_id in self.docs_to_compare:
-                for target_doc_id, ngrams in self.target_files:
+                for target_doc_id in self.target_files:
                     if target_doc_id != source_doc_id:
                         if (
                                 len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["source"][target_doc_id]))
@@ -116,9 +117,10 @@ class SequenceAligner(object):
         else:
             print("\n## Indexing target docs ##")
             target_files = file_arg_to_files(target_files)
-            self.target_files = [self.__build_doc_object(f, "target") for f in target_files]
+            self.global_doc_index["target"] = dict([self.__build_doc_object(f, "target") for f in target_files])
+            self.target_files = list(self.global_doc_index["target"].keys())
             for source_doc_id in self.docs_to_compare:
-                for target_doc_id, ngrams in self.target_files:
+                for target_doc_id in self.target_files:
                     if (
                             len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["target"][target_doc_id]))
                             >=
@@ -178,14 +180,9 @@ class SequenceAligner(object):
                     index_pos += 1
                 except KeyError:
                     pass
-        self.global_doc_index[direction][doc_id] = set(doc_index)
         with open("%s/tmp/%s/%s.pickle" % (self.output_path, direction, doc_id), "wb") as file_to_pickle:
             pickle.dump(doc_index, file_to_pickle, pickle.HIGHEST_PROTOCOL)
-        def unpickle_file():
-            """Unpickle file"""
-            with open("%s/tmp/%s/%s.pickle" % (self.output_path, direction, doc_id), "rb") as pickled_file:
-                return pickle.load(pickled_file)
-        return DocObject(doc_id, unpickle_file)
+        return doc_id, set(doc_index)
 
     def compare(self):
         """Run comparison between source and target files.
@@ -194,25 +191,23 @@ class SequenceAligner(object):
         start_time = timeit.default_timer()
         pool = Pool(self.workers)
         count = list(pool.map(self.__find_matches_in_docs, self.source_files))
-        # count = map(self.__find_matches_in_docs, self.source_files)
         print("\n## Results ##")
         print("Found a total of %d" % sum(count))
         print("Comparison took %f" % (timeit.default_timer() - start_time))
 
-    def __find_matches_in_docs(self, source_file):
+    def __find_matches_in_docs(self, source_doc_id):
         """Default matching algorithm"""
-        source_doc_id, source_pickle = source_file
-        source_ngrams = source_pickle()
+        source_ngrams = unpickle_file("%s/tmp/%s/%s.pickle" % (self.output_path, "source", source_doc_id))
         source_set = set(source_ngrams)
         combined_alignments = []
         count = 0
-        print("Comparing source doc %s to all target docs..." % source_file.doc_id)
-        for target_doc_id, target_ngram_object in self.target_files:
+        print("Comparing source doc %s to all target docs..." % source_doc_id)
+        for target_doc_id in self.target_files:
             if target_doc_id not in self.docs_to_compare[source_doc_id]:
                 if self.debug:
                     print("Skipping source doc %s to target doc %s comparison: not enough matching ngrams" % (source_doc_id, target_doc_id))
                 continue
-            target_ngrams = target_ngram_object()
+            target_ngrams = unpickle_file("%s/tmp/%s/%s.pickle" % (self.output_path, "target", target_doc_id))
             matches = []
             ngram_intersection = {ngram: len(source_ngrams[ngram] + target_ngrams[ngram]) for ngram in source_set.intersection(target_ngrams)}
             common_ngrams = set(i for i, j in sorted(ngram_intersection.items(), key=lambda x: x[1], reverse=True)[:self.banal_ngrams])
@@ -639,6 +634,11 @@ def get_column_names(path):
     cursor = philo_db.dbh.cursor()
     cursor.execute('select %s from toms limit 1' % ",".join(philo_db.locals["metadata_fields"]))
     return list(map(lambda x: x[0], cursor.description))
+
+def unpickle_file(path):
+    """Unpickle file"""
+    with open(path, "rb") as pickled_file:
+        return pickle.load(pickled_file)
 
 def file_arg_to_files(file_arg):
     """Interpret file argument on command line"""
