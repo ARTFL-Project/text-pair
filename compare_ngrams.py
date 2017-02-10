@@ -9,12 +9,11 @@ import re
 import sys
 import timeit
 from ast import literal_eval
-from collections import Counter, defaultdict, deque, namedtuple
+from collections import Counter, defaultdict, deque, namedtuple, OrderedDict
 from glob import glob
 from operator import itemgetter
 from xml.dom.minidom import parseString
 
-from alignment_algorithms import default_algorithm
 from dicttoxml import dicttoxml
 from multiprocess import Pool
 try:
@@ -35,7 +34,7 @@ MATCHING_DEFAULTS = {
     "max_gap": 10,
     "minimum_matching_ngrams":4,
     "minimum_matching_ngrams_in_window":4,
-    "common_ngrams_limit": 50,
+    "common_ngrams_limit": 75,
     "percent_matching": 10
 }
 
@@ -44,8 +43,8 @@ class SequenceAligner(object):
     """Base class for running sequence alignment tasks from ngram
     representation of text."""
 
-    def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, filtered_ngrams=50,
-                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=6, debug=False, matching_algorithm="default",
+    def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, banal_ngrams=25,
+                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=10, debug=False, matching_algorithm="default",
                  source_db_path="", target_db_path="", output_path="./", cached=True, **matching_args):
 
         # Set global variables
@@ -53,7 +52,7 @@ class SequenceAligner(object):
         self.context = context
         self.matching_algorithm = matching_algorithm
         self.cached = cached
-        self.banal_ngrams = filtered_ngrams
+        self.banal_ngrams = banal_ngrams
 
         # Set matching args
         for matching_arg, value in matching_args.items():
@@ -93,7 +92,7 @@ class SequenceAligner(object):
         # Build data representation of index
         print("\n## Loading ngram index ##")
         self.ngram_index = self.__load_ngram_index(source_ngram_index, target_ngram_index)
-        self.common_ngrams = set(range(0, filtered_ngrams))
+        self.common_ngrams = set(range(0, banal_ngrams))
         if self.debug:
             self.index_to_ngram = {value: key for key, value in self.ngram_index.items()}
 
@@ -195,6 +194,7 @@ class SequenceAligner(object):
         start_time = timeit.default_timer()
         pool = Pool(self.workers)
         count = list(pool.map(self.__find_matches_in_docs, self.source_files))
+        # count = map(self.__find_matches_in_docs, self.source_files)
         print("\n## Results ##")
         print("Found a total of %d" % sum(count))
         print("Comparison took %f" % (timeit.default_timer() - start_time))
@@ -204,7 +204,8 @@ class SequenceAligner(object):
         source_doc_id, source_pickle = source_file
         source_ngrams = source_pickle()
         source_set = set(source_ngrams)
-        alignment_count = Counter()
+        combined_alignments = []
+        count = 0
         print("Comparing source doc %s to all target docs..." % source_file.doc_id)
         for target_doc_id, target_ngram_object in self.target_files:
             if target_doc_id not in self.docs_to_compare[source_doc_id]:
@@ -213,22 +214,21 @@ class SequenceAligner(object):
                 continue
             target_ngrams = target_ngram_object()
             matches = []
-            ngram_intersection = {ngram: source_ngrams[ngram] + target_ngrams[ngram] for ngram in source_set.intersection(target_ngrams)}
-            common_ngrams = set(i for i, j in sorted(ngram_intersection.items(), key=lambda x: x[0], reverse=True)[:self.banal_ngrams])
-            # print(common_ngrams)
+            ngram_intersection = {ngram: len(source_ngrams[ngram] + target_ngrams[ngram]) for ngram in source_set.intersection(target_ngrams)}
+            common_ngrams = set(i for i, j in sorted(ngram_intersection.items(), key=lambda x: x[1], reverse=True)[:self.banal_ngrams])
             for ngram in ngram_intersection:
                 for source_obj in source_ngrams[ngram]:
                     for target_obj in target_ngrams[ngram]:
                         matches.append(NgramMatch(source_obj, target_obj, ngram))
             if self.matching_algorithm == "default":
-                #alignments = self.__default_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
-                alignments = default_algorithm(self, source_doc_id, target_doc_id, matches, common_ngrams)
+                alignments = self.__default_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
             else:
                 alignments = self.__out_of_order_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
-            alignment_count[source_doc_id] += len(alignments)
-            if alignment_count[source_doc_id] > 0:
-                self.__write_alignments(source_doc_id, target_doc_id, alignments)
-        return alignment_count[source_doc_id]
+            combined_alignments.append((target_doc_id, alignments))
+            count += len(alignments)
+        if combined_alignments:
+            self.__write_alignments(combined_alignments, source_doc_id)
+        return count
 
     def __default_algorithm(self, source_doc_id, target_doc_id, matches, common_ngrams):
         """Default matching algorithm. Algorithm modeled after the following example
@@ -485,7 +485,7 @@ class SequenceAligner(object):
         return alignments
 
     def __debug_output(self, debug_alignment, debug_output, matches_in_current_alignment, last_match, current_anchor, common_ngram_matches):
-        if common_ngram_matches/matches_in_current_alignment >= self.common_ngrams_limit:
+        if matches_in_current_alignment >= self.minimum_matching_ngrams and common_ngram_matches/matches_in_current_alignment >= self.common_ngrams_limit:
             debug_output.write("\n\n## Failed passage ##\n")
             debug_output.write('Too many common ngrams: %d out of %d matches\n' % (common_ngram_matches, matches_in_current_alignment))
         elif matches_in_current_alignment >= self.minimum_matching_ngrams:
@@ -497,43 +497,59 @@ class SequenceAligner(object):
         for match in debug_alignment:
             print("%s: %s => %s" % (" ".join(match[2]), str(match[0]), str(match[1])), file=debug_output)
 
-    def __write_alignments(self, source_doc_id, target_doc_id, alignments):
+    def __write_alignments(self, combined_alignments, source_doc_id):
         """Write results to file"""
-        source_metadata = get_metadata_from_position(source_doc_id, self.source_path)
-        target_metadata = get_metadata_from_position(target_doc_id, self.target_path)
-        if self.output == "html":
-            self.__html_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id)
-        elif self.output == "json":
-            self.__json_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id)
-        elif self.output == "tab":
-            self.__tab_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id)
-        else:
-            self.__xml_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id)
+        with open("%s/%s_to_all.%s" % (self.output_path, source_doc_id, self.output), 'w') as output_file:
+            combined_output = []
+            if self.output == "tab":
+                columns = get_column_names(self.source_path) + ["source_context_before", "source_passage", "source_context_after"]
+                columns.extend(get_column_names(self.target_path) + ["target_context_before", "target_passage", "target_context_after"])
+                combined_output.append("\t".join(columns))
+            for target_doc_id, alignments in combined_alignments:
+                source_metadata = get_metadata_from_position(source_doc_id, self.source_path)
+                target_metadata = get_metadata_from_position(target_doc_id, self.target_path)
+                if self.output == "html":
+                    combined_output.append(self.__html_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id))
+                elif self.output == "json":
+                    combined_output.extend(self.__json_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id))
+                elif self.output == "tab":
+                    combined_output.extend(self.__tab_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id))
+                else:
+                    combined_output.extend(self.__xml_output(source_metadata, target_metadata, alignments, source_doc_id, target_doc_id))
+            if self.output == "html":
+                output_file.write("".join(combined_output))
+            elif self.output == "tab":
+                output_file.write("\n".join(combined_output))
+            elif self.output == "json":
+                json.dump(combined_output, output_file)
+            elif self.output == "xml":
+                xml = dicttoxml(combined_output)
+                dom = parseString(xml)
+                output_file.write(dom)
 
     def __html_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """HTML output"""
-        output = open("%s/%s-%s.html" % (self.output_path, source_doc_id, target_doc_id), "w")
+        output_string = ""
         for alignment in alignments:
-            output.write("<h1>===================</h1>")
-            output.write("""<div><button type="button">Diff alignments</button>""")
+            output_string += "<h1>===================</h1>"
+            output_string += """<div><button type="button">Diff alignments</button>"""
             source_context_before, source_passage, source_context_after = \
                 self.__alignment_to_text(alignment["source"], source_metadata["filename"], self.source_path)
             target_context_before, target_passage, target_context_after = \
                 self.__alignment_to_text(alignment["target"], target_metadata["filename"], self.target_path)
             source_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (source_context_before, source_passage, source_context_after)
             target_print = '<p>%s <span style="color:red">%s</span> %s</p>' % (target_context_before, target_passage, target_context_after)
-            output.write('<h4>====== Source ======</h4>')
-            output.write('<h5>%s, (%s) &gt; %s</h5>' % (source_metadata["title"], source_metadata["author"], source_metadata["head"]))
-            output.write(source_print)
-            output.write('<h4>====== Target ======</h4>')
-            output.write('<h5>%s, (%s) &gt; %s</h5>' % (target_metadata["title"], target_metadata["author"], target_metadata["head"]))
-            output.write(target_print)
-            output.write("</div>")
-        output.close()
+            output_string += '<h4>====== Source ======</h4>'
+            output_string += '<h5>%s, (%s &gt; %s</h5>' % (source_metadata["title"], source_metadata["author"], source_metadata["head"])
+            output_string += source_print
+            output_string += '<h4>====== Target ======</h4>'
+            output_string += '<h5>%s, (%s &gt; %s</h5>' % (target_metadata["title"], target_metadata["author"], target_metadata["head"])
+            output_string += target_print
+            output_string += "</div>"
+        return output_string
 
     def __json_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """JSON output"""
-        output = open("%s/%s-%s.json" % (self.output_path, source_doc_id, target_doc_id), "w")
         all_alignments = []
         for alignment in alignments:
             source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
@@ -547,26 +563,21 @@ class SequenceAligner(object):
             target = {"metadata": target_metadata, "context_before": target_context_before, "context_after": target_context_after,
                       "matching_passage": target_passage}
             all_alignments.append({"source": source, "target": target})
-        json.dump(all_alignments, output)
-        output.close()
+        return all_alignments
 
     def __tab_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """Tab delimited output."""
-        output = open("%s/%s-%s.tab" % (self.output_path, source_doc_id, target_doc_id), "w")
-        first_line = list(source_metadata.keys()) + ["source_context_before", "source_passage", "source_context_after"]
-        first_line += list(target_metadata.keys()) + ["target_context_before", "target_passage", "target_context_after"]
-        print("\t".join(first_line), file=output)
+        output_string = []
         for alignment in alignments:
             fields = list(source_metadata.values())
             fields.extend(self.__alignment_to_text(alignment["source"], source_metadata["filename"], self.source_path))
             fields.extend(list(target_metadata.values()))
             fields.extend(self.__alignment_to_text(alignment["target"], target_metadata["filename"], self.target_path))
-            print("\t".join(str(i) for i in fields), file=output)
-        output.close()
+            output_string.append("\t".join(str(i) for i in fields))
+        return output_string
 
     def __xml_output(self, source_metadata, target_metadata, alignments, source_doc_id, target_doc_id):
         """XML output"""
-        output = open("%s/%s-%s.xml" % (self.output_path, source_doc_id, target_doc_id), "w")
         all_alignments = []
         for alignment in alignments:
             source_context_before, source_passage, source_context_after = self.__alignment_to_text(alignment["source"],
@@ -580,10 +591,7 @@ class SequenceAligner(object):
             target = {"metadata": target_metadata, "context_before": target_context_before, "context_after": target_context_after,
                       "matching_passage": target_passage}
             all_alignments.append({"source": source, "target": target})
-        xml = dicttoxml(all_alignments)
-        dom = parseString(xml)
-        output.write(dom.toprettyxml())
-        output.close()
+        return all_alignments
 
     def __alignment_to_text(self, alignment, filename, path):
         """Fetches aligned passages using philo IDs.
@@ -619,12 +627,18 @@ class SequenceAligner(object):
 
 def get_metadata_from_position(passage_id, path):
     """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
-    metadata = {}
+    metadata = OrderedDict()
     philo_db = DB(os.path.join(path, "data"), cached=False)
     text_object = philo_db[passage_id.split('_')]
     for field in philo_db.locals["metadata_fields"]:
         metadata[field] = text_object[field]
     return metadata
+
+def get_column_names(path):
+    philo_db = DB(os.path.join(path, "data"), cached=False)
+    cursor = philo_db.dbh.cursor()
+    cursor.execute('select %s from toms limit 1' % ",".join(philo_db.locals["metadata_fields"]))
+    return list(map(lambda x: x[0], cursor.description))
 
 def file_arg_to_files(file_arg):
     """Interpret file argument on command line"""
