@@ -62,6 +62,22 @@ class SequenceAligner(object):
                 setattr(self, default_matching_arg, value)
         self.common_ngrams_limit /= 100
 
+        self.source_files = []
+        self.target_files = []
+        self.output = output.lower()
+        self.workers = workers
+        self.debug = debug
+
+        # Get all paths
+        self.output_path = output_path
+        source_files = file_arg_to_files(source_files)
+        if target_files is not None:
+            target_files = file_arg_to_files(target_files)
+        else:
+            target_files = source_files
+        self.source_files_path = os.path.dirname(source_files[0])
+        self.target_files_path = os.path.dirname(target_files[0])
+
         # Setting PhiloLogic DB paths
         if not source_db_path:
             print("Error: No source db path provided")
@@ -76,32 +92,12 @@ class SequenceAligner(object):
         else:
             self.target_path = target_db_path
 
-        self.source_files = []
-        self.target_files = []
-
-        self.output = output.lower()
-
-        self.workers = workers
-
-        self.debug = debug
-
-        os.system("rm -rf %s/tmp/source && mkdir -p %s/tmp/source" % (output_path, output_path))
-        os.system("rm -rf %s/tmp/target && mkdir -p %s/tmp/target" % (output_path, output_path))
-        self.output_path = output_path
-
-        # Build data representation of index
+        # Load indexes and document representations
+        self.docs_to_compare = {os.path.basename(file).replace('.pickle', ''): set([]) for file in source_files}
         print("\n## Loading ngram index ##")
-        self.ngram_index = self.__load_ngram_index(source_ngram_index, target_ngram_index)
-        self.common_ngrams = set(range(0, banal_ngrams))
-        if self.debug:
-            self.index_to_ngram = {value: key for key, value in self.ngram_index.items()}
-
-        # Build document representation
-        source_files = file_arg_to_files(source_files)
-        self.global_doc_index = {"source": {}, "target": {}}
-        self.docs_to_compare = {os.path.basename(file).replace("_ngrams.json", "").strip(): set([]) for file in source_files}
-        print("\n## Indexing source docs ##")
-        self.global_doc_index["source"] = dict([self.__build_doc_object(f, "source") for f in source_files])
+        self.global_doc_index = {}
+        with open(source_ngram_index, "rb") as source_index:
+            self.global_doc_index["source"] = pickle.load(source_index)
         self.source_files = list(self.global_doc_index["source"].keys())
         if target_files is None:
             self.target_files = self.source_files
@@ -109,27 +105,24 @@ class SequenceAligner(object):
                 for target_doc_id in self.target_files:
                     if target_doc_id != source_doc_id:
                         if (
-                                len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["source"][target_doc_id]))
+                                len(set(self.global_doc_index["source"][source_doc_id]).intersection(self.global_doc_index["source"][target_doc_id]))
                                 >=
                                 self.minimum_matching_ngrams_in_docs
                         ):
                             self.docs_to_compare[source_doc_id].add(target_doc_id)
         else:
-            print("\n## Indexing target docs ##")
-            target_files = file_arg_to_files(target_files)
-            self.global_doc_index["target"] = dict([self.__build_doc_object(f, "target") for f in target_files])
+            with open(target_ngram_index, "rb") as target_index:
+                self.global_doc_index["target"] = pickle.load(target_index)
             self.target_files = list(self.global_doc_index["target"].keys())
             for source_doc_id in self.docs_to_compare:
                 for target_doc_id in self.target_files:
                     if (
-                            len(self.global_doc_index["source"][source_doc_id].intersection(self.global_doc_index["target"][target_doc_id]))
+                            len(set(self.global_doc_index["source"][source_doc_id]).intersection(self.global_doc_index["target"][target_doc_id]))
                             >=
                             self.minimum_matching_ngrams_in_docs
                     ):
                         self.docs_to_compare[source_doc_id].add(target_doc_id)
-
         # release memory since we no longer need those
-        self.ngram_index = {}
         self.global_doc_index = {}
 
     def __setattr__(self, attr, value):
@@ -157,26 +150,6 @@ class SequenceAligner(object):
         ngram_index = {tuple(ngram): n for n, ngram in enumerate(ngrams)}
         return ngram_index
 
-    def __build_doc_object(self, file, direction):
-        """Build a file representation used for ngram comparisons"""
-        doc_id = os.path.basename(file).replace("_ngrams.json", "").strip()
-        print("Processing doc %s..." % doc_id)
-        with open(file) as filehandle:
-            ngrams = json.load(filehandle)
-            doc_index = defaultdict(list)
-            index_pos = 0
-            for ngram_obj in ngrams:
-                ngram, philo_ids = zip(*ngram_obj)
-                try:
-                    ngram_int = self.ngram_index[ngram]
-                    doc_index[ngram_int].append(IndexedNgram(index_pos, philo_ids))
-                    index_pos += 1
-                except KeyError:
-                    pass
-        with open("%s/tmp/%s/%s.pickle" % (self.output_path, direction, doc_id), "wb") as file_to_pickle:
-            pickle.dump(doc_index, file_to_pickle, pickle.HIGHEST_PROTOCOL)
-        return doc_id, set(doc_index)
-
     def compare(self):
         """Run comparison between source and target files.
         If no target is defined, it will compare source files against themselves."""
@@ -190,7 +163,7 @@ class SequenceAligner(object):
 
     def __find_matches_in_docs(self, source_doc_id):
         """Default matching algorithm"""
-        source_ngrams = unpickle_file("%s/tmp/%s/%s.pickle" % (self.output_path, "source", source_doc_id))
+        source_ngrams = unpickle_file("%s/%s.pickle" % (self.source_files_path, source_doc_id))
         source_set = set(source_ngrams)
         combined_alignments = []
         count = 0
@@ -200,14 +173,15 @@ class SequenceAligner(object):
                 if self.debug:
                     print("Skipping source doc %s to target doc %s comparison: not enough matching ngrams" % (source_doc_id, target_doc_id))
                 continue
-            target_ngrams = unpickle_file("%s/tmp/%s/%s.pickle" % (self.output_path, "target", target_doc_id))
+            target_ngrams = unpickle_file("%s/%s.pickle" % (self.target_files_path, target_doc_id))
             matches = []
             ngram_intersection = {ngram: len(source_ngrams[ngram] + target_ngrams[ngram]) for ngram in source_set.intersection(target_ngrams)}
             common_ngrams = set(i for i, j in sorted(ngram_intersection.items(), key=lambda x: x[1], reverse=True)[:self.banal_ngrams])
+            append_to_matches = matches.append
             for ngram in ngram_intersection:
                 for source_obj in source_ngrams[ngram]:
                     for target_obj in target_ngrams[ngram]:
-                        matches.append(NgramMatch(source_obj, target_obj, ngram))
+                        append_to_matches(NgramMatch(source_obj, target_obj, ngram))
             if self.matching_algorithm == "default":
                 alignments = self.__default_algorithm(source_doc_id, target_doc_id, matches, common_ngrams)
             else:
@@ -639,7 +613,7 @@ def file_arg_to_files(file_arg):
         return file_arg
     if file_arg.endswith('/') or os.path.isdir(file_arg):
         files = glob(file_arg + '/*')
-    elif file_arg.endswith('*'):
+    elif "*" in file_arg:
         files = glob(file_arg)
     else:
         files = file_arg[:]

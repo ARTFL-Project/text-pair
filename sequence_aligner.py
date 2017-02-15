@@ -69,18 +69,18 @@ if __name__ == '__main__':
     NGRAMS = Ngrams(**ARGS["preprocessing"])
     print("### Generating source ngrams ###")
     NGRAMS.generate(ARGS["source_files"], ARGS["source_output_path"])
-    SOURCE_JSON = sorted(NGRAMS.json_output_files)
+    SOURCE_FILES = sorted(NGRAMS.output_files)
     SOURCE_INDEX = NGRAMS.ngram_index
     if ARGS["target_files"] is not None:
         print("\n### Generating target ngrams ###")
         NGRAMS.generate(ARGS["target_files"], ARGS["target_output_path"])
-        TARGET_JSON = sorted(NGRAMS.json_output_files)
+        TARGET_FILES = sorted(NGRAMS.output_files)
         TARGET_INDEX = NGRAMS.ngram_index
     else:
-        TARGET_JSON = None
+        TARGET_FILES = None
         TARGET_INDEX = None
     print("\n### Starting sequence alignment ###")
-    ALIGNER = SequenceAligner(SOURCE_JSON, SOURCE_INDEX, target_files=TARGET_JSON, target_ngram_index=TARGET_INDEX,
+    ALIGNER = SequenceAligner(SOURCE_FILES, SOURCE_INDEX, target_files=TARGET_FILES, target_ngram_index=TARGET_INDEX,
                               output=ARGS["output_type"], output_path=ARGS["output_path"], source_db_path=ARGS["source_path"],
                               target_db_path=ARGS["target_path"], debug=ARGS["debug"], **ARGS["matching"])
     ALIGNER.compare()
