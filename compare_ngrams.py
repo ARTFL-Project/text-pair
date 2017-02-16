@@ -44,7 +44,7 @@ class SequenceAligner(object):
     representation of text."""
 
     def __init__(self, source_files, source_ngram_index, target_files=None, target_ngram_index=None, banal_ngrams=25,
-                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=6, debug=False, matching_algorithm="default",
+                 minimum_matching_ngrams_in_docs=4, context=300, output="tab", workers=4, debug=False, matching_algorithm="default",
                  source_db_path="", target_db_path="", output_path="./", cached=True, **matching_args):
 
         # Set global variables
@@ -122,6 +122,7 @@ class SequenceAligner(object):
                             self.minimum_matching_ngrams_in_docs
                     ):
                         self.docs_to_compare[source_doc_id].add(target_doc_id)
+
         # release memory since we no longer need those
         self.global_doc_index = {}
 
@@ -229,7 +230,7 @@ class SequenceAligner(object):
             # This holds the last match and will be added as the last element in the alignment
             last_match = (current_anchor.source, current_anchor.target)
             if self.debug:
-                debug_alignment = [(current_anchor.source.index, current_anchor.target.index, self.index_to_ngram[current_anchor.ngram_index])]
+                debug_alignment = [(current_anchor.source.index, current_anchor.target.index, current_anchor.ngram)]
             for source, target, ngram in matches:
                 if source.index == previous_source_index: # we skip source_match if the same as before
                     continue
@@ -273,7 +274,7 @@ class SequenceAligner(object):
                 if ngram in common_ngrams:
                     common_ngram_matches += 1
                 if self.debug:
-                    debug_alignment.append((source.index, target.index, self.index_to_ngram[ngram]))
+                    debug_alignment.append((source.index, target.index, ngram))
 
         # Add current alignment if not already done
         if in_alignment and matches_in_current_alignment >= self.minimum_matching_ngrams:
@@ -636,7 +637,10 @@ def parse_command_line():
                         type=str, default="")
     parser.add_argument("--output", help="output format: html, json (see docs for proper decoding), xml, or tab",
                         type=str, default="html")
+    parser.add_argument("--output_path", help="path of output",
+                        type=str, default="./")
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
+    parser.add_argument("--cores", help="define number of cores for pairwise comparisons", type=int, default=4)
     args = parser.parse_args()
     return args
 
@@ -644,5 +648,6 @@ if __name__ == '__main__':
     ARGS = parse_command_line()
     ALIGNER = SequenceAligner(ARGS.source_files, ARGS.source_ngram_index, target_files=ARGS.target_files,
                               target_ngram_index=ARGS.target_ngram_index, output=ARGS.output, debug=ARGS.debug,
-                              source_db_path=ARGS.source_db_path, target_db_path=ARGS.target_db_path)
+                              source_db_path=ARGS.source_db_path, target_db_path=ARGS.target_db_path,
+                              output_path=ARGS.output_path, workers=ARGS.cores)
     ALIGNER.compare()

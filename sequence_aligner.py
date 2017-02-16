@@ -30,6 +30,7 @@ def parse_command_line():
     parser.add_argument("--output_type", help="output format: html, json (see docs for proper decoding), xml, or tab",
                         type=str, default="html")
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
+    parser.add_argument("--cores", help="define number of cores for pairwise comparisons", type=int, default=4)
     args = vars(parser.parse_args())
     if args["is_philo_db"]:
         args["source_path"] = TRIM_LAST_SLASH.sub("", args["source_path"])
@@ -82,5 +83,5 @@ if __name__ == '__main__':
     print("\n### Starting sequence alignment ###")
     ALIGNER = SequenceAligner(SOURCE_FILES, SOURCE_INDEX, target_files=TARGET_FILES, target_ngram_index=TARGET_INDEX,
                               output=ARGS["output_type"], output_path=ARGS["output_path"], source_db_path=ARGS["source_path"],
-                              target_db_path=ARGS["target_path"], debug=ARGS["debug"], **ARGS["matching"])
+                              target_db_path=ARGS["target_path"], workers=ARGS["cores"], debug=ARGS["debug"], **ARGS["matching"])
     ALIGNER.compare()
