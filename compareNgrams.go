@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
 	"regexp"
 )
 
@@ -88,7 +87,7 @@ type CombinedAlignments struct {
 // Pair is a data structure to hold a key/value pair.
 type Pair struct {
 	Key   int32
-	Value int32
+	Value int
 }
 
 // PairList is a slice of Pairs that implements sort. Interface to sort by Value.
@@ -99,7 +98,7 @@ func (p PairList) Len() int           { return len(p) }
 func (p PairList) Less(i, j int) bool { return p[i].Value > p[j].Value }
 
 // A function to turn a map into a PairList, then sort and return it.
-func sortMapByValue(m map[int32]int32) PairList {
+func sortMapByValue(m map[int32]int) PairList {
 	p := make(PairList, len(m))
 	i := 0
 	for k, v := range m {
@@ -200,35 +199,30 @@ func openJSONMetadata(fileLocation *string) map[string]map[string]string {
 func openJSONDoc(fileLocation *string) map[int32][]indexedNgram {
 	jsonFile, err := ioutil.ReadFile(*fileLocation)
 	checkErr(err)
-	docKeyString := make(map[string][]indexedNgram)
 	doc := make(map[int32][]indexedNgram)
-	for key, value := range docKeyString {
-		intKey, _ := strconv.ParseInt(key, 10, 32)
-		doc[int32(intKey)] = value
-	}
 	json.Unmarshal(jsonFile, &doc)
 	return doc
 }
 
-func getIntersection(sourceFile *docIndex, targetFile *docIndex) map[int32]int32 {
-	intersectCount := make(map[int32]int32)
+func getIntersection(sourceFile *docIndex, targetFile *docIndex) map[int32]int {
+	intersectCount := make(map[int32]int)
 	if len(sourceFile.Ngrams) < len(targetFile.Ngrams) {
 		for ngram := range sourceFile.Ngrams {
 			if _, ok := targetFile.Ngrams[ngram]; ok {
-				intersectCount[ngram] = int32(len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram]))
+				intersectCount[ngram] = len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram])
 			}
 		}
 	} else {
 		for ngram := range targetFile.Ngrams {
 			if _, ok := sourceFile.Ngrams[ngram]; ok {
-				intersectCount[ngram] = int32(len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram]))
+				intersectCount[ngram] = len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram])
 			}
 		}
 	}
 	return intersectCount
 }
 
-func getMostCommonNgrams(intersectionCount map[int32]int32) map[int32]bool {
+func getMostCommonNgrams(intersectionCount map[int32]int) map[int32]bool {
 	sortedIntersection := sortMapByValue(intersectionCount)
 	mostCommonNgrams := make(map[int32]bool)
 	var count int32
