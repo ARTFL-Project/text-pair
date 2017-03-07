@@ -35,13 +35,12 @@ type matchingParams struct {
 	minimumMatchingNgrams         int32
 	minimumMatchingNgramsInWindow int32
 	commonNgramsLimit             float32
-	percentMatching               int32
 	minimumMatchingNgramsInDocs   int32
 	contextSize                   int32
 	banalNgrams                   int32
 }
 
-type MatchValues struct {
+type matchValues struct {
 	inAlignment               bool
 	matchesInCurrentAlignment int32
 	matchesInCurrentWindow    int32
@@ -122,14 +121,14 @@ func (p matchingNgrams) Less(i, j int) bool {
 	return p[i].target[0] < p[j].target[0]
 }
 
-var matchingDefaults = matchingParams{20, 10, 4, 4, 0.75, 10, 4, 300, 25}
-
 var outputFormat = "tab"
 
 var tags = regexp.MustCompile("<[^>]*?>")
 var brokenBeginTags = regexp.MustCompile("^[^<]*?>")
 var brokenEndTags = regexp.MustCompile("<[^>]*?$")
 var spaces = regexp.MustCompile(" +")
+
+var totalCount = 0
 
 func checkErr(err error) {
 	if err != nil {
@@ -161,12 +160,22 @@ func getFiles(filePath string) []docIndex {
 	return jsonFiles
 }
 
-func parseFlags() ([]docIndex, []docIndex, map[string]map[string]string, map[string]map[string]string, int, *string) {
+func parseFlags() ([]docIndex, []docIndex, map[string]map[string]string, map[string]map[string]string, int, *string, matchingParams) {
 	sourceFilesArg := flag.String("source_files", "", "source files location")
 	targetFilesArg := flag.String("target_files", "", "target files location")
 	threadsArg := flag.Int("threads", 4, "number of threads to use")
 	sourceMetadataArg := flag.String("source_metadata", "", "path to source metadata")
 	targetMetadataArg := flag.String("target_metadata", "", "path to target metadata")
+	matchingWindowSize := int32(*flag.Int("matching_window_size", 20, "size of sliding window for matches"))
+	maxGap := int32(*flag.Int("max_gap", 10, "maximum gap between two matching ngrams"))
+	minimumMatchingNgrams := int32(*flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match"))
+	minimumMatchingNgramsInWindow := int32(*flag.Int("minimum_matching_ngram_in_window", 4, "minimum matching ngrams per sliding window"))
+	commonNgramsLimit := float32(*flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")) / 100
+	minimumMatchingNgramsInDocs := int32(*flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison"))
+	contextSize := int32(*flag.Int("context_size", 300, "size of context for before and after matching passages"))
+	banalNgrams := int32(*flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams"))
+	matchingConfig := matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
+		contextSize, banalNgrams}
 	outputPath := flag.String("output_path", "./", "output path for results")
 	flag.Parse()
 	numThreads := *threadsArg
@@ -176,7 +185,7 @@ func parseFlags() ([]docIndex, []docIndex, map[string]map[string]string, map[str
 	fmt.Println("Loading metadata...")
 	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	targetMetadata := openJSONMetadata(targetMetadataArg)
-	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, numThreads, outputPath
+	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, numThreads, outputPath, matchingConfig
 }
 
 func openJSONMetadata(fileLocation *string) map[string]map[string]string {
@@ -222,7 +231,7 @@ func getIntersection(sourceFile *docIndex, targetFile *docIndex) map[int32]int {
 	return intersectCount
 }
 
-func getMostCommonNgrams(intersectionCount map[int32]int) map[int32]bool {
+func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int32) map[int32]bool {
 	sortedIntersection := sortMapByValue(intersectionCount)
 	mostCommonNgrams := make(map[int32]bool)
 	var count int32
@@ -232,7 +241,7 @@ func getMostCommonNgrams(intersectionCount map[int32]int) map[int32]bool {
 		}
 		mostCommonNgrams[pair.Key] = true
 		count++
-		if count == matchingDefaults.banalNgrams {
+		if count == *banalNgrams {
 			break
 		}
 	}
@@ -240,25 +249,25 @@ func getMostCommonNgrams(intersectionCount map[int32]int) map[int32]bool {
 }
 
 func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string, sourceMetadata map[string]map[string]string,
-	targetMetadata map[string]map[string]string, f *os.File) {
-	combinedOutput := make([]string, len(combinedAlignments.alignments))
+	targetMetadata map[string]map[string]string, f *os.File, matchingConfig *matchingParams) {
+	var combinedOutput []string
 	_, sourceValues := mapToSliceOfSlices(sourceMetadata[*sourceDocID])
 	for _, alignments := range combinedAlignments.alignments {
 		_, targetValues := mapToSliceOfSlices(targetMetadata[alignments.docID])
-		matchOutputs := []string{}
+		// matchOutputs := []string{}
 		for _, alignment := range alignments.matches {
 			fields := []string{}
 			fields = append(fields, sourceValues...)
 			fields = append(fields, []string{strconv.Itoa(int(alignment.source.startByte)), strconv.Itoa(int(alignment.source.endByte))}...)
-			fields = append(fields, alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"])...)
+			fields = append(fields, alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], matchingConfig)...)
 			fields = append(fields, targetValues...)
 			fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
-			fields = append(fields, alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"])...)
-			matchOutputs = append(matchOutputs, strings.Join(fields, "\t"))
+			fields = append(fields, alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], matchingConfig)...)
+			// matchOutputs = append(matchOutputs, strings.Join(fields, "\t"))
 			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
 		}
 	}
-	f.WriteString(strings.Join(combinedOutput, "\n"))
+	f.WriteString("\n" + strings.Join(combinedOutput, "\n"))
 }
 
 func mapToSliceOfSlices(metadata map[string]string) ([]string, []string) {
@@ -273,10 +282,10 @@ func mapToSliceOfSlices(metadata map[string]string) ([]string, []string) {
 	return keys, values
 }
 
-func alignmentToText(alignment *position, filename string) []string {
-	beforeContext := getText(&filename, alignment.startByte-int32(matchingDefaults.contextSize), alignment.startByte)
+func alignmentToText(alignment *position, filename string, matchingConfig *matchingParams) []string {
+	beforeContext := getText(&filename, alignment.startByte-int32(matchingConfig.contextSize), alignment.startByte)
 	matchingPassage := getText(&filename, alignment.startByte, alignment.endByte)
-	afterContext := getText(&filename, alignment.endByte, alignment.endByte+int32(matchingDefaults.contextSize))
+	afterContext := getText(&filename, alignment.endByte, alignment.endByte+int32(matchingConfig.contextSize))
 	passages := []string{beforeContext, matchingPassage, afterContext}
 	return passages
 }
@@ -327,7 +336,7 @@ func createOutputFile(outputPath *string, sourceMetadata map[string]map[string]s
 }
 
 func main() {
-	sourceFiles, targetFiles, sourceMetadata, targetMetadata, numThreads, outputPath := parseFlags()
+	sourceFiles, targetFiles, sourceMetadata, targetMetadata, numThreads, outputPath, matchingConfig := parseFlags()
 	sourceAgainstSource := false
 	sourceFileDone := make(map[string]bool)
 	if len(targetFiles) == 0 {
@@ -369,10 +378,10 @@ func main() {
 						}
 					}
 					sourceTargetIntersection := getIntersection(&sourceFile, &targetFile)
-					if int32(len(sourceTargetIntersection)) < matchingDefaults.minimumMatchingNgramsInDocs {
+					if int32(len(sourceTargetIntersection)) < matchingConfig.minimumMatchingNgramsInDocs {
 						continue
 					}
-					mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection)
+					mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &matchingConfig.banalNgrams)
 					var matches = matchingNgrams{}
 					for ngram := range sourceTargetIntersection {
 						for _, sourceNgramIndex := range sourceFile.Ngrams[ngram] {
@@ -383,97 +392,97 @@ func main() {
 					}
 					sort.Sort(matchingNgrams(matches))
 					alignments := make([]Alignment, 0)
-					matchValues := MatchValues{}
-					matchValues.lastSourcePosition = 0
-					matchValues.inAlignment = false
+					m := matchValues{}
+					m.lastSourcePosition = 0
+					m.inAlignment = false
 					for matchIndex, currentAnchor := range matches {
-						if currentAnchor.source[0] < matchValues.lastSourcePosition {
+						if currentAnchor.source[0] < m.lastSourcePosition {
 							continue
 						}
-						matchValues.sourceAnchor = currentAnchor.source[0]
-						matchValues.sourceWindowBoundary = matchValues.sourceAnchor + matchingDefaults.matchingWindowSize
-						matchValues.lastSourcePosition = matchValues.sourceAnchor
-						matchValues.maxSourceGap = matchValues.lastSourcePosition + matchingDefaults.maxGap
-						matchValues.targetAnchor = currentAnchor.target[0]
-						matchValues.targetWindowBoundary = matchValues.targetAnchor + matchingDefaults.matchingWindowSize
-						matchValues.lastTargetPosition = matchValues.targetAnchor
-						matchValues.maxTargetGap = matchValues.lastTargetPosition + matchingDefaults.maxGap
-						matchValues.inAlignment = true
-						matchValues.previousSourceIndex = matchValues.sourceAnchor
-						matchValues.firstMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
-						matchValues.matchesInCurrentAlignment = 1
-						matchValues.matchesInCurrentWindow = 1
-						matchValues.commonNgramMatches = 0
+						m.sourceAnchor = currentAnchor.source[0]
+						m.sourceWindowBoundary = m.sourceAnchor + matchingConfig.matchingWindowSize
+						m.lastSourcePosition = m.sourceAnchor
+						m.maxSourceGap = m.lastSourcePosition + matchingConfig.maxGap
+						m.targetAnchor = currentAnchor.target[0]
+						m.targetWindowBoundary = m.targetAnchor + matchingConfig.matchingWindowSize
+						m.lastTargetPosition = m.targetAnchor
+						m.maxTargetGap = m.lastTargetPosition + matchingConfig.maxGap
+						m.inAlignment = true
+						m.previousSourceIndex = m.sourceAnchor
+						m.firstMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
+						m.matchesInCurrentAlignment = 1
+						m.matchesInCurrentWindow = 1
+						m.commonNgramMatches = 0
 						if _, ok := mostCommonNgrams[currentAnchor.ngram]; ok {
-							matchValues.commonNgramMatches++
+							m.commonNgramMatches++
 						}
-						matchValues.lastMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
+						m.lastMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
 					innerMatchingLoop:
 						for _, match := range matches[matchIndex+1:] {
 							source, target := match.source, match.target
 							// we skip source_match if the same as before and we only want targets that are after last target match
-							if source[0] == matchValues.previousSourceIndex || target[0] <= matchValues.lastTargetPosition {
+							if source[0] == m.previousSourceIndex || target[0] <= m.lastTargetPosition {
 								continue
 							}
-							if source[0] > matchValues.maxSourceGap || target[0] > matchValues.maxTargetGap {
-								// println("Failed", source[0], matchValues.lastSourcePosition+matchingDefaults.maxGap, target[0], matchValues.lastTargetPosition+matchingDefaults.maxGap)
+							if source[0] > m.maxSourceGap || target[0] > m.maxTargetGap {
+								// println("Failed", source[0], m.lastSourcePosition+matchingDefaults.maxGap, target[0], m.lastTargetPosition+matchingDefaults.maxGap)
 								// println(firstStep, secondStep)
-								matchValues.inAlignment = false
+								m.inAlignment = false
 							}
-							if source[0] > matchValues.sourceWindowBoundary || target[0] > matchValues.targetWindowBoundary {
-								if matchValues.matchesInCurrentWindow < matchingDefaults.minimumMatchingNgramsInWindow {
-									matchValues.inAlignment = false
+							if source[0] > m.sourceWindowBoundary || target[0] > m.targetWindowBoundary {
+								if m.matchesInCurrentWindow < matchingConfig.minimumMatchingNgramsInWindow {
+									m.inAlignment = false
 								} else {
-									if source[0] > matchValues.maxSourceGap || target[0] > matchValues.maxTargetGap {
-										matchValues.inAlignment = false
+									if source[0] > m.maxSourceGap || target[0] > m.maxTargetGap {
+										m.inAlignment = false
 									} else {
-										matchValues.sourceAnchor = source[0]
-										matchValues.sourceWindowBoundary = matchValues.sourceAnchor + matchingDefaults.matchingWindowSize
-										matchValues.targetAnchor = target[0]
-										matchValues.targetWindowBoundary = matchValues.targetAnchor + matchingDefaults.matchingWindowSize
-										matchValues.matchesInCurrentWindow = 0
+										m.sourceAnchor = source[0]
+										m.sourceWindowBoundary = m.sourceAnchor + matchingConfig.matchingWindowSize
+										m.targetAnchor = target[0]
+										m.targetWindowBoundary = m.targetAnchor + matchingConfig.matchingWindowSize
+										m.matchesInCurrentWindow = 0
 									}
 								}
 							}
-							if !matchValues.inAlignment {
-								if float32(matchValues.commonNgramMatches/matchValues.matchesInCurrentAlignment) < matchingDefaults.commonNgramsLimit {
-									if matchValues.matchesInCurrentAlignment >= matchingDefaults.minimumMatchingNgramsInWindow {
-										matchValues.currentAlignment.source = position{matchValues.firstMatch[0][1], matchValues.lastMatch[0][2], matchValues.firstMatch[0][0], matchValues.lastMatch[0][0]}
-										matchValues.currentAlignment.target = position{matchValues.firstMatch[1][1], matchValues.lastMatch[1][2], matchValues.firstMatch[1][0], matchValues.lastMatch[1][0]}
-										alignments = append(alignments, matchValues.currentAlignment)
-										// fmt.Println(matchValues.currentAlignment.source.startIndex, matchValues.currentAlignment.source.endIndex)
+							if !m.inAlignment {
+								if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < matchingConfig.commonNgramsLimit {
+									if m.matchesInCurrentAlignment >= matchingConfig.minimumMatchingNgramsInWindow {
+										m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
+										m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
+										alignments = append(alignments, m.currentAlignment)
+										// fmt.Println(m.currentAlignment.source.startIndex, m.currentAlignment.source.endIndex)
 										// Looking for small match within max_gap
-									} else if (matchValues.lastMatch[0][0]-currentAnchor.source[0]) <= matchingDefaults.maxGap && matchValues.matchesInCurrentAlignment >= matchingDefaults.minimumMatchingNgrams {
-										matchValues.currentAlignment.source = position{matchValues.firstMatch[0][1], matchValues.lastMatch[0][2], matchValues.firstMatch[0][0], matchValues.lastMatch[0][0]}
-										matchValues.currentAlignment.target = position{matchValues.firstMatch[1][1], matchValues.lastMatch[1][2], matchValues.firstMatch[1][0], matchValues.lastMatch[1][0]}
-										alignments = append(alignments, matchValues.currentAlignment)
-										// fmt.Println(matchValues.currentAlignment.source.startIndex, matchValues.currentAlignment.source.endIndex)
+									} else if (m.lastMatch[0][0]-currentAnchor.source[0]) <= matchingConfig.maxGap && m.matchesInCurrentAlignment >= matchingConfig.minimumMatchingNgrams {
+										m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
+										m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
+										alignments = append(alignments, m.currentAlignment)
+										// fmt.Println(m.currentAlignment.source.startIndex, m.currentAlignment.source.endIndex)
 									}
 								}
-								matchValues.lastSourcePosition = matchValues.lastMatch[0][0] + 1 // Make sure we start the next match at index that follows last source match
-								// if matchValues.currentAlignment.source.endByte != 0 {
-								// 	fmt.Println("Failed", source[0], target[0], matchValues.currentAlignment.source.endIndex, matchValues.currentAlignment.target.endIndex)
+								m.lastSourcePosition = m.lastMatch[0][0] + 1 // Make sure we start the next match at index that follows last source match
+								// if m.currentAlignment.source.endByte != 0 {
+								// 	fmt.Println("Failed", source[0], target[0], m.currentAlignment.source.endIndex, m.currentAlignment.target.endIndex)
 								// }
 								break innerMatchingLoop
 							}
-							matchValues.lastSourcePosition = source[0]
-							matchValues.maxSourceGap = matchValues.lastSourcePosition + matchingDefaults.maxGap
-							matchValues.lastTargetPosition = target[0]
-							matchValues.maxTargetGap = matchValues.lastTargetPosition + matchingDefaults.maxGap
-							matchValues.previousSourceIndex = source[0]
-							matchValues.matchesInCurrentWindow++
-							matchValues.matchesInCurrentAlignment++
-							matchValues.lastMatch = []indexedNgram{source, target} // save last matching ngrams
+							m.lastSourcePosition = source[0]
+							m.maxSourceGap = m.lastSourcePosition + matchingConfig.maxGap
+							m.lastTargetPosition = target[0]
+							m.maxTargetGap = m.lastTargetPosition + matchingConfig.maxGap
+							m.previousSourceIndex = source[0]
+							m.matchesInCurrentWindow++
+							m.matchesInCurrentAlignment++
+							m.lastMatch = []indexedNgram{source, target} // save last matching ngrams
 							if _, ok := mostCommonNgrams[match.ngram]; ok {
-								matchValues.commonNgramMatches++
+								m.commonNgramMatches++
 							}
 						}
 					}
 					// Add current alignment if not already done
-					if matchValues.inAlignment && matchValues.matchesInCurrentAlignment >= matchingDefaults.minimumMatchingNgrams {
-						matchValues.currentAlignment.source = position{matchValues.firstMatch[0][1], matchValues.lastMatch[0][2], matchValues.firstMatch[0][0], matchValues.lastMatch[0][0]}
-						matchValues.currentAlignment.target = position{matchValues.firstMatch[1][1], matchValues.lastMatch[1][2], matchValues.firstMatch[1][0], matchValues.lastMatch[1][0]}
-						alignments = append(alignments, matchValues.currentAlignment)
+					if m.inAlignment && m.matchesInCurrentAlignment >= matchingConfig.minimumMatchingNgrams {
+						m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
+						m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
+						alignments = append(alignments, m.currentAlignment)
 					}
 					counts += len(alignments)
 					if len(alignments) > 0 {
@@ -491,7 +500,7 @@ func main() {
 			}
 		}
 		if len(combinedAlignments.alignments) > 0 {
-			writeAligments(&combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput)
+			writeAligments(&combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, &matchingConfig)
 		}
 		if sourceAgainstSource {
 			sourceFileDone[sourceFile.DocID] = true
@@ -500,4 +509,5 @@ func main() {
 	mergedOutput.Sync()
 	mergedOutput.Close()
 	fmt.Printf("%d results...\n", counts)
+	println(totalCount)
 }

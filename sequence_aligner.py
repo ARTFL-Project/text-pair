@@ -8,7 +8,7 @@ import re
 from ast import literal_eval
 from glob import glob
 
-from compare_ngrams import SequenceAligner
+# from compare_ngrams import SequenceAligner
 from generate_ngrams import Ngrams
 
 TRIM_LAST_SLASH = re.compile(r'/\Z')
@@ -81,7 +81,8 @@ if __name__ == '__main__':
         TARGET_FILES = None
         TARGET_INDEX = None
     print("\n### Starting sequence alignment ###")
-    ALIGNER = SequenceAligner(SOURCE_FILES, SOURCE_INDEX, target_files=TARGET_FILES, target_ngram_index=TARGET_INDEX,
-                              output=ARGS["output_type"], output_path=ARGS["output_path"], source_db_path=ARGS["source_path"],
-                              target_db_path=ARGS["target_path"], workers=ARGS["cores"], debug=ARGS["debug"], **ARGS["matching"])
-    ALIGNER.compare()
+    # ALIGNER = SequenceAligner(SOURCE_FILES, SOURCE_INDEX, target_files=TARGET_FILES, target_ngram_index=TARGET_INDEX,
+    #                           output=ARGS["output_type"], output_path=ARGS["output_path"], source_db_path=ARGS["source_path"],
+    #                           target_db_path=ARGS["target_path"], workers=ARGS["cores"], debug=ARGS["debug"], **ARGS["matching"])
+    # ALIGNER.compare()
+    os.system("./compareNgrams --source_files=")
