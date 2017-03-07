@@ -38,6 +38,10 @@ type matchingParams struct {
 	minimumMatchingNgramsInDocs   int32
 	contextSize                   int32
 	banalNgrams                   int32
+	batchSteps                    int
+	outputPath                    string
+	numThreads                    int
+	outputFormat                  string
 }
 
 type matchValues struct {
@@ -121,14 +125,10 @@ func (p matchingNgrams) Less(i, j int) bool {
 	return p[i].target[0] < p[j].target[0]
 }
 
-var outputFormat = "tab"
-
 var tags = regexp.MustCompile("<[^>]*?>")
 var brokenBeginTags = regexp.MustCompile("^[^<]*?>")
 var brokenEndTags = regexp.MustCompile("<[^>]*?$")
 var spaces = regexp.MustCompile(" +")
-
-var totalCount = 0
 
 func checkErr(err error) {
 	if err != nil {
@@ -160,12 +160,13 @@ func getFiles(filePath string) []docIndex {
 	return jsonFiles
 }
 
-func parseFlags() ([]docIndex, []docIndex, map[string]map[string]string, map[string]map[string]string, int, *string, matchingParams) {
+func parseFlags() ([]docIndex, []docIndex, map[string]map[string]string, map[string]map[string]string, matchingParams) {
 	sourceFilesArg := flag.String("source_files", "", "source files location")
 	targetFilesArg := flag.String("target_files", "", "target files location")
 	threadsArg := flag.Int("threads", 4, "number of threads to use")
 	sourceMetadataArg := flag.String("source_metadata", "", "path to source metadata")
 	targetMetadataArg := flag.String("target_metadata", "", "path to target metadata")
+	batchSteps := flag.Int("batch_steps", 1, "batch steps defines the number of steps in which the full source vs target is run: useful when RAM usage is a concern")
 	matchingWindowSize := int32(*flag.Int("matching_window_size", 20, "size of sliding window for matches"))
 	maxGap := int32(*flag.Int("max_gap", 10, "maximum gap between two matching ngrams"))
 	minimumMatchingNgrams := int32(*flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match"))
@@ -174,18 +175,18 @@ func parseFlags() ([]docIndex, []docIndex, map[string]map[string]string, map[str
 	minimumMatchingNgramsInDocs := int32(*flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison"))
 	contextSize := int32(*flag.Int("context_size", 300, "size of context for before and after matching passages"))
 	banalNgrams := int32(*flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams"))
-	matchingConfig := matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
-		contextSize, banalNgrams}
 	outputPath := flag.String("output_path", "./", "output path for results")
+	outputFormat := flag.String("output_format", "tab", "output format of results")
 	flag.Parse()
-	numThreads := *threadsArg
+	config := matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
+		contextSize, banalNgrams, *batchSteps, *outputPath, *threadsArg, *outputFormat}
 	fmt.Println("Reading JSON files...")
 	sourceFiles := getFiles(*sourceFilesArg)
 	targetFiles := getFiles(*targetFilesArg)
 	fmt.Println("Loading metadata...")
 	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	targetMetadata := openJSONMetadata(targetMetadataArg)
-	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, numThreads, outputPath, matchingConfig
+	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, config
 }
 
 func openJSONMetadata(fileLocation *string) map[string]map[string]string {
@@ -249,7 +250,7 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int32) ma
 }
 
 func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string, sourceMetadata map[string]map[string]string,
-	targetMetadata map[string]map[string]string, f *os.File, matchingConfig *matchingParams) {
+	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams) {
 	var combinedOutput []string
 	_, sourceValues := mapToSliceOfSlices(sourceMetadata[*sourceDocID])
 	for _, alignments := range combinedAlignments.alignments {
@@ -259,10 +260,10 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			fields := []string{}
 			fields = append(fields, sourceValues...)
 			fields = append(fields, []string{strconv.Itoa(int(alignment.source.startByte)), strconv.Itoa(int(alignment.source.endByte))}...)
-			fields = append(fields, alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], matchingConfig)...)
+			fields = append(fields, alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)...)
 			fields = append(fields, targetValues...)
 			fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
-			fields = append(fields, alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], matchingConfig)...)
+			fields = append(fields, alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)...)
 			// matchOutputs = append(matchOutputs, strings.Join(fields, "\t"))
 			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
 		}
@@ -282,10 +283,10 @@ func mapToSliceOfSlices(metadata map[string]string) ([]string, []string) {
 	return keys, values
 }
 
-func alignmentToText(alignment *position, filename string, matchingConfig *matchingParams) []string {
-	beforeContext := getText(&filename, alignment.startByte-int32(matchingConfig.contextSize), alignment.startByte)
+func alignmentToText(alignment *position, filename string, config *matchingParams) []string {
+	beforeContext := getText(&filename, alignment.startByte-int32(config.contextSize), alignment.startByte)
 	matchingPassage := getText(&filename, alignment.startByte, alignment.endByte)
-	afterContext := getText(&filename, alignment.endByte, alignment.endByte+int32(matchingConfig.contextSize))
+	afterContext := getText(&filename, alignment.endByte, alignment.endByte+int32(config.contextSize))
 	passages := []string{beforeContext, matchingPassage, afterContext}
 	return passages
 }
@@ -309,9 +310,9 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	return text
 }
 
-func createOutputFile(outputPath *string, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) *os.File {
-	os.MkdirAll(*outputPath, 0755)
-	mergedOutput, err := os.Create(fmt.Sprintf(filepath.Join(*outputPath, "alignments_results.tab")))
+func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) *os.File {
+	os.MkdirAll(config.outputPath, 0755)
+	mergedOutput, err := os.Create(fmt.Sprintf(filepath.Join(config.outputPath, "alignments_results.%s"), config.outputFormat))
 	checkErr(err)
 	var firstSourceKey string
 	for sourceKey := range sourceMetadata {
@@ -336,7 +337,7 @@ func createOutputFile(outputPath *string, sourceMetadata map[string]map[string]s
 }
 
 func main() {
-	sourceFiles, targetFiles, sourceMetadata, targetMetadata, numThreads, outputPath, matchingConfig := parseFlags()
+	sourceFiles, targetFiles, sourceMetadata, targetMetadata, config := parseFlags()
 	sourceAgainstSource := false
 	sourceFileDone := make(map[string]bool)
 	if len(targetFiles) == 0 {
@@ -344,7 +345,7 @@ func main() {
 		targetMetadata = sourceMetadata
 		sourceAgainstSource = true
 	}
-	mergedOutput := createOutputFile(outputPath, sourceMetadata, targetMetadata)
+	mergedOutput := createOutputFile(&config, sourceMetadata, targetMetadata)
 
 	counts := 0
 	targetLength := len(targetFiles)
@@ -352,11 +353,11 @@ func main() {
 	for _, sourceFile := range sourceFiles {
 		fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
 		combinedAlignments := CombinedAlignments{sourceFile.DocID, []alignmentsPerDoc{}}
-		c := make(chan []alignmentsPerDoc, numThreads)
-		wait.Add(numThreads)
+		c := make(chan []alignmentsPerDoc, config.numThreads)
+		wait.Add(config.numThreads)
 		start := 0
-		increment := targetLength/numThreads + 1
-		for i := 0; i < numThreads; i++ {
+		increment := targetLength/config.numThreads + 1
+		for i := 0; i < config.numThreads; i++ {
 			end := increment * (i + 1)
 			if end > targetLength {
 				end = targetLength - 1
@@ -378,10 +379,10 @@ func main() {
 						}
 					}
 					sourceTargetIntersection := getIntersection(&sourceFile, &targetFile)
-					if int32(len(sourceTargetIntersection)) < matchingConfig.minimumMatchingNgramsInDocs {
+					if int32(len(sourceTargetIntersection)) < config.minimumMatchingNgramsInDocs {
 						continue
 					}
-					mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &matchingConfig.banalNgrams)
+					mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams)
 					var matches = matchingNgrams{}
 					for ngram := range sourceTargetIntersection {
 						for _, sourceNgramIndex := range sourceFile.Ngrams[ngram] {
@@ -400,13 +401,13 @@ func main() {
 							continue
 						}
 						m.sourceAnchor = currentAnchor.source[0]
-						m.sourceWindowBoundary = m.sourceAnchor + matchingConfig.matchingWindowSize
+						m.sourceWindowBoundary = m.sourceAnchor + config.matchingWindowSize
 						m.lastSourcePosition = m.sourceAnchor
-						m.maxSourceGap = m.lastSourcePosition + matchingConfig.maxGap
+						m.maxSourceGap = m.lastSourcePosition + config.maxGap
 						m.targetAnchor = currentAnchor.target[0]
-						m.targetWindowBoundary = m.targetAnchor + matchingConfig.matchingWindowSize
+						m.targetWindowBoundary = m.targetAnchor + config.matchingWindowSize
 						m.lastTargetPosition = m.targetAnchor
-						m.maxTargetGap = m.lastTargetPosition + matchingConfig.maxGap
+						m.maxTargetGap = m.lastTargetPosition + config.maxGap
 						m.inAlignment = true
 						m.previousSourceIndex = m.sourceAnchor
 						m.firstMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
@@ -430,29 +431,29 @@ func main() {
 								m.inAlignment = false
 							}
 							if source[0] > m.sourceWindowBoundary || target[0] > m.targetWindowBoundary {
-								if m.matchesInCurrentWindow < matchingConfig.minimumMatchingNgramsInWindow {
+								if m.matchesInCurrentWindow < config.minimumMatchingNgramsInWindow {
 									m.inAlignment = false
 								} else {
 									if source[0] > m.maxSourceGap || target[0] > m.maxTargetGap {
 										m.inAlignment = false
 									} else {
 										m.sourceAnchor = source[0]
-										m.sourceWindowBoundary = m.sourceAnchor + matchingConfig.matchingWindowSize
+										m.sourceWindowBoundary = m.sourceAnchor + config.matchingWindowSize
 										m.targetAnchor = target[0]
-										m.targetWindowBoundary = m.targetAnchor + matchingConfig.matchingWindowSize
+										m.targetWindowBoundary = m.targetAnchor + config.matchingWindowSize
 										m.matchesInCurrentWindow = 0
 									}
 								}
 							}
 							if !m.inAlignment {
-								if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < matchingConfig.commonNgramsLimit {
-									if m.matchesInCurrentAlignment >= matchingConfig.minimumMatchingNgramsInWindow {
+								if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < config.commonNgramsLimit {
+									if m.matchesInCurrentAlignment >= config.minimumMatchingNgramsInWindow {
 										m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
 										m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
 										alignments = append(alignments, m.currentAlignment)
 										// fmt.Println(m.currentAlignment.source.startIndex, m.currentAlignment.source.endIndex)
 										// Looking for small match within max_gap
-									} else if (m.lastMatch[0][0]-currentAnchor.source[0]) <= matchingConfig.maxGap && m.matchesInCurrentAlignment >= matchingConfig.minimumMatchingNgrams {
+									} else if (m.lastMatch[0][0]-currentAnchor.source[0]) <= config.maxGap && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
 										m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
 										m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
 										alignments = append(alignments, m.currentAlignment)
@@ -466,9 +467,9 @@ func main() {
 								break innerMatchingLoop
 							}
 							m.lastSourcePosition = source[0]
-							m.maxSourceGap = m.lastSourcePosition + matchingConfig.maxGap
+							m.maxSourceGap = m.lastSourcePosition + config.maxGap
 							m.lastTargetPosition = target[0]
-							m.maxTargetGap = m.lastTargetPosition + matchingConfig.maxGap
+							m.maxTargetGap = m.lastTargetPosition + config.maxGap
 							m.previousSourceIndex = source[0]
 							m.matchesInCurrentWindow++
 							m.matchesInCurrentAlignment++
@@ -479,7 +480,7 @@ func main() {
 						}
 					}
 					// Add current alignment if not already done
-					if m.inAlignment && m.matchesInCurrentAlignment >= matchingConfig.minimumMatchingNgrams {
+					if m.inAlignment && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
 						m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
 						m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
 						alignments = append(alignments, m.currentAlignment)
@@ -493,14 +494,14 @@ func main() {
 			}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, sourceFileDone)
 		}
 		wait.Wait()
-		for i := 0; i < numThreads; i++ {
+		for i := 0; i < config.numThreads; i++ {
 			localCombinedAlignments := <-c
 			if len(localCombinedAlignments) > 0 {
 				combinedAlignments.alignments = append(combinedAlignments.alignments, localCombinedAlignments...)
 			}
 		}
 		if len(combinedAlignments.alignments) > 0 {
-			writeAligments(&combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, &matchingConfig)
+			writeAligments(&combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, &config)
 		}
 		if sourceAgainstSource {
 			sourceFileDone[sourceFile.DocID] = true
@@ -509,5 +510,4 @@ func main() {
 	mergedOutput.Sync()
 	mergedOutput.Close()
 	fmt.Printf("%d results...\n", counts)
-	println(totalCount)
 }
