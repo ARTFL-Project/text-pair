@@ -150,9 +150,9 @@ class Ngrams:
                         current_ngram, philo_ids, start_bytes, end_bytes = zip(*ngram_obj_to_store)
                         current_ngram = " ".join(current_ngram)
                         if current_ngram not in ngram_index:
+                            ngram_index_count += 1
                             ngram_index[current_ngram] = ngram_index_count
                             current_ngram_index = ngram_index_count
-                            ngram_index_count += 1
                         else:
                             current_ngram_index = ngram_index[current_ngram]
                         ngrams.append((current_ngram_index, start_bytes[0], end_bytes[-1]))
