@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ type matchingParams struct {
 	outputPath                    string
 	numThreads                    int
 	outputFormat                  string
+	sortingField                  string
 }
 
 type matchValues struct {
@@ -137,7 +139,7 @@ func checkErr(err error) {
 	}
 }
 
-func getFiles(filePath string) []string {
+func getFiles(filePath string, metadata map[string]map[string]string, sortField string) []string {
 	if filePath == "" {
 		return []string{}
 	}
@@ -155,11 +157,46 @@ func getFiles(filePath string) []string {
 			filesToLoad = append(filesToLoad, file)
 		}
 	}
-	sort.Slice(filesToLoad, func(i, j int) bool {
-		first, _ := strconv.Atoi(path.Base(strings.Replace(filesToLoad[i], ".json", "", 1)))
-		second, _ := strconv.Atoi(path.Base(strings.Replace(filesToLoad[j], ".json", "", 1)))
-		return first < second
-	})
+	sortFieldIsNumeric := false
+	for _, fields := range metadata {
+		if _, ok := fields[sortField]; !ok {
+			sortField = ""
+			break
+		}
+		if _, err := strconv.Atoi(fields[sortField]); err == nil {
+			sortFieldIsNumeric = true
+		}
+		break
+	}
+	if sortField != "" {
+		sort.Slice(filesToLoad, func(i, j int) bool {
+			first := path.Base(strings.Replace(filesToLoad[i], ".json", "", 1))
+			second := path.Base(strings.Replace(filesToLoad[j], ".json", "", 1))
+			if sortFieldIsNumeric {
+				firstInt, err := strconv.Atoi(metadata[first][sortField])
+				if err != nil {
+					return false
+				}
+				secondInt, err := strconv.Atoi(metadata[second][sortField])
+				if err != nil {
+					return true
+				}
+				if firstInt < secondInt {
+					return true
+				} else if firstInt > secondInt {
+					return false
+				}
+				return first < second
+			}
+			return metadata[first][sortField] < metadata[second][sortField]
+		})
+	} else {
+		sort.Slice(filesToLoad, func(i, j int) bool {
+			first, _ := strconv.Atoi(path.Base(strings.Replace(filesToLoad[i], ".json", "", 1)))
+			second, _ := strconv.Atoi(path.Base(strings.Replace(filesToLoad[j], ".json", "", 1)))
+			return first < second
+		})
+	}
 	return filesToLoad
 }
 
@@ -180,15 +217,15 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	banalNgrams := *flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
 	outputPath := flag.String("output_path", "./", "output path for results")
 	outputFormat := flag.String("output_format", "tab", "output format of results")
+	sortField := flag.String("sort_by", "year", "metadata field used to sort files in ascending order")
 	flag.Parse()
 	config := matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
-		contextSize, banalNgrams, *batchSize, *outputPath, *threadsArg, *outputFormat}
-	fmt.Println("Reading JSON files...")
-	sourceFiles := getFiles(*sourceFilesArg)
-	targetFiles := getFiles(*targetFilesArg)
-	fmt.Println("Loading metadata...")
+		contextSize, banalNgrams, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField}
+	fmt.Println("Loading bibliography...")
 	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	targetMetadata := openJSONMetadata(targetMetadataArg)
+	sourceFiles := getFiles(*sourceFilesArg, sourceMetadata, *sortField)
+	targetFiles := getFiles(*targetFilesArg, targetMetadata, *sortField)
 	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, config
 }
 
@@ -385,6 +422,8 @@ func main() {
 	for sourceBatchNumber := 0; sourceBatchNumber < config.batchSize; sourceBatchNumber++ {
 		if config.batchSize > 1 {
 			fmt.Printf("\n#### Loading source batch %d... ###\n", sourceBatchNumber+1)
+		} else {
+			fmt.Println("Loading source files...")
 		}
 		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber])
 		for targetBatchNumber := 0; targetBatchNumber < config.batchSize; targetBatchNumber++ {
@@ -395,7 +434,9 @@ func main() {
 			if sourceAgainstSource && targetBatchNumber == sourceBatchNumber {
 				targetFileIndexes = sourceFileIndexes
 			} else {
-				fmt.Printf("Loading target batch %d...\n", targetBatchNumber+1)
+				if config.batchSize > 1 {
+					fmt.Printf("Loading target batch %d...\n", targetBatchNumber+1)
+				}
 				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber])
 			}
 			var localSourceFilesDone map[string]bool
@@ -430,11 +471,14 @@ func main() {
 					if start > targetLength-1 {
 						start = targetLength - 1
 					}
-					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool) {
+					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config matchingParams) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
 					innerTargetMatching:
 						for _, targetFile := range splitTargets {
+							if sourceMetadata[sourceFile.DocID][config.sortingField] > targetMetadata[targetFile.DocID][config.sortingField] {
+								continue
+							}
 							if sourceAgainstSource {
 								if sourceMetadata[sourceFile.DocID]["filename"] == targetMetadata[targetFile.DocID]["filename"] {
 									continue innerTargetMatching
@@ -555,7 +599,7 @@ func main() {
 							}
 						}
 						c <- localAlignments
-					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, localSourceFilesDone)
+					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, localSourceFilesDone, config)
 				}
 				wait.Wait()
 				for i := 0; i < config.numThreads; i++ {
@@ -574,6 +618,7 @@ func main() {
 			for sourceFileDocID := range localSourceFilesDone {
 				sourceFilesDone[sourceFileDocID] = true
 			}
+			debug.FreeOSMemory()
 		}
 		// println(len(sourceFileDone))
 
