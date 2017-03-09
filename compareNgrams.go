@@ -40,7 +40,7 @@ type matchingParams struct {
 	minimumMatchingNgramsInDocs   int32
 	contextSize                   int32
 	banalNgrams                   int
-	maxPassageDistance            int32
+	passageDistanceMultiplier     float32
 	batchSize                     int
 	outputPath                    string
 	numThreads                    int
@@ -63,6 +63,7 @@ type matchValues struct {
 	sourceWindowBoundary      int32
 	targetWindowBoundary      int32
 	currentAlignment          Alignment
+	previousAlignment         Alignment
 	firstMatch                []indexedNgram
 	lastMatch                 []indexedNgram
 }
@@ -74,10 +75,8 @@ type Alignment struct {
 }
 
 type position struct {
-	startByte  int32
-	endByte    int32
-	startIndex int32
-	endIndex   int32
+	startByte int32
+	endByte   int32
 }
 
 type alignmentsPerDoc struct {
@@ -161,7 +160,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	minimumMatchingNgramsInDocs := int32(*flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison"))
 	contextSize := int32(*flag.Int("context_size", 300, "size of context for before and after matching passages"))
 	banalNgrams := *flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
-	passageDistance := int32(*flag.Int("passage_distance", 100, "Combine passage which are within this byte distance"))
+	passageDistance := float32(*flag.Float64("passage_distance_multiplier", 0.05, "Combine passage which are within (multiplier*length of previous passage) bytes"))
 	flag.Parse()
 	config := matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
 		contextSize, banalNgrams, passageDistance, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField}
@@ -259,7 +258,9 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 		checkErr(err)
 		json.Unmarshal(jsonFile, &mostCommonNgrams)
 	}
-	mostCommonNgrams = mostCommonNgrams[:*mostCommonNgramThreshold]
+	if len(mostCommonNgrams) > 0 {
+		mostCommonNgrams = mostCommonNgrams[:*mostCommonNgramThreshold]
+	}
 	if *targetNgrams != "" {
 		jsonFile, err := ioutil.ReadFile(*targetNgrams)
 		checkErr(err)
@@ -376,6 +377,9 @@ func alignmentToText(alignment *position, filename string, config *matchingParam
 func getText(fileLocation *string, startByte int32, endByte int32) string {
 	f, err := os.Open(*fileLocation)
 	checkErr(err)
+	if startByte < 0 {
+		startByte = int32(0)
+	}
 	_, err = f.Seek(int64(startByte), 0)
 	checkErr(err)
 	passage := make([]byte, endByte-startByte)
@@ -432,6 +436,22 @@ func makeSliceOfSlices(sliceToSlice []string, config *matchingParams) [][]string
 		sliceOfSlices = append(sliceOfSlices, sliceToSlice[i:end])
 	}
 	return sliceOfSlices
+}
+
+func addAlignment(m *matchValues, config *matchingParams, alignments *[]Alignment) {
+	m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2]}
+	m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2]}
+	distanceValue := int32((float32(m.previousAlignment.source.endByte - m.previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
+	maxSourceDistance := m.currentAlignment.source.startByte - distanceValue
+	maxTargetDistance := m.currentAlignment.target.startByte - distanceValue
+	// Merge passages that are within config.maxPassageDistance
+	if len(*alignments) > 0 && m.previousAlignment.source.startByte <= maxSourceDistance && maxSourceDistance <= m.previousAlignment.source.endByte && m.previousAlignment.target.startByte <= maxTargetDistance && maxTargetDistance <= m.previousAlignment.target.endByte {
+		(*alignments)[len(*alignments)-1].source.endByte = m.currentAlignment.source.endByte
+		(*alignments)[len(*alignments)-1].target.endByte = m.currentAlignment.target.endByte
+	} else {
+		*alignments = append(*alignments, m.currentAlignment)
+		m.previousAlignment = m.currentAlignment
+	}
 }
 
 func main() {
@@ -569,8 +589,6 @@ func main() {
 										continue
 									}
 									if source[0] > m.maxSourceGap || target[0] > m.maxTargetGap {
-										// println("Failed", source[0], m.lastSourcePosition+matchingDefaults.maxGap, target[0], m.lastTargetPosition+matchingDefaults.maxGap)
-										// println(firstStep, secondStep)
 										m.inAlignment = false
 									}
 									if source[0] > m.sourceWindowBoundary || target[0] > m.targetWindowBoundary {
@@ -591,22 +609,13 @@ func main() {
 									if !m.inAlignment {
 										if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < config.commonNgramsLimit {
 											if m.matchesInCurrentAlignment >= config.minimumMatchingNgramsInWindow {
-												m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
-												m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
-												alignments = append(alignments, m.currentAlignment)
-												// fmt.Println(m.currentAlignment.source.startIndex, m.currentAlignment.source.endIndex)
+												addAlignment(&m, &config, &alignments)
 												// Looking for small match within max_gap
 											} else if (m.lastMatch[0][0]-currentAnchor.source[0]) <= config.maxGap && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
-												m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
-												m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
-												alignments = append(alignments, m.currentAlignment)
-												// fmt.Println(m.currentAlignment.source.startIndex, m.currentAlignment.source.endIndex)
+												addAlignment(&m, &config, &alignments)
 											}
 										}
 										m.lastSourcePosition = m.lastMatch[0][0] + 1 // Make sure we start the next match at index that follows last source match
-										// if m.currentAlignment.source.endByte != 0 {
-										// 	fmt.Println("Failed", source[0], target[0], m.currentAlignment.source.endIndex, m.currentAlignment.target.endIndex)
-										// }
 										break innerMatchingLoop
 									}
 									m.lastSourcePosition = source[0]
@@ -624,9 +633,7 @@ func main() {
 							}
 							// Add current alignment if not already done
 							if m.inAlignment && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
-								m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2], m.firstMatch[0][0], m.lastMatch[0][0]}
-								m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2], m.firstMatch[1][0], m.lastMatch[1][0]}
-								alignments = append(alignments, m.currentAlignment)
+								addAlignment(&m, &config, &alignments)
 							}
 							counts += len(alignments)
 							if len(alignments) > 0 {
