@@ -90,12 +90,6 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def __get_column_names(self, path):
-        philo_db = DB(os.path.join(self.input_path, "data"), cached=False)
-        cursor = philo_db.dbh.cursor()
-        cursor.execute('select %s from toms limit 1' % ",".join(philo_db.locals["metadata_fields"]))
-        return list(map(lambda x: x[0], cursor.description))
-
     def generate(self, files, output_path, ngram_index=None, db_path=None):
         """Generate n-grams. Takes a list of files as an argument."""
         os.system('rm -rf %s/*' % output_path)
@@ -108,18 +102,18 @@ class Ngrams:
             self.input_path = db_path
         self.output_path = output_path
         self.metadata = {}
-        if ngram_index == None:
+        if ngram_index is None:
             ngram_index = {}
             ngram_index_count = 0
         else:
             ngram_index_count = max(ngram_index.values()) + 1
         for input_file in files:
             print("Processing document %s..." % input_file)
-            with open(input_file) as fh:
+            with open(input_file) as filehandle:
                 ngrams = []
                 ngram_obj = []
                 current_text_id = None
-                for line in fh:
+                for line in filehandle:
                     word_obj = loads(line.strip())
                     word = word_obj["token"]
                     word = self.__normalize(word)
@@ -151,10 +145,11 @@ class Ngrams:
                         current_ngram = " ".join(current_ngram)
                         if current_ngram not in ngram_index:
                             ngram_index_count += 1
-                            ngram_index[current_ngram] = ngram_index_count
+                            ngram_index[current_ngram] = {"index": ngram_index_count, "count": 0}
                             current_ngram_index = ngram_index_count
                         else:
-                            current_ngram_index = ngram_index[current_ngram]
+                            current_ngram_index = ngram_index[current_ngram]["index"]
+                        ngram_index[current_ngram]["count"] += 1
                         ngrams.append((current_ngram_index, start_bytes[0], end_bytes[-1]))
                         ngram_obj = ngram_obj[1:]
                 if self.text_object_level == "doc":
@@ -166,6 +161,12 @@ class Ngrams:
             dump(self.metadata, metadata_output)
         with open("%s/index/ngram_index.json" % self.output_path, "w") as ngram_index_output:
             dump(ngram_index, ngram_index_output)
+        with open("%s/index/ngram_count.json" % self.output_path, "w") as ngram_count_output:
+            ngram_count = []
+            for ngram, index_info in ngram_index.items():
+                ngram_count.append(ngram, index_info["count"])
+            ngram_count.sort(key=lambda x: x[1], reverse=True)
+            dump([i for i, j in ngram_count[:10000]], ngram_count_output)
         return ngram_index
 
 

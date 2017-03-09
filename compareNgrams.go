@@ -40,6 +40,7 @@ type matchingParams struct {
 	minimumMatchingNgramsInDocs   int32
 	contextSize                   int32
 	banalNgrams                   int
+	maxPassageDistance            int32
 	batchSize                     int
 	outputPath                    string
 	numThreads                    int
@@ -139,6 +140,57 @@ func checkErr(err error) {
 	}
 }
 
+func parseFlags() ([]string, []string, map[string]map[string]string, map[string]map[string]string, map[int32]bool, matchingParams) {
+	sourceFilesArg := flag.String("source_files", "", "source files location")
+	targetFilesArg := flag.String("target_files", "", "target files location")
+	threadsArg := flag.Int("threads", 4, "number of threads to use")
+	sourceMetadataArg := flag.String("source_metadata", "", "path to source metadata")
+	targetMetadataArg := flag.String("target_metadata", "", "path to target metadata")
+	sourceCommonNgramsArg := flag.String("source_common_ngrams", "", "path to a JSON list of the most common ngrams in source files")
+	targetCommonNgramsArg := flag.String("target_common_ngrams", "", "path to a JSON list of the most common ngrams in target files")
+	mostCommonNgramThreshold := flag.Int("most_common_ngram_threshold", 1000, "take the n most common ngrams from source and target common ngrams")
+	outputPath := flag.String("output_path", "./", "output path for results")
+	outputFormat := flag.String("output_format", "tab", "output format of results")
+	sortField := flag.String("sort_by", "year", "metadata field used to sort files in ascending order")
+	batchSize := flag.Int("batch_size", 1, "batch steps defines the number of steps in which the full source vs target is run: useful when RAM usage is a concern")
+	matchingWindowSize := int32(*flag.Int("matching_window_size", 20, "size of sliding window for matches"))
+	maxGap := int32(*flag.Int("max_gap", 10, "maximum gap between two matching ngrams"))
+	minimumMatchingNgrams := int32(*flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match"))
+	minimumMatchingNgramsInWindow := int32(*flag.Int("minimum_matching_ngram_in_window", 4, "minimum matching ngrams per sliding window"))
+	commonNgramsLimit := float32(*flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")) / 100
+	minimumMatchingNgramsInDocs := int32(*flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison"))
+	contextSize := int32(*flag.Int("context_size", 300, "size of context for before and after matching passages"))
+	banalNgrams := *flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
+	passageDistance := int32(*flag.Int("passage_distance", 100, "Combine passage which are within this byte distance"))
+	flag.Parse()
+	config := matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
+		contextSize, banalNgrams, passageDistance, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField}
+	fmt.Println("Loading bibliography...")
+	sourceMetadata := openJSONMetadata(sourceMetadataArg)
+	targetMetadata := openJSONMetadata(targetMetadataArg)
+	sourceFiles := getFiles(*sourceFilesArg, sourceMetadata, *sortField)
+	targetFiles := getFiles(*targetFilesArg, targetMetadata, *sortField)
+	mostCommonNgrams := compileMostCommonNgrams(sourceCommonNgramsArg, targetCommonNgramsArg, mostCommonNgramThreshold)
+	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, mostCommonNgrams, config
+}
+
+func openJSONMetadata(fileLocation *string) map[string]map[string]string {
+	if *fileLocation == "" {
+		return map[string]map[string]string{}
+	}
+	var filePath string
+	if !strings.HasPrefix(*fileLocation, "/") {
+		filePath = "./" + *fileLocation
+	} else {
+		filePath = *fileLocation
+	}
+	jsonFile, err := ioutil.ReadFile(filePath)
+	checkErr(err)
+	metadata := make(map[string]map[string]string)
+	json.Unmarshal(jsonFile, &metadata)
+	return metadata
+}
+
 func getFiles(filePath string, metadata map[string]map[string]string, sortField string) []string {
 	if filePath == "" {
 		return []string{}
@@ -200,50 +252,28 @@ func getFiles(filePath string, metadata map[string]map[string]string, sortField 
 	return filesToLoad
 }
 
-func parseFlags() ([]string, []string, map[string]map[string]string, map[string]map[string]string, matchingParams) {
-	sourceFilesArg := flag.String("source_files", "", "source files location")
-	targetFilesArg := flag.String("target_files", "", "target files location")
-	threadsArg := flag.Int("threads", 4, "number of threads to use")
-	sourceMetadataArg := flag.String("source_metadata", "", "path to source metadata")
-	targetMetadataArg := flag.String("target_metadata", "", "path to target metadata")
-	batchSize := flag.Int("batch_size", 1, "batch steps defines the number of steps in which the full source vs target is run: useful when RAM usage is a concern")
-	matchingWindowSize := int32(*flag.Int("matching_window_size", 20, "size of sliding window for matches"))
-	maxGap := int32(*flag.Int("max_gap", 10, "maximum gap between two matching ngrams"))
-	minimumMatchingNgrams := int32(*flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match"))
-	minimumMatchingNgramsInWindow := int32(*flag.Int("minimum_matching_ngram_in_window", 4, "minimum matching ngrams per sliding window"))
-	commonNgramsLimit := float32(*flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")) / 100
-	minimumMatchingNgramsInDocs := int32(*flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison"))
-	contextSize := int32(*flag.Int("context_size", 300, "size of context for before and after matching passages"))
-	banalNgrams := *flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
-	outputPath := flag.String("output_path", "./", "output path for results")
-	outputFormat := flag.String("output_format", "tab", "output format of results")
-	sortField := flag.String("sort_by", "year", "metadata field used to sort files in ascending order")
-	flag.Parse()
-	config := matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
-		contextSize, banalNgrams, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField}
-	fmt.Println("Loading bibliography...")
-	sourceMetadata := openJSONMetadata(sourceMetadataArg)
-	targetMetadata := openJSONMetadata(targetMetadataArg)
-	sourceFiles := getFiles(*sourceFilesArg, sourceMetadata, *sortField)
-	targetFiles := getFiles(*targetFilesArg, targetMetadata, *sortField)
-	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, config
-}
-
-func openJSONMetadata(fileLocation *string) map[string]map[string]string {
-	if *fileLocation == "" {
-		return map[string]map[string]string{}
+func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCommonNgramThreshold *int) map[int32]bool {
+	mostCommonNgrams := []string{}
+	if *sourceNgrams != "" {
+		jsonFile, err := ioutil.ReadFile(*sourceNgrams)
+		checkErr(err)
+		json.Unmarshal(jsonFile, &mostCommonNgrams)
 	}
-	var filePath string
-	if !strings.HasPrefix(*fileLocation, "/") {
-		filePath = "./" + *fileLocation
-	} else {
-		filePath = *fileLocation
+	mostCommonNgrams = mostCommonNgrams[:*mostCommonNgramThreshold]
+	if *targetNgrams != "" {
+		jsonFile, err := ioutil.ReadFile(*targetNgrams)
+		checkErr(err)
+		targetCommonNgrams := []string{}
+		json.Unmarshal(jsonFile, &targetCommonNgrams)
+		mostCommonNgrams = append(mostCommonNgrams, targetCommonNgrams[:*mostCommonNgramThreshold]...)
 	}
-	jsonFile, err := ioutil.ReadFile(filePath)
-	checkErr(err)
-	metadata := make(map[string]map[string]string)
-	json.Unmarshal(jsonFile, &metadata)
-	return metadata
+	uniqueNgrams := make(map[int32]bool)
+	for _, ngram := range mostCommonNgrams {
+		ngramInt, _ := strconv.Atoi(ngram)
+		uniqueNgrams[int32(ngramInt)] = true
+	}
+	println(len(mostCommonNgrams))
+	return uniqueNgrams
 }
 
 func getJSONDocs(fileLocations []string) []docIndex {
@@ -278,9 +308,9 @@ func getIntersection(sourceFile *docIndex, targetFile *docIndex) map[int32]int {
 	return intersectCount
 }
 
-func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int) map[int32]bool {
+func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, commonNgrams map[int32]bool) map[int32]bool {
 	sortedIntersection := sortMapByValue(intersectionCount)
-	mostCommonNgrams := make(map[int32]bool)
+	mostCommonNgrams := make(map[int32]bool, len(commonNgrams))
 	var count int
 	for _, pair := range sortedIntersection {
 		if pair.Value == 2 {
@@ -291,6 +321,9 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int) map[
 		if count == *banalNgrams {
 			break
 		}
+	}
+	for commonNgrams := range commonNgrams {
+		mostCommonNgrams[commonNgrams] = true
 	}
 	return mostCommonNgrams
 }
@@ -402,7 +435,7 @@ func makeSliceOfSlices(sliceToSlice []string, config *matchingParams) [][]string
 }
 
 func main() {
-	sourceFiles, targetFiles, sourceMetadata, targetMetadata, config := parseFlags()
+	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config := parseFlags()
 	sourceAgainstSource := false
 	sourceFilesDone := make(map[string]bool)
 
@@ -440,10 +473,12 @@ func main() {
 				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber])
 			}
 			var localSourceFilesDone map[string]bool
-			if len(sourceFilesDone) > 0 {
-				localSourceFilesDone = sourceFilesDone
-			} else {
-				localSourceFilesDone = make(map[string]bool)
+			if sourceAgainstSource {
+				if len(sourceFilesDone) > 0 {
+					localSourceFilesDone = sourceFilesDone
+				} else {
+					localSourceFilesDone = make(map[string]bool)
+				}
 			}
 			for _, sourceFile := range sourceFileIndexes {
 				if config.batchSize == 1 {
@@ -471,7 +506,7 @@ func main() {
 					if start > targetLength-1 {
 						start = targetLength - 1
 					}
-					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config matchingParams) {
+					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config matchingParams, commonNgrams map[int32]bool) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
 					innerTargetMatching:
@@ -490,7 +525,7 @@ func main() {
 							if int32(len(sourceTargetIntersection)) < config.minimumMatchingNgramsInDocs {
 								continue
 							}
-							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams)
+							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams, commonNgrams)
 							var matches = matchingNgrams{}
 							for ngram := range sourceTargetIntersection {
 								for _, sourceNgramIndex := range sourceFile.Ngrams[ngram] {
@@ -599,7 +634,7 @@ func main() {
 							}
 						}
 						c <- localAlignments
-					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, localSourceFilesDone, config)
+					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, localSourceFilesDone, config, commonNgrams)
 				}
 				wait.Wait()
 				for i := 0; i < config.numThreads; i++ {
@@ -620,8 +655,6 @@ func main() {
 			}
 			debug.FreeOSMemory()
 		}
-		// println(len(sourceFileDone))
-
 	}
 	mergedOutput.Sync()
 	mergedOutput.Close()
