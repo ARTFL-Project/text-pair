@@ -3,6 +3,7 @@
 
 import argparse
 import configparser
+import gc
 import os
 import re
 from ast import literal_eval
@@ -30,7 +31,7 @@ def parse_command_line():
     parser.add_argument("--output_type", help="output format: html, json (see docs for proper decoding), xml, or tab",
                         type=str, default="html")
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
-    parser.add_argument("--cores", help="define number of cores for pairwise comparisons", type=int, default=4)
+    parser.add_argument("--threads", help="define number of threads for pairwise comparisons", type=int, default=4)
     args = vars(parser.parse_args())
     if args["is_philo_db"]:
         args["source_path"] = TRIM_LAST_SLASH.sub("", args["source_path"])
@@ -69,20 +70,13 @@ if __name__ == '__main__':
     ARGS = parse_command_line()
     NGRAMS = Ngrams(**ARGS["preprocessing"])
     print("### Generating source ngrams ###")
-    NGRAMS.generate(ARGS["source_files"], ARGS["source_output_path"])
-    SOURCE_FILES = sorted(NGRAMS.output_files)
-    SOURCE_INDEX = NGRAMS.ngram_index
+    NGRAM_INDEX = NGRAMS.generate(ARGS["source_files"], ARGS["source_output_path"], save_index=False)
     if ARGS["target_files"] is not None:
         print("\n### Generating target ngrams ###")
-        NGRAMS.generate(ARGS["target_files"], ARGS["target_output_path"])
-        TARGET_FILES = sorted(NGRAMS.output_files)
-        TARGET_INDEX = NGRAMS.ngram_index
-    else:
-        TARGET_FILES = None
-        TARGET_INDEX = None
+        NGRAMS.generate(ARGS["target_files"], ARGS["target_output_path"], ngram_index=NGRAM_INDEX, save_index=True)
+    # Delete NGRAMS Object since we need memory for comparison
+    del NGRAMS
+    gc.collect()
     print("\n### Starting sequence alignment ###")
-    # ALIGNER = SequenceAligner(SOURCE_FILES, SOURCE_INDEX, target_files=TARGET_FILES, target_ngram_index=TARGET_INDEX,
-    #                           output=ARGS["output_type"], output_path=ARGS["output_path"], source_db_path=ARGS["source_path"],
-    #                           target_db_path=ARGS["target_path"], workers=ARGS["cores"], debug=ARGS["debug"], **ARGS["matching"])
-    # ALIGNER.compare()
-    os.system("./compareNgrams --source_files=")
+    os.system("./compareNgrams --source_files=%s --source_metadata=%s/metadata/metadata.json, target_files=%s --target_metadata=%s/metadata/metadata.json --threads=%d"\
+           % (ARGS["source_output_path"], ARGS["source_output_path"], ARGS["target_output_path"], ARGS["target_output_path"], ARGS["threads"]))

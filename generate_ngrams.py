@@ -90,7 +90,7 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, files, output_path, ngram_index=None, db_path=None):
+    def generate(self, files, output_path, ngram_index=None, db_path=None, save_index=True):
         """Generate n-grams. Takes a list of files as an argument."""
         os.system('rm -rf %s/*' % output_path)
         os.system('mkdir -p %s' % output_path)
@@ -159,14 +159,16 @@ class Ngrams:
                     self.__build_text_index(ngrams, current_text_id)
         with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
             dump(self.metadata, metadata_output)
-        with open("%s/index/ngram_index.json" % self.output_path, "w") as ngram_index_output:
-            dump(ngram_index, ngram_index_output)
-        with open("%s/index/ngram_count.json" % self.output_path, "w") as ngram_count_output:
-            ngram_count = []
-            for ngram, index_info in ngram_index.items():
-                ngram_count.append(ngram, index_info["count"])
-            ngram_count.sort(key=lambda x: x[1], reverse=True)
-            dump([i for i, j in ngram_count[:10000]], ngram_count_output)
+        if save_index:
+            with open("%s/index/ngram_index.json" % self.output_path, "w") as ngram_index_output:
+                dump(ngram_index, ngram_index_output)
+            with open("%s/index/ngram_count.json" % self.output_path, "w") as ngram_count_output:
+                ngram_count = []
+                for ngram, index_info in ngram_index.items():
+                    ngram_count.append(ngram, index_info["count"])
+                ngram_count.sort(key=lambda x: x[1], reverse=True)
+                dump([i for i, j in ngram_count[:10000]], ngram_count_output)
+            return {}
         return ngram_index
 
 
@@ -174,4 +176,4 @@ if __name__ == '__main__':
     OUTPUT_PATH = sys.argv[1]
     FILES = sys.argv[2:]
     NGRAM_GENERATOR = Ngrams(stopwords="stopwords.txt")
-    NGRAM_INDEX = NGRAM_GENERATOR.generate(FILES, OUTPUT_PATH)
+    NGRAM_GENERATOR.generate(FILES, OUTPUT_PATH)
