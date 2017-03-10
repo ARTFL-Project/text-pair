@@ -273,7 +273,6 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 		ngramInt, _ := strconv.Atoi(ngram)
 		uniqueNgrams[int32(ngramInt)] = true
 	}
-	println(len(mostCommonNgrams))
 	return uniqueNgrams
 }
 
@@ -329,6 +328,52 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, comm
 	return mostCommonNgrams
 }
 
+func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) (*os.File, []string, []string) {
+	os.MkdirAll(config.outputPath, 0755)
+	mergedOutput, err := os.Create(fmt.Sprintf(filepath.Join(config.outputPath, "alignments_results.%s"), config.outputFormat))
+	checkErr(err)
+	var firstSourceKey string
+	for sourceKey := range sourceMetadata {
+		firstSourceKey = sourceKey
+		break
+	}
+	firstRow := []string{"source_doc_id"}
+	sourceFields := mapToSliceOfKeys(sourceMetadata[firstSourceKey])
+	firstRow = append(firstRow, sourceFields...)
+	firstRow = append(firstRow, []string{"source_start_byte", "source_end_byte"}...)
+	firstRow = append(firstRow, []string{"source_context_before", "source_passage", "source_context_after"}...)
+	var firstTargetKey string
+	for targetKey := range targetMetadata {
+		firstTargetKey = targetKey
+		break
+	}
+	firstRow = append(firstRow, "target_doc_id")
+	targetFields := mapToSliceOfKeys(targetMetadata[firstTargetKey])
+	firstRow = append(firstRow, targetFields...)
+	firstRow = append(firstRow, []string{"target_start_byte", "target_end_byte"}...)
+	firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after"}...)
+	if config.outputFormat == "tab" {
+		mergedOutput.WriteString(strings.Join(firstRow, "\t") + "\n")
+	} else {
+		mergedOutput.WriteString("<html>\n")
+	}
+	return mergedOutput, sourceFields, targetFields
+}
+
+func makeSliceOfSlices(sliceToSlice []string, config *matchingParams) [][]string {
+	var sliceOfSlices [][]string
+	sliceLength := len(sliceToSlice)
+	chunkSize := (sliceLength + config.batchSize - 1) / config.batchSize
+	for i := 0; i < sliceLength; i += chunkSize {
+		end := i + chunkSize
+		if end > sliceLength {
+			end = sliceLength
+		}
+		sliceOfSlices = append(sliceOfSlices, sliceToSlice[i:end])
+	}
+	return sliceOfSlices
+}
+
 func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string, sourceMetadata map[string]map[string]string,
 	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams, sourceFields []string, targetFields []string) {
 	var combinedOutput []string
@@ -336,18 +381,49 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 	for _, alignments := range combinedAlignments.alignments {
 		targetValues := mapToSliceOfValues(targetMetadata[alignments.docID], targetFields)
 		for _, alignment := range alignments.matches {
-			fields := []string{*sourceDocID}
-			fields = append(fields, sourceValues...)
-			fields = append(fields, []string{strconv.Itoa(int(alignment.source.startByte)), strconv.Itoa(int(alignment.source.endByte))}...)
-			fields = append(fields, alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)...)
-			fields = append(fields, alignments.docID)
-			fields = append(fields, targetValues...)
-			fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
-			fields = append(fields, alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)...)
-			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
+			var fields string
+			if config.outputFormat == "tab" {
+				fields = tabOutput(alignment, sourceDocID, alignments.docID, sourceMetadata, targetMetadata, sourceValues, targetValues, config)
+
+			} else {
+				fields = htmlOutput(alignment, sourceDocID, alignments.docID, sourceMetadata, targetMetadata, sourceValues, targetValues, config)
+			}
+			combinedOutput = append(combinedOutput, fields)
 		}
 	}
-	f.WriteString("\n" + strings.Join(combinedOutput, "\n"))
+	if config.outputFormat == "tab" {
+		f.WriteString("\n" + strings.Join(combinedOutput, "\n"))
+	} else {
+		f.WriteString("\n" + strings.Join(combinedOutput, ""))
+	}
+}
+
+func tabOutput(alignment Alignment, sourceDocID *string, targetDocID string, sourceMetadata map[string]map[string]string,
+	targetMetadata map[string]map[string]string, sourceValues []string, targetValues []string, config *matchingParams) string {
+	fields := []string{*sourceDocID}
+	fields = append(fields, sourceValues...)
+	fields = append(fields, []string{strconv.Itoa(int(alignment.source.startByte)), strconv.Itoa(int(alignment.source.endByte))}...)
+	fields = append(fields, alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)...)
+	fields = append(fields, targetDocID)
+	fields = append(fields, targetValues...)
+	fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
+	fields = append(fields, alignmentToText(&alignment.target, targetMetadata[targetDocID]["filename"], config)...)
+	return strings.Join(fields, "\t")
+}
+
+func htmlOutput(alignment Alignment, sourceDocID *string, targetDocID string, sourceMetadata map[string]map[string]string,
+	targetMetadata map[string]map[string]string, sourceValues []string, targetValues []string, config *matchingParams) string {
+	outputString := ""
+	outputString += "<h1>===================</h1>"
+	outputString += "<div><button type='button'>Diff alignments</button>"
+	sourcePassages := alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)
+	targetPassages := alignmentToText(&alignment.target, targetMetadata[targetDocID]["filename"], config)
+	outputString += fmt.Sprintf("<h4>====== Source ======</h4><h5>%s, (%s)</h5>", sourceMetadata[*sourceDocID]["title"], sourceMetadata[*sourceDocID]["author"])
+	outputString += fmt.Sprintf("<p>%s <span style='color:red'>%s</span> %s</p>", sourcePassages[0], sourcePassages[1], sourcePassages[2])
+	outputString += fmt.Sprintf("<h4>====== Target ======</h4><h5>%s, (%s)</h5>", targetMetadata[targetDocID]["title"], targetMetadata[targetDocID]["author"])
+	outputString += fmt.Sprintf("<p>%s <span style='color:red'>%s</span> %s</p>", targetPassages[0], targetPassages[1], targetPassages[2])
+	outputString += "</div>"
+	return outputString
 }
 
 func mapToSliceOfKeys(metadata map[string]string) []string {
@@ -396,55 +472,13 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	return text
 }
 
-func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) (*os.File, []string, []string) {
-	os.MkdirAll(config.outputPath, 0755)
-	mergedOutput, err := os.Create(fmt.Sprintf(filepath.Join(config.outputPath, "alignments_results.%s"), config.outputFormat))
-	checkErr(err)
-	var firstSourceKey string
-	for sourceKey := range sourceMetadata {
-		firstSourceKey = sourceKey
-		break
-	}
-	firstRow := []string{"source_doc_id"}
-	sourceFields := mapToSliceOfKeys(sourceMetadata[firstSourceKey])
-	firstRow = append(firstRow, sourceFields...)
-	firstRow = append(firstRow, []string{"source_start_byte", "source_end_byte"}...)
-	firstRow = append(firstRow, []string{"source_context_before", "source_passage", "source_context_after"}...)
-	var firstTargetKey string
-	for targetKey := range targetMetadata {
-		firstTargetKey = targetKey
-		break
-	}
-	firstRow = append(firstRow, "target_doc_id")
-	targetFields := mapToSliceOfKeys(targetMetadata[firstTargetKey])
-	firstRow = append(firstRow, targetFields...)
-	firstRow = append(firstRow, []string{"target_start_byte", "target_end_byte"}...)
-	firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after"}...)
-	mergedOutput.WriteString(strings.Join(firstRow, "\t") + "\n")
-	return mergedOutput, sourceFields, targetFields
-}
-
-func makeSliceOfSlices(sliceToSlice []string, config *matchingParams) [][]string {
-	var sliceOfSlices [][]string
-	sliceLength := len(sliceToSlice)
-	chunkSize := (sliceLength + config.batchSize - 1) / config.batchSize
-	for i := 0; i < sliceLength; i += chunkSize {
-		end := i + chunkSize
-		if end > sliceLength {
-			end = sliceLength
-		}
-		sliceOfSlices = append(sliceOfSlices, sliceToSlice[i:end])
-	}
-	return sliceOfSlices
-}
-
 func addAlignment(m *matchValues, config *matchingParams, alignments *[]Alignment) {
 	m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2]}
 	m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2]}
 	distanceValue := int32((float32(m.previousAlignment.source.endByte - m.previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
 	maxSourceDistance := m.currentAlignment.source.startByte - distanceValue
 	maxTargetDistance := m.currentAlignment.target.startByte - distanceValue
-	// Merge passages that are within config.maxPassageDistance
+	// Merge passages that are within distanceValue measured in bytes
 	if len(*alignments) > 0 && m.previousAlignment.source.startByte <= maxSourceDistance && maxSourceDistance <= m.previousAlignment.source.endByte && m.previousAlignment.target.startByte <= maxTargetDistance && maxTargetDistance <= m.previousAlignment.target.endByte {
 		(*alignments)[len(*alignments)-1].source.endByte = m.currentAlignment.source.endByte
 		(*alignments)[len(*alignments)-1].target.endByte = m.currentAlignment.target.endByte
