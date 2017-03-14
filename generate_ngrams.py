@@ -1,20 +1,24 @@
 #/usr/bin/env python3
 """N-gram generator"""
 
+import argparse
 import html
+import json
 import os
 import re
 import sys
 import unicodedata
+from ast import literal_eval
 from collections import defaultdict
-from json import dump, loads
 from glob import glob
+from json import dump, loads
 
-from nltk.stem.snowball import SnowballStemmer
 from philologic.DB import DB
+from Stemmer import Stemmer
 
 PUNCTUATION = re.compile(r'[,?;.:!]*')
 NUMBERS = re.compile(r'\d+')
+TRIM_LAST_SLASH = re.compile(r'/\Z')
 
 PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5, 'sent': 6, 'word': 7}
 
@@ -28,25 +32,20 @@ class Ngrams:
         self.numbers = numbers
         if stemmer:
             try:
-                self.stemmer = SnowballStemmer(language)
+                self.stemmer = Stemmer(language)
+                self.stemmer.maxCacheSize = 50000
             except Exception:
                 self.stemmer = False
         else:
             self.stemmer = False
+        self.lowercase = lowercase
         if stopwords is not None and os.path.isfile(stopwords):
             self.stopwords = self.__get_stopwords(stopwords)
         else:
             self.stopwords = []
-        self.lowercase = lowercase
         self.is_philo_db = is_philo_db
         self.text_object_level = text_object_level
         self.debug = debug
-
-    def __getattr__(self, attr):
-        if attr == "output_files":
-            return glob(os.path.join(self.output_path, "*pickle"))
-        elif attr == "ngram_index":
-            return os.path.join(self.output_path, "index/ngram_index.pickle")
 
     def __get_stopwords(self, path):
         stopwords = set([])
@@ -62,7 +61,7 @@ class Ngrams:
         if self.lowercase:
             input_str = input_str.lower()
         if self.stemmer:
-            input_str = self.stemmer.stem(input_str)
+            input_str = self.stemmer.stemWord(input_str)
         nkfd_form = unicodedata.normalize('NFKD', input_str)
         return "".join([c for c in nkfd_form if not unicodedata.combining(c)])
 
@@ -171,9 +170,36 @@ class Ngrams:
             return {}
         return ngram_index
 
+def parse_command_line():
+    """Command line parsing function"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", help="configuration file used to override defaults",
+                        type=str, default="")
+    parser.add_argument("--file_path", help="path to source files",
+                        type=str)
+    parser.add_argument("--prior_index", help="Use ngram index generated from another set of files for cross dataset comparison",
+                        type=str, default="")
+    parser.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
+                        type=literal_eval, default=True)
+    parser.add_argument("--output_path", help="output path of ngrams",
+                        type=str, default="./")
+    parser.add_argument("--output_type", help="output format: html, json (see docs for proper decoding), xml, or tab",
+                        type=str, default="html")
+    parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
+    args = vars(parser.parse_args())
+    if args["is_philo_db"]:
+        args["file_path"] = TRIM_LAST_SLASH.sub("", args["file_path"])
+        args["files"] = sorted(glob(os.path.join(args["file_path"], "data/words_and_philo_ids/*")))
+    return args
+
 
 if __name__ == '__main__':
-    OUTPUT_PATH = sys.argv[1]
-    FILES = sys.argv[2:]
+    ARGS = parse_command_line()
     NGRAM_GENERATOR = Ngrams(stopwords="stopwords.txt")
-    NGRAM_GENERATOR.generate(FILES, OUTPUT_PATH)
+    if ARGS["prior_index"]:
+        print("Loading prior index...")
+        with open(ARGS["prior_index"]) as index:
+            PRIOR_INDEX = json.load(index)
+        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], ngram_index=PRIOR_INDEX)
+    else:
+        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"])

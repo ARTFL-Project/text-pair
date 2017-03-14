@@ -40,7 +40,9 @@ type matchingParams struct {
 	minimumMatchingNgramsInDocs   int32
 	contextSize                   int32
 	banalNgrams                   int
+	mergeOnByteDistance           bool
 	passageDistanceMultiplier     float32
+	twoWayMatching                bool
 	batchSize                     int
 	outputPath                    string
 	numThreads                    int
@@ -160,10 +162,12 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	minimumMatchingNgramsInDocs := int32(*flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison"))
 	contextSize := int32(*flag.Int("context_size", 300, "size of context for before and after matching passages"))
 	banalNgrams := *flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
+	mergeOnByteDistance := *flag.Bool("merge_passages_on_byte_distance", false, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option")
 	passageDistance := float32(*flag.Float64("passage_distance_multiplier", 0.05, "Combine passage which are within (multiplier*length of previous passage) bytes"))
+	twoWayMatching := *flag.Bool("two_way_matching", false, "Enable two way matching: source is compared to target and then target compared to source")
 	flag.Parse()
 	config := matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
-		contextSize, banalNgrams, passageDistance, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField}
+		contextSize, banalNgrams, mergeOnByteDistance, passageDistance, twoWayMatching, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField}
 	fmt.Println("Loading bibliography...")
 	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	targetMetadata := openJSONMetadata(targetMetadataArg)
@@ -475,13 +479,18 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 func addAlignment(m *matchValues, config *matchingParams, alignments *[]Alignment) {
 	m.currentAlignment.source = position{m.firstMatch[0][1], m.lastMatch[0][2]}
 	m.currentAlignment.target = position{m.firstMatch[1][1], m.lastMatch[1][2]}
-	distanceValue := int32((float32(m.previousAlignment.source.endByte - m.previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
-	maxSourceDistance := m.currentAlignment.source.startByte - distanceValue
-	maxTargetDistance := m.currentAlignment.target.startByte - distanceValue
-	// Merge passages that are within distanceValue measured in bytes
-	if len(*alignments) > 0 && m.previousAlignment.source.startByte <= maxSourceDistance && maxSourceDistance <= m.previousAlignment.source.endByte && m.previousAlignment.target.startByte <= maxTargetDistance && maxTargetDistance <= m.previousAlignment.target.endByte {
-		(*alignments)[len(*alignments)-1].source.endByte = m.currentAlignment.source.endByte
-		(*alignments)[len(*alignments)-1].target.endByte = m.currentAlignment.target.endByte
+	if config.mergeOnByteDistance {
+		distanceValue := int32((float32(m.previousAlignment.source.endByte - m.previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
+		maxSourceDistance := m.currentAlignment.source.startByte - distanceValue
+		maxTargetDistance := m.currentAlignment.target.startByte - distanceValue
+		// Merge passages that are within distanceValue measured in bytes
+		if len(*alignments) > 0 && m.previousAlignment.source.startByte <= maxSourceDistance && maxSourceDistance <= m.previousAlignment.source.endByte && m.previousAlignment.target.startByte <= maxTargetDistance && maxTargetDistance <= m.previousAlignment.target.endByte {
+			(*alignments)[len(*alignments)-1].source.endByte = m.currentAlignment.source.endByte
+			(*alignments)[len(*alignments)-1].target.endByte = m.currentAlignment.target.endByte
+		} else {
+			*alignments = append(*alignments, m.currentAlignment)
+			m.previousAlignment = m.currentAlignment
+		}
 	} else {
 		*alignments = append(*alignments, m.currentAlignment)
 		m.previousAlignment = m.currentAlignment
