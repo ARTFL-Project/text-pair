@@ -1,19 +1,20 @@
-#/usr/bin/env python3
+#!/usr/bin/env python3
 """N-gram generator"""
 
 import argparse
+import gc
 import html
 import json
 import os
 import re
-import sys
 import unicodedata
 from ast import literal_eval
-from collections import defaultdict
+from collections import defaultdict, deque, Counter
 from glob import glob
 from json import dump, loads
 
 from philologic.DB import DB
+
 from Stemmer import Stemmer
 
 PUNCTUATION = re.compile(r'[,?;.:!]*')
@@ -46,6 +47,9 @@ class Ngrams:
         self.is_philo_db = is_philo_db
         self.text_object_level = text_object_level
         self.debug = debug
+        self.input_path = ""
+        self.output_path = ""
+        self.metadata = {}
 
     def __get_stopwords(self, path):
         stopwords = set([])
@@ -89,7 +93,8 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, files, output_path, ngram_index=None, db_path=None, save_index=True):
+    # @profile
+    def generate(self, files, output_path, ngram_index=None, db_path=None):
         """Generate n-grams. Takes a list of files as an argument."""
         os.system('rm -rf %s/*' % output_path)
         os.system('mkdir -p %s' % output_path)
@@ -106,18 +111,19 @@ class Ngrams:
             ngram_index_count = 0
         else:
             ngram_index_count = max(ngram_index.values()) + 1
+        ngram_count = Counter()
         for input_file in files:
             print("Processing document %s..." % input_file)
             with open(input_file) as filehandle:
-                ngrams = []
-                ngram_obj = []
+                ngrams = deque([])
+                ngram_obj = deque([])
                 current_text_id = None
                 for line in filehandle:
                     word_obj = loads(line.strip())
                     word = word_obj["token"]
-                    word = self.__normalize(word)
                     if len(word) < 2 or word in self.stopwords:
                         continue
+                    word = self.__normalize(word)
                     position = word_obj["philo_id"]
                     if self.text_object_level == 'doc':
                         text_id = position.split()[0]
@@ -130,45 +136,46 @@ class Ngrams:
                             self.__write_to_disk(ngrams, current_text_id)
                         self.metadata[current_text_id] = self.__get_metadata(current_text_id)
                         self.__build_text_index(ngrams, current_text_id)
-                        ngrams = []
-                        ngram_obj = []
-                        current_ngram = []
+                        ngrams = deque([])
+                        ngram_obj = deque([])
+                        current_ngram = ""
                         current_text_id = text_id
                     ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
                     if len(ngram_obj) == self.ngram:
                         if self.skipgram:
                             ngram_obj_to_store = [ngram_obj[0], ngram_obj[-1]]
                         else:
-                            ngram_obj_to_store = ngram_obj
-                        current_ngram, philo_ids, start_bytes, end_bytes = zip(*ngram_obj_to_store)
-                        current_ngram = " ".join(current_ngram)
+                            ngram_obj_to_store = list(ngram_obj)
+                        current_ngram_list, philo_ids, start_bytes, end_bytes = zip(*ngram_obj_to_store)
+                        current_ngram = " ".join(current_ngram_list)
                         if current_ngram not in ngram_index:
                             ngram_index_count += 1
-                            ngram_index[current_ngram] = {"index": ngram_index_count, "count": 0}
+                            ngram_index[current_ngram] = ngram_index_count
                             current_ngram_index = ngram_index_count
                         else:
-                            current_ngram_index = ngram_index[current_ngram]["index"]
-                        ngram_index[current_ngram]["count"] += 1
+                            current_ngram_index = ngram_index[current_ngram]
+                        ngram_count[current_ngram_index] += 1
                         ngrams.append((current_ngram_index, start_bytes[0], end_bytes[-1]))
-                        ngram_obj = ngram_obj[1:]
+                        ngram_obj.popleft()
                 if self.text_object_level == "doc":
                     if self.debug:
                         self.__write_to_disk(ngrams, current_text_id)
                     self.metadata[current_text_id] = self.__get_metadata(current_text_id)
                     self.__build_text_index(ngrams, current_text_id)
+        print("Finished processing files...")
+        print("Saving metadata...")
         with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
             dump(self.metadata, metadata_output)
-        if save_index:
-            with open("%s/index/ngram_index.json" % self.output_path, "w") as ngram_index_output:
-                dump(ngram_index, ngram_index_output)
-            with open("%s/index/ngram_count.json" % self.output_path, "w") as ngram_count_output:
-                ngram_count = []
-                for ngram, index_info in ngram_index.items():
-                    ngram_count.append(ngram, index_info["count"])
-                ngram_count.sort(key=lambda x: x[1], reverse=True)
-                dump([i for i, j in ngram_count[:10000]], ngram_count_output)
-            return {}
-        return ngram_index
+        print("Saving index...")
+        with open("%s/index/ngram_index.json" % self.output_path, "w") as ngram_index_output:
+            dump(ngram_index, ngram_index_output)
+        ngram_index_path = "%s/index/ngram_index.json" % self.output_path
+        del ngram_index
+        gc.collect()
+        print("Saving most common ngrams...")
+        with open("%s/index/ngram_count.json" % self.output_path, "w") as ngram_count_output:
+            dump([i for i, j in ngram_count.most_common(n=10000)], ngram_count_output)
+        return ngram_index_path
 
 def parse_command_line():
     """Command line parsing function"""
