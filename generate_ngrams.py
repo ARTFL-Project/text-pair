@@ -2,14 +2,14 @@
 """N-gram generator"""
 
 import argparse
-import gc
 import html
 import json
 import os
 import re
+import sqlite3
 import unicodedata
 from ast import literal_eval
-from collections import defaultdict, deque, Counter
+from collections import Counter, defaultdict, deque
 from glob import glob
 from json import dump, loads
 
@@ -18,10 +18,61 @@ from philologic.DB import DB
 from Stemmer import Stemmer
 
 PUNCTUATION = re.compile(r'[,?;.:!]*')
-NUMBERS = re.compile(r'\d+')
+NUMBERS = re.compile(r'[0-9]+')
 TRIM_LAST_SLASH = re.compile(r'/\Z')
 
 PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5, 'sent': 6, 'word': 7}
+
+class NgramIndex:
+    """SQlite representation of ngram to ints"""
+
+    def __init__(self, path, prior_db=None):
+        self.save_path = os.path.join(path, "index/")
+        self.database = sqlite3.connect(":memory:")
+        self.cursor = self.database.cursor()
+        self.cursor.execute("CREATE TABLE ngram_index (ngram text PRIMARY KEY, ngram_int INTEGER, count INTEGER) WITHOUT ROWID")
+        self.current_index = 0
+        if prior_db is not None:
+            self.__load_db(prior_db)
+
+    def __load_db(self, prior_db):
+        with open(prior_db) as prior_database:
+            for line in prior_database:
+                ngram, ngram_int = line.strip().split('\t')[:2]
+                ngram_int = int(ngram_int)
+                if ngram_int > self.current_index:
+                    self.current_index = ngram_int
+                self.cursor.execute("INSERT INTO ngram_index (ngram, ngram_int, count) VALUES (?, ?, ?)", (ngram, ngram_int, 0))
+
+    def __getitem__(self, item):
+        self.cursor.execute('SELECT ngram_int, count FROM ngram_index WHERE ngram=?', (item,))
+        result = self.cursor.fetchone()
+        if result is None:
+            self.current_index += 1
+            self.cursor.execute("INSERT INTO ngram_index (ngram, ngram_int, count) VALUES (?, ?, ?)", (item, self.current_index, 1))
+            # self.database.commit()
+            return self.current_index
+        else:
+            self.cursor.execute("UPDATE ngram_index SET count=? WHERE ngram=?", (int(result[1])+1, item))
+            # self.database.commit()
+            return int(result[0])
+
+    def get_most_frequent(self, limit):
+        """Get most frequent ngrams and save to JSON"""
+        self.cursor.execute("SELECT ngram_int FROM ngram_index where count > 1 order by count desc limit %d" % limit)
+        results = []
+        for i in self.cursor:
+            results.append(i[0])
+        with open(os.path.join(self.save_path, "ngram_count.json"), "w") as ngram_count_output:
+            json.dump(results, ngram_count_output)
+
+    def save_db(self):
+        """Save in memory DB to disk"""
+        with open(os.path.join(self.save_path, "index.tab"), "w") as output:
+            self.cursor.execute("SELECT ngram, ngram_int, count FROM ngram_index")
+            for i in self.cursor:
+                print("\t".join(str(j) for j in i), file=output)
+
 
 class Ngrams:
     """Generate Ngrams"""
@@ -59,8 +110,10 @@ class Ngrams:
         return stopwords
 
     def __normalize(self, input_str):
-        word = PUNCTUATION.sub("", input_str)
-        word = NUMBERS.sub("", word)
+        input_str = PUNCTUATION.sub("", input_str)
+        input_str = NUMBERS.sub("", input_str)
+        if input_str == "":
+            return ""
         input_str = html.unescape(input_str)
         if self.lowercase:
             input_str = input_str.lower()
@@ -93,7 +146,6 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    # @profile
     def generate(self, files, output_path, ngram_index=None, db_path=None):
         """Generate n-grams. Takes a list of files as an argument."""
         os.system('rm -rf %s/*' % output_path)
@@ -107,11 +159,9 @@ class Ngrams:
         self.output_path = output_path
         self.metadata = {}
         if ngram_index is None:
-            ngram_index = {}
-            ngram_index_count = 0
+            ngram_index = NgramIndex(self.output_path)
         else:
-            ngram_index_count = max(ngram_index.values()) + 1
-        ngram_count = Counter()
+            ngram_index = NgramIndex(self.output_path, prior_db=ngram_index)
         for input_file in files:
             print("Processing document %s..." % input_file)
             with open(input_file) as filehandle:
@@ -121,9 +171,9 @@ class Ngrams:
                 for line in filehandle:
                     word_obj = loads(line.strip())
                     word = word_obj["token"]
+                    word = self.__normalize(word)
                     if len(word) < 2 or word in self.stopwords:
                         continue
-                    word = self.__normalize(word)
                     position = word_obj["philo_id"]
                     if self.text_object_level == 'doc':
                         text_id = position.split()[0]
@@ -148,13 +198,7 @@ class Ngrams:
                             ngram_obj_to_store = list(ngram_obj)
                         current_ngram_list, philo_ids, start_bytes, end_bytes = zip(*ngram_obj_to_store)
                         current_ngram = " ".join(current_ngram_list)
-                        if current_ngram not in ngram_index:
-                            ngram_index_count += 1
-                            ngram_index[current_ngram] = ngram_index_count
-                            current_ngram_index = ngram_index_count
-                        else:
-                            current_ngram_index = ngram_index[current_ngram]
-                        ngram_count[current_ngram_index] += 1
+                        current_ngram_index = ngram_index[current_ngram]
                         ngrams.append((current_ngram_index, start_bytes[0], end_bytes[-1]))
                         ngram_obj.popleft()
                 if self.text_object_level == "doc":
@@ -166,15 +210,11 @@ class Ngrams:
         print("Saving metadata...")
         with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
             dump(self.metadata, metadata_output)
-        print("Saving index...")
-        with open("%s/index/ngram_index.json" % self.output_path, "w") as ngram_index_output:
-            dump(ngram_index, ngram_index_output)
-        ngram_index_path = "%s/index/ngram_index.json" % self.output_path
-        del ngram_index
-        gc.collect()
         print("Saving most common ngrams...")
-        with open("%s/index/ngram_count.json" % self.output_path, "w") as ngram_count_output:
-            dump([i for i, j in ngram_count.most_common(n=10000)], ngram_count_output)
+        ngram_index.get_most_frequent(10000)
+        print("Saving index...")
+        ngram_index.save_db()
+        ngram_index_path = os.path.join(self.output_path, "index/index.db")
         return ngram_index_path
 
 def parse_command_line():
@@ -204,9 +244,6 @@ if __name__ == '__main__':
     ARGS = parse_command_line()
     NGRAM_GENERATOR = Ngrams(stopwords="stopwords.txt")
     if ARGS["prior_index"]:
-        print("Loading prior index...")
-        with open(ARGS["prior_index"]) as index:
-            PRIOR_INDEX = json.load(index)
-        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], ngram_index=PRIOR_INDEX)
+        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], ngram_index=ARGS["prior_index"])
     else:
         NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"])

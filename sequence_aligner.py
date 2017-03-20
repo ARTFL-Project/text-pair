@@ -73,9 +73,7 @@ if __name__ == '__main__':
     NGRAM_INDEX_PATH = NGRAMS.generate(ARGS["source_files"], ARGS["source_output_path"])
     if ARGS["target_files"] is not None:
         print("\n### Generating target ngrams ###")
-        with open(NGRAM_INDEX_PATH) as json_file:
-            NGRAM_INDEX = json.load(json_file)
-        NGRAMS.generate(ARGS["target_files"], ARGS["target_output_path"], ngram_index=NGRAM_INDEX)
+        NGRAMS.generate(ARGS["target_files"], ARGS["target_output_path"], ngram_index=NGRAM_INDEX_PATH)
     # Delete NGRAMS Object since we need memory for comparison
     del NGRAMS
     gc.collect()
