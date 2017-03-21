@@ -142,20 +142,20 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	outputFormat := flag.String("output_format", "tab", "output format of results")
 	sortField := flag.String("sort_by", "year", "metadata field used to sort files in ascending order")
 	batchSize := flag.Int("batch_size", 1, "batch steps defines the number of steps in which the full source vs target is run: useful when RAM usage is a concern")
-	matchingWindowSize := int32(*flag.Int("matching_window_size", 20, "size of sliding window for matches"))
-	maxGap := int32(*flag.Int("max_gap", 10, "maximum gap between two matching ngrams"))
-	minimumMatchingNgrams := int32(*flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match"))
-	minimumMatchingNgramsInWindow := int32(*flag.Int("minimum_matching_ngram_in_window", 4, "minimum matching ngrams per sliding window"))
-	commonNgramsLimit := float32(*flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")) / 100
-	minimumMatchingNgramsInDocs := int32(*flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison"))
-	contextSize := int32(*flag.Int("context_size", 300, "size of context for before and after matching passages"))
-	banalNgrams := *flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
-	mergeOnByteDistance := *flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option")
-	passageDistance := float32(*flag.Float64("passage_distance_multiplier", 0.05, "Combine passage which are within (multiplier*length of previous passage) bytes"))
-	twoWayMatching := *flag.Bool("two_way_matching", true, "Enable two way matching: source is compared to target and then target compared to source")
+	matchingWindowSize := flag.Int("matching_window_size", 20, "size of sliding window for matches")
+	maxGap64 := flag.Int("max_gap", 10, "maximum gap between two matching ngrams")
+	minimumMatchingNgrams := flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match")
+	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngram_in_window", 4, "minimum matching ngrams per sliding window")
+	commonNgramsLimit := flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")
+	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
+	contextSize := flag.Int("context_size", 300, "size of context for before and after matching passages")
+	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
+	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option")
+	passageDistance := flag.Float64("passage_distance_multiplier", 0.05, "Combine passage which are within (multiplier*length of previous passage) bytes")
+	twoWayMatching := flag.Bool("two_way_matching", true, "Enable two way matching: source is compared to target and then target compared to source")
 	flag.Parse()
-	config := &matchingParams{matchingWindowSize, maxGap, minimumMatchingNgrams, minimumMatchingNgramsInWindow, commonNgramsLimit, minimumMatchingNgramsInDocs,
-		contextSize, banalNgrams, mergeOnByteDistance, passageDistance, twoWayMatching, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField, *debug}
+	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap64), int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
+		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, float32(*passageDistance), *twoWayMatching, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField, *debug}
 	fmt.Println("Loading bibliography...")
 	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	targetMetadata := openJSONMetadata(targetMetadataArg)
@@ -587,13 +587,13 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			}
 			if targetMatch.target.startByte < sourceMatch.source.startByte && targetMatch.target.endByte >= sourceMatch.source.startByte && targetMatch.source.startByte < sourceMatch.target.startByte && targetMatch.source.endByte >= sourceMatch.target.startByte {
 				if targetMatch.target.endByte > sourceMatch.source.endByte {
-					fmt.Println("1 Extended source from", sourceMatch.source, "to", targetMatch.target)
+					// fmt.Println("1 Extended source from", sourceMatch.source, "to", targetMatch.target)
 					alignments[sourceMatchIndex] = Alignment{targetMatch.target, targetMatch.source}
 				} else {
 					sourcePosition := position{targetMatch.target.startByte, sourceMatch.source.endByte}
 					targetPosition := position{targetMatch.source.startByte, sourceMatch.target.endByte}
 					alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition}
-					fmt.Println("2 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition})
+					// fmt.Println("2 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition})
 				}
 				targetMergeSet[targetMatchIndex] = true
 				break innerTwoWay
@@ -601,7 +601,7 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 				sourcePosition := position{sourceMatch.source.startByte, targetMatch.target.endByte}
 				targetPosition := position{sourceMatch.target.startByte, targetMatch.source.endByte}
 				alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition}
-				fmt.Println("3 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition})
+				// fmt.Println("3 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition})
 				targetMergeSet[targetMatchIndex] = true
 				break innerTwoWay
 			}
@@ -763,14 +763,14 @@ func main() {
 								return matches[i].target[0] < matches[j].target[0]
 							})
 							alignments := matchPassage(&sourceFile, &targetFile, matches, config, mostCommonNgrams)
-							beforeVal := len(alignments)
+							// beforeVal := len(alignments)
 							if config.twoWayMatching {
 								alignments = reverseMatch(&sourceFile, &targetFile, matches, config, mostCommonNgrams, alignments)
 							}
-							afterVal := len(alignments)
-							if beforeVal != afterVal {
-								println(beforeVal, afterVal)
-							}
+							// afterVal := len(alignments)
+							// if beforeVal != afterVal {
+							// 	println(beforeVal, afterVal)
+							// }
 							counts += len(alignments)
 							if len(alignments) > 0 {
 								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments})
