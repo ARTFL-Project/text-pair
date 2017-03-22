@@ -42,7 +42,7 @@ type matchingParams struct {
 	banalNgrams                   int
 	mergeOnByteDistance           bool
 	passageDistanceMultiplier     float32
-	twoWayMatching                bool
+	oneWayMatching                bool
 	batchSize                     int
 	outputPath                    string
 	numThreads                    int
@@ -152,10 +152,10 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
 	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option")
 	passageDistance := flag.Float64("passage_distance_multiplier", 0.05, "Combine passage which are within (multiplier*length of previous passage) bytes")
-	twoWayMatching := flag.Bool("two_way_matching", true, "Enable two way matching: source is compared to target and then target compared to source")
+	oneWayMatching := flag.Bool("one_way_matching", false, "Disable two way matching: source is compared to target and target is NOT compared to source")
 	flag.Parse()
 	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap64), int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
-		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, float32(*passageDistance), *twoWayMatching, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField, *debug}
+		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, float32(*passageDistance), *oneWayMatching, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField, *debug}
 	fmt.Println("Loading bibliography...")
 	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	targetMetadata := openJSONMetadata(targetMetadataArg)
@@ -367,7 +367,7 @@ func makeSliceOfSlices(sliceToSlice []string, config *matchingParams) [][]string
 }
 
 func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string, sourceMetadata map[string]map[string]string,
-	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams, sourceFields []string, targetFields []string) {
+	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams, sourceFields []string, targetFields []string, counts *int) {
 	var combinedOutput []string
 	sourceValues := mapToSliceOfValues(sourceMetadata[*sourceDocID], sourceFields)
 	for _, alignments := range combinedAlignments.alignments {
@@ -381,6 +381,7 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 				fields = htmlOutput(alignment, sourceDocID, alignments.docID, sourceMetadata, targetMetadata, sourceValues, targetValues, config)
 			}
 			combinedOutput = append(combinedOutput, fields)
+			*counts++
 		}
 	}
 	if config.outputFormat == "tab" {
@@ -689,6 +690,8 @@ func main() {
 			} else {
 				if config.batchSize > 1 {
 					fmt.Printf("Loading target batch %d...\n", targetBatchNumber+1)
+				} else {
+					fmt.Println("Loading target files...")
 				}
 				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber])
 			}
@@ -764,14 +767,13 @@ func main() {
 							})
 							alignments := matchPassage(&sourceFile, &targetFile, matches, config, mostCommonNgrams)
 							// beforeVal := len(alignments)
-							if config.twoWayMatching {
+							if !config.oneWayMatching {
 								alignments = reverseMatch(&sourceFile, &targetFile, matches, config, mostCommonNgrams, alignments)
 							}
 							// afterVal := len(alignments)
 							// if beforeVal != afterVal {
-							// 	println(beforeVal, afterVal)
+							// println(beforeVal, afterVal)
 							// }
-							counts += len(alignments)
 							if len(alignments) > 0 {
 								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments})
 							}
@@ -787,7 +789,7 @@ func main() {
 					}
 				}
 				if len(combinedAlignments.alignments) > 0 {
-					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, config, sourceFields, targetFields)
+					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, config, sourceFields, targetFields, &counts)
 				}
 				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
 					localSourceFilesDone[sourceFile.DocID] = true
