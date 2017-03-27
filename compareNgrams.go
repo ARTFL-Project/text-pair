@@ -150,7 +150,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
 	contextSize := flag.Int("context_size", 300, "size of context for before and after matching passages")
 	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
-	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option")
+	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option. Value between 0 and 1")
 	passageDistance := flag.Float64("passage_distance_multiplier", 0.05, "Combine passage which are within (multiplier*length of previous passage) bytes")
 	oneWayMatching := flag.Bool("one_way_matching", false, "Disable two way matching: source is compared to target and target is NOT compared to source")
 	flag.Parse()
@@ -647,7 +647,13 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 func mergeWithPrevious(m *matchValues, config *matchingParams, alignments []Alignment) bool {
 	distanceValue := int32((float32(m.previousAlignment.source.endByte - m.previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
 	maxSourceDistance := m.currentAlignment.source.startByte - distanceValue
+	if maxSourceDistance < 0 {
+		maxSourceDistance = 0
+	}
 	maxTargetDistance := m.currentAlignment.target.startByte - distanceValue
+	if maxTargetDistance < 0 {
+		maxTargetDistance = 0
+	}
 	// Merge passages that are within distanceValue measured in bytes
 	if len(alignments) > 0 && m.previousAlignment.source.startByte <= maxSourceDistance && maxSourceDistance <= m.previousAlignment.source.endByte && m.previousAlignment.target.startByte <= maxTargetDistance && maxTargetDistance <= m.previousAlignment.target.endByte {
 		return true
