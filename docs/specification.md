@@ -9,15 +9,17 @@ pour la transformation en ngrams.
 Un fichier contenant un objet en JSON par ligne, ex:
 
 ```JSON
-{"token": "la", "position": "1 2 3 1 1 1 6 433 1"}
-{"token": "fonctionnalité", "position": "1 2 3 1 1 1 6 435 1"}
-{"token": "recherchée", "position": "1 2 3 1 1 1 6 450 1"}
+{"start_byte": 3633, "token": "je", "philo_id": "1 1 1 1 2 1 1 3633 1", "end_byte": 3635}
+{"start_byte": 3636, "token": "ne", "philo_id": "1 1 1 1 2 1 2 3636 1", "end_byte": 3638}
+{"start_byte": 3639, "token": "fais", "philo_id": "1 1 1 1 2 1 3 3639 1", "end_byte": 3643}
+{"start_byte": 3644, "token": "point", "philo_id": "1 1 1 1 2 1 4 3644 1", "end_byte": 3649}
+{"start_byte": 3650, "token": "ici", "philo_id": "1 1 1 1 2 1 5 3650 1", "end_byte": 3653}
 ...
 ```
 
-Seul les champs "token" et "position" sont nécessaires, le premier indiquant
-le mot traité, le deuxième indiquant la position dans le document, dans le cas
-ci-dessus l'identifiant philologic permettant de revenir au texte de départ.
+Seul les champs "token" et "start_byte" et "end_byte" sont nécessaires, le premier indiquant
+le mot traité, les deux autres indiquant la position dans le document, dans le cas
+ci-dessus l'identifiant philologic `philo_id` permettant de revenir au texte de départ.
 Des champs supplémentaires peuvent être ajoutés pour des opérations futures.
 
 ## Prétraitement ##
@@ -27,14 +29,12 @@ Par exemple, le fichier ci-dessus pourrait être transformé en ajoutant les POS
 
 
 ```JSON
-{"token": "la", "position": "1 2 3 1 1 1 6 433 1", "pos": "DET"}
-{"token": "fonctionnalité", "position": "1 2 3 1 1 1 6 435 1", "pos": "N"}
-{"token": "recherchée", "position": "1 2 3 1 1 1 6 450 1", "pos": "VERB"}
+{"token": "la", "position": "1 2 3 1 1 1 6 3633 1", "start_byte": 3633, "end_byte": 3635, "pos": "DET"}
 ...
 ```
 
 ## Création des ngrams ##
-À cette étape, on va créer la représentation en ngrams de chaque texte, et un index de tous les ngrams ordonné par fréquence des ngrams à travers tout le corpus (afin de pouvoir filtrer par fréquence à l'étape suivante.)
+À cette étape, on va créer la représentation en ngrams de chaque texte sous la forme d'un index inversé où chaque clé est le ngram qui est converti en chiffre, et la valeur une liste de position dans le texte.  
 Le format proposé pour cette transformation est le suivant:
 
 Exemple d'une représentation en trigrammes:
@@ -47,18 +47,10 @@ Exemple d'une représentation en trigrammes:
  ]
  ```
 
-Il s'agit d'une liste de ngram où chaque ngram est constitué d'une liste d'objet contenant 
-le token et sa position dans le texte. Chaque fichier est sauvegardé au format JSON.
+On sauvegarde également deux autres fichiers: un index de tous les ngrams avec leur idientifiant en chiffre, et une liste des ngrams les plus courants afin de pouvoir filtrer par fréquence à l'étape suivante.
 
-Pour l'index de ngrams, on sauvegarde une liste de ngrams ordonné par fréquence, comme par exemple:
-
- ```JSON
- [["tout", "ce", "que"], ["il", "faut", "que"], ["que", "je", "vous"], ["ce", "qu", "il"], 
- ["ce", "que", "je"], ["en", "ces", "lieux"], ["je", "ne", "puis"], ["premiere", "fois", "le"]]
- ```
+Chaque fichier est sauvegardé au format JSON.
  
-#### Note ####
-On ne transforme pas à cette étape les ngrams en chiffre afin de pouvoir conserver une trace des mots jusqu'au dernier moment. Utile pour le débuggage...
  
 ## Comparaison ##
  Avant de comparer, on charge tous les fichiers transformés en ngrams, filtrant si nécessaire les ngrams les plus communs grâce à l'index de ngrams créé à l'étape précédente. On convertit chaque ngram en un chiffre grâce à l'index de ngrams, ce qui permet de réduire la mémoire nécessaire pour la comparaison.
