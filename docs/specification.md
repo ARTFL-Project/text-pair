@@ -34,17 +34,17 @@ Par exemple, le fichier ci-dessus pourrait être transformé en ajoutant les POS
 ```
 
 ## Création des ngrams ##
-À cette étape, on va créer la représentation en ngrams de chaque texte sous la forme d'un index inversé où chaque clé est le ngram qui est converti en chiffre, et la valeur une liste de position dans le texte.  
+À cette étape, on va créer la représentation en ngrams de chaque texte sous la forme d'un index inversé où chaque clé est le ngram qui est converti en chiffre, et la valeur une liste de position (position du ngram, début et fin en bytes) dans le texte.  
 Le format proposé pour cette transformation est le suivant:
 
 Exemple d'une représentation en trigrammes:
 
 ```JSON
-[
-  [["la", "1 2 3 1 1 1 6 433 1"], ["fonctionnalité", "1 2 3 1 1 1 6 435 1"], ["recherché", "1 2 3 1 1 1 6 450 1"]],
-  [["fonctionnalité", "1 2 3 1 1 1 6 435 1"], ["recherché", "1 2 3 1 1 1 6 450 1"], ["tant", "1 2 3 1 1 1 6 460 1"]],
-  [["recherché", "1 2 3 1 1 1 6 450 1"], ["tant", "1 2 3 1 1 1 6 460 1"], ["par", "1 2 3 1 1 1 6 460 1"]]
- ]
+{
+  "1": [[0, 3560, 3653], [34, 4567, 4620]], 
+  "2": [[1, 3639, 3664]]
+  ...
+}
  ```
 
 On sauvegarde également deux autres fichiers: un index de tous les ngrams avec leur idientifiant en chiffre, et une liste des ngrams les plus courants afin de pouvoir filtrer par fréquence à l'étape suivante.
