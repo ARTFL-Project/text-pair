@@ -25,9 +25,9 @@ type docIndex struct {
 }
 
 type indexedNgram struct {
-	index     int32 `json:"index"`
-	startByte int32 `json:"start_byte"`
-	endByte   int32 `json:"end_byte"`
+	index     int32
+	startByte int32
+	endByte   int32
 }
 
 type ngramMatch struct {
@@ -548,13 +548,16 @@ func writeDebugOutput(m *matchValues, config *matchingParams, currentAnchor *ngr
 	if match {
 		stringOutput = "\n\n## MATCH ##\n"
 		stringOutput += fmt.Sprintf("Source byte range: %d-%d\n", m.currentAlignment.source.startByte, m.currentAlignment.source.endByte)
+		stringOutput += fmt.Sprintf("Source matching index range: %d-%d\n", m.firstMatch[0].index, m.lastMatch[0].index)
 		stringOutput += fmt.Sprintf("Target byte range: %d-%d\n", m.currentAlignment.target.startByte, m.currentAlignment.target.endByte)
+		stringOutput += fmt.Sprintf("Target matching index range: %d-%d\n", m.firstMatch[1].index, m.lastMatch[1].index)
 		stringOutput += fmt.Sprintf("Matching ngrams: %s", strings.Join(m.debug, " "))
 	} else {
-		stringOutput = "\n\n## FAILED MATCH##\n"
-		stringOutput += fmt.Sprintf("Source byte range: %d-%d\n", m.currentAlignment.source.startByte, m.currentAlignment.source.endByte)
-		stringOutput += fmt.Sprintf("Source matching index range: %d-%d\n")
-		stringOutput += fmt.Sprintf("Target byte range: %d-%d\n", m.currentAlignment.target.startByte, m.currentAlignment.target.endByte)
+		stringOutput = "\n\n## FAILED MATCH ##\n"
+		stringOutput += fmt.Sprintf("Source byte range: %d-%d\n", m.firstMatch[0].startByte, m.lastMatch[0].endByte)
+		stringOutput += fmt.Sprintf("Source matching index range: %d-%d\n", m.firstMatch[0].index, m.lastMatch[0].index)
+		stringOutput += fmt.Sprintf("Target byte range: %d-%d\n", m.firstMatch[1].startByte, m.lastMatch[1].endByte)
+		stringOutput += fmt.Sprintf("Target matching index range: %d-%d\n", m.firstMatch[1].index, m.lastMatch[1].index)
 		stringOutput += fmt.Sprintf("Matching ngrams: %s\n", strings.Join(m.debug, " "))
 	}
 	debugOutput.WriteString(stringOutput)
@@ -588,6 +591,9 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			m.commonNgramMatches++
 		}
 		m.lastMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
+		if config.debug {
+			m.debug = append(m.debug, ngramIndex[currentAnchor.ngram])
+		}
 	innerMatchingLoop:
 		for _, match := range matches[matchIndex+1:] {
 			source, target := match.source, match.target
