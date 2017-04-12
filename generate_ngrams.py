@@ -215,7 +215,7 @@ class Ngrams:
         ngram_index.get_most_frequent(10000)
         print("Saving index...")
         ngram_index.save_db()
-        ngram_index_path = os.path.join(self.output_path, "index/index.db")
+        ngram_index_path = os.path.join(self.output_path, "index/index.tab")
         return ngram_index_path
 
 def parse_command_line():
@@ -233,8 +233,6 @@ def parse_command_line():
                         type=str, default="doc")
     parser.add_argument("--output_path", help="output path of ngrams",
                         type=str, default="./")
-    parser.add_argument("--output_type", help="output format: html, json (see docs for proper decoding), xml, or tab",
-                        type=str, default="html")
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
     args = vars(parser.parse_args())
     if args["is_philo_db"]:
