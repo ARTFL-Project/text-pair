@@ -102,10 +102,12 @@ class Ngrams:
         self.metadata = {}
 
     def __get_stopwords(self, path):
+        print("Getting stopword list...", end=" ")
         stopwords = set([])
         with open(path) as stopword_file:
             for line in stopword_file:
                 stopwords.add(self.__normalize(line.strip()))
+        print("gathered {} stopwords.".format(len(stopwords)))
         return stopwords
 
     def __normalize(self, input_str):
@@ -158,10 +160,6 @@ class Ngrams:
         self.output_path = output_path
         if metadata is None:
             self.metadata = {}
-        else:
-            with open(metadata) as metadata_input:
-                print("Loading external metadata...")
-                self.metadata = json.load(metadata_input)
         if ngram_index is None:
             ngram_index = NgramIndex(self.output_path)
         else:
@@ -215,8 +213,11 @@ class Ngrams:
                     self.__build_text_index(ngrams, current_text_id)
         print("Finished processing files...")
         print("Saving metadata...")
-        with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
-            dump(self.metadata, metadata_output)
+        if metadata is not None:
+            with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
+                dump(self.metadata, metadata_output)
+        else:
+            os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
         print("Saving most common ngrams...")
         ngram_index.get_most_frequent(10000)
         print("Saving index...")
@@ -243,6 +244,7 @@ def parse_command_line():
     parser.add_argument("--output_type", help="output format: html, json (see docs for proper decoding), xml, or tab",
                         type=str, default="html")
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
+    parser.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     args = vars(parser.parse_args())
     if args["is_philo_db"]:
         args["file_path"] = TRIM_LAST_SLASH.sub("", args["file_path"])
@@ -254,7 +256,7 @@ def parse_command_line():
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
-    NGRAM_GENERATOR = Ngrams(stopwords="stopwords.txt", text_object_level=ARGS["text_object_level"])
+    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"])
     if ARGS["prior_index"]:
         NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], ngram_index=ARGS["prior_index"], metadata=ARGS["metadata"])
     else:

@@ -676,7 +676,6 @@ func main() {
 	} else {
 		targetFileBatches = makeSliceOfSlices(targetFiles, config)
 	}
-
 	mergedOutput, sourceFields, targetFields := createOutputFile(config, sourceMetadata, targetMetadata)
 	counts := 0
 	for sourceBatchNumber := 0; sourceBatchNumber < config.batchSize; sourceBatchNumber++ {
