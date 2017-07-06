@@ -187,7 +187,7 @@ class Ngrams:
                         if self.debug:
                             self.__write_to_disk(ngrams, current_text_id)
                         print("Storing %s: %s..." %(self.text_object_level, current_text_id))
-                        if metadata is not None:
+                        if metadata is None:
                             self.metadata[current_text_id] = self.__get_metadata(current_text_id)
                         self.__build_text_index(ngrams, current_text_id)
                         ngrams = deque([])
@@ -208,7 +208,7 @@ class Ngrams:
                 if self.text_object_level == "doc":
                     if self.debug:
                         self.__write_to_disk(ngrams, current_text_id)
-                    if metadata is not None:
+                    if metadata is None:
                         self.metadata[current_text_id] = self.__get_metadata(current_text_id)
                     self.__build_text_index(ngrams, current_text_id)
         print("Finished processing files...")
