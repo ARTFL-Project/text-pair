@@ -9,14 +9,19 @@ import re
 import sqlite3
 import unicodedata
 from ast import literal_eval
-from collections import Counter, defaultdict, deque
+from collections import defaultdict, deque
 from glob import glob
 from json import dump, loads
 from pathlib import Path
 
-from philologic.DB import DB
-
+from multiprocess import Pool
 from Stemmer import Stemmer
+
+try:
+    from philologic.DB import DB
+except ImportError:
+    DB = None
+
 
 PUNCTUATION = re.compile(r'[,?;.:!]*')
 NUMBERS = re.compile(r'[0-9]+')
@@ -95,6 +100,8 @@ class Ngrams:
         else:
             self.stopwords = []
         self.is_philo_db = is_philo_db
+        if DB is None:
+            self.is_philo_db = False
         self.text_object_level = text_object_level
         self.debug = debug
         self.input_path = ""
@@ -140,26 +147,33 @@ class Ngrams:
     def __get_metadata(self, text_id):
         """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
         metadata = {}
-        philo_db = DB(os.path.join(self.input_path, "data"), cached=False)
-        text_object = philo_db[text_id.split('_')]
-        for field in philo_db.locals["metadata_fields"]:
-            metadata[field] = str(text_object[field])
+        if self.is_philo_db is True:
+            philo_db = DB(os.path.join(self.input_path, "data"), cached=False)
+            text_object = philo_db[text_id.split('_')]
+            for field in philo_db.locals["metadata_fields"]:
+                metadata[field] = str(text_object[field])
+        else:
+            metadata = self.metadata[text_id]
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, files, output_path, ngram_index=None, db_path=None, metadata=None):
+    def generate(self, files, output_path, ngram_index=None, db_path=None, metadata=None, frequent_ngrams=10000, workers=4):
         """Generate n-grams. Takes a list of files as an argument."""
         os.system('rm -rf %s/*' % output_path)
         os.system('mkdir -p %s' % output_path)
         os.system("mkdir %s/metadata" % output_path)
         os.system("mkdir %s/index" % output_path)
-        if db_path is None and self.is_philo_db:
+        if db_path is None and self.is_philo_db is True:
             self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
         else:
             self.input_path = db_path
         self.output_path = output_path
         if metadata is None:
-            self.metadata = {}
+            if self.is_philo_db is False:
+                print("No metadata provided, only the filename will be used as metadata")
+                self.metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
+            else:
+                self.metadata = {}
         if ngram_index is None:
             ngram_index = NgramIndex(self.output_path)
         else:
@@ -219,7 +233,7 @@ class Ngrams:
         else:
             os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
         print("Saving most common ngrams...")
-        ngram_index.get_most_frequent(10000)
+        ngram_index.get_most_frequent(frequent_ngrams)
         print("Saving index...")
         ngram_index.save_db()
         ngram_index_path = os.path.join(self.output_path, "index/index.tab")
@@ -246,11 +260,12 @@ def parse_command_line():
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
     parser.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     args = vars(parser.parse_args())
-    if args["is_philo_db"]:
+    if args["is_philo_db"] is True:
         args["file_path"] = TRIM_LAST_SLASH.sub("", args["file_path"])
         file_path = str(Path(args["file_path"]).joinpath("*"))
-        print(file_path)
         args["files"] = sorted(glob(file_path))
+    else:
+        args["files"] = glob(Path(args["file_path"]).joinpath("*"))
     return args
 
 
