@@ -222,7 +222,7 @@ class Ngrams:
         ngram_index.get_most_frequent(10000)
         print("Saving index...")
         ngram_index.save_db()
-        ngram_index_path = os.path.join(self.output_path, "index/index.db")
+        ngram_index_path = os.path.join(self.output_path, "index/index.tab")
         return ngram_index_path
 
 def parse_command_line():
