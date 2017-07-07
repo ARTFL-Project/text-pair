@@ -12,6 +12,7 @@ from ast import literal_eval
 from collections import Counter, defaultdict, deque
 from glob import glob
 from json import dump, loads
+from pathlib import Path
 
 from philologic.DB import DB
 
@@ -24,7 +25,7 @@ TRIM_LAST_SLASH = re.compile(r'/\Z')
 PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5, 'sent': 6, 'word': 7}
 
 class NgramIndex:
-    """SQlite representation of ngram to ints"""
+    """SQLite representation of ngram to ints"""
 
     def __init__(self, path, prior_db=None):
         self.save_path = os.path.join(path, "index/")
@@ -50,11 +51,9 @@ class NgramIndex:
         if result is None:
             self.current_index += 1
             self.cursor.execute("INSERT INTO ngram_index (ngram, ngram_int, count) VALUES (?, ?, ?)", (item, self.current_index, 1))
-            # self.database.commit()
             return self.current_index
         else:
             self.cursor.execute("UPDATE ngram_index SET count=? WHERE ngram=?", (int(result[1])+1, item))
-            # self.database.commit()
             return int(result[0])
 
     def get_most_frequent(self, limit):
@@ -103,10 +102,12 @@ class Ngrams:
         self.metadata = {}
 
     def __get_stopwords(self, path):
+        print("Getting stopword list...", end=" ")
         stopwords = set([])
         with open(path) as stopword_file:
             for line in stopword_file:
                 stopwords.add(self.__normalize(line.strip()))
+        print("gathered {} stopwords.".format(len(stopwords)))
         return stopwords
 
     def __normalize(self, input_str):
@@ -146,7 +147,7 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, files, output_path, ngram_index=None, db_path=None):
+    def generate(self, files, output_path, ngram_index=None, db_path=None, metadata=None):
         """Generate n-grams. Takes a list of files as an argument."""
         os.system('rm -rf %s/*' % output_path)
         os.system('mkdir -p %s' % output_path)
@@ -157,7 +158,8 @@ class Ngrams:
         else:
             self.input_path = db_path
         self.output_path = output_path
-        self.metadata = {}
+        if metadata is None:
+            self.metadata = {}
         if ngram_index is None:
             ngram_index = NgramIndex(self.output_path)
         else:
@@ -185,7 +187,8 @@ class Ngrams:
                         if self.debug:
                             self.__write_to_disk(ngrams, current_text_id)
                         print("Storing %s: %s..." %(self.text_object_level, current_text_id))
-                        self.metadata[current_text_id] = self.__get_metadata(current_text_id)
+                        if metadata is None:
+                            self.metadata[current_text_id] = self.__get_metadata(current_text_id)
                         self.__build_text_index(ngrams, current_text_id)
                         ngrams = deque([])
                         ngram_obj = deque([])
@@ -205,17 +208,21 @@ class Ngrams:
                 if self.text_object_level == "doc":
                     if self.debug:
                         self.__write_to_disk(ngrams, current_text_id)
-                    self.metadata[current_text_id] = self.__get_metadata(current_text_id)
+                    if metadata is None:
+                        self.metadata[current_text_id] = self.__get_metadata(current_text_id)
                     self.__build_text_index(ngrams, current_text_id)
         print("Finished processing files...")
         print("Saving metadata...")
-        with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
-            dump(self.metadata, metadata_output)
+        if metadata is not None:
+            with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
+                dump(self.metadata, metadata_output)
+        else:
+            os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
         print("Saving most common ngrams...")
         ngram_index.get_most_frequent(10000)
         print("Saving index...")
         ngram_index.save_db()
-        ngram_index_path = os.path.join(self.output_path, "index/index.db")
+        ngram_index_path = os.path.join(self.output_path, "index/index.tab")
         return ngram_index_path
 
 def parse_command_line():
@@ -229,24 +236,28 @@ def parse_command_line():
                         type=str, default="")
     parser.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
                         type=literal_eval, default=True)
+    parser.add_argument("--metadata", help="metadata for input files", default=None)
     parser.add_argument("--text_object_level", help="type of object to split up docs in",
                         type=str, default="doc")
     parser.add_argument("--output_path", help="output path of ngrams",
-                        type=str, default="./")
+                        type=str, default="./ngrams")
     parser.add_argument("--output_type", help="output format: html, json (see docs for proper decoding), xml, or tab",
                         type=str, default="html")
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
+    parser.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     args = vars(parser.parse_args())
     if args["is_philo_db"]:
         args["file_path"] = TRIM_LAST_SLASH.sub("", args["file_path"])
-        args["files"] = sorted(glob(os.path.join(args["file_path"], "data/words_and_philo_ids/*")))
+        file_path = str(Path(args["file_path"]).joinpath("*"))
+        print(file_path)
+        args["files"] = sorted(glob(file_path))
     return args
 
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
-    NGRAM_GENERATOR = Ngrams(stopwords="stopwords.txt", text_object_level=ARGS["text_object_level"])
+    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"])
     if ARGS["prior_index"]:
-        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], ngram_index=ARGS["prior_index"])
+        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], ngram_index=ARGS["prior_index"], metadata=ARGS["metadata"])
     else:
-        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"])
+        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"])
