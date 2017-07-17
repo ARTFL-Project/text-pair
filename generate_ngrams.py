@@ -12,6 +12,7 @@ from ast import literal_eval
 from collections import defaultdict, deque
 from glob import glob
 from pathlib import Path
+from math import floor
 
 from multiprocess import Pool
 from tqdm import tqdm
@@ -65,7 +66,6 @@ class Ngrams:
         self.metadata = {}
 
     def __get_stopwords(self, path):
-        print("Getting stopword list...", end=" ")
         stopwords = set([])
         stemmer = Stemmer(self.language)
         if self.lemmatize:
@@ -75,7 +75,6 @@ class Ngrams:
         with open(path) as stopword_file:
             for line in stopword_file:
                 stopwords.add(self.__normalize(line.strip(), stemmer, lemmatizer))
-        print("gathered {} stopwords.".format(len(stopwords)))
         return stopwords
 
     def __get_lemmatizer(self, path):
@@ -160,9 +159,13 @@ class Ngrams:
         pool.close()
         pool.join()
 
-        print("Saving ngram index and most common ngrams...", flush=True)
-        os.system(r'''for i in {}/temp/*; do cat $i; done | sort -S {} | uniq -c | sort -rn -S {} | awk '{{print $2"\t"$3}}' |
-                      tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''.format(output_path, ram, ram, output_path, output_path))
+        mem_usage = floor(int(ram.replace('%', '')) / 2)
+        if mem_usage >= 50:
+            mem_usage = 45
+        print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
+        os.system(r'''for i in {}/temp/*; do cat $i; done | sort -S {}% | uniq -c | sort -rn -S {}% | awk '{{print $2"\t"$3}}' |
+                   tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''
+                  .format(output_path, mem_usage, mem_usage, output_path, output_path))
 
         print("Saving metadata...")
         os.system("mkdir %s/metadata" % output_path)
@@ -248,7 +251,7 @@ def parse_command_line():
     parser.add_argument("--file_path", help="path to source files",
                         type=str)
     parser.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
-    parser.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage",
+    parser.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%",
                         type=str, default="20%")
     parser.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
                         type=literal_eval, default=True)
