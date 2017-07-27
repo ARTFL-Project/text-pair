@@ -49,7 +49,6 @@ class Ngrams:
         if lemmatizer:
             self.lemmatize = True
             self.lemmatizer_path = lemmatizer
-            # self.lemmas = self.__get_lemmatizer(lemmatizer)
         else:
             self.lemmatize = False
         if stopwords is not None and os.path.isfile(stopwords):
@@ -63,13 +62,13 @@ class Ngrams:
         self.debug = debug
         self.input_path = ""
         self.output_path = ""
-        self.metadata = {}
+        self.metadata_done = False
 
     def __get_stopwords(self, path):
         stopwords = set([])
         stemmer = Stemmer(self.language)
         if self.lemmatize:
-            lemmatizer = self.__get_lemmatizer(self.lemmatizer_path)
+            lemmatizer = self.__get_lemmatizer()
         else:
             lemmatizer = None
         with open(path) as stopword_file:
@@ -77,10 +76,9 @@ class Ngrams:
                 stopwords.add(self.__normalize(line.strip(), stemmer, lemmatizer))
         return stopwords
 
-    def __get_lemmatizer(self, path):
-        # print("Getting lemmatizer mapping list...", end=" ")
+    def __get_lemmatizer(self):
         lemmas = {}
-        with open(path) as input_file:
+        with open(self.lemmatizer_path) as input_file:
             for line in input_file:
                 word, lemma = line.strip().split("\t")
                 lemmas[word] = lemma
@@ -122,11 +120,12 @@ class Ngrams:
         metadata = {}
         if self.is_philo_db is True:
             philo_db = DB(os.path.join(self.input_path, "data"), cached=False)
-            text_object = philo_db[text_id.split('_')]
-            for field in philo_db.locals["metadata_fields"]:
-                metadata[field] = str(text_object[field])
-        else:
-            metadata = self.metadata[text_id]
+            try:
+                text_object = philo_db[text_id.split('_')]
+                for field in philo_db.locals["metadata_fields"]:
+                    metadata[field] = str(text_object[field])
+            except AttributeError:
+                pass
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
@@ -144,17 +143,20 @@ class Ngrams:
         if metadata is None:
             if self.is_philo_db is False:
                 print("No metadata provided, only the filename will be used as metadata")
-                self.metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
+                combined_metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
                 self.metadata_done = True
             else:
-                self.metadata = {}
+                combined_metadata = {}
         else:
             self.metadata_done = True
+            combined_metadata = metadata
 
         print("\nGenerating ngrams...", flush=True)
         pool = Pool(workers)
         with tqdm(total=len(files)) as pbar:
-            for _ in pool.imap_unordered(self.process_file, files):
+            for local_metadata in pool.imap_unordered(self.process_file, files):
+                if self.metadata_done is False:
+                    combined_metadata.update(local_metadata)
                 pbar.update()
         pool.close()
         pool.join()
@@ -171,7 +173,7 @@ class Ngrams:
         os.system("mkdir %s/metadata" % output_path)
         if self.metadata_done is False:
             with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
-                json.dump(self.metadata, metadata_output)
+                json.dump(combined_metadata, metadata_output)
         else:
             os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
 
@@ -188,10 +190,11 @@ class Ngrams:
         else:
             stemmer = None
         if self.lemmatize:
-            lemmatizer = self.__get_lemmatizer(self.lemmatizer_path)  # we initialize here since it is faster than copying between procs
+            lemmatizer = self.__get_lemmatizer()  # we initialize here since it is faster than copying between procs
         else:
             lemmatizer = None
         doc_ngrams = []
+        metadata = {}
         with open(input_file) as filehandle:
             ngrams = deque([])
             ngram_obj = deque([])
@@ -214,7 +217,7 @@ class Ngrams:
                         self.__write_to_disk(ngrams, current_text_id)
                     print("Storing %s: %s..." %(self.text_object_level, current_text_id))
                     if self.metadata_done is False:
-                        self.metadata[current_text_id] = self.__get_metadata(current_text_id)
+                        metadata[current_text_id] = self.__get_metadata(current_text_id)
                     self.__build_text_index(ngrams, current_text_id)
                     ngrams = deque([])
                     ngram_obj = deque([])
@@ -231,14 +234,15 @@ class Ngrams:
                     ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
                     doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
                     ngram_obj.popleft()
-            if self.text_object_level == "doc":
+            if self.text_object_level == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
                 if self.debug:
                     self.__write_to_disk(ngrams, current_text_id)
                 if self.metadata_done is False:
-                    self.metadata[current_text_id] = self.__get_metadata(current_text_id)
+                    metadata[current_text_id] = self.__get_metadata(current_text_id)
                 self.__build_text_index(ngrams, current_text_id)
             with open("{}/temp/{}".format(self.output_path, os.path.basename(input_file)), "w") as output:
                 output.write("\n".join(sorted(doc_ngrams)))
+        return metadata
 
 
 def parse_command_line():
@@ -276,5 +280,6 @@ def parse_command_line():
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
+    print(ARGS["output_path"])
     NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"], lemmatizer=ARGS["lemmatizer"])
     NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])
