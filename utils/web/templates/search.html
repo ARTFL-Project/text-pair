@@ -2,10 +2,10 @@
 {% block search %}
 <div class="ui raised segment" style="margin: 15px;">
     <h1 class="ui centered header">
-        Search Form
+        Search
     </h1>
     <div class="ui container">
-        <form class="ui form" action="results">
+        <form class="ui form" action="{{ db_table }}/results">
             <div class="ui two column divided grid">
                 <div class="row">
                     <div class="column">
@@ -17,7 +17,7 @@
                                 <div class="ui label">
                                     Author:
                                 </div>
-                                <input type="text" name="source_author">
+                                <input type="text" name="source_author" value="{{ form_args.source_author }}">
                             </div>
                         </div>
                         <div class="field">
@@ -25,7 +25,7 @@
                                 <div class="ui label">
                                     Title:
                                 </div>
-                                <input type="text" name="source_title">
+                                <input type="text" name="source_title" value="{{ form_args.source_title }}">
                             </div>
                         </div>
                     </div>
@@ -38,7 +38,7 @@
                                 <div class="ui label">
                                     Author:
                                 </div>
-                                <input type="text" name="target_author">
+                                <input type="text" name="target_author" value="{{ form_args.target_author }}">
                             </div>
                         </div>
                         <div class="field">
@@ -46,7 +46,7 @@
                                 <div class="ui label">
                                     Title:
                                 </div>
-                                <input type="text" name="target_title">
+                                <input type="text" name="target_title" value="{{ form_args.target_title }}">
                             </div>
                         </div>
                     </div>
