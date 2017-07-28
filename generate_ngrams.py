@@ -6,16 +6,20 @@ import html
 import json
 import os
 import re
-import sqlite3
+import sys
 import unicodedata
 from ast import literal_eval
 from collections import defaultdict, deque
 from glob import glob
-from json import dump, loads
 from pathlib import Path
+from math import floor
 
 from multiprocess import Pool
+from tqdm import tqdm
+
+from mmh3 import hash as hash32
 from Stemmer import Stemmer
+from unidecode import unidecode
 
 try:
     from philologic.DB import DB
@@ -23,82 +27,34 @@ except ImportError:
     DB = None
 
 
-PUNCTUATION = re.compile(r'[,?;.:!]*')
-NUMBERS = re.compile(r'[0-9]+')
+# See https://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python/266162#266162
+PUNCTUATION_MAP = dict.fromkeys(i for i in range(sys.maxunicode) if unicodedata.category(chr(i)).startswith('P'))
+NUMBER_MAP = {ord(ch): None for ch in '0123456789'}
 TRIM_LAST_SLASH = re.compile(r'/\Z')
 
 PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5, 'sent': 6, 'word': 7}
-
-class NgramIndex:
-    """SQLite representation of ngram to ints"""
-
-    def __init__(self, path, prior_db=None):
-        self.save_path = os.path.join(path, "index/")
-        self.database = sqlite3.connect(":memory:")
-        self.cursor = self.database.cursor()
-        self.cursor.execute("CREATE TABLE ngram_index (ngram text PRIMARY KEY, ngram_int INTEGER, count INTEGER) WITHOUT ROWID")
-        self.current_index = 0
-        if prior_db is not None:
-            self.__load_db(prior_db)
-
-    def __load_db(self, prior_db):
-        with open(prior_db) as prior_database:
-            for line in prior_database:
-                ngram, ngram_int = line.strip().split('\t')[:2]
-                ngram_int = int(ngram_int)
-                if ngram_int > self.current_index:
-                    self.current_index = ngram_int
-                self.cursor.execute("INSERT INTO ngram_index (ngram, ngram_int, count) VALUES (?, ?, ?)", (ngram, ngram_int, 0))
-
-    def __getitem__(self, item):
-        self.cursor.execute('SELECT ngram_int, count FROM ngram_index WHERE ngram=?', (item,))
-        result = self.cursor.fetchone()
-        if result is None:
-            self.current_index += 1
-            self.cursor.execute("INSERT INTO ngram_index (ngram, ngram_int, count) VALUES (?, ?, ?)", (item, self.current_index, 1))
-            return self.current_index
-        else:
-            self.cursor.execute("UPDATE ngram_index SET count=? WHERE ngram=?", (int(result[1])+1, item))
-            return int(result[0])
-
-    def get_most_frequent(self, limit):
-        """Get most frequent ngrams and save to JSON"""
-        self.cursor.execute("SELECT ngram_int FROM ngram_index where count > 1 order by count desc limit %d" % limit)
-        results = []
-        for i in self.cursor:
-            results.append(i[0])
-        with open(os.path.join(self.save_path, "ngram_count.json"), "w") as ngram_count_output:
-            json.dump(results, ngram_count_output)
-
-    def save_db(self):
-        """Save in memory DB to disk"""
-        with open(os.path.join(self.save_path, "index.tab"), "w") as output:
-            self.cursor.execute("SELECT ngram, ngram_int, count FROM ngram_index")
-            for i in self.cursor:
-                print("\t".join(str(j) for j in i), file=output)
 
 
 class Ngrams:
     """Generate Ngrams"""
 
-    def __init__(self, ngram=3, skipgram=False, stemmer=True, stopwords=None, numbers=False, language="french",
+    def __init__(self, ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
                  lowercase=True, is_philo_db=True, text_object_level="doc", debug=False):
         self.ngram = ngram
         self.skipgram = skipgram
         self.numbers = numbers
-        if stemmer:
-            try:
-                self.stemmer = Stemmer(language)
-                self.stemmer.maxCacheSize = 50000
-            except Exception:
-                self.stemmer = False
-        else:
-            self.stemmer = False
+        self.stemmer = stemmer
+        self.language = language
         self.lowercase = lowercase
+        if lemmatizer:
+            self.lemmatize = True
+            self.lemmatizer_path = lemmatizer
+        else:
+            self.lemmatize = False
         if stopwords is not None and os.path.isfile(stopwords):
             self.stopwords = self.__get_stopwords(stopwords)
         else:
-            self.stopwords = []
+            self.stopwords = set()
         self.is_philo_db = is_philo_db
         if DB is None:
             self.is_philo_db = False
@@ -106,33 +62,48 @@ class Ngrams:
         self.debug = debug
         self.input_path = ""
         self.output_path = ""
-        self.metadata = {}
+        self.metadata_done = False
 
     def __get_stopwords(self, path):
-        print("Getting stopword list...", end=" ")
         stopwords = set([])
+        stemmer = Stemmer(self.language)
+        if self.lemmatize:
+            lemmatizer = self.__get_lemmatizer()
+        else:
+            lemmatizer = None
         with open(path) as stopword_file:
             for line in stopword_file:
-                stopwords.add(self.__normalize(line.strip()))
-        print("gathered {} stopwords.".format(len(stopwords)))
+                stopwords.add(self.__normalize(line.strip(), stemmer, lemmatizer))
         return stopwords
 
-    def __normalize(self, input_str):
-        input_str = PUNCTUATION.sub("", input_str)
-        input_str = NUMBERS.sub("", input_str)
+    def __get_lemmatizer(self):
+        lemmas = {}
+        with open(self.lemmatizer_path) as input_file:
+            for line in input_file:
+                word, lemma = line.strip().split("\t")
+                lemmas[word] = lemma
+        return lemmas
+
+    def __normalize(self, input_str, stemmer, lemmatizer):
+        input_str = input_str.translate(PUNCTUATION_MAP)
+        input_str = input_str.translate(NUMBER_MAP)
         if input_str == "":
             return ""
         input_str = html.unescape(input_str)
         if self.lowercase:
             input_str = input_str.lower()
+        if self.lemmatize:
+            try:
+                input_str = lemmatizer[input_str]
+            except KeyError:
+                pass
         if self.stemmer:
-            input_str = self.stemmer.stemWord(input_str)
-        nkfd_form = unicodedata.normalize('NFKD', input_str)
-        return "".join([c for c in nkfd_form if not unicodedata.combining(c)])
+            input_str = stemmer.stemWord(input_str)
+        return unidecode(input_str)
 
     def __write_to_disk(self, ngrams, text_id):
         with open("%s/debug/%s_ngrams.json" % (self.output_path, text_id), "w") as output:
-            dump(ngrams, output)
+            json.dump(ngrams, output)
 
     def __build_text_index(self, ngrams, text_id):
         """Build a file representation used for ngram comparisons"""
@@ -142,27 +113,28 @@ class Ngrams:
             text_index[ngram].append((index_pos, start_byte, end_byte))
             index_pos += 1
         with open("%s/%s.json" % (self.output_path, text_id), "w") as json_file:
-            dump(text_index, json_file)
+            json.dump(dict(text_index), json_file)
 
     def __get_metadata(self, text_id):
         """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
         metadata = {}
         if self.is_philo_db is True:
             philo_db = DB(os.path.join(self.input_path, "data"), cached=False)
-            text_object = philo_db[text_id.split('_')]
-            for field in philo_db.locals["metadata_fields"]:
-                metadata[field] = str(text_object[field])
-        else:
-            metadata = self.metadata[text_id]
+            try:
+                text_object = philo_db[text_id.split('_')]
+                for field in philo_db.locals["metadata_fields"]:
+                    metadata[field] = str(text_object[field])
+            except AttributeError:
+                pass
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, files, output_path, ngram_index=None, db_path=None, metadata=None, frequent_ngrams=10000, workers=4):
+    def generate(self, files, output_path, db_path=None, metadata=None, workers=4, ram="20%"):
         """Generate n-grams. Takes a list of files as an argument."""
-        os.system('rm -rf %s/*' % output_path)
+        os.system('rm -rf %s/' % output_path)
         os.system('mkdir -p %s' % output_path)
-        os.system("mkdir %s/metadata" % output_path)
         os.system("mkdir %s/index" % output_path)
+        os.system('mkdir {}/temp'.format(output_path))
         if db_path is None and self.is_philo_db is True:
             self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
         else:
@@ -171,83 +143,120 @@ class Ngrams:
         if metadata is None:
             if self.is_philo_db is False:
                 print("No metadata provided, only the filename will be used as metadata")
-                self.metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
+                combined_metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
+                self.metadata_done = True
             else:
-                self.metadata = {}
-        if ngram_index is None:
-            ngram_index = NgramIndex(self.output_path)
+                combined_metadata = {}
         else:
-            ngram_index = NgramIndex(self.output_path, prior_db=ngram_index)
-        for input_file in files:
-            print("Processing document %s..." % input_file)
-            with open(input_file) as filehandle:
-                ngrams = deque([])
-                ngram_obj = deque([])
-                current_text_id = None
-                for line in filehandle:
-                    word_obj = loads(line.strip())
-                    word = word_obj["token"]
-                    word = self.__normalize(word)
-                    if len(word) < 2 or word in self.stopwords:
-                        continue
-                    position = word_obj["philo_id"]
-                    if self.text_object_level == 'doc':
-                        text_id = position.split()[0]
-                    else:
-                        text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.text_object_level]])
-                    if current_text_id is None:
-                        current_text_id = text_id
-                    if current_text_id != text_id:
-                        if self.debug:
-                            self.__write_to_disk(ngrams, current_text_id)
-                        print("Storing %s: %s..." %(self.text_object_level, current_text_id))
-                        if metadata is None:
-                            self.metadata[current_text_id] = self.__get_metadata(current_text_id)
-                        self.__build_text_index(ngrams, current_text_id)
-                        ngrams = deque([])
-                        ngram_obj = deque([])
-                        current_ngram = ""
-                        current_text_id = text_id
-                    ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
-                    if len(ngram_obj) == self.ngram:
-                        if self.skipgram:
-                            ngram_obj_to_store = [ngram_obj[0], ngram_obj[-1]]
-                        else:
-                            ngram_obj_to_store = list(ngram_obj)
-                        current_ngram_list, philo_ids, start_bytes, end_bytes = zip(*ngram_obj_to_store)
-                        current_ngram = " ".join(current_ngram_list)
-                        current_ngram_index = ngram_index[current_ngram]
-                        ngrams.append((current_ngram_index, start_bytes[0], end_bytes[-1]))
-                        ngram_obj.popleft()
-                if self.text_object_level == "doc":
-                    if self.debug:
-                        self.__write_to_disk(ngrams, current_text_id)
-                    if metadata is None:
-                        self.metadata[current_text_id] = self.__get_metadata(current_text_id)
-                    self.__build_text_index(ngrams, current_text_id)
-        print("Finished processing files...")
+            self.metadata_done = True
+            combined_metadata = metadata
+
+        print("\nGenerating ngrams...", flush=True)
+        pool = Pool(workers)
+        with tqdm(total=len(files)) as pbar:
+            for local_metadata in pool.imap_unordered(self.process_file, files):
+                if self.metadata_done is False:
+                    combined_metadata.update(local_metadata)
+                pbar.update()
+        pool.close()
+        pool.join()
+
+        mem_usage = floor(int(ram.replace('%', '')) / 2)
+        if mem_usage >= 50:
+            mem_usage = 45
+        print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
+        os.system(r'''for i in {}/temp/*; do cat $i; done | sort -S {}% | uniq -c | sort -rn -S {}% | awk '{{print $2"\t"$3}}' |
+                   tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''
+                  .format(output_path, mem_usage, mem_usage, output_path, output_path))
+
         print("Saving metadata...")
-        if metadata is not None:
+        os.system("mkdir %s/metadata" % output_path)
+        if self.metadata_done is False:
             with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
-                dump(self.metadata, metadata_output)
+                json.dump(combined_metadata, metadata_output)
         else:
             os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
-        print("Saving most common ngrams...")
-        ngram_index.get_most_frequent(frequent_ngrams)
-        print("Saving index...")
-        ngram_index.save_db()
+
+        print("Cleaning up...")
+        os.system("rm -r {}/temp".format(self.output_path))
+
         ngram_index_path = os.path.join(self.output_path, "index/index.tab")
         return ngram_index_path
+
+    def process_file(self, input_file):
+        """Convert each file into an inverted index of ngrams"""
+        if self.stemmer:
+            stemmer = Stemmer(self.language)  # we initialize here since it creates a deadlock with in self
+        else:
+            stemmer = None
+        if self.lemmatize:
+            lemmatizer = self.__get_lemmatizer()  # we initialize here since it is faster than copying between procs
+        else:
+            lemmatizer = None
+        doc_ngrams = []
+        metadata = {}
+        with open(input_file) as filehandle:
+            ngrams = deque([])
+            ngram_obj = deque([])
+            current_text_id = None
+            for line in filehandle:
+                word_obj = json.loads(line.strip())
+                word = word_obj["token"]
+                word = self.__normalize(word, stemmer, lemmatizer)
+                if len(word) < 2 or word in self.stopwords:
+                    continue
+                position = word_obj["philo_id"]
+                if self.text_object_level == 'doc':
+                    text_id = position.split()[0]
+                else:
+                    text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.text_object_level]])
+                if current_text_id is None:
+                    current_text_id = text_id
+                if current_text_id != text_id:
+                    if self.debug:
+                        self.__write_to_disk(ngrams, current_text_id)
+                    print("Storing %s: %s..." %(self.text_object_level, current_text_id))
+                    if self.metadata_done is False:
+                        metadata[current_text_id] = self.__get_metadata(current_text_id)
+                    self.__build_text_index(ngrams, current_text_id)
+                    ngrams = deque([])
+                    ngram_obj = deque([])
+                    current_text_id = text_id
+                ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
+                if len(ngram_obj) == self.ngram:
+                    if self.skipgram:
+                        ngram_obj_to_store = [ngram_obj[0], ngram_obj[-1]]
+                    else:
+                        ngram_obj_to_store = list(ngram_obj)
+                    current_ngram_list, _, start_bytes, end_bytes = zip(*ngram_obj_to_store)
+                    current_ngram = "_".join(current_ngram_list)
+                    hashed_ngram = hash32(current_ngram)
+                    ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
+                    doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
+                    ngram_obj.popleft()
+            if self.text_object_level == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
+                if self.debug:
+                    self.__write_to_disk(ngrams, current_text_id)
+                if self.metadata_done is False:
+                    metadata[current_text_id] = self.__get_metadata(current_text_id)
+                self.__build_text_index(ngrams, current_text_id)
+            with open("{}/temp/{}".format(self.output_path, os.path.basename(input_file)), "w") as output:
+                output.write("\n".join(sorted(doc_ngrams)))
+        return metadata
+
 
 def parse_command_line():
     """Command line parsing function"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", help="configuration file used to override defaults",
                         type=str, default="")
+    parser.add_argument("--cores", help="number of cores used for parsing and generating ngrams",
+                        type=int, default=4)
     parser.add_argument("--file_path", help="path to source files",
                         type=str)
-    parser.add_argument("--prior_index", help="Use ngram index generated from another set of files for cross dataset comparison",
-                        type=str, default="")
+    parser.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
+    parser.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%",
+                        type=str, default="20%")
     parser.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
                         type=literal_eval, default=True)
     parser.add_argument("--metadata", help="metadata for input files", default=None)
@@ -271,8 +280,6 @@ def parse_command_line():
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
-    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"])
-    if ARGS["prior_index"]:
-        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], ngram_index=ARGS["prior_index"], metadata=ARGS["metadata"])
-    else:
-        NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"])
+    print(ARGS["output_path"])
+    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"], lemmatizer=ARGS["lemmatizer"])
+    NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])

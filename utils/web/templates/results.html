@@ -1,0 +1,61 @@
+{% extends "search.html" %}
+{% block results %}
+<div class="ui raised segment" style="margin: 15px; padding: 25px;">
+    <h1 class="ui centered header" style="margin-bottom: 30px";>
+        Results
+    </h1>
+    <div class="ui two column divided grid">
+        {% for alignment in alignments %}
+        <div class="row ui segment raised">
+            <div class="column">
+                <h4 class="ui centered header">
+                    Source
+                </h4>
+                <p>
+                    <h5 class="ui header">
+                        {{ alignment["source_author"] }}, <i>{{ alignment["source_title"] }}</i> [{{ alignment["source_year"] }}]
+                    </h5>
+                    {{ alignment["source_context_before"] }}
+                    <span style="color: red;">{{ alignment["source_passage"] }}</span>
+                    {{ alignment["source_context_after"] }}
+                </p>
+            </div>
+            <div class="column">
+                <h4 class="ui centered header">
+                    Target
+                </h4>
+                <p>
+                    <h5 class="ui header">
+                        {{ alignment["target_author"] }}, <i>{{ alignment["target_title"] }}</i> [{{ alignment["target_year"] }}]
+                    </h5>
+                    {{ alignment["target_context_before"] }}
+                    <span style="color: red;">{{ alignment["target_passage"] }}</span>
+                    {{ alignment["target_context_after"] }}
+                </p>
+            </div>
+            <div style="position: absolute; top: 0; left: 0; padding: 5px; border-right: 1px solid rgba(34,36,38,.15); border-bottom: 1px solid rgba(34,36,38,.15)">
+                {{ start_position + loop.index }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="ui three column centered grid">
+        <div class="column"></div>
+        <div class="column" style="text-align: center">
+            <div class="ui buttons" style="margin-top: 30px;">
+                {% if page > 1 %}
+                <button class="ui button">
+                    <a href="{{ previous_url }}">Previous</a>
+                </button>
+                {% endif %}
+                <button class="ui button">Page {{ page }}</button>
+                <button class="ui button">
+                    <a href="{{ next_url }}">Next</a>
+                </button>
+            </div>
+        </div>
+        <div class="column"></div>
+    </div>
+
+</div>
+{% endblock %}

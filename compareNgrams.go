@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -194,6 +195,10 @@ func openJSONMetadata(fileLocation *string) map[string]map[string]string {
 	checkErr(err)
 	metadata := make(map[string]map[string]string)
 	json.Unmarshal(jsonFile, &metadata)
+	if len(metadata) == 0 {
+		fmt.Printf("Metadata file %s is empty, stopping alignment...\n", *fileLocation)
+		os.Exit(-1)
+	}
 	return metadata
 }
 
@@ -377,7 +382,9 @@ func createOutputFile(config *matchingParams, sourceMetadata map[string]map[stri
 	}
 	firstRow := []string{"source_doc_id"}
 	sourceFields := mapToSliceOfKeys(sourceMetadata[firstSourceKey])
-	firstRow = append(firstRow, sourceFields...)
+	for _, field := range sourceFields {
+		firstRow = append(firstRow, "source_"+field)
+	}
 	firstRow = append(firstRow, []string{"source_start_byte", "source_end_byte"}...)
 	firstRow = append(firstRow, []string{"source_context_before", "source_passage", "source_context_after"}...)
 	var firstTargetKey string
@@ -387,11 +394,13 @@ func createOutputFile(config *matchingParams, sourceMetadata map[string]map[stri
 	}
 	firstRow = append(firstRow, "target_doc_id")
 	targetFields := mapToSliceOfKeys(targetMetadata[firstTargetKey])
-	firstRow = append(firstRow, targetFields...)
+	for _, field := range targetFields {
+		firstRow = append(firstRow, "target_"+field)
+	}
 	firstRow = append(firstRow, []string{"target_start_byte", "target_end_byte"}...)
 	firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after"}...)
 	if config.outputFormat == "tab" {
-		mergedOutput.WriteString(strings.Join(firstRow, "\t") + "\n")
+		mergedOutput.WriteString(strings.Join(firstRow, "\t"))
 	} else {
 		mergedOutput.WriteString("<html>\n")
 	}
@@ -429,6 +438,7 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 	sourceValues := mapToSliceOfValues(sourceMetadata[*sourceDocID], sourceFields)
 	for _, alignments := range combinedAlignments.alignments {
 		targetValues := mapToSliceOfValues(targetMetadata[alignments.docID], targetFields)
+		*counts += len(alignments.matches)
 		for _, alignment := range alignments.matches {
 			var fields string
 			if config.outputFormat == "tab" {
@@ -438,7 +448,6 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 				fields = htmlOutput(alignment, sourceDocID, alignments.docID, sourceMetadata, targetMetadata, sourceValues, targetValues, config)
 			}
 			combinedOutput = append(combinedOutput, fields)
-			*counts++
 		}
 	}
 	if config.outputFormat == "tab" {
@@ -511,6 +520,7 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	passage := make([]byte, endByte-startByte)
 	_, err = f.Read(passage)
 	checkErr(err)
+	passage = bytes.Trim(passage, "\x00")
 	text := string(passage)
 	text = tags.ReplaceAllString(text, "")
 	text = brokenBeginTags.ReplaceAllString(text, "")
