@@ -11,28 +11,28 @@ les fichiers comme argument:
 
 ## Lancer la comparaison entre documents ##
 
-La comparaison se fait a partir du script `compare_ngrams.py`.
+La comparaison se fait a partir à partir du fichier compareNgrams (généré en compilant compareNgrams.go: `go build compareNgrams.go`)
 
-Voici les arguments necessaires pour executer ce script:
+Voici les arguments principales:
 
 * `--source_files`: Repertoire ou se situe les fichiers sources generes par le script `generate_ngrams.py`
 * `--target_files`: Repertoire ou se situe les fichiers cibles generes par le script `generate_ngrams.py`. Si cette option
-n'est pas specifie, la comparaison s'effectuera entre les fichiers sources.
-* `--source_ngram_index`: Chemin vers la liste de ngrams uniques par document source
-* `--target_ngram_index`: Chemin vers la liste de ngrams uniques par document cible
-* `--source_db_path`: Chemin vers la base de donnes de PhiloLogic4 utilisee pour les fichiers sources
-* `--target_db_path`: Chemin vers la base de donnes de PhiloLogic4 utilisee pour les fichiers cibles
-* `--output`: Format des resultats: HTML (par defaut), TAB, XML, ou JSON.
-* `--output_path`: Repertoire ou sauvegarder les resultats.
+n'est pas specifiée, la comparaison s'effectuera entre les fichiers sources.
+* `--output_path`: Répertoire où sauvegarder les resultats.
 * `--debug`: Activer le debuggage
-* `--cores`: Nombres de processeurs a utiliser pour la comparaison.
+* `--threads`: Nombres de threads à utiliser pour la comparaison.
+
+De nombreuses autres options sont disponibles, exécuter `./compareNgrams -h` pour voir leur description.
 
 
 Exemple:
 
-`python3 compare_ngrams.py --source_files=montesquieu/ngrams/* --target_files=encyclopedie/ngrams/* --source_ngram_index=montesquieu/ngram_count.json  --target_ngram_index=encyclopedie/ngram_count.json  --output=html`
+`./compareNgrams --source_files=montesquieu/ngrams/* --target_files=encyclopedie/ngrams/* --threads=10 --output_path=results/
+
 
 ## Combiner generation de ngrams et comparaison ##
+# NE FONCTIONNE PAS ACTUELLEMENT #
+
 
 Il faut utiliser le script `sequence_aligner.py` pour generer les ngrams puis operer la comparaison en une phase.
 
