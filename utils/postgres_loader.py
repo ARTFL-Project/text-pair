@@ -74,7 +74,7 @@ if __name__ == '__main__':
             rows = []
             lines = 0
     print("Creating indexes...")
-    CURSOR2.execute("CREATE INDEX source_year_target_year_rowid_index ON {} USING BTREE(rowid_ordered)".format(ordered_table))
+    CURSOR2.execute("CREATE INDEX {}_source_year_target_year_rowid_index ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
     DATABASE.commit()
     DATABASE.close()
 

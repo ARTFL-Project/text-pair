@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -144,8 +145,8 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	threadsArg := flag.Int("threads", 4, "number of threads to use")
 	sourceMetadataArg := flag.String("source_metadata", "", "path to source metadata")
 	targetMetadataArg := flag.String("target_metadata", "", "path to target metadata")
-	sourceCommonNgramsArg := flag.String("source_common_ngrams", "", "path to a JSON list of the most common ngrams in source files")
-	targetCommonNgramsArg := flag.String("target_common_ngrams", "", "path to a JSON list of the most common ngrams in target files")
+	sourceCommonNgramsArg := flag.String("source_common_ngrams", "", "path to a text file containing the most common ngrams in source files")
+	targetCommonNgramsArg := flag.String("target_common_ngrams", "", "path to a text file containing the most common ngrams in target files")
 	mostCommonNgramThreshold := flag.Int("most_common_ngram_threshold", 1000, "take the n most common ngrams from source and target common ngrams")
 	outputPath := flag.String("output_path", "./", "output path for results")
 	outputFormat := flag.String("output_format", "tab", "output format of results")
@@ -154,14 +155,14 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	matchingWindowSize := flag.Int("matching_window_size", 20, "size of sliding window for matches")
 	maxGap64 := flag.Int("max_gap", 10, "maximum gap between two matching ngrams")
 	minimumMatchingNgrams := flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match")
-	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngram_in_window", 4, "minimum matching ngrams per sliding window")
+	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngram_in_window", 3, "minimum matching ngrams per sliding window")
 	commonNgramsLimit := flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")
 	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
 	contextSize := flag.Int("context_size", 300, "size of context for before and after matching passages")
 	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
 	duplicateThreshold := flag.Int("duplicate_threshold", 50, "dimiss comparison if two texts share n or more percent of ngrams")
 	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option. Value between 0 and 1")
-	passageDistance := flag.Float64("passage_distance_multiplier", 0.05, "Combine passage which are within (multiplier*length of previous passage) bytes")
+	passageDistance := flag.Float64("passage_distance_multiplier", 0.15, "Combine passage which are within (multiplier*length of previous passage) bytes")
 	oneWayMatching := flag.Bool("one_way_matching", false, "Disable two way matching: source is compared to target and target is NOT compared to source")
 	flag.Parse()
 	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap64), int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
@@ -284,6 +285,31 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 	for _, ngram := range mostCommonNgrams {
 		ngramInt, _ := strconv.Atoi(ngram)
 		uniqueNgrams[int32(ngramInt)] = true
+	}
+
+	file, err := os.Open(fn)
+	defer file.Close()
+	checkErr(err)
+
+	// Start reading from the file with a reader.
+	reader := bufio.NewReader(file)
+
+	var line string
+	for {
+		line, err = reader.ReadString('\n')
+
+		fmt.Printf(" > Read %d characters\n", len(line))
+
+		// Process the line here.
+		fmt.Println(" > > " + limitLength(line, 50))
+
+		if err != nil {
+			break
+		}
+	}
+
+	if err != io.EOF {
+		fmt.Printf(" > Failed!: %v\n", err)
 	}
 	return uniqueNgrams
 }
@@ -771,6 +797,7 @@ func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
 	sourceAgainstSource := false
 	sourceFilesDone := make(map[string]bool)
+	fmt.Println(config)
 
 	// Split source and target files into config.batchSize batches
 	sourceFileBatches := makeSliceOfSlices(sourceFiles, config)
