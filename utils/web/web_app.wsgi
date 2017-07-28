@@ -52,13 +52,15 @@ class formArguments():
         return repr(self.dict)
 
 
-@application.route("/<db_table>")
+@application.route("/<path:db_table>")
 def search(db_table):
+    # db_table = db_table.replace("/", "")
     form_args = formArguments()
     return render_template("search.html", db_table=db_table, form_args=form_args)
 
-@application.route("/<db_table>/results", methods=["GET"])
+@application.route("/<path:db_table>/results", methods=["GET"])
 def results(db_table):
+    # db_table = db_table.replace("/", "")
     search_args = formArguments()
     page = 1
     id_anchor = 0
