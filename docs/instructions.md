@@ -4,10 +4,18 @@
 
 Les ngrams sont generes une base de donnees a la fois, sauf si execute a partir du script `sequence_aligner.py`
 
-Il faut executer le script `generate_ngrams.py` avec le repertoire (en ajoutant une * apres) ou se situe
-les fichiers comme argument:
+Il faut executer le script `generate_ngrams.py` en spécifiant les options suivantes:
 
-```python3 generate_ngrams repertoire/de/mes/fichers/*```
+* --cores : nombres de CPU utilisé pour le parsage et la génération de ngrams
+* --file_path : chemin où se trouve les fichiers à traiter 
+* --lemmatizer : chemin vers où se trouve un fichier où chaque ligne contient un token et son lemme correspondant séparé par une tabulation                      
+* --mem_usage : pourcentage de RAM à utiliser au max (maximum de 90%)
+* --is_philo_db : définir si les fichiers sources sont tirées d'une base de données PhiloLogic
+* --metadata : métadonnées pour les fichiers sources (si ce n'est pas tiré de PhiloLogic)
+* --text_object_level : division des fichiers en objet
+* --output_path : chemin vers où sauvegarder les ngrams
+* --debug : débuggage        
+* --stopwords : chemin vers une liste de stopwords
 
 ## Lancer la comparaison entre documents ##
 
