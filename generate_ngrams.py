@@ -96,7 +96,10 @@ class Ngrams:
             try:
                 input_str = lemmatizer[input_str]
             except KeyError:
-                pass
+                try:
+                    input_str = lemmatizer[unidecode(input_str)]
+                except KeyError:
+                    pass
         if self.stemmer:
             input_str = stemmer.stemWord(input_str)
         return unidecode(input_str)
@@ -252,21 +255,21 @@ def parse_command_line():
     required = parser.add_argument_group('required arguments')
     optional = parser.add_argument_group('optional arguments')
     optional.add_argument("--config", help="configuration file used to override defaults",
-                        type=str, default="")
+                          type=str, default="")
     optional.add_argument("--cores", help="number of cores used for parsing and generating ngrams",
-                        type=int, default=4)
+                          type=int, default=4)
     required.add_argument("--file_path", help="path to source files",
-                        type=str)
+                          type=str)
     optional.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
     optional.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%%",
-                        type=str, default="20%%")
+                          type=str, default="20%%")
     optional.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
-                        type=literal_eval, default=True)
+                          type=literal_eval, default=True)
     optional.add_argument("--metadata", help="metadata for input files", default=None)
     optional.add_argument("--text_object_level", help="type of object to split up docs in",
-                        type=str, default="doc")
+                          type=str, default="doc")
     optional.add_argument("--output_path", help="output path of ngrams",
-                        type=str, default="./ngrams")
+                          type=str, default="./ngrams")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     args = vars(parser.parse_args())

@@ -49,9 +49,11 @@
                 </button>
                 {% endif %}
                 <button class="ui button">Page {{ page }}</button>
+                {% if next_url != "" %}
                 <button class="ui button">
                     <a href="{{ next_url }}">Next</a>
                 </button>
+                {% endif %}
             </div>
         </div>
         <div class="column"></div>

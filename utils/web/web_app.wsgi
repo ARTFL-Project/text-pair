@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Routing and search code for sequence alignment"""
 
 import os
 import re
@@ -54,13 +55,11 @@ class formArguments():
 
 @application.route("/<path:db_table>")
 def search(db_table):
-    # db_table = db_table.replace("/", "")
     form_args = formArguments()
     return render_template("search.html", db_table=db_table, form_args=form_args)
 
 @application.route("/<path:db_table>/results", methods=["GET"])
 def results(db_table):
-    # db_table = db_table.replace("/", "")
     search_args = formArguments()
     page = 1
     id_anchor = 0
@@ -82,12 +81,12 @@ def results(db_table):
             search_args[key] = value
     if direction == "next":
         query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-        o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(db_table, db_table,
-            " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), id_anchor)
+                 o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(db_table, db_table,
+                " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), id_anchor)
     else:
         query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-        o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(db_table, db_table,
-            " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), id_anchor)
+                 o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(db_table, db_table,
+                " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), id_anchor)
     print(query, file=sys.stderr)
     CURSOR.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
     column_names = [desc[0] for desc in CURSOR.description]
@@ -101,9 +100,12 @@ def results(db_table):
     full_url = "{}{}".format(request.script_root, current_path)
     if page > 1:
         previous_url = "{}&page={}&id_anchor={}&direction=previous".format(full_url, page-1, alignments[0]["rowid_ordered"])
-    next_url = "{}&page={}&id_anchor={}&direction=next".format(full_url, page+1, alignments[-1]["rowid_ordered"])
+    try:
+        next_url = "{}&page={}&id_anchor={}&direction=next".format(full_url, page+1, alignments[-1]["rowid_ordered"])
+    except IndexError:
+        next_url = ""
     start_position = 0
     if page > 1:
         start_position = 50 * (page - 1)
-    return render_template("results.html", db_table=db_table, alignments=alignments, form_args=search_args, page=page,
+    return render_template("results.html", db_table="", alignments=alignments, form_args=search_args, page=page,
                            previous_url=previous_url, next_url=next_url, start_position=start_position)
