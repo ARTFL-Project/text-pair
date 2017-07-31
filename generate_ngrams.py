@@ -96,7 +96,10 @@ class Ngrams:
             try:
                 input_str = lemmatizer[input_str]
             except KeyError:
-                pass
+                try:
+                    input_str = lemmatizer[unidecode(input_str)]
+                except KeyError:
+                    pass
         if self.stemmer:
             input_str = stemmer.stemWord(input_str)
         return unidecode(input_str)
@@ -247,28 +250,32 @@ class Ngrams:
 
 def parse_command_line():
     """Command line parsing function"""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", help="configuration file used to override defaults",
-                        type=str, default="")
-    parser.add_argument("--cores", help="number of cores used for parsing and generating ngrams",
-                        type=int, default=4)
-    parser.add_argument("--file_path", help="path to source files",
-                        type=str)
-    parser.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
-    parser.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%",
-                        type=str, default="20%")
-    parser.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
-                        type=literal_eval, default=True)
-    parser.add_argument("--metadata", help="metadata for input files", default=None)
-    parser.add_argument("--text_object_level", help="type of object to split up docs in",
-                        type=str, default="doc")
-    parser.add_argument("--output_path", help="output path of ngrams",
-                        type=str, default="./ngrams")
-    parser.add_argument("--output_type", help="output format: html, json (see docs for proper decoding), xml, or tab",
-                        type=str, default="html")
-    parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
-    parser.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
+    parser = argparse.ArgumentParser(prog="generate_ngrams")
+    parser._action_groups.pop()
+    required = parser.add_argument_group('required arguments')
+    optional = parser.add_argument_group('optional arguments')
+    optional.add_argument("--config", help="configuration file used to override defaults",
+                          type=str, default="")
+    optional.add_argument("--cores", help="number of cores used for parsing and generating ngrams",
+                          type=int, default=4)
+    required.add_argument("--file_path", help="path to source files",
+                          type=str)
+    optional.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
+    optional.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%%",
+                          type=str, default="20%%")
+    optional.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
+                          type=literal_eval, default=True)
+    optional.add_argument("--metadata", help="metadata for input files", default=None)
+    optional.add_argument("--text_object_level", help="type of object to split up docs in",
+                          type=str, default="doc")
+    optional.add_argument("--output_path", help="output path of ngrams",
+                          type=str, default="./ngrams")
+    optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
+    optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     args = vars(parser.parse_args())
+    if len(sys.argv[1:]) == 0:  # no command line args were provided
+        parser.print_help()
+        exit()
     if args["is_philo_db"] is True:
         args["file_path"] = TRIM_LAST_SLASH.sub("", args["file_path"])
         file_path = str(Path(args["file_path"]).joinpath("*"))
