@@ -442,6 +442,7 @@ func writeDebugOutput(m *matchValues, config *matchingParams, currentAnchor *ngr
 		stringOutput += fmt.Sprintf("Target byte range: %d-%d\n", m.currentAlignment.target.startByte, m.currentAlignment.target.endByte)
 		stringOutput += fmt.Sprintf("Target matching index range: %d-%d\n", m.firstMatch[1].index, m.lastMatch[1].index)
 		stringOutput += fmt.Sprintf("Matching ngrams: %s", strings.Join(m.debug, " "))
+		stringOutput += fmt.Sprintf("Number of matching ngrams: %d", len(m.debug))
 	} else {
 		stringOutput = "\n\n## FAILED MATCH ##\n"
 		stringOutput += fmt.Sprintf("Source byte range: %d-%d\n", m.firstMatch[0].startByte, m.lastMatch[0].endByte)
@@ -449,6 +450,7 @@ func writeDebugOutput(m *matchValues, config *matchingParams, currentAnchor *ngr
 		stringOutput += fmt.Sprintf("Target byte range: %d-%d\n", m.firstMatch[1].startByte, m.lastMatch[1].endByte)
 		stringOutput += fmt.Sprintf("Target matching index range: %d-%d\n", m.firstMatch[1].index, m.lastMatch[1].index)
 		stringOutput += fmt.Sprintf("Matching ngrams: %s\n", strings.Join(m.debug, " "))
+		stringOutput += fmt.Sprintf("Number of matching ngrams: %d", len(m.debug))
 	}
 	debugOutput.WriteString(stringOutput)
 	debugOutput.Sync()
@@ -635,14 +637,24 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 		if config.debug {
 			m.debug = append(m.debug, ngramIndex[currentAnchor.ngram])
 		}
+		currentMatchesLength := len(matches)
 	innerMatchingLoop:
-		for _, match := range matches[matchIndex+1:] {
+		for pos, match := range matches[matchIndex+1:] {
 			source, target := match.source, match.target
 			// we skip source_match if the same as before and we only want targets that are after last target match
-			if source.index == m.previousSourceIndex || target.index <= m.lastTargetPosition {
+			if source.index == m.previousSourceIndex {
 				continue
 			}
-			if source.index > m.maxSourceGap || target.index > m.maxTargetGap {
+			if target.index > m.maxTargetGap || target.index <= m.lastTargetPosition {
+				nextIndex := pos + matchIndex + 1
+				// Is next source index within maxSourceGap? If so, the match should continue since target may be within maxTargetGap
+				if nextIndex <= currentMatchesLength && matches[nextIndex].source.index <= m.maxSourceGap {
+					continue
+				} else {
+					m.inAlignment = false
+				}
+			}
+			if source.index > m.maxSourceGap {
 				m.inAlignment = false
 			}
 			if source.index > m.sourceWindowBoundary || target.index > m.targetWindowBoundary {
@@ -771,16 +783,11 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			continue
 		}
 		m.currentAlignment = match
-		// if mergeWithPrevious(&m, config, alignments) {
-		// 	m.previousAlignment.source.endByte = m.currentAlignment.source.endByte
-		// 	m.previousAlignment.target.endByte = m.currentAlignment.target.endByte
-		// } else {
 		newAlignments = append(newAlignments, m.previousAlignment)
 		m.previousAlignment = m.currentAlignment
 		if pos == len(alignments)-1 {
 			newAlignments = append(newAlignments, m.currentAlignment)
 		}
-		// }
 	}
 	return newAlignments
 }
@@ -897,6 +904,7 @@ func main() {
 							})
 							alignments := matchPassage(&sourceFile, &targetFile, matches, config, mostCommonNgrams, ngramIndex, debugOutput)
 							if !config.oneWayMatching {
+								debugOutput.WriteString("\n\n\n\n## REVERSE MATCHING ##\n\n")
 								alignments = reverseMatch(&sourceFile, &targetFile, matches, config, mostCommonNgrams, alignments, ngramIndex, debugOutput)
 							}
 							if config.mergeOnByteDistance || config.mergeOnNgramDistance {
@@ -905,6 +913,7 @@ func main() {
 							if len(alignments) > 0 {
 								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments})
 							}
+							debugOutput.Sync()
 							debugOutput.Close()
 						}
 						c <- localAlignments
