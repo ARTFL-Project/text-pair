@@ -15,8 +15,7 @@ import psycopg2.extras
 
 application = Flask(__name__)
 
-DATABASE = psycopg2.connect(user="alignments", password="martini", database="alignments")
-CURSOR = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
 
 
 class formArguments():
@@ -88,6 +87,8 @@ def results(db_table):
                  o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(db_table, db_table,
                 " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), id_anchor)
     print(query, file=sys.stderr)
+    DATABASE = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    CURSOR = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     CURSOR.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
     column_names = [desc[0] for desc in CURSOR.description]
     alignments = []
