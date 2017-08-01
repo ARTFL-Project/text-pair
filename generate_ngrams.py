@@ -272,6 +272,7 @@ def parse_command_line():
                           type=str, default="./ngrams")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
+    optional.add_argument("--skipgram", help="use skipgrams", action='store_true', default=False)
     args = vars(parser.parse_args())
     if len(sys.argv[1:]) == 0:  # no command line args were provided
         parser.print_help()
@@ -288,5 +289,5 @@ def parse_command_line():
 if __name__ == '__main__':
     ARGS = parse_command_line()
     print(ARGS["output_path"])
-    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"], lemmatizer=ARGS["lemmatizer"])
+    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
     NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])
