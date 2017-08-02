@@ -290,7 +290,6 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 			intNgram, _ := strconv.Atoi(line)
 			uniqueNgrams[int32(intNgram)] = true
 		}
-
 		if err != io.EOF {
 			fmt.Printf(" > Failed!: %v\n", err)
 		}
@@ -298,9 +297,11 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 	return uniqueNgrams
 }
 
-func getJSONDocs(fileLocations []string) []docIndex {
+func getJSONDocs(fileLocations []string, direction string) []docIndex {
 	var jsonFiles []docIndex
-	for _, fileLocation := range fileLocations {
+	percentSteps := buildPercentMap(len(fileLocations))
+	prefixString := fmt.Sprintf("Loading %s files... ", direction)
+	for pos, fileLocation := range fileLocations {
 		jsonFile, err := ioutil.ReadFile(fileLocation)
 		checkErr(err)
 		tempDoc := make(map[int32][][]int32)
@@ -315,7 +316,14 @@ func getJSONDocs(fileLocations []string) []docIndex {
 		docID := path.Base(strings.Replace(fileLocation, ".json", "", 1))
 		docObject := docIndex{docID, doc}
 		jsonFiles = append(jsonFiles, docObject)
+		if _, ok := percentSteps[pos]; ok {
+			percent := strconv.Itoa(percentSteps[pos])
+			os.Stdout.Write([]byte("\r" + prefixString + percent + "%"))
+			os.Stdout.Sync()
+		}
 	}
+	os.Stdout.Write([]byte("\r" + prefixString + "done.\n"))
+	os.Stdout.Sync()
 	return jsonFiles
 }
 
@@ -792,6 +800,24 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	return newAlignments
 }
 
+func buildPercentMap(total int) map[int]int {
+	percentSteps := make(map[int]int)
+	count := 0
+	if total >= 100 {
+		step := total / 100
+		for i := step; i < total; i += step {
+			count++
+			percentSteps[i] = count
+		}
+	} else {
+		multiplier := float64(100 / total)
+		for i := 0; i < total; i++ {
+			percentSteps[i] = int(multiplier * float64(i))
+		}
+	}
+	return percentSteps
+}
+
 func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
 	sourceAgainstSource := false
@@ -811,11 +837,10 @@ func main() {
 	counts := 0
 	for sourceBatchNumber := 0; sourceBatchNumber < config.batchSize; sourceBatchNumber++ {
 		if config.batchSize > 1 {
-			fmt.Printf("\n#### Loading source batch %d... ###\n", sourceBatchNumber+1)
-		} else {
-			fmt.Println("Loading source files...")
+			fmt.Printf("\n\n### Loading batch %d... ###", sourceBatchNumber+1)
 		}
-		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber])
+		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber], "source")
+		// fmt.Printf("\n")
 		for targetBatchNumber := 0; targetBatchNumber < config.batchSize; targetBatchNumber++ {
 			if sourceAgainstSource && sourceBatchNumber > targetBatchNumber {
 				continue // we've already done these comparisons in the other direction
@@ -825,11 +850,12 @@ func main() {
 				targetFileIndexes = sourceFileIndexes
 			} else {
 				if config.batchSize > 1 {
-					fmt.Printf("Loading target batch %d...\n", targetBatchNumber+1)
+					fmt.Printf("Loading target batch %d...", targetBatchNumber+1)
 				} else {
-					fmt.Println("Loading target files...")
+					fmt.Printf("Loading target files...")
 				}
-				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber])
+				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber], "target")
+				// fmt.Printf("\n")
 			}
 			var localSourceFilesDone map[string]bool
 			if sourceAgainstSource {
@@ -839,17 +865,24 @@ func main() {
 					localSourceFilesDone = make(map[string]bool)
 				}
 			}
-			for _, sourceFile := range sourceFileIndexes {
-				if config.batchSize == 1 {
-					fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
+			percentSteps := buildPercentMap(len(sourceFileIndexes))
+			fmt.Printf("Starting sequence alignment... ")
+			for pos, sourceFile := range sourceFileIndexes {
+				if config.debug {
+					if config.batchSize == 1 {
+						fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
+					}
+					if config.batchSize > 1 {
+						fmt.Printf("Comparing source file %s to target batch %d...\n", sourceFile.DocID, targetBatchNumber+1)
+					}
 				}
-
-				if config.batchSize > 1 {
-					fmt.Printf("Comparing source file %s to target batch %d...\n", sourceFile.DocID, targetBatchNumber+1)
+				if _, ok := percentSteps[pos]; ok {
+					percent := strconv.Itoa(percentSteps[pos])
+					os.Stdout.Write([]byte("\rStarting sequence alignment... " + percent + "%"))
+					os.Stdout.Sync()
 				}
 				var wait sync.WaitGroup
 				targetLength := len(targetFileIndexes)
-
 				combinedAlignments := &CombinedAlignments{sourceFile.DocID, []alignmentsPerDoc{}}
 				c := make(chan []alignmentsPerDoc, config.numThreads)
 				wait.Add(config.numThreads)
@@ -938,8 +971,10 @@ func main() {
 			}
 			debug.FreeOSMemory()
 		}
+		os.Stdout.Write([]byte("\rStarting sequence alignment... 100%"))
+		os.Stdout.Sync()
 	}
 	mergedOutput.Sync()
 	mergedOutput.Close()
-	fmt.Printf("%d results...\n", counts)
+	fmt.Printf("\n%d results...\n", counts)
 }
