@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """N-gram generator"""
 
 import argparse
-import html
 import json
 import os
 import re
@@ -13,21 +13,19 @@ from collections import defaultdict, deque
 from glob import glob
 from pathlib import Path
 from math import floor
+import html
+from lxml import etree
 
 from multiprocess import Pool
 from tqdm import tqdm
 
 from mmh3 import hash as hash32
-from Stemmer import Stemmer
+from Stemmer import Stemmer	# pyStemmer module
 from unidecode import unidecode
 
-try:
-    from philologic.DB import DB
-except ImportError:
-    DB = None
 
+DB = None
 
-# See https://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python/266162#266162
 PUNCTUATION_MAP = dict.fromkeys(i for i in range(sys.maxunicode) if unicodedata.category(chr(i)).startswith('P'))
 NUMBER_MAP = {ord(ch): None for ch in '0123456789'}
 TRIM_LAST_SLASH = re.compile(r'/\Z')
@@ -39,7 +37,7 @@ class Ngrams:
     """Generate Ngrams"""
 
     def __init__(self, ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, is_philo_db=True, text_object_level="doc", debug=False):
+                 lowercase=True, text_object_level="doc", debug=False):
         self.ngram = ngram
         self.skipgram = skipgram
         self.numbers = numbers
@@ -55,9 +53,6 @@ class Ngrams:
             self.stopwords = self.__get_stopwords(stopwords)
         else:
             self.stopwords = set()
-        self.is_philo_db = is_philo_db
-        if DB is None:
-            self.is_philo_db = False
         self.text_object_level = text_object_level
         self.debug = debug
         self.input_path = ""
@@ -118,38 +113,18 @@ class Ngrams:
         with open("%s/%s.json" % (self.output_path, text_id), "w") as json_file:
             json.dump(dict(text_index), json_file)
 
-    def __get_metadata(self, text_id):
-        """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
-        metadata = {}
-        if self.is_philo_db is True:
-            philo_db = DB(os.path.join(self.input_path, "data"), cached=False)
-            try:
-                text_object = philo_db[text_id.split('_')]
-                for field in philo_db.locals["metadata_fields"]:
-                    metadata[field] = str(text_object[field])
-            except AttributeError:
-                pass
-        metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
-        return metadata
-
     def generate(self, files, output_path, db_path=None, metadata=None, workers=4, ram="20%"):
         """Generate n-grams. Takes a list of files as an argument."""
         os.system('rm -rf %s/' % output_path)
         os.system('mkdir -p %s' % output_path)
         os.system("mkdir %s/index" % output_path)
         os.system('mkdir {}/temp'.format(output_path))
-        if db_path is None and self.is_philo_db is True:
-            self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
-        else:
-            self.input_path = db_path
+        self.input_path = db_path
         self.output_path = output_path
         if metadata is None:
-            if self.is_philo_db is False:
-                print("No metadata provided, only the filename will be used as metadata")
-                combined_metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
-                self.metadata_done = True
-            else:
-                combined_metadata = {}
+            print("No metadata provided, only the filename will be used as metadata")
+            combined_metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
+            self.metadata_done = True
         else:
             self.metadata_done = True
             combined_metadata = metadata
@@ -168,6 +143,7 @@ class Ngrams:
         if mem_usage >= 50:
             mem_usage = 45
         print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
+        """sauvegarde l'index et les ngram les plus courant"""
         os.system(r'''for i in {}/temp/*; do cat $i; done | sort -S {}% | uniq -c | sort -rn -S {}% | awk '{{print $2"\t"$3}}' |
                    tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''
                   .format(output_path, mem_usage, mem_usage, output_path, output_path))
@@ -185,6 +161,7 @@ class Ngrams:
 
         ngram_index_path = os.path.join(self.output_path, "index/index.tab")
         return ngram_index_path
+
 
     def process_file(self, input_file):
         """Convert each file into an inverted index of ngrams"""
@@ -248,46 +225,249 @@ class Ngrams:
         return metadata
 
 
+    def pretrait(self, path):
+        """Convert a TEI file into a philologic4 database"""
+        directory_path=path+"/XML/"
+        result_path=path+"/pretrait/"
+        metadata_path=result_path+"metadata/"
+        data_path=result_path+"data/"
+        data_text_path=data_path+"/TEXT/"
+        words_path=data_path+"/WORDS/"
+        metadata_text="{" # contient les metadata de tous les fichiers
+        dirs = os.listdir(directory_path)
+        count_file=1
+
+        # Création des fichiers si besoin
+        try:
+            os.makedirs(metadata_path)
+        except:
+            pass
+        try:
+            os.makedirs(data_text_path)
+        except:
+            pass
+        try:
+            os.makedirs(words_path)
+        except:
+            pass
+
+        # Début de la gestion de chaque fichier xml
+        for file in dirs:
+            file_path=directory_path+file
+            print("fichier: "+file_path)
+            count_byte=0
+            fichier = open(file_path,'rb')
+            data = fichier.read()
+            max_byte=len(data)
+            print("taille: "+str(max_byte))
+            temp_accent=""
+            balise=""
+            namespace=""
+            namespace_flag=0    # indique si l'on est dans un namespace ou non
+            balise_flag=0   # Indique si l'on est dans une balise ou non
+            text_flag=0     # indique si l'on est entre deux balise ou non
+            body_flag=0     # indique si l'on est dans le corps du tei ou non
+            metadata={}     # hash contenant les metadata du fichier en cours
+            text_file=""    # Contient l'entièreté des caractères du fichier
+            caractere=""    # Le caractère en cours d'utilisation
+            text_inter=""   # Contient le texte entre deux balise
+            text_prec=""    # Contient le metexte précédent une balise
+            text_oeuvre=""  # Contient l'entiereté des textes du fichier
+            words=""        # contient l'entièreté des mots du fichier ainsi que leurs début et fin en byte
+            words_actual="" # contient le mot en cours de traitement
+            words_start=0   # début du mot
+            words_end=0     # fin du mot
+            words_flag=0    # indique si l'on est dans un mot ou non
+
+            # Construction du texte à partir du fichier binaire
+            while(count_byte<max_byte):
+                fichier.seek(count_byte,0)
+                a = fichier.read(1)
+
+                # Gestion des caractères multioctet
+                try:
+                    caractere=a.decode("utf-8")
+                except:
+                    if(temp_accent == ""):
+                        temp_accent=a
+                    else:
+                        temp_accent=temp_accent+a
+                        try:
+                            caractere=temp_accent.decode("utf-8")
+                            temp_accent=""
+                        except:
+                            pass
+                text_file=text_file+caractere
+
+                # Capture des balises, du namespace
+                if(balise_flag==1):
+                    if(caractere == ">"):
+                        text_flag=1
+                        namespace_flag=0
+                        namespace=""
+
+                        # Interpretation des balises
+                        # Remplissage des metadonnée
+                        if(balise == '/title' and "title" not in metadata):
+                            metadata["title"]=text_prec
+                        if(balise == '/publisher' and "publisher" not in metadata):
+                            metadata["publisher"]=text_prec
+                        if(balise == '/author' and "author" not in metadata):
+                            metadata["author"]=text_prec
+                        if(balise == '/date' and "date" not in metadata):
+                            metadata["date"]=text_prec
+                        if(balise == '/head' and "head" not in metadata):
+                            metadata["head"]=text_prec
+                        if(balise == '/create_date' and "create_date" not in metadata):
+                            metadata["create_date"]=text_prec
+                        if(balise == '/pub_date' and "pub_date" not in metadata):
+                            metadata["pub_date"]=text_prec
+                        if(balise == '/type' and "type" not in metadata):
+                            metadata["type"]=text_prec
+
+                        if(balise == 'text'):
+                            body_flag=1
+
+                        # Remplissage du texte de l'oeuvre
+                        if(body_flag==1 and (balise=='/p' or balise=='/hi' \
+                        or balise=='/salute' or balise=='/titlePart'\
+                        or balise=='/epigraph' or balise=='/head' or balise=='/docAuthor'\
+                        or balise=='pb' or balise=='hi' or balise=='/dateline')):
+                            if(balise=='pb' or balise=='hi' or balise=='/hi'):
+                                text_oeuvre=text_oeuvre+text_prec
+                            else:
+                                text_oeuvre=text_oeuvre+"\n"+text_prec
+                        balise_flag=0
+                        balise=""
+
+                    elif(caractere == " "):
+                        if(namespace_flag==0):
+                            namespace_flag=1
+                        else:
+                            namespace=namespace+caractere
+                    elif(namespace_flag==1):
+                        namespace=namespace+caractere
+                    else:
+                        balise=balise+caractere
+
+                elif(caractere == "\t"):
+                    next
+                elif(caractere == "\n"):
+                    text_inter=text_inter+" "
+
+                else:
+                    if(caractere == "<"):
+                        text_prec=text_inter
+                        text_inter=""
+                        balise_flag=1
+                    else:
+                        text_inter=text_inter+caractere
+
+                    # Ajout dans le fichier de mot words
+                    if(body_flag==1):
+                        if(caractere.isalpha() or temp_accent!=""):
+                            if(words_flag==0):
+                                words_flag=1
+                                words_start=count_byte
+                                if(caractere.isalpha()):
+                                    words_actual=caractere
+                            else:
+                                words_actual=words_actual+caractere
+                        else:
+                            if(words_flag==1 or caractere == "<"):
+                                words_flag=0
+                                words_end=count_byte
+                                if(words_actual!=""):
+                                    words=words+"{\"token\": \""+words_actual+\
+                                    "\", \"start_byte\": \""+str(words_start)+\
+                                    "\", \"end_byte\": \""+str(words_end)+\
+                                    "\", \"philo_id\": \"0 0 0 0 0 0 0 0 0\"}\n"
+                                words_actual=""
+
+                count_byte=count_byte+1
+                caractere=""
+            #fin de la boucle while (binaire - caractère)
+
+            #Enregistrement des metadonnée du fichier traité
+            metadata["filename"]=os.path.abspath(file_path)
+            if("title" not in metadata):
+                metadata["title"]=""
+            if("publisher" not in metadata):
+                metadata["publisher"]=""
+            if("author" not in metadata):
+                metadata["author"]=""
+            if("date" not in metadata):
+                metadata["date"]=""
+            if("head" not in metadata):
+                metadata["head"]=""
+            if("create_date" not in metadata):
+                metadata["create_date"]=""
+            if("pub_date" not in metadata):
+                metadata["pub_date"]=""
+            if("type" not in metadata):
+                metadata["type"]=""
+            metadata["metadata_all"]="\""+str(count_file)+"\" :{\"titre\": \""+\
+            metadata.get("title")+"\", \"filename\": \""+metadata.get("filename")+"\", \"publisher\": \""+\
+            metadata.get("publisher")+"\", \"author\": \""+metadata.get("author")+"\", \"year\" : \""+\
+            metadata.get("date")+"\", \"head\": \""+metadata.get("head")+"\", \"create_date\": \""+\
+            metadata.get("create_date")+"\", \"pub_date\": \""+metadata.get("pub_date")+"\", \"type\": \""+\
+            metadata.get("type")+"\"}"
+            if(count_file>1):
+                metadata_text=metadata_text+", "
+            metadata_text=metadata_text+metadata.get("metadata_all")
+
+            # Impression du fichier texte correspondant au tei traité
+            with open(data_text_path+str(count_file), "w") as text_output:
+                text_output.write(text_oeuvre)
+            # Impression du fichier words correspondant au tei traité
+            with open(words_path+str(count_file), "w") as words_output:
+                words_output.write(words)
+
+            print("fin: "+str(count_byte))
+
+
+            fichier.close()
+            count_file=count_file+1
+	    #fin de la boucle for (fichier)
+
+        # Impression des metadata de l'ensemble du corpus traité
+        metadata_text=metadata_text+"}"
+        with open(metadata_path+"metadata.json", "w") as metadata_file:
+            metadata_file.write(metadata_text)
+
+    #fin de la fonction
+
+
+
 def parse_command_line():
     """Command line parsing function"""
     parser = argparse.ArgumentParser(prog="generate_ngrams")
     parser._action_groups.pop()
-    required = parser.add_argument_group('required arguments')
     optional = parser.add_argument_group('optional arguments')
     optional.add_argument("--config", help="configuration file used to override defaults",
                           type=str, default="")
     optional.add_argument("--cores", help="number of cores used for parsing and generating ngrams",
                           type=int, default=4)
-    required.add_argument("--file_path", help="path to source files",
-                          type=str)
+    optional.add_argument("--file_path", help="path to source files",
+                          type=str, default="")
     optional.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
     optional.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%%",
                           type=str, default="20%%")
-    optional.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
-                          type=literal_eval, default=True)
     optional.add_argument("--metadata", help="metadata for input files", default=None)
     optional.add_argument("--text_object_level", help="type of object to split up docs in",
                           type=str, default="doc")
     optional.add_argument("--output_path", help="output path of ngrams",
                           type=str, default="./ngrams")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
-    optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
+    optional.add_argument("--stopwords", help="path to stopword list", type=str, default="./StopWords/french.txt")
     optional.add_argument("--skipgram", help="use skipgrams", action='store_true', default=False)
     args = vars(parser.parse_args())
-    if len(sys.argv[1:]) == 0:  # no command line args were provided
-        parser.print_help()
-        exit()
-    if args["is_philo_db"] is True:
-        args["file_path"] = TRIM_LAST_SLASH.sub("", args["file_path"])
-        file_path = str(Path(args["file_path"]).joinpath("*"))
-        args["files"] = sorted(glob(file_path))
-    else:
-        args["files"] = glob(Path(args["file_path"]).joinpath("*"))
+    args["files"] = ("/local/spinel/ownCloud/Python/alignment-test/source/pretrait/data/WORDS/1")
     return args
 
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
-    print(ARGS["output_path"])
     NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
+    #NGRAM_GENERATOR.pretrait("source")
     NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])
