@@ -53,7 +53,8 @@ type matchingParams struct {
 	passageDistanceMultiplier     float32
 	oneWayMatching                bool
 	duplicateThreshold            int
-	batchSize                     int
+	sourceBatch                   int
+	targetBatch                   int
 	outputPath                    string
 	numThreads                    int
 	outputFormat                  string
@@ -155,7 +156,8 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	outputPath := flag.String("output_path", "./", "output path for results")
 	outputFormat := flag.String("output_format", "tab", "output format of results")
 	sortField := flag.String("sort_by", "year", "metadata field used to sort files in ascending order")
-	batchSize := flag.Int("batch_size", 1, "batch steps defines the number of steps in which the full source vs target is run: useful when RAM usage is a concern")
+	sourceBatch := flag.Int("source_batch", 1, "Split the source files into n number of batches: useful when RAM usage is a concern")
+	targetBatch := flag.Int("target_batch", 1, "Split the target files into n number of batches: useful when RAM usage is a concern")
 	matchingWindowSize := flag.Int("matching_window_size", 20, "size of sliding window for matches")
 	maxGap64 := flag.Int("max_gap", 10, "maximum gap between two matching ngrams")
 	minimumMatchingNgrams := flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match")
@@ -171,16 +173,17 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	oneWayMatching := flag.Bool("one_way_matching", false, "Disable two way matching: source is compared to target and target is NOT compared to source")
 	flag.Parse()
 	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap64), int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
-		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), *oneWayMatching, *duplicateThreshold, *batchSize, *outputPath, *threadsArg, *outputFormat, *sortField, *debug}
+		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), *oneWayMatching, *duplicateThreshold, *sourceBatch, *targetBatch, *outputPath, *threadsArg, *outputFormat, *sortField, *debug}
 	ngramIndex := make(map[int32]string)
 	if config.debug && *ngramIndexLocation != "" {
 		ngramIndex = loadNgramIndex(*ngramIndexLocation)
 	} else {
 		ngramIndex = map[int32]string{}
 	}
-	fmt.Println("Loading metadata...")
+	fmt.Printf("\nLoading metadata...")
 	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	targetMetadata := openJSONMetadata(targetMetadataArg)
+	fmt.Println("done.")
 	sourceFiles := getFiles(*sourceFilesArg, sourceMetadata, *sortField)
 	targetFiles := getFiles(*targetFilesArg, targetMetadata, *sortField)
 	mostCommonNgrams := compileMostCommonNgrams(sourceCommonNgramsArg, targetCommonNgramsArg, mostCommonNgramThreshold)
@@ -290,7 +293,6 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 			intNgram, _ := strconv.Atoi(line)
 			uniqueNgrams[int32(intNgram)] = true
 		}
-
 		if err != io.EOF {
 			fmt.Printf(" > Failed!: %v\n", err)
 		}
@@ -298,9 +300,10 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 	return uniqueNgrams
 }
 
-func getJSONDocs(fileLocations []string) []docIndex {
+func getJSONDocs(fileLocations []string, prefixString string) []docIndex {
 	var jsonFiles []docIndex
-	for _, fileLocation := range fileLocations {
+	totalFiles := len(fileLocations)
+	for pos, fileLocation := range fileLocations {
 		jsonFile, err := ioutil.ReadFile(fileLocation)
 		checkErr(err)
 		tempDoc := make(map[int32][][]int32)
@@ -315,7 +318,12 @@ func getJSONDocs(fileLocations []string) []docIndex {
 		docID := path.Base(strings.Replace(fileLocation, ".json", "", 1))
 		docObject := docIndex{docID, doc}
 		jsonFiles = append(jsonFiles, docObject)
+		progress := fmt.Sprintf("\r%s... %d/%d", prefixString, pos+1, totalFiles)
+		os.Stdout.Write([]byte(progress))
+		os.Stdout.Sync()
 	}
+	os.Stdout.Write([]byte("\r\033[K" + prefixString + "... done.\n"))
+	os.Stdout.Sync()
 	return jsonFiles
 }
 
@@ -456,10 +464,10 @@ func writeDebugOutput(m *matchValues, config *matchingParams, currentAnchor *ngr
 	debugOutput.Sync()
 }
 
-func makeSliceOfSlices(sliceToSlice []string, config *matchingParams) [][]string {
+func makeSliceOfSlices(sliceToSlice []string, batch int) [][]string {
 	var sliceOfSlices [][]string
 	sliceLength := len(sliceToSlice)
-	chunkSize := (sliceLength + config.batchSize - 1) / config.batchSize
+	chunkSize := (sliceLength + batch - 1) / batch
 	for i := 0; i < sliceLength; i += chunkSize {
 		end := i + chunkSize
 		if end > sliceLength {
@@ -792,31 +800,49 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	return newAlignments
 }
 
+func buildPercentMap(total int) map[int]int {
+	percentSteps := make(map[int]int)
+	count := 0
+	if total >= 100 {
+		step := total / 100
+		for i := step; i < total; i += step {
+			count++
+			percentSteps[i] = count
+		}
+	} else {
+		multiplier := float64(100 / total)
+		for i := 0; i < total; i++ {
+			percentSteps[i] = int(multiplier * float64(i))
+		}
+	}
+	return percentSteps
+}
+
 func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
 	sourceAgainstSource := false
 	sourceFilesDone := make(map[string]bool)
 
 	// Split source and target files into config.batchSize batches
-	sourceFileBatches := makeSliceOfSlices(sourceFiles, config)
+	sourceFileBatches := makeSliceOfSlices(sourceFiles, config.sourceBatch)
 	var targetFileBatches [][]string
 	if len(targetFiles) == 0 {
 		targetMetadata = sourceMetadata
 		sourceAgainstSource = true
 		targetFileBatches = sourceFileBatches
 	} else {
-		targetFileBatches = makeSliceOfSlices(targetFiles, config)
+		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
 	mergedOutput, sourceFields, targetFields := createOutputFile(config, sourceMetadata, targetMetadata)
 	counts := 0
-	for sourceBatchNumber := 0; sourceBatchNumber < config.batchSize; sourceBatchNumber++ {
-		if config.batchSize > 1 {
-			fmt.Printf("\n#### Loading source batch %d... ###\n", sourceBatchNumber+1)
-		} else {
-			fmt.Println("Loading source files...")
+	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
+		prefixString := "Loading source files"
+		if config.sourceBatch > 1 {
+			prefixString += fmt.Sprintf(" from source batch %d", sourceBatchNumber+1)
+			fmt.Printf("\n### Comparing source batch %d against all... ###\n", sourceBatchNumber+1)
 		}
-		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber])
-		for targetBatchNumber := 0; targetBatchNumber < config.batchSize; targetBatchNumber++ {
+		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber], prefixString)
+		for targetBatchNumber := 0; targetBatchNumber < config.targetBatch; targetBatchNumber++ {
 			if sourceAgainstSource && sourceBatchNumber > targetBatchNumber {
 				continue // we've already done these comparisons in the other direction
 			}
@@ -824,12 +850,11 @@ func main() {
 			if sourceAgainstSource && targetBatchNumber == sourceBatchNumber {
 				targetFileIndexes = sourceFileIndexes
 			} else {
-				if config.batchSize > 1 {
-					fmt.Printf("Loading target batch %d...\n", targetBatchNumber+1)
-				} else {
-					fmt.Println("Loading target files...")
+				targetPrefix := "Loading target files"
+				if config.targetBatch > 1 {
+					targetPrefix += fmt.Sprintf(" from target batch %d", targetBatchNumber+1)
 				}
-				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber])
+				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber], targetPrefix)
 			}
 			var localSourceFilesDone map[string]bool
 			if sourceAgainstSource {
@@ -839,17 +864,23 @@ func main() {
 					localSourceFilesDone = make(map[string]bool)
 				}
 			}
-			for _, sourceFile := range sourceFileIndexes {
-				if config.batchSize == 1 {
-					fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
+			percentSteps := buildPercentMap(len(sourceFileIndexes))
+			fmt.Printf("Comparing files... 0%%")
+			for pos, sourceFile := range sourceFileIndexes {
+				if config.debug {
+					if config.sourceBatch == 1 {
+						fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
+					} else {
+						fmt.Printf("Comparing source file %s to target batch %d...\n", sourceFile.DocID, targetBatchNumber+1)
+					}
 				}
-
-				if config.batchSize > 1 {
-					fmt.Printf("Comparing source file %s to target batch %d...\n", sourceFile.DocID, targetBatchNumber+1)
+				if _, ok := percentSteps[pos]; ok {
+					percent := strconv.Itoa(percentSteps[pos])
+					os.Stdout.Write([]byte("\rComparing files... " + percent + "%"))
+					os.Stdout.Sync()
 				}
 				var wait sync.WaitGroup
 				targetLength := len(targetFileIndexes)
-
 				combinedAlignments := &CombinedAlignments{sourceFile.DocID, []alignmentsPerDoc{}}
 				c := make(chan []alignmentsPerDoc, config.numThreads)
 				wait.Add(config.numThreads)
@@ -937,9 +968,11 @@ func main() {
 				sourceFilesDone[sourceFileDocID] = true
 			}
 			debug.FreeOSMemory()
+			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
+			os.Stdout.Sync()
 		}
 	}
 	mergedOutput.Sync()
 	mergedOutput.Close()
-	fmt.Printf("%d results...\n", counts)
+	fmt.Printf("\n\n%d pairwise alignments found...\n", counts)
 }
