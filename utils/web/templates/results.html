@@ -6,7 +6,7 @@
     </h1>
     <div class="ui two column divided grid">
         {% for alignment in alignments %}
-        <div class="row ui segment raised">
+        <div class="row ui segment raised" style="padding-bottom: 45px">
             <div class="column">
                 <h4 class="ui centered header">
                     Source
@@ -32,6 +32,9 @@
                     <span style="color: red;">{{ alignment["target_passage"] }}</span>
                     {{ alignment["target_context_after"] }}
                 </p>
+            </div>
+            <div style="position: absolute; bottom: 0; left: 0; padding: 5px; border-right: 1px solid rgba(34,36,38,.15); border-top: 1px solid rgba(34,36,38,.15);">
+                {{ alignment["passage_similarity"] }} similar
             </div>
             <div style="position: absolute; top: 0; left: 0; padding: 5px; border-right: 1px solid rgba(34,36,38,.15); border-bottom: 1px solid rgba(34,36,38,.15)">
                 {{ start_position + loop.index }}
