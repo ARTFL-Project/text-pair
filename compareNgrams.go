@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"io/ioutil"
 	"log"
@@ -536,6 +537,7 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	passage := make([]byte, endByte-startByte)
 	_, err = f.Read(passage)
 	checkErr(err)
+	f.Close()
 	passage = bytes.Trim(passage, "\x00")
 	text := string(passage)
 	text = tags.ReplaceAllString(text, "")
@@ -544,7 +546,7 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	text = strings.Replace(text, "\t", " ", -1)
 	text = strings.Replace(text, "\n", " ", -1)
 	text = spaces.ReplaceAllString(text, " ")
-	f.Close()
+	text = html.UnescapeString(text)
 	return text
 }
 

@@ -220,7 +220,6 @@ class Ngrams:
                 if current_text_id != text_id:
                     if self.debug:
                         self.__write_to_disk(ngrams, current_text_id)
-                    print("Storing %s: %s..." %(self.text_object_level, current_text_id))
                     if self.metadata_done is False:
                         metadata[current_text_id] = self.__get_metadata(current_text_id)
                     self.__build_text_index(ngrams, current_text_id)
