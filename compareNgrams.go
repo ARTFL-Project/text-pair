@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"io/ioutil"
 	"log"
@@ -57,7 +58,6 @@ type matchingParams struct {
 	targetBatch                   int
 	outputPath                    string
 	numThreads                    int
-	outputFormat                  string
 	sortingField                  string
 	debug                         bool
 }
@@ -85,8 +85,9 @@ type matchValues struct {
 
 // Alignment is the matching representation
 type Alignment struct {
-	source position
-	target position
+	source              position
+	target              position
+	totalMatchingNgrams int32
 }
 
 type position struct {
@@ -135,34 +136,186 @@ var tags = regexp.MustCompile("<[^>]*?>")
 var brokenBeginTags = regexp.MustCompile("^[^<]*?>")
 var brokenEndTags = regexp.MustCompile("<[^>]*?$")
 var spaces = regexp.MustCompile(" +")
+var tabEntities = regexp.MustCompile("(&#9;)+")
 
-func checkErr(err error) {
-	if err != nil {
-		log.Fatal(err)
+func main() {
+	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
+	sourceAgainstSource := false
+	sourceFilesDone := make(map[string]bool)
+
+	// Split source and target files into config.batchSize batches
+	sourceFileBatches := makeSliceOfSlices(sourceFiles, config.sourceBatch)
+	var targetFileBatches [][]string
+	if len(targetFiles) == 0 {
+		targetMetadata = sourceMetadata
+		sourceAgainstSource = true
+		targetFileBatches = sourceFileBatches
+	} else {
+		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
+	mergedOutput, sourceFields, targetFields := createOutputFile(config, sourceMetadata, targetMetadata)
+	counts := 0
+	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
+		prefixString := "Loading source files"
+		if config.sourceBatch > 1 {
+			prefixString += fmt.Sprintf(" from source batch %d", sourceBatchNumber+1)
+			fmt.Printf("\n### Comparing source batch %d against all... ###\n", sourceBatchNumber+1)
+		}
+		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber], prefixString)
+		for targetBatchNumber := 0; targetBatchNumber < config.targetBatch; targetBatchNumber++ {
+			if sourceAgainstSource && sourceBatchNumber > targetBatchNumber {
+				continue // we've already done these comparisons in the other direction
+			}
+			var targetFileIndexes []docIndex
+			if sourceAgainstSource && targetBatchNumber == sourceBatchNumber {
+				targetFileIndexes = sourceFileIndexes
+			} else {
+				targetPrefix := "Loading target files"
+				if config.targetBatch > 1 {
+					targetPrefix += fmt.Sprintf(" from target batch %d", targetBatchNumber+1)
+				}
+				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber], targetPrefix)
+			}
+			var localSourceFilesDone map[string]bool
+			if sourceAgainstSource {
+				if len(sourceFilesDone) > 0 {
+					localSourceFilesDone = sourceFilesDone
+				} else {
+					localSourceFilesDone = make(map[string]bool)
+				}
+			}
+			percentSteps := buildPercentMap(len(sourceFileIndexes))
+			fmt.Printf("Comparing files... 0%%")
+			for pos, sourceFile := range sourceFileIndexes {
+				if config.debug {
+					if config.sourceBatch == 1 {
+						fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
+					} else {
+						fmt.Printf("Comparing source file %s to target batch %d...\n", sourceFile.DocID, targetBatchNumber+1)
+					}
+				}
+				if _, ok := percentSteps[pos]; ok {
+					percent := strconv.Itoa(percentSteps[pos])
+					os.Stdout.Write([]byte("\rComparing files... " + percent + "%"))
+					os.Stdout.Sync()
+				}
+				var wait sync.WaitGroup
+				targetLength := len(targetFileIndexes)
+				combinedAlignments := &CombinedAlignments{sourceFile.DocID, []alignmentsPerDoc{}}
+				c := make(chan []alignmentsPerDoc, config.numThreads)
+				wait.Add(config.numThreads)
+				start := 0
+				increment := targetLength/config.numThreads + 1
+				for i := 0; i < config.numThreads; i++ {
+					end := increment * (i + 1)
+					if end > targetLength {
+						end = targetLength - 1
+					}
+					splitTargets := targetFileIndexes[start:end]
+					start += increment
+					if start > targetLength-1 {
+						start = targetLength - 1
+					}
+					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config *matchingParams, commonNgrams map[int32]bool) {
+						defer wait.Done()
+						localAlignments := []alignmentsPerDoc{}
+					innerTargetMatching:
+						for _, targetFile := range splitTargets {
+							if sourceAgainstSource {
+								if sourceMetadata[sourceFile.DocID]["filename"] == targetMetadata[targetFile.DocID]["filename"] {
+									continue innerTargetMatching
+								} else if _, ok := localSourceFilesDone[targetFile.DocID]; ok {
+									continue innerTargetMatching
+								}
+							}
+							var debugOutput *os.File
+							if config.debug {
+								debugOutput = createDebugOutputFile(config, sourceFile.DocID, targetFile.DocID)
+							}
+							sourceTargetIntersection := getIntersection(&sourceFile, &targetFile)
+							if int32(len(sourceTargetIntersection)) < config.minimumMatchingNgramsInDocs {
+								continue
+							}
+							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams, commonNgrams)
+							var matches = []ngramMatch{}
+							for ngram := range sourceTargetIntersection {
+								for _, sourceNgramIndex := range sourceFile.Ngrams[ngram] {
+									for _, targetNgramIndex := range targetFile.Ngrams[ngram] {
+										matches = append(matches, ngramMatch{sourceNgramIndex, targetNgramIndex, ngram})
+									}
+								}
+							}
+							sort.Slice(matches, func(i, j int) bool {
+								if matches[i].source.index < matches[j].source.index {
+									return true
+								} else if matches[i].source.index > matches[j].source.index {
+									return false
+								}
+								return matches[i].target.index < matches[j].target.index
+							})
+							alignments := matchPassage(&sourceFile, &targetFile, matches, config, mostCommonNgrams, ngramIndex, debugOutput)
+							if !config.oneWayMatching {
+								debugOutput.WriteString("\n\n\n\n## REVERSE MATCHING ##\n\n")
+								alignments = reverseMatch(&sourceFile, &targetFile, matches, config, mostCommonNgrams, alignments, ngramIndex, debugOutput)
+							}
+							if config.mergeOnByteDistance || config.mergeOnNgramDistance {
+								alignments = mergeWithPrevious(alignments, config)
+							}
+							if len(alignments) > 0 {
+								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments})
+							}
+							debugOutput.Sync()
+							debugOutput.Close()
+						}
+						c <- localAlignments
+					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, localSourceFilesDone, config, commonNgrams)
+				}
+				wait.Wait()
+				for i := 0; i < config.numThreads; i++ {
+					localCombinedAlignments := <-c
+					if len(localCombinedAlignments) > 0 {
+						combinedAlignments.alignments = append(combinedAlignments.alignments, localCombinedAlignments...)
+					}
+				}
+				if len(combinedAlignments.alignments) > 0 {
+					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, config, sourceFields, targetFields, &counts)
+				}
+				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
+					localSourceFilesDone[sourceFile.DocID] = true
+				}
+			}
+			for sourceFileDocID := range localSourceFilesDone {
+				sourceFilesDone[sourceFileDocID] = true
+			}
+			debug.FreeOSMemory()
+			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
+			os.Stdout.Sync()
+		}
+	}
+	mergedOutput.Sync()
+	mergedOutput.Close()
+	fmt.Printf("\n\n%d pairwise alignments found...\n", counts)
 }
 
 func parseFlags() ([]string, []string, map[string]map[string]string, map[string]map[string]string, map[int32]bool, *matchingParams, map[int32]string) {
-	debug := flag.Bool("debug", false, "set debugging: you need to also provide the --ngram_index option with a path to the ngram index to debug the matching logic.")
-	ngramIndexLocation := flag.String("ngram_index", "", "location of ngram index used for debugging")
+	outputPath := flag.String("output_path", "./", "output path for results")
+	ngramIndexLocation := flag.String("ngram_index", "", "location of ngram index used for debugging. Should be the source or target index, not matter which since it'll be used for common ngrams")
 	sourceFilesArg := flag.String("source_files", "", "source files location")
 	targetFilesArg := flag.String("target_files", "", "target files location")
 	threadsArg := flag.Int("threads", 4, "number of threads to use")
 	sourceMetadataArg := flag.String("source_metadata", "", "path to source metadata")
 	targetMetadataArg := flag.String("target_metadata", "", "path to target metadata")
-	sourceCommonNgramsArg := flag.String("source_common_ngrams", "", "path to a text file containing the most common ngrams in source files")
-	targetCommonNgramsArg := flag.String("target_common_ngrams", "", "path to a text file containing the most common ngrams in target files")
-	mostCommonNgramThreshold := flag.Int("most_common_ngram_threshold", 1000, "take the n most common ngrams from source and target common ngrams")
-	outputPath := flag.String("output_path", "./", "output path for results")
-	outputFormat := flag.String("output_format", "tab", "output format of results")
 	sortField := flag.String("sort_by", "year", "metadata field used to sort files in ascending order")
 	sourceBatch := flag.Int("source_batch", 1, "Split the source files into n number of batches: useful when RAM usage is a concern")
 	targetBatch := flag.Int("target_batch", 1, "Split the target files into n number of batches: useful when RAM usage is a concern")
-	matchingWindowSize := flag.Int("matching_window_size", 20, "size of sliding window for matches")
-	maxGap64 := flag.Int("max_gap", 10, "maximum gap between two matching ngrams")
-	minimumMatchingNgrams := flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match")
-	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngram_in_window", 3, "minimum matching ngrams per sliding window")
+	sourceCommonNgramsArg := flag.String("source_common_ngrams", "", "path to a text file containing the most common ngrams in source files")
+	targetCommonNgramsArg := flag.String("target_common_ngrams", "", "path to a text file containing the most common ngrams in target files")
+	mostCommonNgramThreshold := flag.Int("most_common_ngram_threshold", 1000, "take the n most common ngrams from source and target common ngrams")
 	commonNgramsLimit := flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")
+	matchingWindowSize := flag.Int("matching_window_size", 20, "size of sliding window for matches")
+	maxGap := flag.Int("max_gap", 10, "maximum gap between two matching ngrams")
+	minimumMatchingNgrams := flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match")
+	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngrams_in_window", 3, "minimum matching ngrams per sliding window")
 	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
 	contextSize := flag.Int("context_size", 300, "size of context for before and after matching passages")
 	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
@@ -170,10 +323,13 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option. Value between 0 and 1")
 	mergeOnNgramDistance := flag.Bool("merge_passages_on_ngram_distance", true, "Merge passages within x number of ngrams: the value used is the matching_window_size defaulting to 20")
 	passageDistance := flag.Float64("passage_distance_multiplier", 0.5, "Combine passage which are within (multiplier*length of previous passage) bytes")
-	oneWayMatching := flag.Bool("one_way_matching", false, "Disable two way matching: source is compared to target and target is NOT compared to source")
+	oneWayMatchingArg := flag.String("one_way_matching", "false", "Disable two way matching: source is compared to target and target is NOT compared to source")
+	oneWayMatching, _ := strconv.ParseBool(*oneWayMatchingArg)
+	debugArg := flag.String("debug", "false", "set debugging: you need to also provide the --ngram_index option with a path to the ngram index to debug the matching logic.")
+	debug, _ := strconv.ParseBool(*debugArg)
 	flag.Parse()
-	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap64), int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
-		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), *oneWayMatching, *duplicateThreshold, *sourceBatch, *targetBatch, *outputPath, *threadsArg, *outputFormat, *sortField, *debug}
+	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
+		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), oneWayMatching, *duplicateThreshold, *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
 	ngramIndex := make(map[int32]string)
 	if config.debug && *ngramIndexLocation != "" {
 		ngramIndex = loadNgramIndex(*ngramIndexLocation)
@@ -387,7 +543,7 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, comm
 
 func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) (*os.File, []string, []string) {
 	os.MkdirAll(config.outputPath, 0755)
-	mergedOutput, err := os.Create(fmt.Sprintf(filepath.Join(config.outputPath, "alignments_results.%s"), config.outputFormat))
+	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignments_results.tab"))
 	checkErr(err)
 	var firstSourceKey string
 	for sourceKey := range sourceMetadata {
@@ -412,12 +568,8 @@ func createOutputFile(config *matchingParams, sourceMetadata map[string]map[stri
 		firstRow = append(firstRow, "target_"+field)
 	}
 	firstRow = append(firstRow, []string{"target_start_byte", "target_end_byte"}...)
-	firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after"}...)
-	if config.outputFormat == "tab" {
-		mergedOutput.WriteString(strings.Join(firstRow, "\t"))
-	} else {
-		mergedOutput.WriteString("<html>\n")
-	}
+	firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after", "passage_similarity"}...)
+	mergedOutput.WriteString(strings.Join(firstRow, "\t"))
 	return mergedOutput, sourceFields, targetFields
 }
 
@@ -464,20 +616,6 @@ func writeDebugOutput(m *matchValues, config *matchingParams, currentAnchor *ngr
 	debugOutput.Sync()
 }
 
-func makeSliceOfSlices(sliceToSlice []string, batch int) [][]string {
-	var sliceOfSlices [][]string
-	sliceLength := len(sliceToSlice)
-	chunkSize := (sliceLength + batch - 1) / batch
-	for i := 0; i < sliceLength; i += chunkSize {
-		end := i + chunkSize
-		if end > sliceLength {
-			end = sliceLength
-		}
-		sliceOfSlices = append(sliceOfSlices, sliceToSlice[i:end])
-	}
-	return sliceOfSlices
-}
-
 func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string, sourceMetadata map[string]map[string]string,
 	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams, sourceFields []string, targetFields []string, counts *int) {
 	var combinedOutput []string
@@ -494,26 +632,12 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			fields = append(fields, targetValues...)
 			fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
 			fields = append(fields, alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)...)
+			passageSimilarity := int(float64(alignment.totalMatchingNgrams*2) / float64((alignment.source.endNgramIndex-alignment.source.startNgramIndex+1)+(alignment.target.endNgramIndex-alignment.target.startNgramIndex+1)) * 100)
+			fields = append(fields, fmt.Sprintf("%d%%", passageSimilarity))
 			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
 		}
 	}
 	f.WriteString("\n" + strings.Join(combinedOutput, "\n"))
-}
-
-func mapToSliceOfKeys(metadata map[string]string) []string {
-	keys := []string{}
-	for k := range metadata {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-func mapToSliceOfValues(metadata map[string]string, fields []string) []string {
-	values := []string{}
-	for _, v := range fields {
-		values = append(values, metadata[v])
-	}
-	return values
 }
 
 // Returns three passages: the context before, the match itself, and the context after
@@ -537,15 +661,17 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	passage := make([]byte, endByte-startByte)
 	_, err = f.Read(passage)
 	checkErr(err)
+	f.Close()
 	passage = bytes.Trim(passage, "\x00")
 	text := string(passage)
 	text = tags.ReplaceAllString(text, "")
 	text = brokenBeginTags.ReplaceAllString(text, "")
 	text = brokenEndTags.ReplaceAllString(text, "")
 	text = strings.Replace(text, "\t", " ", -1)
+	text = tabEntities.ReplaceAllString(text, " ")
 	text = strings.Replace(text, "\n", " ", -1)
 	text = spaces.ReplaceAllString(text, " ")
-	f.Close()
+	text = html.UnescapeString(text)
 	return text
 }
 
@@ -553,6 +679,7 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 func addAlignment(m *matchValues, config *matchingParams, alignments *[]Alignment) {
 	m.currentAlignment.source = position{m.firstMatch[0].startByte, m.lastMatch[0].endByte, m.firstMatch[0].index, m.lastMatch[0].index}
 	m.currentAlignment.target = position{m.firstMatch[1].startByte, m.lastMatch[1].endByte, m.firstMatch[1].index, m.lastMatch[1].index}
+	m.currentAlignment.totalMatchingNgrams = m.matchesInCurrentAlignment
 	*alignments = append(*alignments, m.currentAlignment)
 	m.previousAlignment = m.currentAlignment
 }
@@ -596,14 +723,14 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams) []Alignme
 			maxTargetDistance <= previousAlignment.target.endByte {
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-			previousAlignment = Alignment{sourcePosition, targetPosition}
+			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
 		} else if sourceNgramDistance > 0 &&
 			sourceNgramDistance <= maxNgramDistance &&
 			targetNgramDistance > 0 &&
 			targetNgramDistance <= maxNgramDistance {
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-			previousAlignment = Alignment{sourcePosition, targetPosition}
+			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
 		} else {
 			mergedAlignments = append(mergedAlignments, previousAlignment)
 		}
@@ -747,11 +874,11 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			if targetMatch.target.startByte < sourceMatch.source.startByte && targetMatch.target.endByte >= sourceMatch.source.startByte && targetMatch.source.startByte < sourceMatch.target.startByte && targetMatch.source.endByte >= sourceMatch.target.startByte {
 				if targetMatch.target.endByte > sourceMatch.source.endByte {
 					// fmt.Println("1 Extended source from", sourceMatch.source, "to", targetMatch.target)
-					alignments[sourceMatchIndex] = Alignment{targetMatch.target, targetMatch.source}
+					alignments[sourceMatchIndex] = Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams}
 				} else {
 					sourcePosition := position{targetMatch.target.startByte, sourceMatch.source.endByte, targetMatch.target.startNgramIndex, sourceMatch.source.endNgramIndex}
 					targetPosition := position{targetMatch.source.startByte, sourceMatch.target.endByte, targetMatch.source.startNgramIndex, sourceMatch.target.endNgramIndex}
-					alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition}
+					alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams}
 					// fmt.Println("2 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition})
 				}
 				targetMergeSet[targetMatchIndex] = true
@@ -759,7 +886,7 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			} else if targetMatch.target.endByte > sourceMatch.source.endByte && targetMatch.target.startByte <= sourceMatch.source.endByte && targetMatch.source.endByte > sourceMatch.target.endByte && targetMatch.source.startByte <= sourceMatch.target.endByte {
 				sourcePosition := position{sourceMatch.source.startByte, targetMatch.target.endByte, sourceMatch.source.startNgramIndex, targetMatch.target.endNgramIndex}
 				targetPosition := position{sourceMatch.target.startByte, targetMatch.source.endByte, sourceMatch.target.startNgramIndex, targetMatch.source.endNgramIndex}
-				alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition}
+				alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams}
 				// fmt.Println("3 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition})
 				targetMergeSet[targetMatchIndex] = true
 				break innerTwoWay
@@ -768,7 +895,7 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	}
 	for targetMatchIndex, targetMatch := range reverseAlignments {
 		if _, ok := targetMergeSet[targetMatchIndex]; !ok {
-			alignments = append(alignments, Alignment{targetMatch.target, targetMatch.source})
+			alignments = append(alignments, Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams})
 			// fmt.Println("Adding", targetMatch.target, targetMatch.source)
 		}
 	}
@@ -800,6 +927,7 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	return newAlignments
 }
 
+// Helper functions
 func buildPercentMap(total int) map[int]int {
 	percentSteps := make(map[int]int)
 	count := 0
@@ -818,161 +946,38 @@ func buildPercentMap(total int) map[int]int {
 	return percentSteps
 }
 
-func main() {
-	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
-	sourceAgainstSource := false
-	sourceFilesDone := make(map[string]bool)
+func checkErr(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
+}
 
-	// Split source and target files into config.batchSize batches
-	sourceFileBatches := makeSliceOfSlices(sourceFiles, config.sourceBatch)
-	var targetFileBatches [][]string
-	if len(targetFiles) == 0 {
-		targetMetadata = sourceMetadata
-		sourceAgainstSource = true
-		targetFileBatches = sourceFileBatches
-	} else {
-		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
-	}
-	mergedOutput, sourceFields, targetFields := createOutputFile(config, sourceMetadata, targetMetadata)
-	counts := 0
-	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
-		prefixString := "Loading source files"
-		if config.sourceBatch > 1 {
-			prefixString += fmt.Sprintf(" from source batch %d", sourceBatchNumber+1)
-			fmt.Printf("\n### Comparing source batch %d against all... ###\n", sourceBatchNumber+1)
+func makeSliceOfSlices(sliceToSlice []string, batch int) [][]string {
+	var sliceOfSlices [][]string
+	sliceLength := len(sliceToSlice)
+	chunkSize := (sliceLength + batch - 1) / batch
+	for i := 0; i < sliceLength; i += chunkSize {
+		end := i + chunkSize
+		if end > sliceLength {
+			end = sliceLength
 		}
-		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber], prefixString)
-		for targetBatchNumber := 0; targetBatchNumber < config.targetBatch; targetBatchNumber++ {
-			if sourceAgainstSource && sourceBatchNumber > targetBatchNumber {
-				continue // we've already done these comparisons in the other direction
-			}
-			var targetFileIndexes []docIndex
-			if sourceAgainstSource && targetBatchNumber == sourceBatchNumber {
-				targetFileIndexes = sourceFileIndexes
-			} else {
-				targetPrefix := "Loading target files"
-				if config.targetBatch > 1 {
-					targetPrefix += fmt.Sprintf(" from target batch %d", targetBatchNumber+1)
-				}
-				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber], targetPrefix)
-			}
-			var localSourceFilesDone map[string]bool
-			if sourceAgainstSource {
-				if len(sourceFilesDone) > 0 {
-					localSourceFilesDone = sourceFilesDone
-				} else {
-					localSourceFilesDone = make(map[string]bool)
-				}
-			}
-			percentSteps := buildPercentMap(len(sourceFileIndexes))
-			fmt.Printf("Comparing files... 0%%")
-			for pos, sourceFile := range sourceFileIndexes {
-				if config.debug {
-					if config.sourceBatch == 1 {
-						fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
-					} else {
-						fmt.Printf("Comparing source file %s to target batch %d...\n", sourceFile.DocID, targetBatchNumber+1)
-					}
-				}
-				if _, ok := percentSteps[pos]; ok {
-					percent := strconv.Itoa(percentSteps[pos])
-					os.Stdout.Write([]byte("\rComparing files... " + percent + "%"))
-					os.Stdout.Sync()
-				}
-				var wait sync.WaitGroup
-				targetLength := len(targetFileIndexes)
-				combinedAlignments := &CombinedAlignments{sourceFile.DocID, []alignmentsPerDoc{}}
-				c := make(chan []alignmentsPerDoc, config.numThreads)
-				wait.Add(config.numThreads)
-				start := 0
-				increment := targetLength/config.numThreads + 1
-				for i := 0; i < config.numThreads; i++ {
-					end := increment * (i + 1)
-					if end > targetLength {
-						end = targetLength - 1
-					}
-					splitTargets := targetFileIndexes[start:end]
-					start += increment
-					if start > targetLength-1 {
-						start = targetLength - 1
-					}
-					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config *matchingParams, commonNgrams map[int32]bool) {
-						defer wait.Done()
-						localAlignments := []alignmentsPerDoc{}
-					innerTargetMatching:
-						for _, targetFile := range splitTargets {
-							if sourceAgainstSource {
-								if sourceMetadata[sourceFile.DocID]["filename"] == targetMetadata[targetFile.DocID]["filename"] {
-									continue innerTargetMatching
-								} else if _, ok := localSourceFilesDone[targetFile.DocID]; ok {
-									continue innerTargetMatching
-								}
-							}
-							var debugOutput *os.File
-							if config.debug {
-								debugOutput = createDebugOutputFile(config, sourceFile.DocID, targetFile.DocID)
-							}
-							sourceTargetIntersection := getIntersection(&sourceFile, &targetFile)
-							if int32(len(sourceTargetIntersection)) < config.minimumMatchingNgramsInDocs {
-								continue
-							}
-							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams, commonNgrams)
-							var matches = []ngramMatch{}
-							for ngram := range sourceTargetIntersection {
-								for _, sourceNgramIndex := range sourceFile.Ngrams[ngram] {
-									for _, targetNgramIndex := range targetFile.Ngrams[ngram] {
-										matches = append(matches, ngramMatch{sourceNgramIndex, targetNgramIndex, ngram})
-									}
-								}
-							}
-							sort.Slice(matches, func(i, j int) bool {
-								if matches[i].source.index < matches[j].source.index {
-									return true
-								} else if matches[i].source.index > matches[j].source.index {
-									return false
-								}
-								return matches[i].target.index < matches[j].target.index
-							})
-							alignments := matchPassage(&sourceFile, &targetFile, matches, config, mostCommonNgrams, ngramIndex, debugOutput)
-							if !config.oneWayMatching {
-								debugOutput.WriteString("\n\n\n\n## REVERSE MATCHING ##\n\n")
-								alignments = reverseMatch(&sourceFile, &targetFile, matches, config, mostCommonNgrams, alignments, ngramIndex, debugOutput)
-							}
-							if config.mergeOnByteDistance || config.mergeOnNgramDistance {
-								alignments = mergeWithPrevious(alignments, config)
-							}
-							if len(alignments) > 0 {
-								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments})
-							}
-							debugOutput.Sync()
-							debugOutput.Close()
-						}
-						c <- localAlignments
-					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, localSourceFilesDone, config, commonNgrams)
-				}
-				wait.Wait()
-				for i := 0; i < config.numThreads; i++ {
-					localCombinedAlignments := <-c
-					if len(localCombinedAlignments) > 0 {
-						combinedAlignments.alignments = append(combinedAlignments.alignments, localCombinedAlignments...)
-					}
-				}
-				if len(combinedAlignments.alignments) > 0 {
-					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, config, sourceFields, targetFields, &counts)
-				}
-				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
-					localSourceFilesDone[sourceFile.DocID] = true
-				}
-			}
-			for sourceFileDocID := range localSourceFilesDone {
-				sourceFilesDone[sourceFileDocID] = true
-			}
-			debug.FreeOSMemory()
-			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
-			os.Stdout.Sync()
-		}
+		sliceOfSlices = append(sliceOfSlices, sliceToSlice[i:end])
 	}
-	mergedOutput.Sync()
-	mergedOutput.Close()
-	fmt.Printf("\n\n%d pairwise alignments found...\n", counts)
+	return sliceOfSlices
+}
+
+func mapToSliceOfKeys(metadata map[string]string) []string {
+	keys := []string{}
+	for k := range metadata {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func mapToSliceOfValues(metadata map[string]string, fields []string) []string {
+	values := []string{}
+	for _, v := range fields {
+		values = append(values, metadata[v])
+	}
+	return values
 }

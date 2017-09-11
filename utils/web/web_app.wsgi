@@ -5,17 +5,18 @@ import os
 import re
 import sys
 from collections import OrderedDict
+from pathlib import Path
 
-from flask import Flask
+from flask import Flask, redirect
 from flask import render_template
 from flask import request
 
+from philologic.runtime.link import byte_range_to_link
 import psycopg2
 import psycopg2.extras
 
+APP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app"))
 application = Flask(__name__)
-
-
 
 
 class formArguments():
@@ -54,8 +55,11 @@ class formArguments():
 
 @application.route("/<path:db_table>")
 def search(db_table):
-    form_args = formArguments()
-    return render_template("search.html", db_table=db_table, form_args=form_args)
+    return send_from_directory(APP_PATH, "index.html")
+
+@app.route('/<path:db_table:path>', methods=['GET'])
+def static_proxy(path):
+    return send_from_directory(root, path)
 
 @application.route("/<path:db_table>/results", methods=["GET"])
 def results(db_table):
@@ -86,14 +90,28 @@ def results(db_table):
         query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
                  o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(db_table, db_table,
                 " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), id_anchor)
-    print(query, file=sys.stderr)
     DATABASE = psycopg2.connect(user="alignments", password="martini", database="alignments")
     CURSOR = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     CURSOR.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
     column_names = [desc[0] for desc in CURSOR.description]
     alignments = []
     for pos, row in enumerate(CURSOR):
-        alignments.append({key: row[key] for key in column_names})
+        metadata = {key: row[key] for key in column_names}
+        metadata["source_link_to_philologic"] = "{}/link_to_philologic?filename={}&doc_id={}&start_byte={}&end_byte={}".format(
+            db_table,
+            metadata["source_filename"],
+            metadata["source_doc_id"].replace("_", " "),
+            metadata["source_start_byte"],
+            metadata["source_end_byte"]
+        )
+        metadata["target_link_to_philologic"] = "{}/link_to_philologic?filename={}&doc_id={}&start_byte={}&end_byte={}".format(
+            db_table,
+            metadata["target_filename"],
+            metadata["target_doc_id"].replace("_", " "),
+            metadata["target_start_byte"],
+            metadata["target_end_byte"]
+        )
+        alignments.append(metadata)
     if direction == "previous":
         alignments.reverse()
     previous_url = ""
@@ -110,3 +128,10 @@ def results(db_table):
         start_position = 50 * (page - 1)
     return render_template("results.html", db_table="", alignments=alignments, form_args=search_args, page=page,
                            previous_url=previous_url, next_url=next_url, start_position=start_position)
+
+@application.route("/<path:db_table>/link_to_philologic", methods=["GET"])
+def link_to_philologic(db_table):
+    db_path = str(Path(request.args["filename"]).parent).replace("data/TEXT", "")
+    print(db_path, file=sys.stderr)
+    philologic_link = byte_range_to_link(db_path, request.args["doc_id"], int(request.args["start_byte"]), int(request.args["end_byte"]))
+    return redirect(philologic_link[0])

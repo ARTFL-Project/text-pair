@@ -21,7 +21,7 @@ def parse_file(file):
         for pos, line in enumerate(input_file):
             if pos < 2:
                 continue
-            fields = line#.rstrip()
+            fields = line
             yield fields
 
 if __name__ == '__main__':
@@ -79,3 +79,4 @@ if __name__ == '__main__':
     DATABASE.close()
 
     print("DB viewable at http://root_url_for_alignment_dbs/{}".format(table_name))
+    print("Configure database at http://root_url_for_alignment_dbs/{}_config.json".format(table_name))

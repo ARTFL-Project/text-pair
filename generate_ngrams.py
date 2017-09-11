@@ -38,8 +38,8 @@ PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5
 class Ngrams:
     """Generate Ngrams"""
 
-    def __init__(self, ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, is_philo_db=True, text_object_level="doc", debug=False):
+    def __init__(self, text_object_level="doc", ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
+                 lowercase=True, is_philo_db=True, debug=False):
         self.ngram = ngram
         self.skipgram = skipgram
         self.numbers = numbers
@@ -132,7 +132,7 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, files, output_path, db_path=None, metadata=None, workers=4, ram="20%"):
+    def generate(self, files, output_path, text_object_level="doc", db_path=None, metadata=None, workers=4, ram="20%"):
         """Generate n-grams. Takes a list of files as an argument."""
         os.system('rm -rf %s/' % output_path)
         os.system('mkdir -p %s' % output_path)
@@ -153,6 +153,8 @@ class Ngrams:
         else:
             self.metadata_done = True
             combined_metadata = metadata
+        if text_object_level != "doc":
+            self.text_object_level = text_object_level
 
         print("\nGenerating ngrams...", flush=True)
         pool = Pool(workers)
@@ -183,7 +185,7 @@ class Ngrams:
         print("Cleaning up...")
         os.system("rm -r {}/temp".format(self.output_path))
 
-        ngram_index_path = os.path.join(self.output_path, "index/index.tab")
+        ngram_index_path = Path(self.output_path).joinpath("index/index.tab")
         return ngram_index_path
 
     def process_file(self, input_file):
@@ -218,7 +220,6 @@ class Ngrams:
                 if current_text_id != text_id:
                     if self.debug:
                         self.__write_to_disk(ngrams, current_text_id)
-                    print("Storing %s: %s..." %(self.text_object_level, current_text_id))
                     if self.metadata_done is False:
                         metadata[current_text_id] = self.__get_metadata(current_text_id)
                     self.__build_text_index(ngrams, current_text_id)
@@ -258,7 +259,7 @@ def parse_command_line():
                           type=str, default="")
     optional.add_argument("--cores", help="number of cores used for parsing and generating ngrams",
                           type=int, default=4)
-    required.add_argument("--file_path", help="path to source files",
+    required.add_argument("--file_path", help="path to files",
                           type=str)
     optional.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
     optional.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%%",
@@ -289,5 +290,6 @@ def parse_command_line():
 if __name__ == '__main__':
     ARGS = parse_command_line()
     print(ARGS["output_path"])
-    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
-    NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])
+    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
+    NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], text_object_level=ARGS["text_object_level"],
+                             metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])
