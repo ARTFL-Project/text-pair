@@ -15,6 +15,7 @@ from philologic.runtime.link import byte_range_to_link
 import psycopg2
 import psycopg2.extras
 
+APP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app"))
 application = Flask(__name__)
 
 
@@ -54,8 +55,11 @@ class formArguments():
 
 @application.route("/<path:db_table>")
 def search(db_table):
-    form_args = formArguments()
-    return render_template("search.html", db_table=db_table, form_args=form_args)
+    return send_from_directory(APP_PATH, "index.html")
+
+@app.route('/<path:db_table:path>', methods=['GET'])
+def static_proxy(path):
+    return send_from_directory(root, path)
 
 @application.route("/<path:db_table>/results", methods=["GET"])
 def results(db_table):

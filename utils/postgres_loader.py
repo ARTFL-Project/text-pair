@@ -21,7 +21,7 @@ def parse_file(file):
         for pos, line in enumerate(input_file):
             if pos < 2:
                 continue
-            fields = line#.rstrip()
+            fields = line
             yield fields
 
 if __name__ == '__main__':

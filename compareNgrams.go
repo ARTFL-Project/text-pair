@@ -136,6 +136,7 @@ var tags = regexp.MustCompile("<[^>]*?>")
 var brokenBeginTags = regexp.MustCompile("^[^<]*?>")
 var brokenEndTags = regexp.MustCompile("<[^>]*?$")
 var spaces = regexp.MustCompile(" +")
+var tabEntities = regexp.MustCompile("(&#9;)+")
 
 func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
@@ -667,6 +668,7 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	text = brokenBeginTags.ReplaceAllString(text, "")
 	text = brokenEndTags.ReplaceAllString(text, "")
 	text = strings.Replace(text, "\t", " ", -1)
+	text = tabEntities.ReplaceAllString(text, " ")
 	text = strings.Replace(text, "\n", " ", -1)
 	text = spaces.ReplaceAllString(text, " ")
 	text = html.UnescapeString(text)
