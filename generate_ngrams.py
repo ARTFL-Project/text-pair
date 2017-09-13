@@ -39,7 +39,7 @@ class Ngrams:
     """Generate Ngrams"""
 
     def __init__(self, text_object_level="doc", ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, is_philo_db=True, debug=False):
+                 lowercase=True, debug=False):
         self.ngram = ngram
         self.skipgram = skipgram
         self.numbers = numbers
@@ -55,9 +55,6 @@ class Ngrams:
             self.stopwords = self.__get_stopwords(stopwords)
         else:
             self.stopwords = set()
-        self.is_philo_db = is_philo_db
-        if DB is None:
-            self.is_philo_db = False
         self.text_object_level = text_object_level
         self.debug = debug
         self.input_path = ""
@@ -123,30 +120,31 @@ class Ngrams:
     def __get_metadata(self, text_id):
         """Pull metadata from PhiloLogic DB based on position of ngrams in file"""
         metadata = {}
-        if self.is_philo_db is True:
-            philo_db = DB(os.path.join(self.input_path, "data"), cached=False)
-            try:
-                text_object = philo_db[text_id.split('_')]
-                for field in philo_db.locals["metadata_fields"]:
-                    metadata[field] = str(text_object[field])
-            except AttributeError:
-                pass
+        philo_db = DB(os.path.join(self.input_path, "data"), cached=False)
+        try:
+            text_object = philo_db[text_id.split('_')]
+            for field in philo_db.locals["metadata_fields"]:
+                metadata[field] = str(text_object[field])
+        except AttributeError:
+            pass
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, files, output_path, db_path=None, metadata=None, workers=4, ram="20%"):
-        """Generate n-grams. Takes a list of files as an argument."""
+
+    def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="20%"):
+        """Generate n-grams."""
+        files = glob(str(Path(file_path).joinpath("*")))
         os.system('rm -rf %s/' % output_path)
         os.system('mkdir -p %s' % output_path)
         os.system("mkdir %s/index" % output_path)
         os.system('mkdir {}/temp'.format(output_path))
-        if db_path is None and self.is_philo_db is True:
+        if db_path is None and is_philo_db is True:
             self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
         else:
             self.input_path = db_path
         self.output_path = output_path
         if metadata is None:
-            if self.is_philo_db is False:
+            if is_philo_db is False:
                 print("No metadata provided, only the filename will be used as metadata")
                 combined_metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
                 self.metadata_done = True
@@ -155,8 +153,6 @@ class Ngrams:
         else:
             self.metadata_done = True
             combined_metadata = metadata
-        if text_object_level != "doc":
-            self.text_object_level = text_object_level
 
         print("\nGenerating ngrams...", flush=True)
         pool = Pool(workers)
@@ -313,7 +309,7 @@ class Ngrams:
                 word = self.__normalize(word, stemmer, lemmatizer)
                 if len(word) < 2 or word in self.stopwords:
                     continue
-                position = word_obj["philo_id"]
+                position = word_obj["position"]
                 if self.text_object_level == 'doc':
                     text_id = position.split()[0]
                 else:
@@ -424,22 +420,20 @@ def parse_command_line():
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     optional.add_argument("--skipgram", help="use skipgrams", action='store_true', default=False)
-    optional.add_argument("--db_name", help="path to db", type=str, default="DataBase.db")
+    optional.add_argument("--db_name", help="path to db", type=str, default="")
     args = vars(parser.parse_args())
     if len(sys.argv[1:]) == 0:  # no command line args were provided
         parser.print_help()
         exit()
-    if args["is_philo_db"] is True:
-        args["file_path"] = TRIM_LAST_SLASH.sub("", args["file_path"])
-        file_path = str(Path(args["file_path"]).joinpath("*"))
-        args["files"] = sorted(glob(file_path))
-    else:
-        args["files"] = glob(Path(args["file_path"]).joinpath("*"))
     return args
 
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
     NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
-    NGRAM_GENERATOR.generate2(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"], db_name=ARGS["db_name"], db_path=ARGS["db_name"])
-    
+    if ARGS["db_name"]:
+        NGRAM_GENERATOR.generate2(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"], db_name=ARGS["db_name"], db_path=ARGS["db_name"])
+    else:
+
+        NGRAM_GENERATOR.generate(ARGS["file_path"], ARGS["output_path"], is_philo_db=ARGS["is_philo_db"],
+                             metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])

@@ -14,6 +14,7 @@ from lxml import etree
 from multiprocess import Pool
 from tqdm import tqdm
 
+
 DEFAULT_DOC_XPATHS = {
     "author": [
         ".//sourceDesc/bibl/author[@type='marc100']", ".//sourceDesc/bibl/author[@type='artfl']",
@@ -129,7 +130,7 @@ def convert_entities(text):
 def parse_command_line():
     """Command line parsing function"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--files", help="path to source files from which to compare",
+    parser.add_argument("--file_path", help="path to source files from which to compare",
                         type=str, default="")
     parser.add_argument("--output_path", help="output path for ngrams and sequence alignment",
                         type=str, default="./")
@@ -137,20 +138,20 @@ def parse_command_line():
                         type=int, default=4)
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
     args = parser.parse_args()
-    args.files = glob(str(Path(args.files).joinpath("*")))
-    return args.files, args.output_path, args.cores, args.debug
-
+    return args
 
 class TEIParser:
 
-    def __init__(self, files, output_path="./", cores=4, debug=False):
-        if os.path.exists(output_path):
+    def __init__(self, file_path, output_path="./", cores=4, debug=False):
+        if os.path.exists(str(output_path)):  # we convert to string in case it's a PosixPath type
             print("{} exists. Please delete or change the output path before rerunning this script.".format(output_path))
             exit()
         else:
             os.system("mkdir -p {}/metadata".format(output_path))
             os.system("mkdir -p {}/texts".format(output_path))
-        self.output_path = output_path
+        self.text_path = str(Path(output_path).joinpath("texts"))
+        self.metadata_path = str(Path(output_path).joinpath("metadata/metadata.json"))
+        files = glob(str(Path(file_path).joinpath("*")))
         self.files = list(zip(range(len(files)), files))
         self.workers = cores
         self.debug = debug
@@ -162,10 +163,10 @@ class TEIParser:
         pool = Pool(self.workers)
         with tqdm(total=len(self.files)) as pbar:
             for file_id, local_metadata, invalid_file in pool.imap_unordered(self.parse_header, self.files):
-                if local_metadata:
-                    metadata[file_id]= local_metadata
                 if invalid_file:
                     invalid_files.append((file_id, invalid_file))
+                else:
+                    metadata[file_id]= local_metadata
                 pbar.update()
         pool.close()
         pool.join()
@@ -173,27 +174,29 @@ class TEIParser:
             for f in invalid_files:
                 self.files.remove(f)
                 print("{} has no valid TEI header or contains invalid data: removing from parsing...".format(f[1]))
-        with open(os.path.join(self.output_path, "metadata/metadata.json"), "w") as metadata_output:
+        with open(self.metadata_path, "w") as metadata_output:
             dump(metadata, metadata_output)
 
     def parse_header(self, file_with_id, header_xpaths=DEFAULT_DOC_XPATHS):
         file_id, file = file_with_id
-        load_metadata = []
         metadata_xpaths = header_xpaths
-        data = {"filename": os.path.basename(file)}
+        metadata = {"filename": file}
         header = ""
         if os.path.isdir(file):
-            return file_id, load_metadata, file
-        with open(file) as text_file:
-            try:
-                file_content = "".join(text_file.readlines())
-            except UnicodeDecodeError:
-                return file_id, load_metadata, file
+            return file_id, metadata, file
+        try:
+            with open(file) as text_file:
+                try:
+                    file_content = "".join(text_file.readlines())
+                except UnicodeDecodeError:
+                    return file_id, metadata, file
+        except PermissionError:
+            return file_id, metadata, file
         try:
             start_header_index = re.search(r'<teiheader', file_content, re.I).start()
             end_header_index = re.search(r'</teiheader', file_content, re.I).start()
         except AttributeError:  # tag not found
-            return file_id, load_metadata, file
+            return file_id, metadata, file
         header = file_content[start_header_index:end_header_index]
         header = convert_entities(header)
         if self.debug:
@@ -211,12 +214,12 @@ class TEIParser:
                         elements = tree.findall(xp_prefix)
                         for el in elements:
                             if el is not None and el.get(attr_name, ""):
-                                data[field] = el.get(attr_name, "")
+                                metadata[field] = el.get(attr_name, "")
                                 break
                     else:
                         el = tree.find(xpath)
                         if el is not None and el.text is not None:
-                            data[field] = el.text
+                            metadata[field] = el.text
                             break
             trimmed_metadata_xpaths = [
                 (metadata_type, xpath, field)
@@ -224,14 +227,13 @@ class TEIParser:
                 if metadata_type in metadata_xpaths for field in metadata_xpaths[metadata_type]
                 for xpath in metadata_xpaths[metadata_type][field]
             ]
-            data = self.create_year_field(data)
+            metadata = self.create_year_field(metadata)
             if self.debug:
                 print(data)
-            data["options"] = {"metadata_xpaths": trimmed_metadata_xpaths}
-            load_metadata.append(data)
+            metadata["options"] = {"metadata_xpaths": trimmed_metadata_xpaths}
         except etree.XMLSyntaxError:
-            return file_id, load_metadata, file
-        return file_id, load_metadata, ""
+            return file_id, metadata, file
+        return file_id, metadata, ""
 
     def create_year_field(self, metadata):
         year_finder = re.compile(r'^.*?(\d{4}).*')  # we are assuming dates from 1000 AC
@@ -258,13 +260,14 @@ class TEIParser:
 
     def parse_file(self, file_with_id):
         file_id, file = file_with_id
-        with open(os.path.join(self.output_path, "texts", str(file_id)), "w") as output_file:
+        with open(os.path.join(self.text_path, str(file_id)), "w") as output_file:
             with open(file) as text_file:
                 text_content = text_file.read()
             text_content = self.prepare_content(text_content)
             bytes_read_in = 0
             line_count = 0
             in_the_text = False
+            word_count = 0
             for line in text_content.split("\n"):
                 if text_tag.search(line) or doc_body_tag.search(line) or body_tag.search(line):
                     in_the_text = True
@@ -274,8 +277,10 @@ class TEIParser:
                         bytes_read_in += len(line.encode('utf8'))
                         continue  # we ignore all tags
                     else:
-                        self.word_handler(line, bytes_read_in, output_file)
+                        word_count = self.word_handler(line, bytes_read_in, output_file, file_id, word_count)
                         bytes_read_in += len(line.encode('utf8'))
+                else:
+                    bytes_read_in += len(line.encode('utf8'))
 
     def prepare_content(self, content):
         """Run various clean-ups before parsing."""
@@ -292,7 +297,7 @@ class TEIParser:
         content = content.replace('<', '\n<').replace('>', '>\n')
         return content
 
-    def word_handler(self, line, bytes_read_in, output_file, defined_words_to_index=False, words_to_index=[]):
+    def word_handler(self, line, bytes_read_in, output_file, file_id, word_count, defined_words_to_index=False, words_to_index=[]):
         """ Word handler. It takes an artbitrary string or words between two tags and
         splits them into words."""
         # We're splitting the line of words into distinct words separated by "\n"
@@ -339,13 +344,15 @@ class TEIParser:
                 word = word.replace("_", "").strip()
                 word = word.replace(' ', '')
                 if len(word):
-                    word_obj = dumps({"token": word, "start_byte": word_pos, "end_byte": current_pos})
+                    word_count += 1
+                    word_obj = dumps({"token": word, "start_byte": word_pos, "end_byte": current_pos, "position": "{} 0 0 0 0 0 {}".format(file_id, word_count)})
                     print(word_obj, file=output_file)
+        return word_count
 
 
 def main():
-    files, output_path, cores, debug = parse_command_line()
-    parser = TEIParser(files, output_path=output_path, cores=cores, debug=debug)
+    args = parse_command_line()
+    parser = TEIParser(args.file_path, output_path=args.output_path, cores=args.cores, debug=args.debug)
     parser.get_metadata()
     parser.get_text()
 
