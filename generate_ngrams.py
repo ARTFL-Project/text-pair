@@ -13,7 +13,7 @@ from collections import defaultdict, deque
 from glob import glob
 from pathlib import Path
 from math import floor
-
+import sqlite3
 from multiprocess import Pool
 from tqdm import tqdm
 
@@ -60,6 +60,8 @@ class Ngrams:
         self.input_path = ""
         self.output_path = ""
         self.metadata_done = False
+        self.db_name = ""
+        self.db_path=""
 
     def __get_stopwords(self, path):
         stopwords = set([])
@@ -128,6 +130,7 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
+
     def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="20%"):
         """Generate n-grams."""
         files = glob(str(Path(file_path).joinpath("*")))
@@ -182,6 +185,107 @@ class Ngrams:
 
         ngram_index_path = Path(self.output_path).joinpath("index/index.tab")
         return ngram_index_path
+
+    def generate2(self, files, output_path, metadata, workers, ram, db_name, db_path):
+        """Generate n-grams. Takes a list of files as an argument."""
+
+        print("\nStarting generation...")
+        self.db_name = db_name
+        self.db_path = db_path
+        self.createDB(db_path)
+        sqlDataBase = sqlite3.connect(db_path)
+        self.input_path = db_path
+        self.output_path = output_path
+
+        # Chargement des informations de metadate dans la table
+        if not (os.path.isfile(metadata)):  # Vérification que le fichier de metadata existe
+            print(metadata+" n'existe pas")
+        metadata_json = open(metadata, 'r')
+        with metadata_json as fichier:
+            data = json.load(fichier)
+            # On parcours les id des fichiers et on enregistre les informations dans la db
+            for id_json in data:
+                cursor = sqlDataBase.cursor()
+                cursor.execute("""INSERT INTO metadata(title, filename, author, create_date, year, pub_date, publisher)
+                                VALUES (:title, :filename, :author, :create_date, :year, :pub_date, :publisher)""",
+                                (data[id_json][0]["title"], data[id_json][0]["filename"], data[id_json][0]["author"]
+                                , data[id_json][0]["create_date"], data[id_json][0]["year"], data[id_json][0]["pub_date"]
+                                , data[id_json][0]["publisher"]), )
+                sqlDataBase.commit()
+            sqlDataBase.close()
+        print("Metadata loading in DataBase...")
+
+
+        # Pour chaque fichier de la liste
+        print("\nGenerating ngrams...")
+        for file_name in files:
+            print("File:" + file_name)
+            # Création des ngram
+            metadata_return = self.process_file2(file_name)
+
+
+    def process_file2(self, input_file):
+        """Convert each file into an inverted index of ngrams"""
+        if self.stemmer:
+            stemmer = Stemmer(self.language)  # we initialize here since it creates a deadlock with in self
+        else:
+            stemmer = None
+        if self.lemmatize:
+            lemmatizer = self.__get_lemmatizer()  # we initialize here since it is faster than copying between procs
+        else:
+            lemmatizer = None
+        doc_ngrams = []
+        metadata = {}
+        sqlDataBase = sqlite3.connect(self.db_path)
+        compteur_affiche=0
+
+        with open(input_file) as filehandle:
+            ngrams = deque([])
+            ngram_obj = deque([])
+            current_text_id = None
+            print ("Insert ngram to DataBase: *", end='')
+            cursor = sqlDataBase.cursor()
+            list_occurence=list()   # liste contenant les occurences de chaque ngram
+            list_ngram=list()        # liste contenant tous les ngram
+            list_ngramSql=list()        # liste contenant tous les ngram + id à ajouter dans sql
+
+            for line in filehandle:
+                compteur_affiche=compteur_affiche+1
+                if (compteur_affiche>5000):
+                    print ("*", end='')
+                    compteur_affiche=0
+                word_obj = json.loads(line.strip())
+                word = word_obj["token"]
+                word = self.__normalize(word, stemmer, lemmatizer)         #A décommenter apres tests pour voir si prise en compte de l'utf8
+                if len(word) <= 2 or word in self.stopwords:
+                    continue
+                position = []
+
+                ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
+                if len(ngram_obj) == self.ngram:
+                    if self.skipgram:
+                        ngram_obj_to_store = [ngram_obj[0], ngram_obj[-1]]
+                    else:
+                        ngram_obj_to_store = list(ngram_obj)
+                    current_ngram_list, _, start_bytes, end_bytes = zip(*ngram_obj_to_store)
+                    current_ngram = "_".join(current_ngram_list)
+                    hashed_ngram = hash32(current_ngram)
+                    ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
+                    doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
+                    ngram_obj.popleft()
+
+                    if not(current_ngram in list_ngram): # si le ngram n'existe pas on le sauvegarde pour le créer en l'ajoutant à la liste
+                        list_ngram.append(current_ngram)
+                        list_ngramSql.append((current_ngram, hashed_ngram))
+                    list_occurence.append((hashed_ngram, current_ngram, input_file, start_bytes[0], end_bytes[-1])) # dans tous les cas on ajoute cette occurence à la liste
+
+            # lorsqu'un fichier est totalement lu on execute les commandes sqlite pour ajouter les champs aux tables ngram et occurence
+            cursor.executemany("INSERT INTO ngram (ngram_contain, ngram_id) VALUES (?, ?)", list_ngramSql)
+            sqlDataBase.commit()
+            cursor.executemany("INSERT INTO occurence (ngram_id, ngram_contain, filename, start_byte, end_byte) VALUES (?, ?, ?, ?, ?)", list_occurence)
+            sqlDataBase.commit()
+            print()
+        return metadata
 
     def process_file(self, input_file):
         """Convert each file into an inverted index of ngrams"""
@@ -243,6 +347,53 @@ class Ngrams:
                 output.write("\n".join(sorted(doc_ngrams)))
         return metadata
 
+    def createDB(self, db_name):
+        try:
+            if (os.path.isfile(db_name)): # Si la base de donnée existe on l'écrase
+                print("DB exist in "+db_name+" supression and recreation")
+                os.remove(db_name)
+            sqlDataBase = sqlite3.connect(db_name)
+            cursor = sqlDataBase.cursor()
+
+            # Création de la table contenant les Ngram
+            # On peut rajouter des colonne par la suite avec la fonction ALTER TABLE (pour les Ngram>3)
+            cursor.execute("""CREATE TABLE ngram(
+                id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
+                ngram_contain TEXT,
+                ngram_id INTEGER
+                )""")
+            sqlDataBase.commit()
+
+            # La Table contenant les occurences des Ngram
+            cursor.execute("""CREATE TABLE occurence(
+                id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
+                ngram_id INTEGER,
+                ngram_contain TEXT,
+                filename TEXT,
+                start_byte TEXT,
+                end_byte TEXT
+                )""")
+            sqlDataBase.commit()
+
+            # Création de la table contenant les metadata
+            cursor.execute("""CREATE TABLE metadata(
+                id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
+                title TEXT,
+                filename TEXT,
+                author TEXT,
+                create_date TEXT,
+                year TEXT,
+                pub_date   TEXT,
+                publisher TEXT
+                )""")
+            sqlDataBase.commit()
+
+        except Exception as e:
+            print("Erreur Lors de la création de la DataBase")
+            sqlDataBase.rollback()
+
+        sqlDataBase.close()
+        print("Database created at: " + db_name)
 
 def parse_command_line():
     """Command line parsing function"""
@@ -269,6 +420,7 @@ def parse_command_line():
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     optional.add_argument("--skipgram", help="use skipgrams", action='store_true', default=False)
+    optional.add_argument("--db_name", help="path to db", type=str, default="")
     args = vars(parser.parse_args())
     if len(sys.argv[1:]) == 0:  # no command line args were provided
         parser.print_help()
@@ -278,7 +430,10 @@ def parse_command_line():
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
-    print(ARGS["output_path"])
     NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
-    NGRAM_GENERATOR.generate(ARGS["file_path"], ARGS["output_path"], is_philo_db=ARGS["is_philo_db"],
+    if ARGS["db_name"]:
+        NGRAM_GENERATOR.generate2(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"], db_name=ARGS["db_name"], db_path=ARGS["db_name"])
+    else:
+
+        NGRAM_GENERATOR.generate(ARGS["file_path"], ARGS["output_path"], is_philo_db=ARGS["is_philo_db"],
                              metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])
