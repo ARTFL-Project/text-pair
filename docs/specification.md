@@ -9,11 +9,11 @@ pour la transformation en ngrams.
 Un fichier contenant un objet en JSON par ligne, ex:
 
 ```JSON
-{"start_byte": 3633, "token": "je", "philo_id": "1 1 1 1 2 1 1 3633 1", "end_byte": 3635}
-{"start_byte": 3636, "token": "ne", "philo_id": "1 1 1 1 2 1 2 3636 1", "end_byte": 3638}
-{"start_byte": 3639, "token": "fais", "philo_id": "1 1 1 1 2 1 3 3639 1", "end_byte": 3643}
-{"start_byte": 3644, "token": "point", "philo_id": "1 1 1 1 2 1 4 3644 1", "end_byte": 3649}
-{"start_byte": 3650, "token": "ici", "philo_id": "1 1 1 1 2 1 5 3650 1", "end_byte": 3653}
+{"start_byte": 3633, "token": "je", "position": "1 1 1 1 2 1 1 3633 1", "end_byte": 3635}
+{"start_byte": 3636, "token": "ne", "position": "1 1 1 1 2 1 2 3636 1", "end_byte": 3638}
+{"start_byte": 3639, "token": "fais", "position": "1 1 1 1 2 1 3 3639 1", "end_byte": 3643}
+{"start_byte": 3644, "token": "point", "position": "1 1 1 1 2 1 4 3644 1", "end_byte": 3649}
+{"start_byte": 3650, "token": "ici", "position": "1 1 1 1 2 1 5 3650 1", "end_byte": 3653}
 ...
 ```
 
