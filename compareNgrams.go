@@ -357,7 +357,7 @@ func openJSONMetadata(fileLocation *string) map[string]map[string]string {
 		filePath = *fileLocation
 	}
 	jsonFile, err := ioutil.ReadFile(filePath)
-	checkErr(err)
+	checkErr(err, "openJSONMetadata")
 	metadata := make(map[string]map[string]string)
 	json.Unmarshal(jsonFile, &metadata)
 	if len(metadata) == 0 {
@@ -375,9 +375,9 @@ func getFiles(filePath string, metadata map[string]map[string]string, sortField 
 		filePath = "./" + filePath
 	}
 	directory, err := os.Open(filePath)
-	checkErr(err)
+	checkErr(err, "getFiles (opening directory)")
 	files, err := directory.Readdir(-1)
-	checkErr(err)
+	checkErr(err, "getFiles (reading directory)")
 	var filesToLoad []string
 	for _, fileInfo := range files {
 		if !fileInfo.IsDir() {
@@ -437,7 +437,7 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 		}
 		file, err := os.Open(filename)
 		defer file.Close()
-		checkErr(err)
+		checkErr(err, "compileMostCommonNgrams")
 		reader := bufio.NewReader(file)
 		var line string
 		for count := 0; count < *mostCommonNgramThreshold; count++ {
@@ -461,7 +461,7 @@ func getJSONDocs(fileLocations []string, prefixString string) []docIndex {
 	totalFiles := len(fileLocations)
 	for pos, fileLocation := range fileLocations {
 		jsonFile, err := ioutil.ReadFile(fileLocation)
-		checkErr(err)
+		checkErr(err, "getJSONDocs")
 		tempDoc := make(map[int32][][]int32)
 		json.Unmarshal(jsonFile, &tempDoc)
 		doc := make(map[int32][]indexedNgram)
@@ -486,7 +486,7 @@ func getJSONDocs(fileLocations []string, prefixString string) []docIndex {
 func loadNgramIndex(fileLocation string) map[int32]string {
 	file, err := os.Open(fileLocation)
 	defer file.Close()
-	checkErr(err)
+	checkErr(err, "loadNgramIndex")
 	reader := bufio.NewReader(file)
 	ngramIndex := make(map[int32]string)
 	var line string
@@ -544,7 +544,7 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, comm
 func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) (*os.File, []string, []string) {
 	os.MkdirAll(config.outputPath, 0755)
 	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignments_results.tab"))
-	checkErr(err)
+	checkErr(err, "createOutputFile")
 	var firstSourceKey string
 	for sourceKey := range sourceMetadata {
 		firstSourceKey = sourceKey
@@ -580,7 +580,7 @@ func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDoc
 	}
 	outputFile := fmt.Sprintf("%s_%s", sourceDocID, targetDocID)
 	debugOutput, err := os.Create(filepath.Join(debugOutputPath, outputFile))
-	checkErr(err)
+	checkErr(err, "createDebugOutputFile")
 	return debugOutput
 }
 
@@ -652,15 +652,15 @@ func alignmentToText(alignment *position, filename string, config *matchingParam
 // Get text passages using file location and start and end byte
 func getText(fileLocation *string, startByte int32, endByte int32) string {
 	f, err := os.Open(*fileLocation)
-	checkErr(err)
+	checkErr(err, fmt.Sprintf("getText (opening %s)", *fileLocation))
 	if startByte < 0 {
 		startByte = int32(0)
 	}
 	_, err = f.Seek(int64(startByte), 0)
-	checkErr(err)
+	checkErr(err, "getText (seeking in file)")
 	passage := make([]byte, endByte-startByte)
 	_, err = f.Read(passage)
-	checkErr(err)
+	checkErr(err, "getText (reading in file)")
 	f.Close()
 	passage = bytes.Trim(passage, "\x00")
 	text := string(passage)
@@ -946,8 +946,9 @@ func buildPercentMap(total int) map[int]int {
 	return percentSteps
 }
 
-func checkErr(err error) {
+func checkErr(err error, errorMessage string) {
 	if err != nil {
+		fmt.Printf("An error occured in following function %s. See error message below:\n", errorMessage)
 		log.Fatal(err)
 	}
 }
