@@ -16,9 +16,11 @@ from math import floor
 import sqlite3
 from multiprocess import Pool
 from tqdm import tqdm
+
 from mmh3 import hash as hash32
 from Stemmer import Stemmer
 from unidecode import unidecode
+
 try:
     from philologic.DB import DB
 except ImportError:
@@ -36,8 +38,8 @@ PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5
 class Ngrams:
     """Generate Ngrams"""
 
-    def __init__(self, ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, is_philo_db=True, text_object_level="doc", debug=False):
+    def __init__(self, text_object_level="doc", ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
+                 lowercase=True, is_philo_db=True, debug=False):
         self.ngram = ngram
         self.skipgram = skipgram
         self.numbers = numbers
@@ -153,6 +155,8 @@ class Ngrams:
         else:
             self.metadata_done = True
             combined_metadata = metadata
+        if text_object_level != "doc":
+            self.text_object_level = text_object_level
 
         print("\nGenerating ngrams...", flush=True)
         pool = Pool(workers)
@@ -183,7 +187,7 @@ class Ngrams:
         print("Cleaning up...")
         os.system("rm -r {}/temp".format(self.output_path))
 
-        ngram_index_path = os.path.join(self.output_path, "index/index.tab")
+        ngram_index_path = Path(self.output_path).joinpath("index/index.tab")
         return ngram_index_path
 
     def generate2(self, files, output_path, metadata, workers, ram, db_name, db_path):
@@ -192,9 +196,9 @@ class Ngrams:
         print("\nStarting generation...")
         self.db_name = db_name
         self.db_path = db_path
-        self.createDB(self.db_path)
-        sqlDataBase = sqlite3.connect(self.db_path)
-        self.input_path = self.db_path
+        self.createDB(db_path)
+        sqlDataBase = sqlite3.connect(db_path)
+        self.input_path = db_path
         self.output_path = output_path
 
         # Chargement des informations de metadate dans la table
@@ -207,9 +211,12 @@ class Ngrams:
             for id_json in data:
                 cursor = sqlDataBase.cursor()
                 cursor.execute("""INSERT INTO metadata(title, filename, author, create_date, year, pub_date, publisher)
-                                            VALUES(:title, :filename, :author, :create_date, :year, :pub_date, :publisher)""", data[id_json])
+                                VALUES (:title, :filename, :author, :create_date, :year, :pub_date, :publisher)""",
+                                (data[id_json][0]["title"], data[id_json][0]["filename"], data[id_json][0]["author"]
+                                , data[id_json][0]["create_date"], data[id_json][0]["year"], data[id_json][0]["pub_date"]
+                                , data[id_json][0]["publisher"]), )
                 sqlDataBase.commit()
-        sqlDataBase.close()
+            sqlDataBase.close()
         print("Metadata loading in DataBase...")
 
 
@@ -218,8 +225,7 @@ class Ngrams:
         for file_name in files:
             print("File:" + file_name)
             # Création des ngram
-            test_path = "1"
-            test_return = self.process_file2(file_name)
+            metadata_return = self.process_file2(file_name)
 
 
     def process_file2(self, input_file):
@@ -257,26 +263,7 @@ class Ngrams:
                 word = self.__normalize(word, stemmer, lemmatizer)         #A décommenter apres tests pour voir si prise en compte de l'utf8
                 if len(word) <= 2 or word in self.stopwords:
                     continue
-                position = word_obj["philo_id"]
-
-                ''' Utilité ?
-                if self.text_object_level == 'doc':
-                    text_id = position.split()[0]
-                else:
-                    text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.text_object_level]])
-                if current_text_id is None:
-                    current_text_id = text_id
-                if current_text_id != text_id:
-                    if self.debug:
-                        self.__write_to_disk(ngrams, current_text_id)
-                    print("Storing %s: %s..." %(self.text_object_level, current_text_id))
-                    if self.metadata_done is False:
-                        metadata[current_text_id] = self.__get_metadata(current_text_id)
-                    self.__build_text_index(ngrams, current_text_id)
-                    ngrams = deque([])
-                    ngram_obj = deque([])
-                    current_text_id = text_id
-                '''
+                position = []
 
                 ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
                 if len(ngram_obj) == self.ngram:
@@ -302,15 +289,6 @@ class Ngrams:
             cursor.executemany("INSERT INTO occurence (ngram_id, ngram_contain, filename, start_byte, end_byte) VALUES (?, ?, ?, ?, ?)", list_occurence)
             sqlDataBase.commit()
             print()
-            ''' Utilité ?
-            if self.text_object_level == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
-                if self.debug:
-                    self.__write_to_disk(ngrams, current_text_id)
-                if self.metadata_done is False:
-                    metadata[current_text_id] = self.__get_metadata(current_text_id)
-                self.__build_text_index(ngrams, current_text_id)
-            '''
-
         return metadata
 
     def process_file(self, input_file):
@@ -345,7 +323,6 @@ class Ngrams:
                 if current_text_id != text_id:
                     if self.debug:
                         self.__write_to_disk(ngrams, current_text_id)
-                    print("Storing %s: %s..." %(self.text_object_level, current_text_id))
                     if self.metadata_done is False:
                         metadata[current_text_id] = self.__get_metadata(current_text_id)
                     self.__build_text_index(ngrams, current_text_id)
@@ -422,222 +399,6 @@ class Ngrams:
         sqlDataBase.close()
         print("Database created at: " + db_name)
 
-    def pretrait(self, path):
-        """Convert a TEI file into a philologic4 database"""
-        directory_path=path+"/XML/"
-        result_path=path+"/pretrait/"
-        metadata_path=result_path+"metadata/"
-        data_path=result_path+"data/"
-        data_text_path=data_path+"/TEXT/"
-        words_path=data_path+"/WORDS/"
-        metadata_text="{" # contient les metadata de tous les fichiers
-        dirs = os.listdir(directory_path)
-        count_file=1
-
-        # Création des fichiers si besoin
-        try:
-            os.makedirs(metadata_path)
-        except:
-            pass
-        try:
-            os.makedirs(data_text_path)
-        except:
-            pass
-        try:
-            os.makedirs(words_path)
-        except:
-            pass
-
-        # Début de la gestion de chaque fichier xml
-        for file in dirs:
-            file_path=directory_path+file
-            print("fichier: "+file_path)
-            count_byte=0
-            fichier = open(file_path,'rb')
-            data = fichier.read()
-            max_byte=len(data)
-            print("taille: "+str(max_byte))
-            temp_accent=""
-            balise=""
-            namespace=""
-            namespace_flag=0    # indique si l'on est dans un namespace ou non
-            balise_flag=0   # Indique si l'on est dans une balise ou non
-            text_flag=0     # indique si l'on est entre deux balise ou non
-            body_flag=0     # indique si l'on est dans le corps du tei ou non
-            metadata={}     # hash contenant les metadata du fichier en cours
-            text_file=""    # Contient l'entièreté des caractères du fichier
-            caractere=""    # Le caractère en cours d'utilisation
-            text_inter=""   # Contient le texte entre deux balise
-            text_prec=""    # Contient le metexte précédent une balise
-            text_oeuvre=""  # Contient l'entiereté des textes du fichier
-            words=""        # contient l'entièreté des mots du fichier ainsi que leurs début et fin en byte
-            words_actual="" # contient le mot en cours de traitement
-            words_start=0   # début du mot
-            words_end=0     # fin du mot
-            words_flag=0    # indique si l'on est dans un mot ou non
-            indicateur_duree=0 # permet d'indiquer une durée à l'utilisateur
-
-            # Construction du texte à partir du fichier binaire
-            print("Lecture du fichier binaire: ", end='')
-            while(count_byte<max_byte):
-                indicateur_duree=indicateur_duree+1
-                if(indicateur_duree==10000):
-                    print ("*", end='')
-                    indicateur_duree=0
-                fichier.seek(count_byte,0)
-                a = fichier.read(1)
-
-                # Gestion des caractères multioctet
-                try:
-                    caractere=a.decode("utf-8")
-                except:
-                    if(temp_accent == ""):
-                        temp_accent=a
-                    else:
-                        temp_accent=temp_accent+a
-                        try:
-                            caractere=temp_accent.decode("utf-8")
-                            temp_accent=""
-                        except:
-                            pass
-                text_file=text_file+caractere
-
-                # Capture des balises, du namespace
-                if(balise_flag==1):
-                    if(caractere == ">"):
-                        text_flag=1
-                        namespace_flag=0
-                        namespace=""
-
-                        # Interpretation des balises
-                        # Remplissage des metadonnée
-                        if(balise == '/title' and "title" not in metadata):
-                            metadata["title"]=text_prec
-                        if(balise == '/publisher' and "publisher" not in metadata):
-                            metadata["publisher"]=text_prec
-                        if(balise == '/author' and "author" not in metadata):
-                            metadata["author"]=text_prec
-                        if(balise == '/date' and "date" not in metadata):
-                            metadata["date"]=text_prec
-                        if(balise == '/head' and "head" not in metadata):
-                            metadata["head"]=text_prec
-                        if(balise == '/create_date' and "create_date" not in metadata):
-                            metadata["create_date"]=text_prec
-                        if(balise == '/pub_date' and "pub_date" not in metadata):
-                            metadata["pub_date"]=text_prec
-                        if(balise == '/type' and "type" not in metadata):
-                            metadata["type"]=text_prec
-
-                        if(balise == 'text'):
-                            body_flag=1
-
-                        # Remplissage du texte de l'oeuvre
-                        if(body_flag==1 and (balise=='/p' or balise=='/hi' \
-                        or balise=='/salute' or balise=='/titlePart'\
-                        or balise=='/epigraph' or balise=='/head' or balise=='/docAuthor'\
-                        or balise=='pb' or balise=='hi' or balise=='/dateline')):
-                            if(balise=='pb' or balise=='hi' or balise=='/hi'):
-                                text_oeuvre=text_oeuvre+text_prec
-                            else:
-                                text_oeuvre=text_oeuvre+"\n"+text_prec
-                        balise_flag=0
-                        balise=""
-
-                    elif(caractere == " "):
-                        if(namespace_flag==0):
-                            namespace_flag=1
-                        else:
-                            namespace=namespace+caractere
-                    elif(namespace_flag==1):
-                        namespace=namespace+caractere
-                    else:
-                        balise=balise+caractere
-
-                elif(caractere == "\t"):
-                    next
-                elif(caractere == "\n"):
-                    text_inter=text_inter+" "
-
-                else:
-                    if(caractere == "<"):
-                        text_prec=text_inter
-                        text_inter=""
-                        balise_flag=1
-                    else:
-                        text_inter=text_inter+caractere
-
-                    # Ajout dans le fichier de mot words
-                    if(body_flag==1):
-                        if(caractere.isalpha() or temp_accent!=""):
-                            if(words_flag==0):
-                                words_flag=1
-                                words_start=count_byte
-                                if(caractere.isalpha()):
-                                    words_actual=caractere
-                            else:
-                                words_actual=words_actual+caractere
-                        else:
-                            if(words_flag==1 or caractere == "<"):
-                                words_flag=0
-                                words_end=count_byte
-                                if(words_actual!=""):
-                                    words=words+"{\"token\": \""+words_actual+\
-                                    "\", \"start_byte\": \""+str(words_start)+\
-                                    "\", \"end_byte\": \""+str(words_end)+\
-                                    "\", \"philo_id\": \"0 0 0 0 0 0 0 0 0\"}\n"
-                                words_actual=""
-
-                count_byte=count_byte+1
-                caractere=""
-            #fin de la boucle while (binaire - caractère)
-
-            #Enregistrement des metadonnée du fichier traité
-            metadata["filename"]=os.path.abspath(file_path)
-            if("title" not in metadata):
-                metadata["title"]=""
-            if("publisher" not in metadata):
-                metadata["publisher"]=""
-            if("author" not in metadata):
-                metadata["author"]=""
-            if("date" not in metadata):
-                metadata["date"]=""
-            if("head" not in metadata):
-                metadata["head"]=""
-            if("create_date" not in metadata):
-                metadata["create_date"]=""
-            if("pub_date" not in metadata):
-                metadata["pub_date"]=""
-            if("type" not in metadata):
-                metadata["type"]=""
-            metadata["metadata_all"]="\""+str(count_file)+"\" :{\"titre\": \""+\
-            metadata.get("title")+"\", \"filename\": \""+metadata.get("filename")+"\", \"publisher\": \""+\
-            metadata.get("publisher")+"\", \"author\": \""+metadata.get("author")+"\", \"year\" : \""+\
-            metadata.get("date")+"\", \"head\": \""+metadata.get("head")+"\", \"create_date\": \""+\
-            metadata.get("create_date")+"\", \"pub_date\": \""+metadata.get("pub_date")+"\", \"type\": \""+\
-            metadata.get("type")+"\"}"
-            if(count_file>1):
-                metadata_text=metadata_text+", "
-            metadata_text=metadata_text+metadata.get("metadata_all")
-
-            # Impression du fichier texte correspondant au tei traité
-            with open(data_text_path+str(count_file), "w") as text_output:
-                text_output.write(text_oeuvre)
-            # Impression du fichier words correspondant au tei traité
-            with open(words_path+str(count_file), "w") as words_output:
-                words_output.write(words)
-            print(" byte: "+str(count_byte))
-
-
-            fichier.close()
-            count_file=count_file+1
-        #fin de la boucle for (fichier)
-
-        # Impression des metadata de l'ensemble du corpus traité
-        metadata_text=metadata_text+"}"
-        with open(metadata_path+"metadata.json", "w") as metadata_file:
-            metadata_file.write(metadata_text)
-        #fin de la fonction
-
 def parse_command_line():
     """Command line parsing function"""
     parser = argparse.ArgumentParser(prog="generate_ngrams")
@@ -645,10 +406,10 @@ def parse_command_line():
     required = parser.add_argument_group('required arguments')
     optional = parser.add_argument_group('optional arguments')
     optional.add_argument("--config", help="configuration file used to override defaults",
-                          type=str, default="config.ini")
+                          type=str, default="")
     optional.add_argument("--cores", help="number of cores used for parsing and generating ngrams",
                           type=int, default=4)
-    required.add_argument("--file_path", help="path to source files",
+    required.add_argument("--file_path", help="path to files",
                           type=str)
     optional.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
     optional.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%%",
@@ -661,8 +422,7 @@ def parse_command_line():
     optional.add_argument("--output_path", help="output path of ngrams",
                           type=str, default="./ngrams")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
-    optional.add_argument("--stopwords", help="path to stopword list", type=str,
-                          default="StopWords/french.txt")
+    optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     optional.add_argument("--skipgram", help="use skipgrams", action='store_true', default=False)
     optional.add_argument("--db_name", help="path to db", type=str, default="DataBase.db")
     args = vars(parser.parse_args())
@@ -680,9 +440,6 @@ def parse_command_line():
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
-    print(ARGS["output_path"])
-    # Fonction chargeant les parametre du fichier config.txt
-    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], text_object_level=ARGS["text_object_level"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
-    #NGRAM_GENERATOR.pretrait("source")
-    NGRAM_GENERATOR.generate2(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"], db_name=ARGS["db_name"], db_path=ARGS["output_path"]+"/"+ARGS["db_name"])
-    #NGRAM_GENERATOR.generate(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"])
+    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
+    NGRAM_GENERATOR.generate2(ARGS["files"], ARGS["output_path"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"], db_name=ARGS["db_name"], db_path=ARGS["db_name"])
+    
