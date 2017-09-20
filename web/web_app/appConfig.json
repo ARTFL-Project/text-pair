@@ -1,0 +1,66 @@
+{
+    "apiServer": "http://condorcet.uchicago.edu/alignment/",
+    "databaseName": "frantext",
+    "databaseLabel": "Frantext alignments",
+    "metadataFields": {
+        "source": [
+            {
+                "label": "Title",
+                "value": "source_title"
+            },
+            {
+                "label": "Author",
+                "value": "source_author"
+            },
+            {
+                "label": "Year",
+                "value": "source_year"
+            }
+        ],
+        "target": [
+            {
+                "label": "Title",
+                "value": "target_title"
+            },
+            {
+                "label": "Author",
+                "value": "target_author"
+            },
+            {
+                "label": "Year",
+                "value": "target_year"
+            }
+        ]
+    },
+    "facetsFields": {
+        "source": [
+            {
+                "label": "Title",
+                "value": "source_title"
+            },
+            {
+                "label": "Author",
+                "value": "source_author"
+            },
+            {
+                "label": "Year",
+                "value": "source_year"
+            }
+        ],
+        "target": [
+            {
+                "label": "Title",
+                "value": "target_title"
+            },
+            {
+                "label": "Author",
+                "value": "target_author"
+            },
+            {
+                "label": "Year",
+                "value": "target_year"
+            }
+        ]
+    }
+
+}

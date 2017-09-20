@@ -6,17 +6,22 @@ import re
 import sys
 from collections import OrderedDict
 from pathlib import Path
+import json
 
 from flask import Flask, redirect
 from flask import render_template
 from flask import request
+from flask import send_from_directory
+from flask import jsonify
 
 from philologic.runtime.link import byte_range_to_link
 import psycopg2
 import psycopg2.extras
 
-APP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app"))
-application = Flask(__name__)
+ROOT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./")
+application = Flask(__name__,
+                    template_folder=ROOT_PATH,
+                    static_folder=os.path.join(ROOT_PATH, "assets"))
 
 
 class formArguments():
@@ -53,22 +58,27 @@ class formArguments():
         return repr(self.dict)
 
 
-@application.route("/<path:db_table>")
-def search(db_table):
-    return send_from_directory(APP_PATH, "index.html")
+@application.route("/")
+def index():
+    return render_template("index.html")
 
-@app.route('/<path:db_table:path>', methods=['GET'])
-def static_proxy(path):
-    return send_from_directory(root, path)
+# @application.route('/<path:path>', methods=['GET'])
+# def return_app(path):
+#     main_config = load_json("{}/db_configs.json".format(ROOT_PATH))
+#     path = path.split('/')[0]
+#     return redirect(main_config[path])
 
-@application.route("/<path:db_table>/results", methods=["GET"])
-def results(db_table):
+@application.route("/search_alignments/", methods=["GET"])
+def search_alignments():
     search_args = formArguments()
     page = 1
     id_anchor = 0
     direction = "next"
+    db_table = ""
     for key, value in request.args.items():
-        if key == "page":
+        if key == "db_table":
+            db_table = value
+        elif key == "page":
             try:
                 page = int(value)
             except TypeError:
@@ -97,15 +107,13 @@ def results(db_table):
     alignments = []
     for pos, row in enumerate(CURSOR):
         metadata = {key: row[key] for key in column_names}
-        metadata["source_link_to_philologic"] = "{}/link_to_philologic?filename={}&doc_id={}&start_byte={}&end_byte={}".format(
-            db_table,
+        metadata["source_link_to_philologic"] = "link_to_philologic?filename={}&doc_id={}&start_byte={}&end_byte={}".format(
             metadata["source_filename"],
             metadata["source_doc_id"].replace("_", " "),
             metadata["source_start_byte"],
             metadata["source_end_byte"]
         )
-        metadata["target_link_to_philologic"] = "{}/link_to_philologic?filename={}&doc_id={}&start_byte={}&end_byte={}".format(
-            db_table,
+        metadata["target_link_to_philologic"] = "link_to_philologic?filename={}&doc_id={}&start_byte={}&end_byte={}".format(
             metadata["target_filename"],
             metadata["target_doc_id"].replace("_", " "),
             metadata["target_start_byte"],
@@ -115,23 +123,60 @@ def results(db_table):
     if direction == "previous":
         alignments.reverse()
     previous_url = ""
-    current_path = re.sub(r'&(page|id_anchor|direction)=(previous|next|\d*)', '', request.full_path)
-    full_url = "{}{}".format(request.script_root, current_path)
+    current_path = re.sub(r'&(page|id_anchor|direction)=(previous|next|\d*)', '', request.path)
     if page > 1:
-        previous_url = "{}&page={}&id_anchor={}&direction=previous".format(full_url, page-1, alignments[0]["rowid_ordered"])
+        previous_url = "{}&page={}&id_anchor={}&direction=previous".format(current_path, page-1, alignments[0]["rowid_ordered"])
     try:
-        next_url = "{}&page={}&id_anchor={}&direction=next".format(full_url, page+1, alignments[-1]["rowid_ordered"])
+        next_url = "{}&page={}&id_anchor={}&direction=next".format(current_path, page+1, alignments[-1]["rowid_ordered"])
     except IndexError:
         next_url = ""
     start_position = 0
     if page > 1:
         start_position = 50 * (page - 1)
-    return render_template("results.html", db_table="", alignments=alignments, form_args=search_args, page=page,
-                           previous_url=previous_url, next_url=next_url, start_position=start_position)
+    result_object = {"alignments": alignments, "page": page, "next_url": next_url, "previous_url": previous_url, "start_position": start_position}
+    response = jsonify(result_object)
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
 
-@application.route("/<path:db_table>/link_to_philologic", methods=["GET"])
-def link_to_philologic(db_table):
+@application.route("/facets/", methods=["GET"])
+def facets():
+    search_args = formArguments()
+    db_table = ""
+    facet = ""
+    for key, value in request.args.items():
+        if key == "page" or key == "id_anchor" or key == "direction":
+            continue
+        elif key == "db_table":
+            db_table = value
+        elif key == "facet":
+            facet = value
+        else:
+            search_args[key] = value
+    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
+        facet, db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), facet)
+    cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
+    results = []
+    for result in cursor:
+        field_name, count = result
+        results.append({
+            "field": field_name,
+            "count": count
+        })
+    response = jsonify({"facet": facet, "results": results})
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
+
+@application.route("/link_to_philologic", methods=["GET"])
+def link_to_philologic():
     db_path = str(Path(request.args["filename"]).parent).replace("data/TEXT", "")
     print(db_path, file=sys.stderr)
     philologic_link = byte_range_to_link(db_path, request.args["doc_id"], int(request.args["start_byte"]), int(request.args["end_byte"]))
-    return redirect(philologic_link[0])
+    response = jsonify({"link": philologic_link})
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
+
+def load_json(path):
+    with open(path) as p:
+        return json.load(p)
