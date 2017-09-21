@@ -148,6 +148,7 @@ export default {
     },
     methods: {
         fetchData() {
+            this.results = { alignments: [] } // clear alignments with new search
             this.facetResults = null // clear facet results with new search
             let params = this.cloneObject(this.$route.query)
             params.db_table = this.$globalConfig.databaseName
@@ -206,6 +207,7 @@ export default {
             queryParams[fieldName] = value
             EventBus.$emit("urlUpdate", queryParams)
             this.facetResults = null
+            this.results = { alignments: [] }
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
         beforeEnter: function(el) {

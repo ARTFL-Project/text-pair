@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """Routing and search code for sequence alignment"""
 
+import json
 import os
 import re
 import sys
+from ast import literal_eval as eval
 from collections import OrderedDict
 from pathlib import Path
-import json
 
-from flask import Flask, redirect
-from flask import render_template
-from flask import request
-from flask import send_from_directory
-from flask import jsonify
-
-from philologic.runtime.link import byte_range_to_link
 import psycopg2
 import psycopg2.extras
+from flask import (Flask, jsonify, redirect, render_template, request,
+                   send_from_directory)
+from philologic.runtime.link import byte_range_to_link
 
 ROOT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./")
 application = Flask(__name__,
@@ -33,6 +30,14 @@ class formArguments():
     def __getitem__(self, item):
         if item in self.dict:
             return self.dict[item]
+        elif item == "page":
+            return 1
+        elif item == "id_anchor":
+            return 0
+        elif item == "full":
+            return False
+        elif item == "direction":
+            return "next"
         else:
             return ""
 
@@ -45,6 +50,12 @@ class formArguments():
     def __iter__(self):
         for k in self.dict:
             yield k
+
+    def __bool__(self):
+        if self.dict:
+            return True
+        else:
+            return False
 
     def items(self):
         for k, v in self.dict.items():
@@ -70,36 +81,15 @@ def index():
 
 @application.route("/search_alignments/", methods=["GET"])
 def search_alignments():
-    search_args = formArguments()
-    page = 1
-    id_anchor = 0
-    direction = "next"
-    db_table = ""
-    for key, value in request.args.items():
-        if key == "db_table":
-            db_table = value
-        elif key == "page":
-            try:
-                page = int(value)
-            except TypeError:
-                pass
-        elif key == "id_anchor":
-            try:
-                id_anchor = int(value)
-            except TypeError:
-                pass
-        elif key == "direction":
-            direction = value or "next"
-        else:
-            search_args[key] = value
-    if direction == "next":
+    search_args, other_args = parse_args(request)
+    if other_args.direction == "next":
         query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-                 o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(db_table, db_table,
-                " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), id_anchor)
+                o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
+                " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
     else:
         query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-                 o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(db_table, db_table,
-                " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), id_anchor)
+                o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(db_table, db_table,
+                " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
     DATABASE = psycopg2.connect(user="alignments", password="martini", database="alignments")
     CURSOR = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     CURSOR.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
@@ -120,42 +110,56 @@ def search_alignments():
             metadata["target_end_byte"]
         )
         alignments.append(metadata)
-    if direction == "previous":
+    if other_args.direction == "previous":
         alignments.reverse()
     previous_url = ""
     current_path = re.sub(r'&(page|id_anchor|direction)=(previous|next|\d*)', '', request.path)
-    if page > 1:
-        previous_url = "{}&page={}&id_anchor={}&direction=previous".format(current_path, page-1, alignments[0]["rowid_ordered"])
+    if other_args.page > 1:
+        previous_url = "{}&page={}&id_anchor={}&direction=previous".format(current_path, other_args.page-1, alignments[0]["rowid_ordered"])
     try:
-        next_url = "{}&page={}&id_anchor={}&direction=next".format(current_path, page+1, alignments[-1]["rowid_ordered"])
+        next_url = "{}&page={}&id_anchor={}&direction=next".format(current_path, other_args.page+1, alignments[-1]["rowid_ordered"])
     except IndexError:
         next_url = ""
     start_position = 0
-    if page > 1:
-        start_position = 50 * (page - 1)
-    result_object = {"alignments": alignments, "page": page, "next_url": next_url, "previous_url": previous_url, "start_position": start_position}
+    if other_args.page > 1:
+        start_position = 50 * (other_args.page - 1)
+    result_object = {"alignments": alignments, "page": other_args.page, "next_url": next_url, "previous_url": previous_url, "start_position": start_position}
     response = jsonify(result_object)
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
+
+@application.route("/search_alignments_full/", methods=["GET"])
+def search_alignments_full():
+    search_args, other_args = parse_args(request)
+    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    if search_args is True:
+        query = "SELECT {}, {} FROM {} WHERE {} != '' and {} != '' and {}".format(
+            other_args.source, other_args.target, other_args.db_table, other_args.source, other_args.target,
+            " and ".join([i + " ilike %s " for i in search_args if search_args[i]]))
+        cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
+    else:
+        query = "SELECT {}, {} FROM {} WHERE {} != '' and {} != ''".format(
+            other_args.source, other_args.target, other_args.db_table, other_args.source, other_args.target)
+        cursor.execute(query)
+    results = []
+    for source, target in cursor:
+        results.append((source, target))
+    response = jsonify({
+        "source": other_args.source,
+        "target": other_args.target,
+        "results": results
+    })
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
 @application.route("/facets/", methods=["GET"])
 def facets():
-    search_args = formArguments()
-    db_table = ""
-    facet = ""
-    for key, value in request.args.items():
-        if key == "page" or key == "id_anchor" or key == "direction":
-            continue
-        elif key == "db_table":
-            db_table = value
-        elif key == "facet":
-            facet = value
-        else:
-            search_args[key] = value
+    search_args, other_args = parse_args(request)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
-        facet, db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), facet)
+        other_args.facet, other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.facet)
     cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
     results = []
     for result in cursor:
@@ -164,7 +168,7 @@ def facets():
             "field": field_name,
             "count": count
         })
-    response = jsonify({"facet": facet, "results": results})
+    response = jsonify({"facet": other_args.facet, "results": results})
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
@@ -176,6 +180,37 @@ def link_to_philologic():
     response = jsonify({"link": philologic_link})
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
+
+def parse_args(request):
+    search_args = formArguments()
+    other_args = formArguments()
+    for key, value in request.args.items():
+        if key == "full":
+            try:
+                other_args["full"] = eval(value.title())
+            except ValueError:
+                pass
+        if key == "db_table":
+            other_args["db_table"] = value
+        elif key == "page":
+            try:
+                other_args["page"] = int(value)
+            except TypeError:
+                pass
+        elif key == "id_anchor":
+            try:
+                other_args["id_anchor"] = int(value)
+            except TypeError:
+                pass
+        elif key == "direction":
+            other_args["direction"] = value or "next"
+        elif key == "facet":
+            other_args["facet"] = value
+        elif key == "source" or key == "target":
+            other_args[key] = value
+        else:
+            search_args[key] = value
+    return search_args, other_args
 
 def load_json(path):
     with open(path) as p:

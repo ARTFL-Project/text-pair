@@ -1,6 +1,7 @@
 import Vue from "vue";
 import Router from "vue-router";
 import searchResults from "../components/searchResults";
+import graphResults from "../components/graphResults";
 
 Vue.use(Router);
 
@@ -11,6 +12,11 @@ export default new Router({
             path: "/search",
             name: "searchResults",
             component: searchResults
+        },
+        {
+            path: "/graph",
+            name: "graphResults",
+            component: graphResults
         }
     ],
     scrollBehavior(to, from, savedPosition) {
