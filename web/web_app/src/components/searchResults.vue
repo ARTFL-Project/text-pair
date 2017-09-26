@@ -33,11 +33,11 @@
                                 </p>
                             </div>
                         </div>
-                        <div class="row">
+                        <div class="row passages">
                             <div class="col mb-2">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.source_context_before }}
-                                    <span style="color: red;">{{ alignment.source_passage }}</span>
+                                    <span class="source-passage">{{ alignment.source_passage }}</span>
                                     {{ alignment.source_context_after }}
                                 </p>
                                 <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-on:click="goToContext(alignment.source_link_to_philologic)">View passage in context</a>
@@ -45,14 +45,15 @@
                             <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.target_context_before }}
-                                    <span style="color: red;">{{ alignment.target_passage }}</span>
+                                    <span class="target-passage">{{ alignment.target_passage }}</span>
                                     {{ alignment.target_context_after }}
                                 </p>
                                 <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-on:click="goToContext(alignment.target_link_to_philologic)">View passage in context</a>
                             </div>
                         </div>
-                        <div class="text-muted text-center mb-1 py-1" style="font-size: 90%">
-                            {{ alignment.passage_similarity }} similar
+                        <div class="text-muted text-center">
+                            <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br>
+                            <a class="diff-btn" v-on:click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
                         </div>
                     </div>
                 </transition-group>
@@ -116,6 +117,7 @@
 
 <script>
 import { EventBus } from '../main.js';
+import * as differ from 'diff'
 
 var paramsToUrl = function(formValues) {
     var queryParams = [];
@@ -203,12 +205,34 @@ export default {
         },
         filteredSearch(fieldName, value) {
             let queryParams = this.cloneObject(this.$route.query)
+            delete queryParams.page
+            delete queryParams.id_anchor
             queryParams.db_table = this.$globalConfig.databaseName
             queryParams[fieldName] = value
             EventBus.$emit("urlUpdate", queryParams)
             this.facetResults = null
             this.results = { alignments: [] }
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
+        },
+        showDifferences(sourceText, targetText) {
+            let sourceElement = event.srcElement.parentNode.parentNode.querySelector(".source-passage")
+            let targetElement = event.srcElement.parentNode.parentNode.querySelector(".target-passage")
+            let differences = differ.diffChars(sourceText, targetText, {ignoreCase: true})
+            let newSourceString = ""
+            let newTargetString = ""
+            let deleted = ""
+            for (let text of differences) {
+                if (!text.hasOwnProperty("added") && !text.hasOwnProperty("removed")) {
+                    newTargetString += text.value
+                    newSourceString += text.value
+                } else if (text.added) {
+                    newTargetString += `<span class="added">${text.value}</span>`
+                } else {
+                    newSourceString += `<span class="removed">${text.value}</span>`
+                }
+            }
+            sourceElement.innerHTML = newSourceString
+            targetElement.innerHTML = newTargetString
         },
         beforeEnter: function(el) {
             el.style.opacity = 0
@@ -254,5 +278,32 @@ export default {
 .list-group-item:focus,.list-group-item:active {
    outline: none !important;
 }
-</style>
 
+.source-passage, .target-passage {
+    color: dodgerblue;
+}
+
+.added {
+    color: darkblue;
+    font-weight: 700;
+}
+
+.removed {
+    color: green;
+    font-weight: 700;
+    text-decoration: line-through;
+}
+
+.diff-btn {
+    display: inline-block;
+    padding: .2rem;
+    margin-bottom: 2px;
+    border: solid 1px #ddd;
+    cursor: pointer;
+}
+
+.diff-btn:hover {
+    color: #565656 !important;
+    background-color: #f8f8f8;
+}
+</style>
