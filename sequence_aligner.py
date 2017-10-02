@@ -75,12 +75,12 @@ def parse_command_line():
         paths["source"]["parse_output"] = Path(args["output_path"]).joinpath("source")
         paths["source"]["input_files_for_ngrams"] = Path(args["output_path"]).joinpath("source/texts")
         paths["source"]["ngram_output_path"] = Path(args["output_path"]).joinpath("source/")
-        paths["source"]["metadata_path"] = Path(args["output_path"]).joinpath("source/metadata/metadata.json")
+        paths["source"]["metadata_path"] = str(Path(args["output_path"]).joinpath("source/metadata/metadata.json"))
         paths["source"]["is_philo_db"] = False
     else:
         paths["source"]["input_files_for_ngrams"] = args["source_files"]
         paths["source"]["ngram_output_path"] = Path(args["output_path"]).joinpath("source/")
-        paths["source"]["metadata_path"] = args["source_metadata"] or Path(args["output_path"]).joinpath("source/metadata/metadata.json")
+        paths["source"]["metadata_path"] = args["source_metadata"] or str(Path(args["output_path"]).joinpath("source/metadata/metadata.json"))
         paths["source"]["is_philo_db"] = args["is_philo_db"]
     if args["target_files"]:
         if tei_parsing["parse_target_files"] is True:
@@ -88,12 +88,12 @@ def parse_command_line():
             paths["target"]["parse_output"] = Path(args["output_path"]).joinpath("target")
             paths["target"]["input_files_for_ngrams"] = Path(args["output_path"]).joinpath("target/texts")
             paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/")
-            paths["target"]["metadata_path"] = Path(args["output_path"]).joinpath("target/metadata/metadata.json")
+            paths["target"]["metadata_path"] = str(Path(args["output_path"]).joinpath("target/metadata/metadata.json"))
             paths["target"]["is_philo_db"] = False
         else:
             paths["target"]["input_files_for_ngrams"] = args["target_files"]
             paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/")
-            paths["target"]["metadata_path"] = args["target_metadata"] or Path(args["output_path"]).joinpath("target/metadata/metadata.json")
+            paths["target"]["metadata_path"] = args["target_metadata"] or str(Path(args["output_path"]).joinpath("target/metadata/metadata.json"))
             paths["target"]["is_philo_db"] = args["is_philo_db"]
     preprocessing_params = {"source": preprocessing_params, "target": preprocessing_params}
     preprocessing_params["source"]["text_object_level"] = preprocessing_params["source"]["source_text_object_level"]
