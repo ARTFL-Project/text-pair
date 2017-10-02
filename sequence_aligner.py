@@ -117,7 +117,7 @@ def main():
                     metadata=paths["source"]["metadata_path"], is_philo_db=paths["source"]["is_philo_db"], workers=workers)
     if paths["target"]:
         if tei_parsing["parse_target_files"] is True:
-            print("\n### Parsing source TEI files ###")
+            print("\n### Parsing target TEI files ###")
             parser = TEIParser(paths["target"]["tei_input_files"], output_path=paths["target"]["parse_output"], cores=workers,
                                words_to_keep=tei_parsing["target_words_to_keep"], debug=debug)
             parser.get_metadata()
