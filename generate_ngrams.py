@@ -133,7 +133,7 @@ class Ngrams:
     def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="20%", use_db=False, db_name=""):
         """Generate n-grams."""
         files = glob(str(Path(file_path).joinpath("*")))
-        os.system('rm -rf %s/' % output_path)
+        # os.system('rm -rf %s/' % output_path)
         os.system('mkdir -p {}/ngrams'.format(output_path))
         os.system('mkdir -p {}/metadata'.format(output_path))
         os.system("mkdir %s/index" % output_path)
