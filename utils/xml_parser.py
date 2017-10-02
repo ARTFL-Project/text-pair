@@ -160,6 +160,7 @@ class TEIParser:
         else:
             self.filter = True
             self.words_to_keep = set()
+            print("Loading words to keep file...")
             with open(words_to_keep) as input_file:
                 for line in input_file:
                     word = line.strip()
@@ -171,7 +172,7 @@ class TEIParser:
         invalid_files = []
         pool = Pool(self.workers)
         with tqdm(total=len(self.files)) as pbar:
-            for file_id, local_metadata, invalid_file in pool.imap_unordered(self.parse_header, self.files):
+            for file_id, local_metadata, invalid_file in pool.map(self.parse_header, self.files):
                 if invalid_file:
                     invalid_files.append((file_id, invalid_file))
                 else:
@@ -262,7 +263,7 @@ class TEIParser:
         print("\nParsing text body of all files...", flush=True)
         pool = Pool(self.workers)
         with tqdm(total=len(self.files)) as pbar:
-            for _ in pool.imap_unordered(self.parse_file, self.files):
+            for _ in pool.map(self.parse_file, self.files):
                 pbar.update()
         pool.close()
         pool.join()

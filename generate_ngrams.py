@@ -155,7 +155,7 @@ class Ngrams:
         print("\nGenerating ngrams...", flush=True)
         pool = Pool(workers)
         with tqdm(total=len(files)) as pbar:
-            for local_metadata in pool.imap_unordered(self.process_file, files):
+            for local_metadata in pool.map(self.process_file, files):
                 if self.metadata_done is False:
                     combined_metadata.update(local_metadata)
                 pbar.update()
