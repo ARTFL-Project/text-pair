@@ -171,9 +171,8 @@ class TEIParser:
         metadata = {}
         invalid_files = []
         pool = Pool(self.workers)
-        total_files = len(self.files)
-        with tqdm(total=total_files) as pbar:
-            for file_id, local_metadata, invalid_file in pool.imap_unordered(self.parse_header, self.files, chunksize=total_files//self.workers):
+        with tqdm(total=len(self.files)) as pbar:
+            for file_id, local_metadata, invalid_file in pool.imap_unordered(self.parse_header, self.files):
                 if invalid_file:
                     invalid_files.append((file_id, invalid_file))
                 else:
