@@ -36,7 +36,10 @@
                         <a class="nav-link active" id="search-alignments-tab" data-toggle="tab" href="#search-alignments" role="tab" aria-controls="search-alignments" aria-expanded="true">Search Alignments</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" id="graph-tab" data-toggle="tab" href="#graph" role="tab" aria-controls="graph" aria-expanded="true">Display Network</a>
+                        <a class="nav-link" id="graph-tab" data-toggle="tab" href="#graph" role="tab" aria-controls="graph" aria-expanded="true">Display Network Graph</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" id="stats-tab" data-toggle="tab" href="#global-stats" role="tab" aria-controls="global-stats" aria-expanded="true">Display Global Stats</a>
                     </li>
                 </ul>
                 <div class="tab-content mt-3" id="myTabContent">
@@ -51,8 +54,8 @@
                             </div>
                             <div class="col-2">
                                 <div class="my-dropdown">
-                                    <button class="btn btn-light rounded-0" v-on:click="toggleDropdown('source')">{{ formGraphValues.source.label }} &#9662;</button>
-                                    <ul class="my-dropdown-menu shadow-1" v-if="dropdownShow.source">
+                                    <button type="button" class="btn btn-light rounded-0" v-on:click="toggleDropdown()">{{ formGraphValues.source.label }} &#9662;</button>
+                                    <ul class="my-dropdown-menu shadow-1">
                                         <li class="my-dropdown-item" v-for="field in globalConfig.metadataFields.source" :key="field.label" v-on:click="selectItem('source', field)">{{ field.label }}</li>
                                     </ul>
                                 </div>
@@ -64,8 +67,8 @@
                             </div>
                             <div class="col-2">
                                 <div class="my-dropdown">
-                                    <button class="btn btn-light rounded-0" v-on:click="toggleDropdown('target')">{{ formGraphValues.target.label }} &#9662;</button>
-                                    <ul class="my-dropdown-menu shadow-1" v-if="dropdownShow.target">
+                                    <button type="button" class="btn btn-light rounded-0" v-on:click="toggleDropdown()">{{ formGraphValues.target.label }} &#9662;</button>
+                                    <ul class="my-dropdown-menu shadow-1">
                                         <li class="my-dropdown-item" v-for="field in globalConfig.metadataFields.target" :key="field.label" v-on:click="selectItem('target', field)">{{ field.label }}</li>
                                     </ul>
                                 </div>
@@ -73,6 +76,29 @@
                         </div>
                         <div class="mt-3">
                             <button class="btn btn-primary rounded-0" type="button" v-on:click="getGraphData()">Display network graph</button>
+                            <button type="button" class="btn btn-secondary rounded-0" v-on:click="clearForm()">Reset</button>
+                        </div>
+                    </div>
+                    <div class="tab-pane fade show" id="global-stats" role="tabpanel" aria-labelledby="global-stats-tab">
+                        <div class="row">
+                            <div class="col-1">
+                                Display stats for:
+                            </div>
+                            <div class="col-2">
+                                <div class="my-dropdown">
+                                    <button type="button" class="btn btn-light rounded-0" v-on:click="toggleDropdown()">{{ formStatsValues.selected.label }} &#9662;</button>
+                                    <ul class="my-dropdown-menu shadow-1">
+                                        <h6 class="dropdown-header">Source</h6>
+                                        <li class="my-dropdown-item" v-for="field in globalConfig.metadataFields.source" :key="field.label" v-on:click="selectStatsItem('Source', field)">{{ field.label }}</li>
+                                        <div class="dropdown-divider"></div>
+                                        <h6 class="dropdown-header">Target</h6>
+                                        <li class="my-dropdown-item" v-for="field in globalConfig.metadataFields.target" :key="field.label" v-on:click="selectStatsItem('Target', field)">{{ field.label }}</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <button class="btn btn-primary rounded-0" type="button" v-on:click="getStats()">Display stats</button>
                             <button type="button" class="btn btn-secondary rounded-0" v-on:click="clearForm()">Reset</button>
                         </div>
                     </div>
@@ -95,14 +121,20 @@ export default {
                 source: this.$globalConfig.metadataFields.source[0],
                 target: this.$globalConfig.metadataFields.target[0]
             },
-            dropdownShow: { "source": false, "target": false }
+            formStatsValues: {
+                values: [...this.$globalConfig.metadataFields.source, ...this.$globalConfig.metadataFields.target],
+                selected: {
+                    label: `Source ${this.$globalConfig.metadataFields.source[0].label}`,
+                    value: this.$globalConfig.metadataFields.source[0].value
+                }
+            }
         }
     },
     created() {
         var vm = this
         EventBus.$on("urlUpdate", updatedParams => {
             for (let key in updatedParams) {
-                if (key in vm.formValues && updatedParams[key] != vm.formValues[key]) {
+                if (key in vm.formValues) {
                     vm.formValues[key] = updatedParams[key]
                 }
             }
@@ -117,11 +149,15 @@ export default {
                 for (const key of this.$globalConfig.metadataFields.source) {
                     if (key.value in this.$route.query) {
                         formValues[key.value] = this.$route.query[key.value]
+                    } else {
+                        formValues[key.value] = ""
                     }
                 }
                 for (const key of this.$globalConfig.metadataFields.target) {
                     if (key.value in this.$route.query) {
                         formValues[key.value] = this.$route.query[key.value]
+                    } else {
+                        formValues[key.value] = ""
                     }
                 }
             }
@@ -135,20 +171,31 @@ export default {
                 this.formValues[key] = ""
             }
         },
-        toggleDropdown(direction) {
-            if (this.dropdownShow[direction]) {
-                this.dropdownShow[direction] = false
+        toggleDropdown() {
+            let element = event.srcElement.closest(".my-dropdown").querySelector("ul")
+            if (element.style.display != "table") {
+                element.style.display = "table"
             } else {
-                this.dropdownShow[direction] = true
+                element.style.display = "none"
             }
         },
-        selectItem(direction, item) {
-            this.formGraphValues[direction] = item
-            this.toggleDropdown(direction)
+        selectGraphItem(key, item) {
+            this.formGraphValues[key] = item
+            this.toggleDropdown()
         },
         getGraphData() {
-            this.$router.push(`/graph?${this.paramsToUrl({source: this.formGraphValues.source.value, target: this.formGraphValues.target.value})}`)
-        }
+            let params = {...this.formValues, source: this.formGraphValues.source.value, target: this.formGraphValues.target.value}
+            this.$router.push(`/graph?${this.paramsToUrl(params)}`)
+        },
+        selectStatsItem(direction, item) {
+            this.formStatsValues.selected.label = `${direction} ${item.label}`
+            this.formStatsValues.selected.value = item.value
+            this.toggleDropdown()
+        },
+        getStats() {
+            let params = {...this.formValues, stats_field: this.formStatsValues.selected.value}
+            this.$router.push(`/stats?${this.paramsToUrl(params)}`)
+        },
     }
 }
 </script>
@@ -170,6 +217,7 @@ my-dropdown .btn:active {
 
 .my-dropdown-menu {
     position: absolute;
+    display: none;
     left: 0;
     top: 38px;
     background-color: #fff;

@@ -14,13 +14,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime/debug"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-
-	"regexp"
 )
 
 type docIndex struct {
@@ -287,7 +285,6 @@ func main() {
 			for sourceFileDocID := range localSourceFilesDone {
 				sourceFilesDone[sourceFileDocID] = true
 			}
-			debug.FreeOSMemory()
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
 			os.Stdout.Sync()
 		}
@@ -341,6 +338,9 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	targetMetadata := openJSONMetadata(targetMetadataArg)
 	fmt.Println("done.")
 	sourceFiles := getFiles(*sourceFilesArg, sourceMetadata, *sortField)
+	if *targetFilesArg == *sourceFilesArg {
+		*targetFilesArg = ""
+	}
 	targetFiles := getFiles(*targetFilesArg, targetMetadata, *sortField)
 	mostCommonNgrams := compileMostCommonNgrams(sourceCommonNgramsArg, targetCommonNgramsArg, mostCommonNgramThreshold)
 	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, mostCommonNgrams, config, ngramIndex

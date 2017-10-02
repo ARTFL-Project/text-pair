@@ -25,13 +25,6 @@ Vue.mixin({
                 );
             }
             return queryParams.join("&");
-        },
-        cloneObject: function(objectToClone) {
-            var newObject = {};
-            for (var key in objectToClone) {
-                newObject[key] = objectToClone[key];
-            }
-            return newObject;
         }
     }
 });

@@ -6,7 +6,6 @@ import configparser
 import os
 import re
 from ast import literal_eval
-from glob import glob
 from pathlib import Path
 from collections import defaultdict
 
@@ -75,26 +74,26 @@ def parse_command_line():
         paths["source"]["tei_input_files"] = args["source_files"]
         paths["source"]["parse_output"] = Path(args["output_path"]).joinpath("source")
         paths["source"]["input_files_for_ngrams"] = Path(args["output_path"]).joinpath("source/texts")
-        paths["source"]["ngram_output_path"] = Path(args["output_path"]).joinpath("source/ngrams")
+        paths["source"]["ngram_output_path"] = Path(args["output_path"]).joinpath("source/")
         paths["source"]["metadata_path"] = Path(args["output_path"]).joinpath("source/metadata/metadata.json")
         paths["source"]["is_philo_db"] = False
     else:
         paths["source"]["input_files_for_ngrams"] = args["source_files"]
-        paths["source"]["ngram_output_path"] = Path(args["output_path"]).joinpath("source/ngrams")
-        paths["source"]["metadata_path"] = Path(args["output_path"]).joinpath("source/metadata/metadata.json")
+        paths["source"]["ngram_output_path"] = Path(args["output_path"]).joinpath("source/")
+        paths["source"]["metadata_path"] = args["source_metadata"] or Path(args["output_path"]).joinpath("source/metadata/metadata.json")
         paths["source"]["is_philo_db"] = args["is_philo_db"]
     if args["target_files"]:
         if tei_parsing["parse_target_files"] is True:
             paths["target"]["tei_input_files"] = args["target_files"]
             paths["target"]["parse_output"] = Path(args["output_path"]).joinpath("target")
             paths["target"]["input_files_for_ngrams"] = Path(args["output_path"]).joinpath("target/texts")
-            paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/ngrams")
+            paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/")
             paths["target"]["metadata_path"] = Path(args["output_path"]).joinpath("target/metadata/metadata.json")
             paths["target"]["is_philo_db"] = False
         else:
             paths["target"]["input_files_for_ngrams"] = args["target_files"]
-            paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/ngrams")
-            paths["target"]["metadata_path"] = Path(args["output_path"]).joinpath("target/metadata/metadata.json")
+            paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/")
+            paths["target"]["metadata_path"] = args["target_metadata"] or Path(args["output_path"]).joinpath("target/metadata/metadata.json")
             paths["target"]["is_philo_db"] = args["is_philo_db"]
     preprocessing_params = {"source": preprocessing_params, "target": preprocessing_params}
     preprocessing_params["source"]["text_object_level"] = preprocessing_params["source"]["source_text_object_level"]
@@ -106,34 +105,36 @@ def parse_command_line():
 def main():
     """Main function to start sequence alignment"""
     paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, debug = parse_command_line()
-    for var in [paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, debug]:
-        print("\n", var)
     if tei_parsing["parse_source_files"] is True:
         print("\n### Parsing source TEI files ###")
-        parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"], cores=workers, debug=debug)
+        parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"],
+                           words_to_keep=tei_parsing["source_words_to_keep"], cores=workers, debug=debug)
         parser.get_metadata()
         parser.get_text()
     print("\n### Generating source ngrams ###")
     ngrams = Ngrams(**preprocessing_params["source"], debug=debug)
     ngrams.generate(paths["source"]["input_files_for_ngrams"], paths["source"]["ngram_output_path"],
-                    metadata=paths["source"]["metadata_path"], workers=workers)
+                    metadata=paths["source"]["metadata_path"], is_philo_db=paths["source"]["is_philo_db"], workers=workers)
     if paths["target"]:
         if tei_parsing["parse_target_files"] is True:
             print("\n### Parsing source TEI files ###")
-            parser = TEIParser(paths["target"]["tei_input_files"], output_path=paths["target"]["parse_output"], cores=workers, debug=debug)
+            parser = TEIParser(paths["target"]["tei_input_files"], output_path=paths["target"]["parse_output"], cores=workers,
+                               words_to_keep=tei_parsing["target_words_to_keep"], debug=debug)
             parser.get_metadata()
             parser.get_text()
         print("\n### Generating target ngrams ###")
         ngrams = Ngrams(**preprocessing_params["target"], debug=debug)
         ngrams.generate(paths["target"]["input_files_for_ngrams"], paths["target"]["ngram_output_path"],
-                        metadata=paths["target"]["metadata_path"], workers=workers)
+                        metadata=paths["target"]["metadata_path"], is_philo_db=paths["target"]["is_philo_db"], workers=workers)
     print("\n### Starting sequence alignment ###")
+    if paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
+        paths["target"]["ngram_output_path"] = paths["source"]["ngram_output_path"]
     if matching_params:
         os.system("./compareNgrams \
-                  --output_path={} \
+                  --output_path={}/results \
                   --threads={} \
-                  --source_files={} \
-                  --target_files={} \
+                  --source_files={}/ngrams \
+                  --target_files={}/ngrams \
                   --source_metadata={} \
                   --target_metadata={} \
                   --sort_by={} \
@@ -158,7 +159,7 @@ def main():
                   --debug={} \
                   --ngram_index={}"
                   .format(
-                      Path(output_path).joinpath("results"),
+                      output_path,
                       workers,
                       paths["source"]["ngram_output_path"],
                       paths["target"]["ngram_output_path"],
@@ -188,14 +189,14 @@ def main():
                   ))
     else:
         os.system("./compareNgrams \
-                  --output_path={} \
-                  --source_files={} \
-                  --target_files={} \
+                  --output_path={}/results \
+                  --source_files={}/ngrams \
+                  --target_files={}/ngrams \
                   --source_metadata={}/metadata/metadata.json \
                   --target_metadata={}/metadata/metadata.json \
                   --debug={}"
                   .format(
-                      Path(output_path).joinpath("results"),
+                      output_path,
                       paths["source"]["ngram_output_path"],
                       paths["target"]["ngram_output_path"],
                       paths["source"]["metadata_path"],

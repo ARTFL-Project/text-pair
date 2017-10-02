@@ -142,7 +142,7 @@ def parse_command_line():
 
 class TEIParser:
 
-    def __init__(self, file_path, output_path="./", cores=4, debug=False):
+    def __init__(self, file_path, output_path="./", cores=4, words_to_keep="all", debug=False):
         if os.path.exists(str(output_path)):  # we convert to string in case it's a PosixPath type
             print("{} exists. Please delete or change the output path before rerunning this script.".format(output_path))
             exit()
@@ -155,6 +155,15 @@ class TEIParser:
         self.files = list(zip(range(len(files)), files))
         self.workers = cores
         self.debug = debug
+        if words_to_keep == "all":
+            self.filter = False
+        else:
+            self.filter = True
+            self.words_to_keep = set()
+            with open(words_to_keep) as input_file:
+                for line in input_file:
+                    word = line.strip()
+                    self.words_to_keep.add(word)
 
     def get_metadata(self):
         print("\nParsing headers in all files...", flush=True)
@@ -343,6 +352,9 @@ class TEIParser:
                 word = control_char_re.sub("", word)
                 word = word.replace("_", "").strip()
                 word = word.replace(' ', '')
+                if self.filter:
+                    if word not in self.words_to_keep:
+                        continue
                 if len(word):
                     word_count += 1
                     word_obj = dumps({"token": word, "start_byte": word_pos, "end_byte": current_pos, "position": "{} 0 0 0 0 0 {}".format(file_id, word_count)})

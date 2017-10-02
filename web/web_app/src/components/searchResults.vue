@@ -152,7 +152,7 @@ export default {
         fetchData() {
             this.results = { alignments: [] } // clear alignments with new search
             this.facetResults = null // clear facet results with new search
-            let params = this.cloneObject(this.$route.query)
+            let params = {...this.$route.query}
             params.db_table = this.$globalConfig.databaseName
             this.$http.get(`${this.$globalConfig.apiServer}/search_alignments/?`, {
                 params: params
@@ -175,21 +175,21 @@ export default {
 
         },
         previousPage() {
-            let queryParams = this.cloneObject(this.$route.query)
+            let queryParams = {...this.$route.query}
             queryParams.page = parseInt(this.results.page) - 1
             queryParams.direction = "previous"
             queryParams.id_anchor = this.results.alignments[0].rowid_ordered
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
         nextPage(urlEnd) {
-            let queryParams = this.cloneObject(this.$route.query)
+            let queryParams = {...this.$route.query}
             queryParams.page = parseInt(this.results.page) + 1
             queryParams.direction = "next"
             queryParams.id_anchor = this.results.alignments[this.results.alignments.length - 1].rowid_ordered
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
         facetSearch(field) {
-            let queryParams = this.cloneObject(this.$route.query)
+            let queryParams = {...this.$route.query}
             queryParams.db_table = this.$globalConfig.databaseName
             queryParams.facet = field
             this.facetLoading = true
@@ -204,7 +204,7 @@ export default {
             });
         },
         filteredSearch(fieldName, value) {
-            let queryParams = this.cloneObject(this.$route.query)
+            let queryParams = {...this.$route.query}
             delete queryParams.page
             delete queryParams.id_anchor
             queryParams.db_table = this.$globalConfig.databaseName

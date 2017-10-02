@@ -6,7 +6,7 @@ import os
 import re
 import sys
 from ast import literal_eval as eval
-from collections import OrderedDict
+from collections import OrderedDict, Counter, defaultdict
 from pathlib import Path
 
 import psycopg2
@@ -45,7 +45,8 @@ class formArguments():
         return self.__getitem__(attr)
 
     def __setitem__(self, item, value):
-        self.dict[item] = value
+        if value:
+            self.dict[item] = value
 
     def __iter__(self):
         for k in self.dict:
@@ -172,6 +173,54 @@ def facets():
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
+@application.route("/stats/", methods=["GET"])
+def stats():
+    search_args, other_args = parse_args(request)
+    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    if search_args:
+        query = "SELECT {}, passage_id, COUNT(*) FROM {} WHERE {} GROUP BY passage_id, {}".format(
+            other_args.stats_field, other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.stats_field
+        )
+    else:
+        query = "SELECT {}, passage_id, COUNT(*) FROM {} GROUP BY passage_id, {}".format(
+            other_args.stats_field, other_args.db_table, other_args.stats_field
+        )
+    cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
+    results = {}
+    for result in cursor:
+        field_name, passage_id, count = result
+        if field_name not in results:
+            results[field_name] = {
+                "passage_id": passage_id,
+                "count": count,
+                "distinct_reuses": 0
+            }
+        results[field_name]["count"] += count
+    results = sorted([{"label": field_name, "count": result["count"], "passage_id": result["passage_id"]} for field_name, result in results.items()], key=lambda x: x["count"], reverse=True)
+    response = jsonify({"stats_field": other_args.stats_field, "results": results})
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
+
+@application.route("/get_most_reused_passages", methods=["GET"])
+def get_most_reused_passages():
+    search_args, other_args = parse_args(request)
+    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    query = "SELECT * FROM {} WHERE {}".format(
+        other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]])
+    )
+    cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
+    column_names = [desc[0] for desc in CURSOR.description]
+    source_columns = [col for col in column_names if not col.startswith("target_")]
+    target_columns = [col for col in column_names if not col.startswith("source_")]
+    results = {}
+    skip_source = False
+    skip_target = False
+    for result in cursor:
+        pass
+
+
 @application.route("/link_to_philologic", methods=["GET"])
 def link_to_philologic():
     db_path = str(Path(request.args["filename"]).parent).replace("data/TEXT", "")
@@ -184,30 +233,28 @@ def link_to_philologic():
 def parse_args(request):
     search_args = formArguments()
     other_args = formArguments()
+    other_args_keys = ["facet", "direction", "source", "target", "stats_field", "db_table", "filter_field", "filter_value"]
     for key, value in request.args.items():
-        if key == "full":
-            try:
-                other_args["full"] = eval(value.title())
-            except ValueError:
-                pass
-        if key == "db_table":
-            other_args["db_table"] = value
-        elif key == "page":
-            try:
-                other_args["page"] = int(value)
-            except TypeError:
-                pass
-        elif key == "id_anchor":
-            try:
-                other_args["id_anchor"] = int(value)
-            except TypeError:
-                pass
-        elif key == "direction":
-            other_args["direction"] = value or "next"
-        elif key == "facet":
-            other_args["facet"] = value
-        elif key == "source" or key == "target":
-            other_args[key] = value
+        if key in other_args_keys:
+            if key == "full":
+                try:
+                    other_args["full"] = eval(value.title())
+                except ValueError:
+                    pass
+            elif key == "page":
+                try:
+                    other_args["page"] = int(value)
+                except TypeError:
+                    pass
+            elif key == "id_anchor":
+                try:
+                    other_args["id_anchor"] = int(value)
+                except TypeError:
+                    pass
+            elif key == "direction":
+                other_args["direction"] = value or "next"
+            else:
+                other_args[key] = value
         else:
             search_args[key] = value
     return search_args, other_args

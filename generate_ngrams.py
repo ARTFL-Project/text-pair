@@ -114,7 +114,7 @@ class Ngrams:
         for ngram, start_byte, end_byte in ngrams:
             text_index[ngram].append((index_pos, start_byte, end_byte))
             index_pos += 1
-        with open("%s/%s.json" % (self.output_path, text_id), "w") as json_file:
+        with open("%s/ngrams/%s.json" % (self.output_path, text_id), "w") as json_file:
             json.dump(dict(text_index), json_file)
 
     def __get_metadata(self, text_id):
@@ -134,7 +134,8 @@ class Ngrams:
         """Generate n-grams."""
         files = glob(str(Path(file_path).joinpath("*")))
         os.system('rm -rf %s/' % output_path)
-        os.system('mkdir -p %s' % output_path)
+        os.system('mkdir -p {}/ngrams'.format(output_path))
+        os.system('mkdir -p {}/metadata'.format(output_path))
         os.system("mkdir %s/index" % output_path)
         os.system('mkdir {}/temp'.format(output_path))
         if db_path is None and is_philo_db is True:
@@ -142,16 +143,14 @@ class Ngrams:
         else:
             self.input_path = db_path
         self.output_path = output_path
-        if metadata is None:
-            if is_philo_db is False:
-                print("No metadata provided, only the filename will be used as metadata")
-                combined_metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
-                self.metadata_done = True
-            else:
-                combined_metadata = {}
-        else:
+
+        if is_philo_db:
+            combined_metadata = {}
+        elif os.path.isfile(metadata):
             self.metadata_done = True
             combined_metadata = metadata
+        else:
+            print("No metadata provided: exiting...")
 
         print("\nGenerating ngrams...", flush=True)
         pool = Pool(workers)
@@ -163,40 +162,21 @@ class Ngrams:
         pool.close()
         pool.join()
 
-        if use_db is True:
-            sqlite_db_path = os.path.join(self.output_path, db_name)
-            self.createDB(sqlite_db_path, metadata_fields)
-            sqlDataBase = sqlite3.connect(sqlite_db_path)
-            metadata_fields = []
-            with open(combined_metadata) as metadata_file:
+        mem_usage = floor(int(ram.replace('%', '')) / 2)
+        if mem_usage >= 50:
+            mem_usage = 45
+        print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
+        os.system(r'''for i in {}/temp/*; do cat $i; done | sort -S {}% | uniq -c | sort -rn -S {}% | awk '{{print $2"\t"$3}}' |
+                tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''
+                .format(output_path, mem_usage, mem_usage, output_path, output_path))
 
-                for _, fields in combined_metadata.items():
-                    metadata_fields = fields.keys()
-            for doc_id, fields in metadata.items():
-                cursor = sqlDataBase.cursor()
-                metadata_values = (fields[m] for m in metadata_fields)
-                cursor.execute("""INSERT INTO metadata({})
-                                VALUES ({})""".format(metadata_fields, " ,".join(["?" for _ in metadata_fields])),
-                                metadata_values)
-            print("Metadata loading in DataBase...")
-            for file in os.scandir(self.output_path):
-                print(file.path)
+        print("Saving metadata...")
+        if self.metadata_done is False:
+            print("%s/metadata/metadata.json" % self.output_path)
+            with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
+                json.dump(combined_metadata, metadata_output)
         else:
-            mem_usage = floor(int(ram.replace('%', '')) / 2)
-            if mem_usage >= 50:
-                mem_usage = 45
-            print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
-            os.system(r'''for i in {}/temp/*; do cat $i; done | sort -S {}% | uniq -c | sort -rn -S {}% | awk '{{print $2"\t"$3}}' |
-                    tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''
-                    .format(output_path, mem_usage, mem_usage, output_path, output_path))
-
-            print("Saving metadata...")
-            os.system("mkdir %s/metadata" % output_path)
-            if self.metadata_done is False:
-                with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
-                    json.dump(combined_metadata, metadata_output)
-            else:
-                os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
+            os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
 
         print("Cleaning up...")
         os.system("rm -r {}/temp".format(self.output_path))
@@ -416,7 +396,7 @@ def parse_command_line():
     optional.add_argument("--text_object_level", help="type of object to split up docs in",
                           type=str, default="doc")
     optional.add_argument("--output_path", help="output path of ngrams",
-                          type=str, default="./ngrams")
+                          type=str, default="./output")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     optional.add_argument("--skipgram", help="use skipgrams", action='store_true', default=False)
