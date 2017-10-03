@@ -9,6 +9,7 @@ from glob import glob
 from html.entities import name2codepoint
 from json import dump, dumps
 from pathlib import Path
+from time import sleep
 
 from lxml import etree
 from multiprocess import Pool
@@ -133,7 +134,7 @@ def parse_command_line():
     parser.add_argument("--file_path", help="path to source files from which to compare",
                         type=str, default="")
     parser.add_argument("--output_path", help="output path for ngrams and sequence alignment",
-                        type=str, default="./")
+                        type=str, default="./output")
     parser.add_argument("--cores", help="How many threads or cores to use for parsing",
                         type=int, default=4)
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
@@ -159,20 +160,17 @@ class TEIParser:
             self.filter = False
         else:
             self.filter = True
+            self.words_to_keep_path = words_to_keep  # we store the path info and load the contents later
             self.words_to_keep = set()
-            print("Loading words to keep file...")
-            with open(words_to_keep) as input_file:
-                for line in input_file:
-                    word = line.strip()
-                    self.words_to_keep.add(word)
 
     def get_metadata(self):
         print("\nParsing headers in all files...", flush=True)
         metadata = {}
         invalid_files = []
         pool = Pool(self.workers)
+        chunksize = len(self.files) // self.workers
         with tqdm(total=len(self.files)) as pbar:
-            for file_id, local_metadata, invalid_file in pool.imap_unordered(self.parse_header, self.files):
+            for file_id, local_metadata, invalid_file in pool.imap_unordered(self.parse_header, self.files, chunksize=chunksize or 1):
                 if invalid_file:
                     invalid_files.append((file_id, invalid_file))
                 else:
@@ -260,10 +258,17 @@ class TEIParser:
         return metadata
 
     def get_text(self):
+        if self.filter:
+            print("Loading words to keep file...")
+            with open(self.words_to_keep_path) as input_file:
+                for line in input_file:
+                    word = line.strip()
+                    self.words_to_keep.add(word)
         print("\nParsing text body of all files...", flush=True)
         pool = Pool(self.workers)
+        chunksize = len(self.files)//self.workers//10
         with tqdm(total=len(self.files)) as pbar:
-            for _ in pool.imap_unordered(self.parse_file, self.files):
+            for _ in pool.imap_unordered(self.parse_file, self.files, chunksize=chunksize or 1):
                 pbar.update()
         pool.close()
         pool.join()
