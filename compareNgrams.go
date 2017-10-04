@@ -134,6 +134,7 @@ var tags = regexp.MustCompile("<[^>]*?>")
 var brokenBeginTags = regexp.MustCompile("^[^<]*?>")
 var brokenEndTags = regexp.MustCompile("<[^>]*?$")
 var spaces = regexp.MustCompile(" +")
+var spaceChars = regexp.MustCompile(`[\s\n\t]+`)
 var tabEntities = regexp.MustCompile("(&#9;)+")
 
 func main() {
@@ -363,6 +364,11 @@ func openJSONMetadata(fileLocation *string) map[string]map[string]string {
 	if len(metadata) == 0 {
 		fmt.Printf("Metadata file %s is empty, stopping alignment...\n", *fileLocation)
 		os.Exit(-1)
+	}
+	for doc, fields := range metadata {
+		for field, value := range fields {
+			metadata[doc][field] = spaceChars.ReplaceAllString(value, " ") // clean up metadata
+		}
 	}
 	return metadata
 }
