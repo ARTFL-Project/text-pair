@@ -24,7 +24,7 @@ def parse_file(file):
             fields = line
             yield fields
 
-if __name__ == '__main__':
+def main():
     line_count = count_lines(sys.argv[1]) - 1 # skip first line with field names
     alignments = parse_file(sys.argv[1])
     table_name = sys.argv[2]
@@ -80,3 +80,6 @@ if __name__ == '__main__':
 
     print("DB viewable at http://root_url_for_alignment_dbs/{}".format(table_name))
     print("Configure database at http://root_url_for_alignment_dbs/{}_config.json".format(table_name))
+
+if __name__ == '__main__':
+    main()
