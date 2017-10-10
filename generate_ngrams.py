@@ -413,4 +413,4 @@ if __name__ == '__main__':
     ARGS = parse_command_line()
     NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
     NGRAM_GENERATOR.generate(ARGS["file_path"], ARGS["output_path"], is_philo_db=ARGS["is_philo_db"], metadata=ARGS["metadata"],
-                             workers=ARGS["cores"], ram=ARGS["mem_usage"], text_object_level=ARGS["text_object_level", use_db=ARGS["use_db"])
+                             workers=ARGS["cores"], ram=ARGS["mem_usage"], text_object_level=ARGS["text_object_level"], use_db=ARGS["use_db"])
