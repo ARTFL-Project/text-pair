@@ -1,7 +1,7 @@
 {
     "apiServer": "http://condorcet.uchicago.edu/alignment/",
-    "databaseName": "frantext",
-    "databaseLabel": "Frantext alignments",
+    "databaseName": "encyc_vs_tgb",
+    "databaseLabel": "Encyclopédie vs TGN alignments",
     "metadataFields": {
         "source": [
             {

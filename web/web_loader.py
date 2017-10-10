@@ -30,7 +30,7 @@ def main():
     table_name = sys.argv[2]
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
-    with open(sys.argv[1]) as input_file:
+    with open(sys.argv[1], errors="ignore") as input_file:
         field_names.extend(input_file.readline().rstrip().split("\t"))
         fields_in_table.extend([i + " TEXT" for i in field_names if i != "rowid"])
     CURSOR.execute("DROP TABLE if exists {}".format(table_name))

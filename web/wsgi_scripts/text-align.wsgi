@@ -89,7 +89,7 @@ def search_alignments():
                 " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
     else:
         query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-                o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(db_table, db_table,
+                o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
                 " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
     DATABASE = psycopg2.connect(user="alignments", password="martini", database="alignments")
     CURSOR = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -233,7 +233,7 @@ def link_to_philologic():
 def parse_args(request):
     search_args = formArguments()
     other_args = formArguments()
-    other_args_keys = ["facet", "direction", "source", "target", "stats_field", "db_table", "filter_field", "filter_value"]
+    other_args_keys = ["facet", "direction", "source", "target", "stats_field", "db_table", "filter_field", "filter_value", "page", "id_anchor"]
     for key, value in request.args.items():
         if key in other_args_keys:
             if key == "full":
