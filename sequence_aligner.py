@@ -39,7 +39,7 @@ def parse_command_line():
     parser.add_argument("--debug", help="add debugging", action='store_true', default=False)
     args = vars(parser.parse_args())
     tei_parsing = {}
-    preprocessing_params = {}
+    preprocessing_params = {"source": {}, "target": {}}
     matching_params = {}
     if args["config"]:
         if os.path.exists(args["config"]):
@@ -59,13 +59,18 @@ def parse_command_line():
                             value = Path(args["output_path"]).joinpath("target")
                     tei_parsing[key] = value
             for key, value in dict(config["PREPROCESSING"]).items():
-                if key.endswith("object_level"):
-                    preprocessing_params[key] = value
-                elif value or key not in preprocessing_params:
-                    if key == "ngram":
-                        preprocessing_params[key] = int(value)
+                if value:
+                    if key.endswith("object_level"):
+                        if key.startswith("source"):
+                            preprocessing_params["source"]["text_object_level"] = value
+                        else:
+                            preprocessing_params["target"]["text_object_level"] = value
+                    elif key == "ngram":
+                        preprocessing_params["source"][key] = int(value)
+                        preprocessing_params["target"][key] = int(value)
                     else:
-                        preprocessing_params[key] = value
+                        preprocessing_params["source"][key] = value
+                        preprocessing_params["target"][key] = value
             for key, value in dict(config["MATCHING"]).items():
                 if value or key not in matching_params:
                     matching_params[key] = value
@@ -96,10 +101,6 @@ def parse_command_line():
             paths["target"]["metadata_path"] = args["target_metadata"] or str(Path(args["output_path"]).joinpath("target/metadata/metadata.json"))
             paths["target"]["is_philo_db"] = args["is_philo_db"]
     preprocessing_params = {"source": preprocessing_params, "target": preprocessing_params}
-    preprocessing_params["source"]["text_object_level"] = preprocessing_params["source"]["source_text_object_level"]
-    del preprocessing_params["source"]["source_text_object_level"]
-    preprocessing_params["target"]["text_object_level"] = preprocessing_params["target"]["target_text_object_level"]
-    del preprocessing_params["target"]["target_text_object_level"]
     return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], args["debug"]
 
 def main():
