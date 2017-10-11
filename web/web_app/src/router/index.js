@@ -4,10 +4,13 @@ import searchResults from "../components/searchResults";
 import graphResults from "../components/graphResults";
 import globalStats from "../components/globalStats";
 
+import globalConfig from "../../appConfig.json";
+
 Vue.use(Router);
 
 export default new Router({
     mode: "history",
+    base: globalConfig.appPath,
     routes: [
         {
             path: "/search",

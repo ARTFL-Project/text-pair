@@ -179,30 +179,30 @@ def stats():
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if search_args:
-        query = "SELECT {}, passage_id, COUNT(*) FROM {} WHERE {} GROUP BY passage_id, {}".format(
+        query = "SELECT {}, COUNT(*) FROM {} WHERE {} AND earliest=%s GROUP BY {} ORDER BY COUNT(*) DESC LIMIT 100".format(
             other_args.stats_field, other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.stats_field
         )
     else:
-        query = "SELECT {}, passage_id, COUNT(*) FROM {} GROUP BY passage_id, {}".format(
+        query = "SELECT {}, COUNT(*) FROM {} WHERE earliest=%s GROUP BY {} ORDER BY COUNT(*) DESC LIMIT 100".format(
             other_args.stats_field, other_args.db_table, other_args.stats_field
         )
-    cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
-    results = {}
+    if other_args.direction == "source":
+        cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v] + ["yes"])
+    else:
+        cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v] + ["no"])  # give instances where passage is a reuse
+    results = []
     for result in cursor:
-        field_name, passage_id, count = result
-        if field_name not in results:
-            results[field_name] = {
-                "passage_id": passage_id,
-                "count": count,
-                "distinct_reuses": 0
-            }
-        results[field_name]["count"] += count
-    results = sorted([{"label": field_name, "count": result["count"], "passage_id": result["passage_id"]} for field_name, result in results.items()], key=lambda x: x["count"], reverse=True)
+        field_name, count = result
+        results.append({
+            "label": field_name,
+            "count": count
+        })
+    # results = sorted([{"label": field_name, "count": result["count"], "passage_id": result["passage_id"]} for field_name, result in results.items()], key=lambda x: x["count"], reverse=True)
     response = jsonify({"stats_field": other_args.stats_field, "results": results})
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
-@application.route("/get_most_reused_passages", methods=["GET"])
+@application.route("/get_most_reused_passages/", methods=["GET"])
 def get_most_reused_passages():
     search_args, other_args = parse_args(request)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
@@ -211,15 +211,21 @@ def get_most_reused_passages():
         other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]])
     )
     cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
-    column_names = [desc[0] for desc in CURSOR.description]
-    source_columns = [col for col in column_names if not col.startswith("target_")]
-    target_columns = [col for col in column_names if not col.startswith("source_")]
+    column_names = [desc[0] for desc in cursor.description]
     results = {}
-    skip_source = False
-    skip_target = False
-    for result in cursor:
-        pass
-
+    for pos, row in enumerate(cursor):
+        metadata = {key: row[key] for key in column_names}
+        passage_id = metadata["passage_id"]
+        if passage_id not in results:
+            results[passage_id] = {
+                "metadata": metadata,
+                "count": 0
+            }
+        results[passage_id]["count"] += 1
+    results = [v for k, v in sorted(results.items(), key=lambda x: x[1]["count"], reverse=True)]
+    response = jsonify({"results": results})
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
 
 @application.route("/link_to_philologic", methods=["GET"])
 def link_to_philologic():

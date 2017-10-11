@@ -119,13 +119,6 @@
 import { EventBus } from '../main.js';
 import * as differ from 'diff'
 
-var paramsToUrl = function(formValues) {
-    var queryParams = [];
-    for (var param in formValues) {
-        queryParams.push(`${param}=${encodeURIComponent(formValues[param])}`)
-    }
-    return queryParams.join("&")
-}
 export default {
     name: "searchResults",
     data() {
