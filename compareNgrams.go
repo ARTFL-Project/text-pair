@@ -160,7 +160,7 @@ func main() {
 			prefixString += fmt.Sprintf(" from source batch %d", sourceBatchNumber+1)
 			fmt.Printf("\n### Comparing source batch %d against all... ###\n", sourceBatchNumber+1)
 		}
-		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber], prefixString)
+		sourceFileIndexes := getJSONDocs(sourceFileBatches[sourceBatchNumber], prefixString, config.numThreads)
 		for targetBatchNumber := 0; targetBatchNumber < config.targetBatch; targetBatchNumber++ {
 			if sourceAgainstSource && sourceBatchNumber > targetBatchNumber {
 				continue // we've already done these comparisons in the other direction
@@ -173,7 +173,7 @@ func main() {
 				if config.targetBatch > 1 {
 					targetPrefix += fmt.Sprintf(" from target batch %d", targetBatchNumber+1)
 				}
-				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber], targetPrefix)
+				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber], targetPrefix, config.numThreads)
 			}
 			var localSourceFilesDone map[string]bool
 			if sourceAgainstSource {
@@ -434,6 +434,53 @@ func getFiles(filePath string, metadata map[string]map[string]string, sortField 
 	return filesToLoad
 }
 
+func getJSONDocs(fileLocations []string, prefixString string, threads int) []docIndex {
+	var jsonFiles []docIndex
+	totalFiles := len(fileLocations)
+	runningTotal := 0
+	multiplier := threads * 4
+	var c chan docIndex
+	groupNum := int(math.Floor(float64(totalFiles)/float64(multiplier))) + 1
+	fileGroups := makeSliceOfSlices(fileLocations, groupNum)
+	for _, fileGroup := range fileGroups {
+		filesInGroup := len(fileGroup)
+		c = make(chan docIndex, filesInGroup)
+		var wait sync.WaitGroup
+		wait.Add(filesInGroup)
+		for _, fileLocation := range fileGroup {
+			go func(fileLocation string) {
+				defer wait.Done()
+				jsonFile, err := ioutil.ReadFile(fileLocation)
+				checkErr(err, "getJSONDocs")
+				tempDoc := make(map[int32][][]int32)
+				json.Unmarshal(jsonFile, &tempDoc)
+				doc := make(map[int32][]indexedNgram)
+				for key, value := range tempDoc {
+					doc[key] = []indexedNgram{}
+					for _, ngram := range value {
+						doc[key] = append(doc[key], indexedNgram{ngram[0], ngram[1], ngram[2]})
+					}
+				}
+				docID := path.Base(strings.Replace(fileLocation, ".json", "", 1))
+				docObject := docIndex{docID, doc}
+				c <- docObject
+			}(fileLocation)
+		}
+		wait.Wait()
+		for i := 0; i < filesInGroup; i++ {
+			localDocIndex := <-c
+			jsonFiles = append(jsonFiles, localDocIndex)
+			runningTotal++
+		}
+		progress := fmt.Sprintf("\r%s... %d/%d", prefixString, runningTotal, totalFiles)
+		os.Stdout.Write([]byte(progress))
+		os.Stdout.Sync()
+	}
+	os.Stdout.Write([]byte("\r\033[K" + prefixString + "... done.\n"))
+	os.Stdout.Sync()
+	return jsonFiles
+}
+
 func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCommonNgramThreshold *int) map[int32]bool {
 	uniqueNgrams := make(map[int32]bool)
 	listOfFiles := []string{*sourceNgrams, *targetNgrams}
@@ -460,33 +507,6 @@ func compileMostCommonNgrams(sourceNgrams *string, targetNgrams *string, mostCom
 		}
 	}
 	return uniqueNgrams
-}
-
-func getJSONDocs(fileLocations []string, prefixString string) []docIndex {
-	var jsonFiles []docIndex
-	totalFiles := len(fileLocations)
-	for pos, fileLocation := range fileLocations {
-		jsonFile, err := ioutil.ReadFile(fileLocation)
-		checkErr(err, "getJSONDocs")
-		tempDoc := make(map[int32][][]int32)
-		json.Unmarshal(jsonFile, &tempDoc)
-		doc := make(map[int32][]indexedNgram)
-		for key, value := range tempDoc {
-			doc[key] = []indexedNgram{}
-			for _, ngram := range value {
-				doc[key] = append(doc[key], indexedNgram{ngram[0], ngram[1], ngram[2]})
-			}
-		}
-		docID := path.Base(strings.Replace(fileLocation, ".json", "", 1))
-		docObject := docIndex{docID, doc}
-		jsonFiles = append(jsonFiles, docObject)
-		progress := fmt.Sprintf("\r%s... %d/%d", prefixString, pos+1, totalFiles)
-		os.Stdout.Write([]byte(progress))
-		os.Stdout.Sync()
-	}
-	os.Stdout.Write([]byte("\r\033[K" + prefixString + "... done.\n"))
-	os.Stdout.Sync()
-	return jsonFiles
 }
 
 func loadNgramIndex(fileLocation string) map[int32]string {
