@@ -100,7 +100,6 @@ def parse_command_line():
             paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/")
             paths["target"]["metadata_path"] = args["target_metadata"] or str(Path(args["output_path"]).joinpath("target/metadata/metadata.json"))
             paths["target"]["is_philo_db"] = args["is_philo_db"]
-    preprocessing_params = {"source": preprocessing_params, "target": preprocessing_params}
     return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], args["debug"]
 
 def main():
