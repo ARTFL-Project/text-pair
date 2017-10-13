@@ -29,8 +29,8 @@ except ImportError:
 
 # See https://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python/266162#266162
 PUNCTUATION_MAP = dict.fromkeys(i for i in range(sys.maxunicode) if unicodedata.category(chr(i)).startswith('P'))
-NUMBER_MAP = {ord(ch): None for ch in '0123456789'}
 TRIM_LAST_SLASH = re.compile(r'/\Z')
+NUMBERS = re.compile(r'\d')
 
 PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5, 'sent': 6, 'word': 7}
 
@@ -84,8 +84,10 @@ class Ngrams:
         return lemmas
 
     def __normalize(self, input_str, stemmer, lemmatizer):
+        if self.numbers is False:
+            if NUMBERS.search(input_str):
+                return ""
         input_str = input_str.translate(PUNCTUATION_MAP)
-        input_str = input_str.translate(NUMBER_MAP)
         if input_str == "":
             return ""
         input_str = html.unescape(input_str)
