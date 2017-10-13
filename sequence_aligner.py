@@ -60,10 +60,11 @@ def parse_command_line():
                     tei_parsing[key] = value
             for key, value in dict(config["PREPROCESSING"]).items():
                 if value:
-                    if value.lower() == "yes" or value.lower() == "true":
-                        value = True
-                    else:
-                        value = False
+                    if key == "skipgram":
+                        if value.lower() == "yes" or value.lower() == "true":
+                            value = True
+                        else:
+                            value = False
                     if key.endswith("object_level"):
                         if key.startswith("source"):
                             preprocessing_params["source"]["text_object_level"] = value
@@ -109,6 +110,7 @@ def parse_command_line():
 def main():
     """Main function to start sequence alignment"""
     paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, debug = parse_command_line()
+    print(preprocessing_params)
     if tei_parsing["parse_source_files"] is True:
         print("\n### Parsing source TEI files ###")
         parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"],
