@@ -60,6 +60,10 @@ def parse_command_line():
                     tei_parsing[key] = value
             for key, value in dict(config["PREPROCESSING"]).items():
                 if value:
+                    if value.lower() == "yes" or value.lower() == "true":
+                        value = True
+                    else:
+                        value = False
                     if key.endswith("object_level"):
                         if key.startswith("source"):
                             preprocessing_params["source"]["text_object_level"] = value

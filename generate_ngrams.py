@@ -130,7 +130,7 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="20%", use_db=False, db_name=""):
+    def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="50%", use_db=False, db_name=""):
         """Generate n-grams."""
         files = glob(str(Path(file_path).joinpath("*")))
         # os.system('rm -rf %s/' % output_path)
