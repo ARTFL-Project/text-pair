@@ -19,8 +19,10 @@
                                     Source
                                 </h6>
                                 <p class="pt-3 px-3">
-                                    {{ alignment.source_author }}
-                                    <i>{{ alignment.source_title }}</i> [{{ alignment.source_year }}]
+                                    <span v-for="(citation, citationIndex) in globalConfig.sourceCitation" :key="citation.field" v-if="alignment[citation.field]">
+                                        <span :style="citation.style">{{ alignment[citation.field] }}</span>
+                                        <span class="separator" v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
+                                    </span>
                                 </p>
                             </div>
                             <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0">
@@ -28,8 +30,10 @@
                                     Target
                                 </h6>
                                 <p class="pt-3 px-3">
-                                    {{ alignment.target_author }},
-                                    <i>{{ alignment.target_title }}</i> [{{ alignment.target_year }}]
+                                    <span v-for="(citation, citationIndex) in globalConfig.targetCitation" :key="citation.field" v-if="alignment[citation.field]">
+                                        <span :style="citation.style">{{ alignment[citation.field] }}</span>
+                                        <span class="separator" v-if="citationIndex != globalConfig.targetCitation.length - 1">&#9679;&nbsp;</span>
+                                    </span>
                                 </p>
                             </div>
                         </div>
@@ -40,7 +44,7 @@
                                     <span class="source-passage">{{ alignment.source_passage }}</span>
                                     {{ alignment.source_context_after }}
                                 </p>
-                                <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-on:click="goToContext(alignment.source_link_to_philologic)">View passage in context</a>
+                                <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.sourceDB.philoDB" v-on:click="goToContext(alignment, 'source')">View passage in context</a>
                             </div>
                             <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
@@ -48,7 +52,7 @@
                                     <span class="target-passage">{{ alignment.target_passage }}</span>
                                     {{ alignment.target_context_after }}
                                 </p>
-                                <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-on:click="goToContext(alignment.target_link_to_philologic)">View passage in context</a>
+                                <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.targetDB.philoDB" v-on:click="goToContext(alignment, 'target')">View passage in context</a>
                             </div>
                         </div>
                         <div class="text-muted text-center">
@@ -145,7 +149,7 @@ export default {
         fetchData() {
             this.results = { alignments: [] } // clear alignments with new search
             this.facetResults = null // clear facet results with new search
-            let params = {...this.$route.query}
+            let params = { ...this.$route.query }
             params.db_table = this.$globalConfig.databaseName
             this.$http.get(`${this.$globalConfig.apiServer}/search_alignments/?`, {
                 params: params
@@ -159,30 +163,48 @@ export default {
                 console.log(error)
             });
         },
-        goToContext(urlParams) {
-            this.$http.get(`${this.$globalConfig.apiServer}/${urlParams}`).then(response => {
-                window.open(response.data.link, '_blank');
+        goToContext(alignment, direction) {
+            let rootURL = ""
+            let params = {}
+            if (direction == "source") {
+                rootURL = this.globalConfig.sourceDB.link
+                params = {
+                    doc_id: alignment.source_doc_id,
+                    start_byte: alignment.source_start_byte,
+                    end_byte: alignment.source_end_byte
+                }
+            } else {
+                rootURL = this.globalConfig.targetDB.link
+                params = {
+                    doc_id: alignment.target_doc_id,
+                    start_byte: alignment.target_start_byte,
+                    end_byte: alignment.target_end_byte
+                }
+            }
+            this.$http.get(`${rootURL}/scripts/alignment_to_text.py?`, {
+                params: params
+            }).then(response => {
+                window.open(`${rootURL}/${response.data.link}`, '_blank');
             }).catch(error => {
                 alert(error)
             })
-
         },
         previousPage() {
-            let queryParams = {...this.$route.query}
+            let queryParams = { ...this.$route.query }
             queryParams.page = parseInt(this.results.page) - 1
             queryParams.direction = "previous"
             queryParams.id_anchor = this.results.alignments[0].rowid_ordered
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
         nextPage(urlEnd) {
-            let queryParams = {...this.$route.query}
+            let queryParams = { ...this.$route.query }
             queryParams.page = parseInt(this.results.page) + 1
             queryParams.direction = "next"
             queryParams.id_anchor = this.results.alignments[this.results.alignments.length - 1].rowid_ordered
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
         facetSearch(field) {
-            let queryParams = {...this.$route.query}
+            let queryParams = { ...this.$route.query }
             queryParams.db_table = this.$globalConfig.databaseName
             queryParams.facet = field
             this.facetLoading = true
@@ -197,7 +219,7 @@ export default {
             });
         },
         filteredSearch(fieldName, value) {
-            let queryParams = {...this.$route.query}
+            let queryParams = { ...this.$route.query }
             delete queryParams.page
             delete queryParams.id_anchor
             queryParams.db_table = this.$globalConfig.databaseName
@@ -210,7 +232,7 @@ export default {
         showDifferences(sourceText, targetText) {
             let sourceElement = event.srcElement.parentNode.parentNode.querySelector(".source-passage")
             let targetElement = event.srcElement.parentNode.parentNode.querySelector(".target-passage")
-            let differences = differ.diffChars(sourceText, targetText, {ignoreCase: true})
+            let differences = differ.diffChars(sourceText, targetText, { ignoreCase: true })
             let newSourceString = ""
             let newTargetString = ""
             let deleted = ""
@@ -268,11 +290,13 @@ export default {
     text-align: right;
 }
 
-.list-group-item:focus,.list-group-item:active {
-   outline: none !important;
+.list-group-item:focus,
+.list-group-item:active {
+    outline: none !important;
 }
 
-.source-passage, .target-passage {
+.source-passage,
+.target-passage {
     color: dodgerblue;
 }
 
@@ -298,5 +322,9 @@ export default {
 .diff-btn:hover {
     color: #565656 !important;
     background-color: #f8f8f8;
+}
+
+.separator {
+    padding: 5px;
 }
 </style>

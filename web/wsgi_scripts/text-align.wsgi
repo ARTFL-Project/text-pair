@@ -98,18 +98,6 @@ def search_alignments():
     alignments = []
     for pos, row in enumerate(CURSOR):
         metadata = {key: row[key] for key in column_names}
-        metadata["source_link_to_philologic"] = "link_to_philologic?filename={}&doc_id={}&start_byte={}&end_byte={}".format(
-            metadata["source_filename"],
-            metadata["source_doc_id"].replace("_", " "),
-            metadata["source_start_byte"],
-            metadata["source_end_byte"]
-        )
-        metadata["target_link_to_philologic"] = "link_to_philologic?filename={}&doc_id={}&start_byte={}&end_byte={}".format(
-            metadata["target_filename"],
-            metadata["target_doc_id"].replace("_", " "),
-            metadata["target_start_byte"],
-            metadata["target_end_byte"]
-        )
         alignments.append(metadata)
     if other_args.direction == "previous":
         alignments.reverse()
@@ -229,6 +217,7 @@ def get_most_reused_passages():
 
 @application.route("/link_to_philologic", methods=["GET"])
 def link_to_philologic():
+    _, other_args = parse_args(request)
     db_path = str(Path(request.args["filename"]).parent).replace("data/TEXT", "")
     print(db_path, file=sys.stderr)
     philologic_link = byte_range_to_link(db_path, request.args["doc_id"], int(request.args["start_byte"]), int(request.args["end_byte"]))

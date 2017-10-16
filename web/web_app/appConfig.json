@@ -1,31 +1,67 @@
 {
     "appPath": "",
     "apiServer": "http://condorcet.uchicago.edu/alignment/",
-    "databaseName": "frantext",
-    "databaseLabel": "Frantext alignments",
+    "databaseName": "encyc_vs_tgb",
+    "databaseLabel": "Encyclopédie vs TGB alignments",
+    "sourceDB": {
+        "philoDB": true,
+        "link": "http://condorcet.uchicago.edu/philologic/encyclopedie_rc4"
+    },
+    "targetDB": {
+        "philoDB": false,
+        "link": ""
+    },
+    "sourceCitation": [
+        {
+            "field": "source_kafauth",
+            "style": {}
+        },
+        {
+            "field": "source_head",
+            "style": {}
+        },
+        {
+            "field": "source_normclass",
+            "style": {}
+        }
+    ],
+    "targetCitation": [
+        {
+            "field": "target_author",
+            "style": {}
+        },
+        {
+            "field": "target_title",
+            "style": { "font-style": "italic" }
+        },
+        {
+            "field": "target_year",
+            "style": {}
+        }
+    ],
     "metadataFields": {
         "source": [
             {
-                "label": "Title",
-                "value": "source_title"
-            },
-            {
                 "label": "Author",
-                "value": "source_author"
+                "value": "source_kafauth"
             },
             {
-                "label": "Year",
-                "value": "source_year"
+                "label": "Headword",
+                "value": "source_head"
+            },
+            {
+                "label": "Class",
+                "value": "source_normclass"
             }
         ],
         "target": [
             {
-                "label": "Title",
-                "value": "target_title"
-            },
-            {
                 "label": "Author",
                 "value": "target_author"
+            },
+            {
+                "label": "Title",
+                "value": "target_title"
             },
             {
                 "label": "Year",
@@ -36,26 +72,26 @@
     "facetsFields": {
         "source": [
             {
-                "label": "Title",
-                "value": "source_title"
-            },
-            {
                 "label": "Author",
-                "value": "source_author"
+                "value": "source_kafauth"
             },
             {
-                "label": "Year",
-                "value": "source_year"
+                "label": "Headword",
+                "value": "source_head"
+            },
+            {
+                "label": "Class",
+                "value": "source_normclass"
             }
         ],
         "target": [
             {
-                "label": "Title",
-                "value": "target_title"
-            },
-            {
                 "label": "Author",
                 "value": "target_author"
+            },
+            {
+                "label": "Title",
+                "value": "target_title"
             },
             {
                 "label": "Year",
@@ -63,5 +99,4 @@
             }
         ]
     }
-
 }
