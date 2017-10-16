@@ -39,13 +39,14 @@ class Ngrams:
     """Generate Ngrams"""
 
     def __init__(self, text_object_level="doc", ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, debug=False):
+                 lowercase=True, minimum_word_length=2, debug=False):
         self.ngram = ngram
         self.skipgram = skipgram
         self.numbers = numbers
         self.stemmer = stemmer
         self.language = language
         self.lowercase = lowercase
+        self.minimum_word_length = minimum_word_length
         if lemmatizer:
             self.lemmatize = True
             self.lemmatizer_path = lemmatizer
@@ -103,6 +104,8 @@ class Ngrams:
                     pass
         if self.stemmer:
             input_str = stemmer.stemWord(input_str)
+        if len(input_str) < self.minimum_word_length:
+            return ""
         return unidecode(input_str)
 
     def __write_to_disk(self, ngrams, text_id):
@@ -298,7 +301,7 @@ class Ngrams:
                 word_obj = json.loads(line.strip())
                 word = word_obj["token"]
                 word = self.__normalize(word, stemmer, lemmatizer)
-                if len(word) < 2 or word in self.stopwords:
+                if word in self.stopwords:
                     continue
                 position = word_obj["position"]
                 if self.text_object_level == 'doc':

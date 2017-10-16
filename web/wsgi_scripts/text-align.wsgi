@@ -84,13 +84,23 @@ def index():
 def search_alignments():
     search_args, other_args = parse_args(request)
     if other_args.direction == "next":
-        query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-                o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
-                " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
+        if search_args:
+            query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
+                    o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
+                    " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
+        else:
+            query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
+                    o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
+                    other_args.id_anchor)
     else:
-        query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-                o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
-                " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
+        if search_args:
+            query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
+                    o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
+                    " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
+        else:
+            query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
+                    o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
+                    other_args.id_anchor)
     DATABASE = psycopg2.connect(user="alignments", password="martini", database="alignments")
     CURSOR = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     CURSOR.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
@@ -147,8 +157,12 @@ def facets():
     search_args, other_args = parse_args(request)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
-        other_args.facet, other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.facet)
+    if search_args:
+        query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
+            other_args.facet, other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.facet)
+    else:
+        query = "SELECT {}, COUNT(*) FROM {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
+            other_args.facet, other_args.db_table, other_args.facet)
     cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
     results = []
     for result in cursor:
@@ -251,7 +265,8 @@ def parse_args(request):
             else:
                 other_args[key] = value
         else:
-            search_args[key] = value
+            if value:
+                search_args[key] = value
     return search_args, other_args
 
 def load_json(path):
