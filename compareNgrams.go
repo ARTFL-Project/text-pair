@@ -612,6 +612,280 @@ func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDoc
 	return debugOutput
 }
 
+func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMatch, config *matchingParams, mostCommonNgrams map[int32]bool, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
+	alignments := make([]Alignment, 0)
+	m := &matchValues{}
+	m.lastSourcePosition = 0
+	m.inAlignment = false
+	for matchIndex, currentAnchor := range matches {
+		if currentAnchor.source.index < m.lastSourcePosition {
+			continue
+		}
+		m.sourceAnchor = currentAnchor.source.index
+		m.sourceWindowBoundary = m.sourceAnchor + config.matchingWindowSize
+		m.lastSourcePosition = m.sourceAnchor
+		m.maxSourceGap = m.lastSourcePosition + config.maxGap
+		m.targetAnchor = currentAnchor.target.index
+		m.targetWindowBoundary = m.targetAnchor + config.matchingWindowSize
+		m.lastTargetPosition = m.targetAnchor
+		m.maxTargetGap = m.lastTargetPosition + config.maxGap
+		m.inAlignment = true
+		m.previousSourceIndex = m.sourceAnchor
+		m.firstMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
+		m.matchesInCurrentAlignment = 1
+		m.matchesInCurrentWindow = 1
+		m.commonNgramMatches = 0
+		if _, ok := mostCommonNgrams[currentAnchor.ngram]; ok {
+			m.commonNgramMatches++
+		}
+		m.lastMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
+		if config.debug {
+			m.debug = append(m.debug, ngramIndex[currentAnchor.ngram])
+		}
+		currentMatchesLength := len(matches)
+		// lastPosition := len(matches[matchIndex+1:]) - 1
+	innerMatchingLoop:
+		for pos, match := range matches[matchIndex+1:] {
+			source, target := match.source, match.target
+			// we skip source_match if the same as before and we only want targets that are after last target match
+			if source.index == m.previousSourceIndex {
+				continue
+			}
+			if target.index > m.maxTargetGap || target.index <= m.lastTargetPosition {
+				nextIndex := pos + matchIndex + 1
+				// Is next source index within maxSourceGap? If so, the match should continue since target may be within maxTargetGap
+				if nextIndex <= currentMatchesLength && matches[nextIndex].source.index <= m.maxSourceGap {
+					continue
+				} else {
+					m.inAlignment = false
+				}
+			}
+			if source.index > m.maxSourceGap {
+				m.inAlignment = false
+			}
+			if source.index > m.sourceWindowBoundary || target.index > m.targetWindowBoundary {
+				if m.matchesInCurrentWindow < config.minimumMatchingNgramsInWindow {
+					m.inAlignment = false
+				} else {
+					if source.index > m.maxSourceGap || target.index > m.maxTargetGap {
+						m.inAlignment = false
+					} else {
+						m.sourceAnchor = source.index
+						m.sourceWindowBoundary = m.sourceAnchor + config.matchingWindowSize
+						m.targetAnchor = target.index
+						m.targetWindowBoundary = m.targetAnchor + config.matchingWindowSize
+						m.matchesInCurrentWindow = 0
+					}
+				}
+			}
+			if !m.inAlignment {
+				if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < config.commonNgramsLimit {
+					if m.matchesInCurrentAlignment >= config.minimumMatchingNgramsInWindow {
+						addAlignment(m, config, &alignments)
+						// Looking for small match within max_gap
+					} else if (m.lastMatch[0].index-currentAnchor.source.index) <= config.maxGap && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
+						addAlignment(m, config, &alignments)
+					}
+				}
+				m.lastSourcePosition = m.lastMatch[0].index + 1 // Make sure we start the next match at index that follows last source match
+				if config.debug {
+					writeDebugOutput(m, config, &currentAnchor, debugOutput)
+				}
+				m.debug = []string{}
+				break innerMatchingLoop
+			}
+			m.lastSourcePosition = source.index
+			m.maxSourceGap = m.lastSourcePosition + config.maxGap
+			m.lastTargetPosition = target.index
+			m.maxTargetGap = m.lastTargetPosition + config.maxGap
+			m.previousSourceIndex = source.index
+			m.matchesInCurrentWindow++
+			m.matchesInCurrentAlignment++
+			m.lastMatch = []indexedNgram{source, target} // save last matching ngrams
+			if _, ok := mostCommonNgrams[match.ngram]; ok {
+				m.commonNgramMatches++
+			}
+			if config.debug {
+				m.debug = append(m.debug, ngramIndex[match.ngram])
+			}
+		}
+		if m.inAlignment && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
+			addAlignment(m, config, &alignments)
+		}
+	}
+	return alignments
+}
+
+func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMatch, config *matchingParams, mostCommonNgrams map[int32]bool, alignments []Alignment, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
+	var invertMatches = []ngramMatch{}
+	for _, match := range matches {
+		invertMatches = append(invertMatches, ngramMatch{match.target, match.source, match.ngram})
+	}
+	sort.Slice(invertMatches, func(i, j int) bool {
+		if invertMatches[i].source.index < invertMatches[j].source.index {
+			return true
+		} else if invertMatches[i].source.index > invertMatches[j].source.index {
+			return false
+		}
+		return invertMatches[i].target.index < invertMatches[j].target.index
+	})
+	reverseAlignments := matchPassage(targetFile, sourceFile, invertMatches, config, mostCommonNgrams, ngramIndex, debugOutput)
+	targetMergeSet := make(map[int]bool)
+	// Merging reverse match
+	for sourceMatchIndex, sourceMatch := range alignments {
+	innerTwoWay:
+		for targetMatchIndex, targetMatch := range reverseAlignments {
+			if _, ok := targetMergeSet[targetMatchIndex]; ok {
+				continue
+			}
+			if sourceMatch.source == targetMatch.target {
+				targetMergeSet[targetMatchIndex] = true
+				break innerTwoWay
+			}
+			if targetMatch.target.startByte < sourceMatch.source.startByte && targetMatch.target.endByte >= sourceMatch.source.startByte && targetMatch.source.startByte < sourceMatch.target.startByte && targetMatch.source.endByte >= sourceMatch.target.startByte {
+				if targetMatch.target.endByte > sourceMatch.source.endByte {
+					// fmt.Println("1 Extended source from", sourceMatch.source, "to", targetMatch.target)
+					alignments[sourceMatchIndex] = Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams}
+				} else {
+					sourcePosition := position{targetMatch.target.startByte, sourceMatch.source.endByte, targetMatch.target.startNgramIndex, sourceMatch.source.endNgramIndex}
+					targetPosition := position{targetMatch.source.startByte, sourceMatch.target.endByte, targetMatch.source.startNgramIndex, sourceMatch.target.endNgramIndex}
+					alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams}
+					// fmt.Println("2 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams})
+				}
+				targetMergeSet[targetMatchIndex] = true
+				break innerTwoWay
+			} else if targetMatch.target.endByte > sourceMatch.source.endByte && targetMatch.target.startByte <= sourceMatch.source.endByte && targetMatch.source.endByte > sourceMatch.target.endByte && targetMatch.source.startByte <= sourceMatch.target.endByte {
+				sourcePosition := position{sourceMatch.source.startByte, targetMatch.target.endByte, sourceMatch.source.startNgramIndex, targetMatch.target.endNgramIndex}
+				targetPosition := position{sourceMatch.target.startByte, targetMatch.source.endByte, sourceMatch.target.startNgramIndex, targetMatch.source.endNgramIndex}
+				alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams}
+				// fmt.Println("3 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams})
+				targetMergeSet[targetMatchIndex] = true
+				break innerTwoWay
+			}
+		}
+	}
+	for targetMatchIndex, targetMatch := range reverseAlignments {
+		if _, ok := targetMergeSet[targetMatchIndex]; !ok {
+			alignments = append(alignments, Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams})
+			// fmt.Println("Adding", targetMatchIndex, targetMatch.target, targetMatch.source)
+		}
+	}
+	sort.Slice(alignments, func(i, j int) bool {
+		if alignments[i].source.startByte < alignments[j].source.startByte {
+			return true
+		} else if alignments[i].source.startByte > alignments[j].source.startByte {
+			return false
+		} else if alignments[i].source.endByte > alignments[j].source.endByte {
+			return true
+		} else if alignments[i].source.endByte < alignments[j].source.endByte {
+			return false
+		} else if alignments[i].target.startByte < alignments[j].target.startByte {
+			return true
+		}
+		return alignments[i].target.startByte < alignments[j].target.startByte
+	})
+	if len(alignments) == 1 {
+		return alignments
+	}
+	var newAlignments = []Alignment{}
+	m := matchValues{}
+	for pos, match := range alignments {
+		if pos == 0 {
+			m.previousAlignment = match
+			continue
+		}
+		m.currentAlignment = match
+		newAlignments = append(newAlignments, m.previousAlignment)
+		m.previousAlignment = m.currentAlignment
+		if pos == len(alignments)-1 {
+			newAlignments = append(newAlignments, m.currentAlignment)
+		}
+	}
+	return newAlignments
+}
+
+// Merge alignments based on either byte distance or ngram distance
+func mergeWithPrevious(alignments []Alignment, config *matchingParams) []Alignment {
+	var maxSourceDistance, maxTargetDistance int32
+	var maxNgramDistance int32
+	if config.mergeOnNgramDistance {
+		maxNgramDistance = config.matchingWindowSize
+	} else {
+		maxNgramDistance = math.MaxInt32
+	}
+	var mergedAlignments []Alignment
+	var previousAlignment Alignment
+	lastIndex := len(alignments) - 1
+	for index, currentAlignment := range alignments {
+		if index == 0 {
+			previousAlignment = currentAlignment
+			continue
+		}
+		if config.mergeOnByteDistance {
+			distanceValue := int32((float32(previousAlignment.source.endByte - previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
+			maxSourceDistance := currentAlignment.source.startByte - distanceValue
+			if maxSourceDistance < 0 {
+				maxSourceDistance = 0
+			}
+			maxTargetDistance := currentAlignment.target.startByte - distanceValue
+			if maxTargetDistance < 0 {
+				maxTargetDistance = 0
+			}
+		} else {
+			maxSourceDistance = math.MaxInt32
+			maxTargetDistance = math.MaxInt32
+		}
+		sourceNgramDistance := currentAlignment.source.startNgramIndex - previousAlignment.source.endNgramIndex
+		targetNgramDistance := currentAlignment.target.startNgramIndex - previousAlignment.target.endNgramIndex
+		if previousAlignment.source.startByte <= maxSourceDistance &&
+			maxSourceDistance <= previousAlignment.source.endByte &&
+			previousAlignment.target.startByte <= maxTargetDistance &&
+			maxTargetDistance <= previousAlignment.target.endByte {
+			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
+			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
+			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+		} else if sourceNgramDistance >= 0 &&
+			sourceNgramDistance <= maxNgramDistance &&
+			targetNgramDistance >= 0 &&
+			targetNgramDistance <= maxNgramDistance {
+			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
+			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
+			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+		} else if currentAlignment.source.startNgramIndex >= previousAlignment.source.startNgramIndex && //intersection of current source with previous source with extended end
+			currentAlignment.source.startNgramIndex <= previousAlignment.source.endNgramIndex {
+			var sourcePosition position
+			if currentAlignment.source.endNgramIndex >= previousAlignment.source.endNgramIndex {
+				sourcePosition = position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
+			} else {
+				sourcePosition = previousAlignment.source
+			}
+			if currentAlignment.target.startNgramIndex <= previousAlignment.target.startNgramIndex && // intersection of current target with previous target with extended end
+				currentAlignment.target.startNgramIndex <= previousAlignment.target.endNgramIndex {
+				if currentAlignment.target.endNgramIndex >= previousAlignment.target.endNgramIndex {
+					targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
+					previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+				} else {
+					previousAlignment = Alignment{sourcePosition, previousAlignment.target, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+				}
+			} else if targetNgramDistance >= 0 && // current target is within targetNgramDistance
+				targetNgramDistance <= config.matchingWindowSize {
+				targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
+				previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+			}
+		} else {
+			mergedAlignments = append(mergedAlignments, previousAlignment) // we store previous since it can no longer be merged with next
+			previousAlignment = currentAlignment                           // current match was not merged with previous so now becomes previous
+		}
+		if index == lastIndex { // don't forget to add last unmerged alignment
+			mergedAlignments = append(mergedAlignments, currentAlignment)
+		}
+	}
+	if (Alignment{}) != previousAlignment && len(mergedAlignments) == 0 {
+		mergedAlignments = append(mergedAlignments, previousAlignment)
+	}
+	return mergedAlignments
+}
+
 func writeDebugOutput(m *matchValues, config *matchingParams, currentAnchor *ngramMatch, debugOutput *os.File) {
 	match := false
 	if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < config.commonNgramsLimit {
@@ -710,277 +984,6 @@ func addAlignment(m *matchValues, config *matchingParams, alignments *[]Alignmen
 	m.currentAlignment.totalMatchingNgrams = m.matchesInCurrentAlignment
 	*alignments = append(*alignments, m.currentAlignment)
 	m.previousAlignment = m.currentAlignment
-}
-
-// Merge alignments based on either byte distance or ngram distance
-func mergeWithPrevious(alignments []Alignment, config *matchingParams) []Alignment {
-	var maxSourceDistance, maxTargetDistance int32
-	var maxNgramDistance int32
-	if config.mergeOnNgramDistance {
-		maxNgramDistance = config.matchingWindowSize
-	} else {
-		maxNgramDistance = math.MaxInt32
-	}
-	var mergedAlignments []Alignment
-	var previousAlignment Alignment
-	lastIndex := len(alignments) - 1
-	for index, currentAlignment := range alignments {
-		if index == 0 {
-			previousAlignment = currentAlignment
-			continue
-		}
-		if config.mergeOnByteDistance {
-			distanceValue := int32((float32(previousAlignment.source.endByte - previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
-			maxSourceDistance := currentAlignment.source.startByte - distanceValue
-			if maxSourceDistance < 0 {
-				maxSourceDistance = 0
-			}
-			maxTargetDistance := currentAlignment.target.startByte - distanceValue
-			if maxTargetDistance < 0 {
-				maxTargetDistance = 0
-			}
-		} else {
-			maxSourceDistance = math.MaxInt32
-			maxTargetDistance = math.MaxInt32
-		}
-		sourceNgramDistance := currentAlignment.source.startNgramIndex - previousAlignment.source.endNgramIndex
-		targetNgramDistance := currentAlignment.target.startNgramIndex - previousAlignment.target.endNgramIndex
-		if previousAlignment.source.startByte <= maxSourceDistance &&
-			maxSourceDistance <= previousAlignment.source.endByte &&
-			previousAlignment.target.startByte <= maxTargetDistance &&
-			maxTargetDistance <= previousAlignment.target.endByte {
-			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
-			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
-		} else if sourceNgramDistance >= 0 &&
-			sourceNgramDistance <= maxNgramDistance &&
-			targetNgramDistance >= 0 &&
-			targetNgramDistance <= maxNgramDistance {
-			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
-			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
-		} else if currentAlignment.source.startNgramIndex >= previousAlignment.source.startNgramIndex && //intersection of current source with previous source with extended end
-			currentAlignment.source.startNgramIndex <= previousAlignment.source.endNgramIndex {
-			var sourcePosition position
-			if currentAlignment.source.endNgramIndex >= previousAlignment.source.endNgramIndex {
-				sourcePosition = position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
-			} else {
-				sourcePosition = previousAlignment.source
-			}
-			if currentAlignment.target.startNgramIndex <= previousAlignment.target.startNgramIndex && // intersection of current target with previous target with extended end
-				currentAlignment.target.startNgramIndex <= previousAlignment.target.endNgramIndex {
-				if currentAlignment.target.endNgramIndex >= previousAlignment.target.endNgramIndex {
-					targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-					previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
-				} else {
-					previousAlignment = Alignment{sourcePosition, previousAlignment.target, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
-				}
-			} else if targetNgramDistance >= 0 && // current target is within targetNgramDistance
-				targetNgramDistance <= config.matchingWindowSize {
-				targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-				previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
-			}
-		} else {
-			mergedAlignments = append(mergedAlignments, previousAlignment) // we store previous since it can no longer be merged with next
-			previousAlignment = currentAlignment                           // current match was not merged with previous so now becomes previous
-		}
-		if index == lastIndex { // don't forget to add last unmerged alignment
-			mergedAlignments = append(mergedAlignments, currentAlignment)
-		}
-	}
-	return mergedAlignments
-}
-
-func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMatch, config *matchingParams, mostCommonNgrams map[int32]bool, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
-	alignments := make([]Alignment, 0)
-	m := &matchValues{}
-	m.lastSourcePosition = 0
-	m.inAlignment = false
-	for matchIndex, currentAnchor := range matches {
-		if currentAnchor.source.index < m.lastSourcePosition {
-			continue
-		}
-		m.sourceAnchor = currentAnchor.source.index
-		m.sourceWindowBoundary = m.sourceAnchor + config.matchingWindowSize
-		m.lastSourcePosition = m.sourceAnchor
-		m.maxSourceGap = m.lastSourcePosition + config.maxGap
-		m.targetAnchor = currentAnchor.target.index
-		m.targetWindowBoundary = m.targetAnchor + config.matchingWindowSize
-		m.lastTargetPosition = m.targetAnchor
-		m.maxTargetGap = m.lastTargetPosition + config.maxGap
-		m.inAlignment = true
-		m.previousSourceIndex = m.sourceAnchor
-		m.firstMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
-		m.matchesInCurrentAlignment = 1
-		m.matchesInCurrentWindow = 1
-		m.commonNgramMatches = 0
-		if _, ok := mostCommonNgrams[currentAnchor.ngram]; ok {
-			m.commonNgramMatches++
-		}
-		m.lastMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
-		if config.debug {
-			m.debug = append(m.debug, ngramIndex[currentAnchor.ngram])
-		}
-		currentMatchesLength := len(matches)
-	innerMatchingLoop:
-		for pos, match := range matches[matchIndex+1:] {
-			source, target := match.source, match.target
-			// we skip source_match if the same as before and we only want targets that are after last target match
-			if source.index == m.previousSourceIndex {
-				continue
-			}
-			if target.index > m.maxTargetGap || target.index <= m.lastTargetPosition {
-				nextIndex := pos + matchIndex + 1
-				// Is next source index within maxSourceGap? If so, the match should continue since target may be within maxTargetGap
-				if nextIndex <= currentMatchesLength && matches[nextIndex].source.index <= m.maxSourceGap {
-					continue
-				} else {
-					m.inAlignment = false
-				}
-			}
-			if source.index > m.maxSourceGap {
-				m.inAlignment = false
-			}
-			if source.index > m.sourceWindowBoundary || target.index > m.targetWindowBoundary {
-				if m.matchesInCurrentWindow < config.minimumMatchingNgramsInWindow {
-					m.inAlignment = false
-				} else {
-					if source.index > m.maxSourceGap || target.index > m.maxTargetGap {
-						m.inAlignment = false
-					} else {
-						m.sourceAnchor = source.index
-						m.sourceWindowBoundary = m.sourceAnchor + config.matchingWindowSize
-						m.targetAnchor = target.index
-						m.targetWindowBoundary = m.targetAnchor + config.matchingWindowSize
-						m.matchesInCurrentWindow = 0
-					}
-				}
-			}
-			if !m.inAlignment {
-				if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < config.commonNgramsLimit {
-					if m.matchesInCurrentAlignment >= config.minimumMatchingNgramsInWindow {
-						addAlignment(m, config, &alignments)
-						// Looking for small match within max_gap
-					} else if (m.lastMatch[0].index-currentAnchor.source.index) <= config.maxGap && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
-						addAlignment(m, config, &alignments)
-					}
-				}
-				m.lastSourcePosition = m.lastMatch[0].index + 1 // Make sure we start the next match at index that follows last source match
-				if config.debug {
-					writeDebugOutput(m, config, &currentAnchor, debugOutput)
-				}
-				m.debug = []string{}
-				break innerMatchingLoop
-			}
-			m.lastSourcePosition = source.index
-			m.maxSourceGap = m.lastSourcePosition + config.maxGap
-			m.lastTargetPosition = target.index
-			m.maxTargetGap = m.lastTargetPosition + config.maxGap
-			m.previousSourceIndex = source.index
-			m.matchesInCurrentWindow++
-			m.matchesInCurrentAlignment++
-			m.lastMatch = []indexedNgram{source, target} // save last matching ngrams
-			if _, ok := mostCommonNgrams[match.ngram]; ok {
-				m.commonNgramMatches++
-			}
-			if config.debug {
-				m.debug = append(m.debug, ngramIndex[match.ngram])
-			}
-		}
-	}
-	// Add current alignment if not already done
-	if m.inAlignment && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
-		addAlignment(m, config, &alignments)
-	}
-	return alignments
-}
-
-func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMatch, config *matchingParams, mostCommonNgrams map[int32]bool, alignments []Alignment, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
-	var invertMatches = []ngramMatch{}
-	for _, match := range matches {
-		invertMatches = append(invertMatches, ngramMatch{match.target, match.source, match.ngram})
-	}
-	sort.Slice(invertMatches, func(i, j int) bool {
-		if invertMatches[i].source.index < invertMatches[j].source.index {
-			return true
-		} else if invertMatches[i].source.index > invertMatches[j].source.index {
-			return false
-		}
-		return invertMatches[i].target.index < invertMatches[j].target.index
-	})
-	reverseAlignments := matchPassage(targetFile, sourceFile, invertMatches, config, mostCommonNgrams, ngramIndex, debugOutput)
-	targetMergeSet := make(map[int]bool)
-	// Merging reverse match
-	for sourceMatchIndex, sourceMatch := range alignments {
-	innerTwoWay:
-		for targetMatchIndex, targetMatch := range reverseAlignments {
-			if _, ok := targetMergeSet[targetMatchIndex]; ok {
-				continue
-			}
-			if sourceMatch.source == targetMatch.target {
-				targetMergeSet[targetMatchIndex] = true
-				break innerTwoWay
-			}
-			if targetMatch.target.startByte < sourceMatch.source.startByte && targetMatch.target.endByte >= sourceMatch.source.startByte && targetMatch.source.startByte < sourceMatch.target.startByte && targetMatch.source.endByte >= sourceMatch.target.startByte {
-				if targetMatch.target.endByte > sourceMatch.source.endByte {
-					// fmt.Println("1 Extended source from", sourceMatch.source, "to", targetMatch.target)
-					alignments[sourceMatchIndex] = Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams}
-				} else {
-					sourcePosition := position{targetMatch.target.startByte, sourceMatch.source.endByte, targetMatch.target.startNgramIndex, sourceMatch.source.endNgramIndex}
-					targetPosition := position{targetMatch.source.startByte, sourceMatch.target.endByte, targetMatch.source.startNgramIndex, sourceMatch.target.endNgramIndex}
-					alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams}
-					// fmt.Println("2 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams})
-				}
-				targetMergeSet[targetMatchIndex] = true
-				break innerTwoWay
-			} else if targetMatch.target.endByte > sourceMatch.source.endByte && targetMatch.target.startByte <= sourceMatch.source.endByte && targetMatch.source.endByte > sourceMatch.target.endByte && targetMatch.source.startByte <= sourceMatch.target.endByte {
-				sourcePosition := position{sourceMatch.source.startByte, targetMatch.target.endByte, sourceMatch.source.startNgramIndex, targetMatch.target.endNgramIndex}
-				targetPosition := position{sourceMatch.target.startByte, targetMatch.source.endByte, sourceMatch.target.startNgramIndex, targetMatch.source.endNgramIndex}
-				alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams}
-				// fmt.Println("3 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams})
-				targetMergeSet[targetMatchIndex] = true
-				break innerTwoWay
-			}
-		}
-	}
-	for targetMatchIndex, targetMatch := range reverseAlignments {
-		if _, ok := targetMergeSet[targetMatchIndex]; !ok {
-			alignments = append(alignments, Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams})
-			// fmt.Println("Adding", targetMatchIndex, targetMatch.target, targetMatch.source)
-		}
-	}
-	sort.Slice(alignments, func(i, j int) bool {
-		if alignments[i].source.startByte < alignments[j].source.startByte {
-			return true
-		} else if alignments[i].source.startByte > alignments[j].source.startByte {
-			return false
-		} else if alignments[i].source.endByte > alignments[j].source.endByte {
-			return true
-		} else if alignments[i].source.endByte < alignments[j].source.endByte {
-			return false
-		} else if alignments[i].target.startByte < alignments[j].target.startByte {
-			return true
-		}
-		return alignments[i].target.startByte < alignments[j].target.startByte
-	})
-	if len(alignments) == 1 {
-		return alignments
-	}
-	var newAlignments = []Alignment{}
-	m := matchValues{}
-	for pos, match := range alignments {
-		if pos == 0 {
-			m.previousAlignment = match
-			continue
-		}
-		m.currentAlignment = match
-		newAlignments = append(newAlignments, m.previousAlignment)
-		m.previousAlignment = m.currentAlignment
-		if pos == len(alignments)-1 {
-			newAlignments = append(newAlignments, m.currentAlignment)
-		}
-	}
-	return newAlignments
 }
 
 // Helper functions
