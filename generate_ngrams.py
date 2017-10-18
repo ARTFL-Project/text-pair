@@ -106,6 +106,9 @@ class Ngrams:
             input_str = stemmer.stemWord(input_str)
         if len(input_str) < self.minimum_word_length:
             return ""
+        if self.numbers is False:
+            if NUMBERS.search(input_str):
+                return ""
         return unidecode(input_str)
 
     def __write_to_disk(self, ngrams, text_id):
