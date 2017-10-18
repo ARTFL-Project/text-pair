@@ -56,11 +56,16 @@
                             </div>
                         </div>
                         <div class="text-muted text-center">
-                            <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br>
+                            <!-- <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br> -->
                             <a class="diff-btn" v-on:click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
                         </div>
                     </div>
                 </transition-group>
+                <!-- <infinite-loading v-if="results.alignments.length > 0" @infinite="infiniteHandler">
+                        <span slot="no-more">
+                            There is no more Hacker News :(
+                        </span>
+                    </infinite-loading> -->
             </div>
             <div class="col-3 pl-0">
                 <div class="card rounded-0 shadow-1">
@@ -121,7 +126,8 @@
 
 <script>
 import { EventBus } from '../main.js';
-import * as differ from 'diff'
+import * as differ from 'diff';
+// import { InfiniteLoading } from '../main.js';
 
 export default {
     name: "searchResults",
@@ -130,6 +136,8 @@ export default {
             loading: false,
             done: false,
             results: { alignments: [] },
+            lastRowID: null,
+            page: 0,
             error: null,
             globalConfig: this.$globalConfig,
             facetResults: null,
@@ -155,6 +163,8 @@ export default {
                 params: params
             }).then(response => {
                 this.results = response.data
+                this.lastRowID = this.results.alignments[this.results.alignments.length - 1].rowid_ordered
+                this.page++
                 this.loading = false
                 this.done = true
             }).catch(error => {
@@ -262,7 +272,32 @@ export default {
                     { complete: done }
                 )
             }, delay)
-        }
+        },
+        infiniteHandler($state) {
+            // setTimeout(function() {
+            console.log("hi", this.results.alignments.length)
+            let queryParams = { ...this.$route.query }
+            queryParams.page = this.page + 1
+            queryParams.direction = "next"
+            queryParams.id_anchor = this.lastRowID
+            queryParams.db_table = this.$globalConfig.databaseName
+            this.$http.get(`${this.$globalConfig.apiServer}/search_alignments/?`, {
+                params: queryParams
+            }).then(response => {
+                if (response.data.length) {
+                    this.results.alignments = this.results.alignments.concat(response.data.alignments);
+                    this.page++
+                    this.lastRowID = this.results.alignments[this.results.alignments.length - 1].rowid_ordered
+                    $state.loaded();
+                } else {
+                    $state.complete();
+                }
+            }).catch(error => {
+                this.error = error.toString();
+                console.log("ERROR", error)
+            });
+            // }, 10)
+        },
     }
 }
 </script>

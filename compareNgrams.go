@@ -296,7 +296,7 @@ func main() {
 }
 
 func parseFlags() ([]string, []string, map[string]map[string]string, map[string]map[string]string, map[int32]bool, *matchingParams, map[int32]string) {
-	outputPath := flag.String("output_path", "./", "output path for results")
+	outputPath := flag.String("output_path", "./output", "output path for results")
 	ngramIndexLocation := flag.String("ngram_index", "", "location of ngram index used for debugging. Should be the source or target index, not matter which since it'll be used for common ngrams")
 	sourceFilesArg := flag.String("source_files", "", "source files location")
 	targetFilesArg := flag.String("target_files", "", "target files location")
@@ -322,10 +322,10 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	mergeOnNgramDistance := flag.Bool("merge_passages_on_ngram_distance", true, "Merge passages within x number of ngrams: the value used is the matching_window_size defaulting to 20")
 	passageDistance := flag.Float64("passage_distance_multiplier", 0.5, "Combine passage which are within (multiplier*length of previous passage) bytes")
 	oneWayMatchingArg := flag.String("one_way_matching", "false", "Disable two way matching: source is compared to target and target is NOT compared to source")
-	oneWayMatching, _ := strconv.ParseBool(*oneWayMatchingArg)
 	debugArg := flag.String("debug", "false", "set debugging: you need to also provide the --ngram_index option with a path to the ngram index to debug the matching logic.")
-	debug, _ := strconv.ParseBool(*debugArg)
 	flag.Parse()
+	oneWayMatching, _ := strconv.ParseBool(*oneWayMatchingArg)
+	debug, _ := strconv.ParseBool(*debugArg)
 	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
 		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), oneWayMatching, *duplicateThreshold, *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
 	ngramIndex := make(map[int32]string)
@@ -523,8 +523,10 @@ func loadNgramIndex(fileLocation string) map[int32]string {
 		}
 		line = strings.TrimSpace(line)
 		values := strings.Split(line, "\t")
-		intValue, _ := strconv.Atoi(values[1])
-		ngramIndex[int32(intValue)] = values[0]
+		if len(values) == 2 { // avoid dying on empty line
+			intValue, _ := strconv.Atoi(values[1])
+			ngramIndex[int32(intValue)] = values[0]
+		}
 	}
 	return ngramIndex
 }
@@ -750,20 +752,41 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams) []Alignme
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
 			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
-		} else if sourceNgramDistance > 0 &&
+		} else if sourceNgramDistance >= 0 &&
 			sourceNgramDistance <= maxNgramDistance &&
-			targetNgramDistance > 0 &&
+			targetNgramDistance >= 0 &&
 			targetNgramDistance <= maxNgramDistance {
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
 			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+		} else if currentAlignment.source.startNgramIndex >= previousAlignment.source.startNgramIndex && //intersection of current source with previous source with extended end
+			currentAlignment.source.startNgramIndex <= previousAlignment.source.endNgramIndex {
+			var sourcePosition position
+			if currentAlignment.source.endNgramIndex >= previousAlignment.source.endNgramIndex {
+				sourcePosition = position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
+			} else {
+				sourcePosition = previousAlignment.source
+			}
+			if currentAlignment.target.startNgramIndex <= previousAlignment.target.startNgramIndex && // intersection of current target with previous target with extended end
+				currentAlignment.target.startNgramIndex <= previousAlignment.target.endNgramIndex {
+				if currentAlignment.target.endNgramIndex >= previousAlignment.target.endNgramIndex {
+					targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
+					previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+				} else {
+					previousAlignment = Alignment{sourcePosition, previousAlignment.target, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+				}
+			} else if targetNgramDistance >= 0 && // current target is within targetNgramDistance
+				targetNgramDistance <= config.matchingWindowSize {
+				targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
+				previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams}
+			}
 		} else {
-			mergedAlignments = append(mergedAlignments, previousAlignment)
+			mergedAlignments = append(mergedAlignments, previousAlignment) // we store previous since it can no longer be merged with next
+			previousAlignment = currentAlignment                           // current match was not merged with previous so now becomes previous
 		}
-		if index == lastIndex {
+		if index == lastIndex { // don't forget to add last unmerged alignment
 			mergedAlignments = append(mergedAlignments, currentAlignment)
 		}
-		previousAlignment = currentAlignment
 	}
 	return mergedAlignments
 }
@@ -887,6 +910,7 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	})
 	reverseAlignments := matchPassage(targetFile, sourceFile, invertMatches, config, mostCommonNgrams, ngramIndex, debugOutput)
 	targetMergeSet := make(map[int]bool)
+	// Merging reverse match
 	for sourceMatchIndex, sourceMatch := range alignments {
 	innerTwoWay:
 		for targetMatchIndex, targetMatch := range reverseAlignments {
@@ -905,7 +929,7 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 					sourcePosition := position{targetMatch.target.startByte, sourceMatch.source.endByte, targetMatch.target.startNgramIndex, sourceMatch.source.endNgramIndex}
 					targetPosition := position{targetMatch.source.startByte, sourceMatch.target.endByte, targetMatch.source.startNgramIndex, sourceMatch.target.endNgramIndex}
 					alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams}
-					// fmt.Println("2 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition})
+					// fmt.Println("2 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams})
 				}
 				targetMergeSet[targetMatchIndex] = true
 				break innerTwoWay
@@ -913,7 +937,7 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 				sourcePosition := position{sourceMatch.source.startByte, targetMatch.target.endByte, sourceMatch.source.startNgramIndex, targetMatch.target.endNgramIndex}
 				targetPosition := position{sourceMatch.target.startByte, targetMatch.source.endByte, sourceMatch.target.startNgramIndex, targetMatch.source.endNgramIndex}
 				alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams}
-				// fmt.Println("3 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition})
+				// fmt.Println("3 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams})
 				targetMergeSet[targetMatchIndex] = true
 				break innerTwoWay
 			}
@@ -922,7 +946,7 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	for targetMatchIndex, targetMatch := range reverseAlignments {
 		if _, ok := targetMergeSet[targetMatchIndex]; !ok {
 			alignments = append(alignments, Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams})
-			// fmt.Println("Adding", targetMatch.target, targetMatch.source)
+			// fmt.Println("Adding", targetMatchIndex, targetMatch.target, targetMatch.source)
 		}
 	}
 	sort.Slice(alignments, func(i, j int) bool {
@@ -930,6 +954,12 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			return true
 		} else if alignments[i].source.startByte > alignments[j].source.startByte {
 			return false
+		} else if alignments[i].source.endByte > alignments[j].source.endByte {
+			return true
+		} else if alignments[i].source.endByte < alignments[j].source.endByte {
+			return false
+		} else if alignments[i].target.startByte < alignments[j].target.startByte {
+			return true
 		}
 		return alignments[i].target.startByte < alignments[j].target.startByte
 	})

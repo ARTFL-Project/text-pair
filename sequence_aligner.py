@@ -110,6 +110,7 @@ def parse_command_line():
 def main():
     """Main function to start sequence alignment"""
     paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, debug = parse_command_line()
+    print(paths)
     if tei_parsing["parse_source_files"] is True:
         print("\n### Parsing source TEI files ###")
         parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"],

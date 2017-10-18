@@ -149,13 +149,14 @@ class Ngrams:
             self.input_path = db_path
         self.output_path = output_path
 
-        if is_philo_db and metadata is None:
+        if is_philo_db:
             combined_metadata = {}
         elif os.path.isfile(metadata):
             self.metadata_done = True
             combined_metadata = metadata
         else:
             print("No metadata provided: exiting...")
+            exit()
 
         print("\nGenerating ngrams...", flush=True)
         pool = Pool(workers)
@@ -177,7 +178,6 @@ class Ngrams:
 
         print("Saving metadata...")
         if self.metadata_done is False:
-            print("%s/metadata/metadata.json" % self.output_path)
             with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
                 json.dump(combined_metadata, metadata_output)
         else:

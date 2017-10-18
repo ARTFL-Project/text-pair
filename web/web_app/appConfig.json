@@ -1,15 +1,15 @@
 {
     "appPath": "",
     "apiServer": "http://condorcet.uchicago.edu/alignment/",
-    "databaseName": "encyc_vs_tgb",
+    "databaseName": "encyc_vs_frantext",
     "databaseLabel": "Encyclopédie vs TGB alignments",
     "sourceDB": {
         "philoDB": true,
         "link": "http://condorcet.uchicago.edu/philologic/encyclopedie_rc4"
     },
     "targetDB": {
-        "philoDB": false,
-        "link": ""
+        "philoDB": true,
+        "link": "http://condorcet.uchicago.edu/philologic/frantext0917"
     },
     "sourceCitation": [
         {
