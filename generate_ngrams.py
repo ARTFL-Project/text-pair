@@ -106,7 +106,7 @@ class Ngrams:
             input_str = stemmer.stemWord(input_str)
         if len(input_str) < self.minimum_word_length:
             return ""
-        if self.numbers is False:
+        if self.numbers is True:
             if NUMBERS.search(input_str):
                 return ""
         return unidecode(input_str)
