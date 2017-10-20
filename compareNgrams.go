@@ -316,7 +316,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngrams_in_window", 3, "minimum matching ngrams per sliding window")
 	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
 	contextSize := flag.Int("context_size", 300, "size of context for before and after matching passages")
-	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
+	banalNgrams := flag.Int("banal_ngrams", 0, "The top ngrams between two docs: used to define common, or banal ngrams")
 	duplicateThreshold := flag.Int("duplicate_threshold", 50, "dimiss comparison if two texts share n or more percent of ngrams")
 	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option. Value between 0 and 1")
 	mergeOnNgramDistance := flag.Bool("merge_passages_on_ngram_distance", true, "Merge passages within x number of ngrams: the value used is the matching_window_size defaulting to 20")
