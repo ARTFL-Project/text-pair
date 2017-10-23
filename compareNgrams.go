@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -134,8 +135,10 @@ var tags = regexp.MustCompile("<[^>]*?>")
 var brokenBeginTags = regexp.MustCompile("^[^<]*?>")
 var brokenEndTags = regexp.MustCompile("<[^>]*?$")
 var spaces = regexp.MustCompile(" +")
-var spaceChars = regexp.MustCompile(`[\s\n\t]+`)
+var spaceChars = regexp.MustCompile(`[\s\r\n\t]+`)
 var tabEntities = regexp.MustCompile("(&#9;)+")
+var cleanStart = regexp.MustCompile(`^\S+ `)
+var cleanEnd = regexp.MustCompile(` \S+$`)
 
 func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
@@ -316,7 +319,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngrams_in_window", 3, "minimum matching ngrams per sliding window")
 	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
 	contextSize := flag.Int("context_size", 300, "size of context for before and after matching passages")
-	banalNgrams := flag.Int("banal_ngrams", 0, "The top ngrams between two docs: used to define common, or banal ngrams")
+	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
 	duplicateThreshold := flag.Int("duplicate_threshold", 50, "dimiss comparison if two texts share n or more percent of ngrams")
 	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option. Value between 0 and 1")
 	mergeOnNgramDistance := flag.Bool("merge_passages_on_ngram_distance", true, "Merge passages within x number of ngrams: the value used is the matching_window_size defaulting to 20")
@@ -568,6 +571,39 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, comm
 
 func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) (*os.File, []string, []string) {
 	os.MkdirAll(config.outputPath, 0755)
+
+	// Save alignment config first
+	configOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_config.tab"))
+	configOutput.WriteString("## Alignment Parameters ##\n\n")
+	matchingParameters := []string{
+		"matchingWindowSize",
+		"maxGap",
+		"minimumMatchingNgrams",
+		"minimumMatchingNgramsInWindow",
+		"commonNgramsLimit",
+		"minimumMatchingNgramsInDocs",
+		"contextSize",
+		"banalNgrams",
+		"mergeOnByteDistance",
+		"mergeOnNgramDistance",
+		"passageDistanceMultiplier",
+		"oneWayMatching",
+		"duplicateThreshold",
+		"sourceBatch",
+		"targetBatch",
+		"outputPath",
+		"numThreads",
+		"sortingField",
+		"debug",
+	}
+	v := reflect.ValueOf(*config)
+	for _, param := range matchingParameters {
+		f := reflect.Indirect(v).FieldByName(param)
+		configOutput.WriteString(fmt.Sprintf("%s: %v\n", param, f))
+	}
+	configOutput.Sync()
+	configOutput.Close()
+
 	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignments_results.tab"))
 	checkErr(err, "createOutputFile")
 	var firstSourceKey string
@@ -640,7 +676,6 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			m.debug = append(m.debug, ngramIndex[currentAnchor.ngram])
 		}
 		currentMatchesLength := len(matches)
-		// lastPosition := len(matches[matchIndex+1:]) - 1
 	innerMatchingLoop:
 		for pos, match := range matches[matchIndex+1:] {
 			source, target := match.source, match.target
@@ -676,14 +711,12 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 				}
 			}
 			if !m.inAlignment {
-				// if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < config.commonNgramsLimit {
-				if m.matchesInCurrentAlignment >= config.minimumMatchingNgramsInWindow {
+				if m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
 					addAlignment(m, config, &alignments)
 					// Looking for small match within max_gap
 				} else if (m.lastMatch[0].index-currentAnchor.source.index) <= config.maxGap && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
 					addAlignment(m, config, &alignments)
 				}
-				// }
 				m.lastSourcePosition = m.lastMatch[0].index + 1 // Make sure we start the next match at index that follows last source match
 				if config.debug {
 					writeDebugOutput(m, config, &currentAnchor, debugOutput)
@@ -943,8 +976,10 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 // Returns three passages: the context before, the match itself, and the context after
 func alignmentToText(alignment *position, filename string, config *matchingParams) []string {
 	beforeContext := getText(&filename, alignment.startByte-int32(config.contextSize), alignment.startByte)
+	beforeContext = cleanStart.ReplaceAllString(beforeContext, "") // avoid truncation at beginning
 	matchingPassage := getText(&filename, alignment.startByte, alignment.endByte)
 	afterContext := getText(&filename, alignment.endByte, alignment.endByte+int32(config.contextSize))
+	afterContext = cleanEnd.ReplaceAllString(afterContext, "") // avoid truncation at the end
 	passages := []string{beforeContext, matchingPassage, afterContext}
 	return passages
 }
@@ -964,14 +999,16 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	f.Close()
 	passage = bytes.Trim(passage, "\x00")
 	text := string(passage)
+	text = html.UnescapeString(text)
 	text = tags.ReplaceAllString(text, "")
+	text = strings.Replace(text, "\\n", "\n", -1)
+	text = strings.Replace(text, "\\t", "\t", -1)
 	text = brokenBeginTags.ReplaceAllString(text, "")
 	text = brokenEndTags.ReplaceAllString(text, "")
 	text = strings.Replace(text, "\t", " ", -1)
 	text = tabEntities.ReplaceAllString(text, " ")
 	text = strings.Replace(text, "\n", " ", -1)
 	text = spaces.ReplaceAllString(text, " ")
-	text = html.UnescapeString(text)
 	return text
 }
 
