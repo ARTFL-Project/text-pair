@@ -962,12 +962,14 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			fields := []string{*sourceDocID}
 			fields = append(fields, sourceValues...)
 			fields = append(fields, []string{strconv.Itoa(int(alignment.source.startByte)), strconv.Itoa(int(alignment.source.endByte))}...)
-			fields = append(fields, alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)...)
+			sourcePassages := alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)
+			fields = append(fields, sourcePassages...)
 			fields = append(fields, alignments.docID)
 			fields = append(fields, targetValues...)
 			fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
-			fields = append(fields, alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)...)
-			passageSimilarity := int(float64(alignment.totalMatchingNgrams*2) / float64((alignment.source.endNgramIndex-alignment.source.startNgramIndex+1)+(alignment.target.endNgramIndex-alignment.target.startNgramIndex+1)) * 100)
+			targetPassages := alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)
+			fields = append(fields, targetPassages...)
+			passageSimilarity := passageSimilarity(sourcePassages[1], targetPassages[1])
 			fields = append(fields, fmt.Sprintf("%d%%", passageSimilarity))
 			fields = append(fields, fmt.Sprintf("%v", alignment.banality))
 			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
@@ -1082,4 +1084,41 @@ func mapToSliceOfValues(metadata map[string]string, fields []string) []string {
 		values = append(values, metadata[v])
 	}
 	return values
+}
+
+func passageSimilarity(a, b string) int {
+	la := float64(len(a))
+	lb := float64(len(b))
+	matchRange := int(math.Floor(math.Max(la, lb)/2.0)) - 1
+	matchRange = int(math.Max(0, float64(matchRange-1)))
+	var matches, halfs float64
+	transposed := make([]bool, len(b))
+
+	for i := 0; i < len(a); i++ {
+		start := int(math.Max(0, float64(i-matchRange)))
+		end := int(math.Min(lb-1, float64(i+matchRange)))
+
+		for j := start; j <= end; j++ {
+			if transposed[j] {
+				continue
+			}
+
+			if a[i] == b[j] {
+				if i != j {
+					halfs++
+				}
+				matches++
+				transposed[j] = true
+				break
+			}
+		}
+	}
+
+	if matches == 0 {
+		return 0
+	}
+
+	transposes := math.Floor(float64(halfs / 2))
+	jaroScore := ((matches / la) + (matches / lb) + (matches-transposes)/matches) / 3.0
+	return int(math.Floor(jaroScore * 100))
 }
