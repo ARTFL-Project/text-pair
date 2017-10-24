@@ -276,7 +276,7 @@ class TEIParser:
     def parse_file(self, file_with_id):
         file_id, file = file_with_id
         with open(os.path.join(self.text_path, str(file_id)), "w") as output_file:
-            with open(file) as text_file:
+            with open(file, "r", newline="") as text_file:
                 text_content = text_file.read()
             text_content = self.prepare_content(text_content)
             bytes_read_in = 0
@@ -302,11 +302,6 @@ class TEIParser:
         # Replace carriage returns and newlines with spaces
         content = content.replace('\r', ' ')
         content = content.replace('\n', ' ')
-
-        # An experimental inword tag spanner. For selected tags between letters, this replaces the tag with "_"
-        # (in order to keep the byte count).  This is to allow indexing of words broken by tags.
-        def replace_tag(m):
-            return ''.join([m[0], m[2], '_' * len(m[1])])
 
         # Add newlines to the beginning and end of all tags
         content = content.replace('<', '\n<').replace('>', '>\n')

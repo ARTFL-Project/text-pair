@@ -724,6 +724,8 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 				m.debug = []string{}
 				break innerMatchingLoop
 			}
+			fmt.Println("LAST", m.lastMatch)
+			fmt.Println("CURRENT", source, target)
 			m.lastSourcePosition = source.index
 			m.maxSourceGap = m.lastSourcePosition + config.maxGap
 			m.lastTargetPosition = target.index
@@ -743,6 +745,7 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			addAlignment(m, config, &alignments)
 		}
 	}
+	fmt.Println(alignments)
 	return alignments
 }
 
@@ -1003,6 +1006,7 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	text = tags.ReplaceAllString(text, "")
 	text = strings.Replace(text, "\\n", "\n", -1)
 	text = strings.Replace(text, "\\t", "\t", -1)
+	text = strings.Replace(text, "\\r", "\r", -1)
 	text = brokenBeginTags.ReplaceAllString(text, "")
 	text = brokenEndTags.ReplaceAllString(text, "")
 	text = strings.Replace(text, "\t", " ", -1)
