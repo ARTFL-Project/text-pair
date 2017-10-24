@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type docIndex struct {
@@ -572,8 +573,18 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, comm
 func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) (*os.File, []string, []string) {
 	os.MkdirAll(config.outputPath, 0755)
 
+	t := time.Now()
+	year, month, day := t.Date()
+	hour, minute, _ := t.Clock()
+	var timeStamp string
+	if minute < 10 {
+		timeStamp = fmt.Sprintf("%d-%d-%d_%d:0%d", day, month, year, hour, minute)
+	} else {
+		timeStamp = fmt.Sprintf("%d-%d-%d_%d:%d", day, month, year, hour, minute)
+	}
+
 	// Save alignment config first
-	configOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_config.tab"))
+	configOutput, err := os.Create(filepath.Join(config.outputPath, fmt.Sprintf("alignment_config_%s.tab", timeStamp)))
 	configOutput.WriteString("## Alignment Parameters ##\n\n")
 	matchingParameters := []string{
 		"matchingWindowSize",
@@ -604,7 +615,7 @@ func createOutputFile(config *matchingParams, sourceMetadata map[string]map[stri
 	configOutput.Sync()
 	configOutput.Close()
 
-	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignments_results.tab"))
+	mergedOutput, err := os.Create(filepath.Join(config.outputPath, fmt.Sprintf("alignments_result_%s.tab", timeStamp)))
 	checkErr(err, "createOutputFile")
 	var firstSourceKey string
 	for sourceKey := range sourceMetadata {
