@@ -735,8 +735,6 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 				m.debug = []string{}
 				break innerMatchingLoop
 			}
-			fmt.Println("LAST", m.lastMatch)
-			fmt.Println("CURRENT", source, target)
 			m.lastSourcePosition = source.index
 			m.maxSourceGap = m.lastSourcePosition + config.maxGap
 			m.lastTargetPosition = target.index
@@ -756,7 +754,6 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			addAlignment(m, config, &alignments)
 		}
 	}
-	fmt.Println(alignments)
 	return alignments
 }
 
