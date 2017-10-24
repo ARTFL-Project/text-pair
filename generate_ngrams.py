@@ -29,8 +29,8 @@ except ImportError:
 
 # See https://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python/266162#266162
 PUNCTUATION_MAP = dict.fromkeys(i for i in range(sys.maxunicode) if unicodedata.category(chr(i)).startswith('P'))
-NUMBER_MAP = {ord(ch): None for ch in '0123456789'}
 TRIM_LAST_SLASH = re.compile(r'/\Z')
+NUMBERS = re.compile(r'\d')
 
 PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5, 'sent': 6, 'word': 7}
 
@@ -39,13 +39,14 @@ class Ngrams:
     """Generate Ngrams"""
 
     def __init__(self, text_object_level="doc", ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, debug=False):
+                 lowercase=True, minimum_word_length=2, debug=False):
         self.ngram = ngram
         self.skipgram = skipgram
         self.numbers = numbers
         self.stemmer = stemmer
         self.language = language
         self.lowercase = lowercase
+        self.minimum_word_length = minimum_word_length
         if lemmatizer:
             self.lemmatize = True
             self.lemmatizer_path = lemmatizer
@@ -84,8 +85,10 @@ class Ngrams:
         return lemmas
 
     def __normalize(self, input_str, stemmer, lemmatizer):
+        if self.numbers is False:
+            if NUMBERS.search(input_str):
+                return ""
         input_str = input_str.translate(PUNCTUATION_MAP)
-        input_str = input_str.translate(NUMBER_MAP)
         if input_str == "":
             return ""
         input_str = html.unescape(input_str)
@@ -101,6 +104,11 @@ class Ngrams:
                     pass
         if self.stemmer:
             input_str = stemmer.stemWord(input_str)
+        if len(input_str) < self.minimum_word_length:
+            return ""
+        if self.numbers is True:
+            if NUMBERS.search(input_str):
+                return ""
         return unidecode(input_str)
 
     def __write_to_disk(self, ngrams, text_id):
@@ -130,7 +138,7 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="20%", use_db=False, db_name=""):
+    def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="50%", use_db=False, db_name=""):
         """Generate n-grams."""
         files = glob(str(Path(file_path).joinpath("*")))
         # os.system('rm -rf %s/' % output_path)
@@ -151,6 +159,7 @@ class Ngrams:
             combined_metadata = metadata
         else:
             print("No metadata provided: exiting...")
+            exit()
 
         print("\nGenerating ngrams...", flush=True)
         pool = Pool(workers)
@@ -172,7 +181,6 @@ class Ngrams:
 
         print("Saving metadata...")
         if self.metadata_done is False:
-            print("%s/metadata/metadata.json" % self.output_path)
             with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
                 json.dump(combined_metadata, metadata_output)
         else:
@@ -296,7 +304,7 @@ class Ngrams:
                 word_obj = json.loads(line.strip())
                 word = word_obj["token"]
                 word = self.__normalize(word, stemmer, lemmatizer)
-                if len(word) < 2 or word in self.stopwords:
+                if word in self.stopwords:
                     continue
                 position = word_obj["position"]
                 if self.text_object_level == 'doc':
@@ -411,6 +419,6 @@ def parse_command_line():
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
-    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"])
+    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"], text_object_level=ARGS["text_object_level"])
     NGRAM_GENERATOR.generate(ARGS["file_path"], ARGS["output_path"], is_philo_db=ARGS["is_philo_db"], metadata=ARGS["metadata"],
                              workers=ARGS["cores"], ram=ARGS["mem_usage"], use_db=ARGS["use_db"])
