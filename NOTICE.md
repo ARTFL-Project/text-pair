@@ -1,4 +1,4 @@
-### Jaro-Winkler code from: https://github.com/xrash/smetrics ###
+### Jaro distance code from: https://github.com/xrash/smetrics ###
 
 Copyright (C) 2016 Felipe da Cunha Gonçalves
 All Rights Reserved.
