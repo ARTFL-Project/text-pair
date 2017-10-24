@@ -1087,6 +1087,7 @@ func mapToSliceOfValues(metadata map[string]string, fields []string) []string {
 }
 
 func passageSimilarity(a, b string) int {
+	// Using Jaro distance code from https://github.com/xrash/smetrics
 	la := float64(len(a))
 	lb := float64(len(b))
 	matchRange := int(math.Floor(math.Max(la, lb)/2.0)) - 1
