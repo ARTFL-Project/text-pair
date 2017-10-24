@@ -2,24 +2,26 @@
 """N-gram generator"""
 
 import argparse
+import configparser
 import html
 import json
 import os
 import re
+import sqlite3
 import sys
 import unicodedata
 from ast import literal_eval
 from collections import defaultdict, deque
 from glob import glob
-from pathlib import Path
 from math import floor
-import sqlite3
+from pathlib import Path
+
 from multiprocess import Pool
 from tqdm import tqdm
+from unidecode import unidecode
 
 from mmh3 import hash as hash32
 from Stemmer import Stemmer
-from unidecode import unidecode
 
 try:
     from philologic.DB import DB
@@ -40,23 +42,22 @@ class Ngrams:
 
     def __init__(self, text_object_level="doc", ngram=3, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
                  lowercase=True, minimum_word_length=2, debug=False):
-        self.ngram = ngram
-        self.skipgram = skipgram
-        self.numbers = numbers
-        self.stemmer = stemmer
-        self.language = language
-        self.lowercase = lowercase
-        self.minimum_word_length = minimum_word_length
-        if lemmatizer:
-            self.lemmatize = True
-            self.lemmatizer_path = lemmatizer
-        else:
-            self.lemmatize = False
+        self.config = {
+            "ngram": ngram,
+            "skipgram": skipgram,
+            "numbers": numbers,
+            "stemmer": stemmer,
+            "language": language,
+            "lowercase": lowercase,
+            "minimum_word_length": minimum_word_length,
+            "lemmatizer": lemmatizer,
+            "stopwords": stopwords,
+            "text_object_level": text_object_level
+        }
         if stopwords is not None and os.path.isfile(stopwords):
             self.stopwords = self.__get_stopwords(stopwords)
         else:
             self.stopwords = set()
-        self.text_object_level = text_object_level
         self.debug = debug
         self.input_path = ""
         self.output_path = ""
@@ -66,8 +67,8 @@ class Ngrams:
 
     def __get_stopwords(self, path):
         stopwords = set([])
-        stemmer = Stemmer(self.language)
-        if self.lemmatize:
+        stemmer = Stemmer(self.config["language"])
+        if self.config["lemmatizer"]:
             lemmatizer = self.__get_lemmatizer()
         else:
             lemmatizer = None
@@ -78,23 +79,23 @@ class Ngrams:
 
     def __get_lemmatizer(self):
         lemmas = {}
-        with open(self.lemmatizer_path) as input_file:
+        with open(self.config["lemmatizer"]) as input_file:
             for line in input_file:
                 word, lemma = line.strip().split("\t")
                 lemmas[word] = lemma
         return lemmas
 
     def __normalize(self, input_str, stemmer, lemmatizer):
-        if self.numbers is False:
+        if self.config["numbers"] is False:
             if NUMBERS.search(input_str):
                 return ""
         input_str = input_str.translate(PUNCTUATION_MAP)
         if input_str == "":
             return ""
         input_str = html.unescape(input_str)
-        if self.lowercase:
+        if self.config["lowercase"]:
             input_str = input_str.lower()
-        if self.lemmatize:
+        if self.config["lemmatizer"]:
             try:
                 input_str = lemmatizer[input_str]
             except KeyError:
@@ -102,11 +103,11 @@ class Ngrams:
                     input_str = lemmatizer[unidecode(input_str)]
                 except KeyError:
                     pass
-        if self.stemmer:
+        if self.config["stemmer"]:
             input_str = stemmer.stemWord(input_str)
-        if len(input_str) < self.minimum_word_length:
+        if len(input_str) < self.config["minimum_word_length"]:
             return ""
-        if self.numbers is True:
+        if self.config["numbers"] is True:
             if NUMBERS.search(input_str):
                 return ""
         return unidecode(input_str)
@@ -138,14 +139,23 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
+    def __dump_config(self, output_path):
+        with open(str(output_path.joinpath("config/ngram_config.ini")), "w") as ini_file:
+            ngram_config = configparser.ConfigParser()
+            ngram_config.add_section('PREPROCESSING')
+            for param, value in self.config.items():
+                ngram_config.set("PREPROCESSING", param, repr(value))
+            ngram_config.write(ini_file)
+
+
     def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="50%", use_db=False, db_name=""):
         """Generate n-grams."""
         files = glob(str(Path(file_path).joinpath("*")))
-        # os.system('rm -rf %s/' % output_path)
         os.system('mkdir -p {}/ngrams'.format(output_path))
         os.system('mkdir -p {}/metadata'.format(output_path))
-        os.system("mkdir %s/index" % output_path)
-        os.system('mkdir {}/temp'.format(output_path))
+        os.system("mkdir -p {}/index".format(output_path))
+        os.system("mkdir -p {}/config".format(output_path))
+        os.system('mkdir -p {}/temp'.format(output_path))
         if db_path is None and is_philo_db is True:
             self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
         else:
@@ -186,11 +196,10 @@ class Ngrams:
         else:
             os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
 
+        self.__dump_config(output_path)
+
         print("Cleaning up...")
         os.system("rm -r {}/temp".format(self.output_path))
-
-        ngram_index_path = Path(self.output_path).joinpath("index/index.tab")
-        return ngram_index_path
 
     def generate2(self, file_path, output_path, workers, ram, db_name, db_path, is_philo_db=False):
         """Generate n-grams. Takes a list of files as an argument."""
@@ -259,8 +268,8 @@ class Ngrams:
                 position = []
 
                 ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
-                if len(ngram_obj) == self.ngram:
-                    if self.skipgram:
+                if len(ngram_obj) == self.config["ngram"]:
+                    if self.config["skipgram"]:
                         ngram_obj_to_store = [ngram_obj[0], ngram_obj[-1]]
                     else:
                         ngram_obj_to_store = list(ngram_obj)
@@ -286,11 +295,11 @@ class Ngrams:
 
     def process_file(self, input_file):
         """Convert each file into an inverted index of ngrams"""
-        if self.stemmer:
-            stemmer = Stemmer(self.language)  # we initialize here since it creates a deadlock with in self
+        if self.config["stemmer"]:
+            stemmer = Stemmer(self.config["language"])  # we initialize here since it creates a deadlock with in self
         else:
             stemmer = None
-        if self.lemmatize:
+        if self.config["lemmatizer"]:
             lemmatizer = self.__get_lemmatizer()  # we initialize here since it is faster than copying between procs
         else:
             lemmatizer = None
@@ -307,10 +316,10 @@ class Ngrams:
                 if word in self.stopwords:
                     continue
                 position = word_obj["position"]
-                if self.text_object_level == 'doc':
+                if self.config["text_object_level"] == 'doc':
                     text_id = position.split()[0]
                 else:
-                    text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.text_object_level]])
+                    text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]])
                 if current_text_id is None:
                     current_text_id = text_id
                 if current_text_id != text_id:
@@ -323,8 +332,8 @@ class Ngrams:
                     ngram_obj = deque([])
                     current_text_id = text_id
                 ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
-                if len(ngram_obj) == self.ngram:
-                    if self.skipgram:
+                if len(ngram_obj) == self.config["ngram"]:
+                    if self.config["skipgram"]:
                         ngram_obj_to_store = [ngram_obj[0], ngram_obj[-1]]
                     else:
                         ngram_obj_to_store = list(ngram_obj)
@@ -334,7 +343,7 @@ class Ngrams:
                     ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
                     doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
                     ngram_obj.popleft()
-            if self.text_object_level == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
+            if self.config["text_object_level"] == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
                 if self.debug:
                     self.__write_to_disk(ngrams, current_text_id)
                 if self.metadata_done is False:

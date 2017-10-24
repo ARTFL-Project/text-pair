@@ -145,11 +145,9 @@ class TEIParser:
 
     def __init__(self, file_path, output_path="./", cores=4, words_to_keep="all", debug=False):
         if os.path.exists(str(output_path)):  # we convert to string in case it's a PosixPath type
-            print("{} exists. Please delete or change the output path before rerunning this script.".format(output_path))
-            exit()
-        else:
-            os.system("mkdir -p {}/metadata".format(output_path))
-            os.system("mkdir -p {}/texts".format(output_path))
+            os.system("rm -rf {}".format(output_path))
+        os.system("mkdir -p {}/metadata".format(output_path))
+        os.system("mkdir -p {}/texts".format(output_path))
         self.text_path = str(Path(output_path).joinpath("texts"))
         self.metadata_path = str(Path(output_path).joinpath("metadata/metadata.json"))
         files = glob(str(Path(file_path).joinpath("*")))
