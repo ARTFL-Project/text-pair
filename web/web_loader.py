@@ -21,7 +21,7 @@ def parse_file(file):
         for pos, line in enumerate(input_file):
             if pos < 2:
                 continue
-            fields = line
+            fields = line.rstrip("\n")
             yield fields
 
 def main():
@@ -30,8 +30,8 @@ def main():
     table_name = sys.argv[2]
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
-    with open(sys.argv[1]) as input_file:
-        field_names.extend(input_file.readline().rstrip().split("\t"))
+    with open(sys.argv[1], errors="ignore") as input_file:
+        field_names.extend(input_file.readline().rstrip("\n").split("\t"))
         fields_in_table.extend([i + " TEXT" for i in field_names if i != "rowid"])
     CURSOR.execute("DROP TABLE if exists {}".format(table_name))
     CURSOR.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
