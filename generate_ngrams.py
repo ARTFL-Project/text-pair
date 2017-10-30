@@ -39,11 +39,12 @@ PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5
 class Ngrams:
     """Generate Ngrams"""
 
-    def __init__(self, ngram = 3, gap = 0, skipgram = False, text_object_level="doc", stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
+    def __init__(self, ngram = 3, gap = 0, skipgram = False, order=True, text_object_level="doc", stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
                  lowercase=True, debug=False):
         self.ngram = ngram
         self.gap = gap
         self.window = ngram + gap
+        self.order=order
         self.skipgram = skipgram
         self.numbers = numbers
         self.stemmer = stemmer
@@ -117,7 +118,7 @@ class Ngrams:
         for ngram, start_byte, end_byte in ngrams:
             text_index[ngram].append((index_pos, start_byte, end_byte))
             index_pos += 1
-        with open("%s/%s.json" % (self.output_path, text_id), "w") as json_file:
+        with open("%s/ngrams/%s.json" % (self.output_path, text_id), "w") as json_file:
             json.dump(dict(text_index), json_file)
 
     def __get_metadata(self, text_id):
@@ -133,11 +134,12 @@ class Ngrams:
         metadata["filename"] = os.path.join(self.input_path, "data/TEXT", metadata["filename"])
         return metadata
 
-    def generate(self, file_path, output_path, db_path="", db_name="DataBase.db",  is_philo_db=False, metadata=None, workers=4, ram="20%%"):
+    def generate(self, file_path, output_path, db_path=None, db_name="DataBase.db", is_philo_db=False, metadata=None, workers=4, ram="20%"):
         """Generate n-grams."""
         files = glob(str(Path(file_path).joinpath("*")))
-        os.system('rm -rf %s/' % output_path)
-        os.system('mkdir -p %s' % output_path)
+		# os.system('rm -rf %s/' % output_path)
+        os.system('mkdir -p {}/ngrams'.format(output_path))
+        os.system('mkdir -p {}/metadata'.format(output_path))
         os.system("mkdir %s/index" % output_path)
         os.system('mkdir {}/temp'.format(output_path))
         if db_path is None and is_philo_db is True:
@@ -147,18 +149,18 @@ class Ngrams:
             self.db_name = db_name
             self.db_path = db_path
         self.output_path = output_path
-        if metadata is None:
-            if is_philo_db is False:
-                print("No metadata provided, only the filename will be used as metadata")
-                combined_metadata = {os.path.basename(i): {"filename": os.path.basename(i)} for i in files}
-                self.metadata_done = True
-            else:
-                combined_metadata = {}
-        else:
+        if is_philo_db:
+            combined_metadata = {}
+        elif os.path.isfile(metadata):
             self.metadata_done = True
             combined_metadata = metadata
+        else:
+            print("No metadata provided: exiting...")
 
         print("\nGenerating ngrams...", flush=True)
+        self.gap = 0
+        self.window = self.ngram + self.gap
+        print("\nGap:"+str(self.gap)+" Window: "+str(self.window), flush=True)
         pool = Pool(workers)
         with tqdm(total=len(files)) as pbar:
             for local_metadata in pool.imap_unordered(self.process_file, files):
@@ -173,12 +175,13 @@ class Ngrams:
             mem_usage = 45
         print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
         os.system(r'''for i in {}/temp/*; do cat $i; done | sort -S {}% | uniq -c | sort -rn -S {}% | awk '{{print $2"\t"$3}}' |
-                   tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''
-                  .format(output_path, mem_usage, mem_usage, output_path, output_path))
+                tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''
+                .format(output_path, mem_usage, mem_usage, output_path, output_path))
 
         print("Saving metadata...")
-        os.system("mkdir %s/metadata" % output_path)
+
         if self.metadata_done is False:
+            print("%s/metadata/metadata.json" % self.output_path)
             with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
                 json.dump(combined_metadata, metadata_output)
         else:
@@ -190,8 +193,8 @@ class Ngrams:
         ngram_index_path = Path(self.output_path).joinpath("index/index.tab")
 
         # generate a sqlite DataBase
-        if db_path is None:
-            self.convert2DataBase(self.db_path, self.db_name, output_path)
+        #if db_path is None:
+        #    self.convert2DataBase(self.db_path, self.db_name, output_path)
 
         return ngram_index_path
 
@@ -285,6 +288,63 @@ class Ngrams:
                             VALUES (?, ?)""", list_index)
         sqlDataBase.commit()
         print("DataBase Completed")
+
+    def insert_file_in_db(self, input_file):
+        """Convert each file into an inverted index of ngrams"""
+        doc_ngrams = []
+        metadata = {}
+        sqlDataBase = sqlite3.connect(self.db_path)
+        compteur_affiche=0
+        with open(input_file.path) as filehandle:
+            all_ngrams = json.load(filehandle)
+            ngrams = deque([])
+            ngram_obj = deque([])
+            current_text_id = None
+            print ("Insert ngram to DataBase: *", end='')
+            cursor = sqlDataBase.cursor()
+            list_occurence = []   # liste contenant les occurences de chaque ngram
+            list_ngram = []        # liste contenant tous les ngram
+            list_ngramSql = []        # liste contenant tous les ngram + id à ajouter dans sql
+
+            for line in filehandle:
+                compteur_affiche += 1
+                if (compteur_affiche > 5000):
+                    print ("*", end='')
+                    compteur_affiche = 0
+                word_obj = json.loads(line.strip())
+                word = word_obj["token"]
+                word = self.__normalize(word, stemmer, lemmatizer)         #A décommenter apres tests pour voir si prise en compte de l'utf8
+                if len(word) <= 2 or word in self.stopwords:
+                    continue
+                position = []
+
+                ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
+                if len(ngram_obj) == self.ngram:
+                    if self.skipgram:
+                        ngram_obj_to_store = [ngram_obj[0], ngram_obj[-1]]
+                    else:
+                        ngram_obj_to_store = list(ngram_obj)
+                    current_ngram_list, _, start_bytes, end_bytes = zip(*ngram_obj_to_store)
+                    current_ngram = "_".join(current_ngram_list)
+                    hashed_ngram = hash32(current_ngram)
+                    ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
+                    doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
+                    ngram_obj.popleft()
+
+                    if not(current_ngram in list_ngram): # si le ngram n'existe pas on le sauvegarde pour le créer en l'ajoutant à la liste
+                        list_ngram.append(current_ngram)
+                        list_ngramSql.append((current_ngram, hashed_ngram))
+                    list_occurence.append((hashed_ngram, current_ngram, input_file, start_bytes[0], end_bytes[-1])) # dans tous les cas on ajoute cette occurence à la liste
+
+            # lorsqu'un fichier est totalement lu on execute les commandes sqlite pour ajouter les champs aux tables ngram et occurence
+            cursor.executemany("INSERT INTO ngram (ngram_contain, ngram_id) VALUES (?, ?)", list_ngramSql)
+            sqlDataBase.commit()
+
+            cursor.executemany("INSERT INTO occurence (ngram_id, ngram_contain, filename, start_byte, end_byte) VALUES (?, ?, ?, ?, ?)", list_occurence)
+
+            sqlDataBase.commit()
+            print()
+        return metadata
 
     def process_file(self, input_file):
         """Convert each file into an inverted index of ngrams"""
@@ -401,160 +461,6 @@ class Ngrams:
         sqlDataBase.close()
         print("Database created at: " + (db_path + db_name))
 
-    def matchingDB(self, db_path, db_name, nb_doc, fenetre_rabbout):
-        """Use a sqlite3 DataBase to match ngram"""
-        try:
-            sqlDataBase = sqlite3.connect(db_path+db_name)
-            cursor = sqlDataBase.cursor()
-        except Exception as e:
-            print("Erreur on opening DataBase")
-
-        sortie = open("matching.txt", "w")
-
-        compteur_distance=0
-        compteur_distance_etendue=0
-        compteur_chevauchement=0
-        compteur_rabboutage=0
-        for i in range(nb_doc):
-            #print("Comparaison string: "+str(i))
-            sortie.write("Comparaison string "+str(i)+"\n")
-            cursor.execute("""SELECT ngram_id, start_byte, end_byte FROM occurence WHERE filename=?""", (i,))
-            list_ngramDoc1 = cursor.fetchall()
-            for j in range(i+1,nb_doc):
-                #print("\t with "+str(j))
-                sortie.write("\t with "+str(j)+"\n")
-                list_ngramCommun=list()
-                cursor.execute("""SELECT ngram_id, start_byte, end_byte FROM occurence WHERE filename=?""", (j,))
-                list_ngramDoc2 = cursor.fetchall()      # On cherche les reutilisation de doc1 dans doc2 c'est donc sur doc2 que le rabboutage peut se faire
-                for k in range(len(list_ngramDoc1)):
-                    for r in range(len(list_ngramDoc2)):
-                        if (list_ngramDoc1[k][0] == list_ngramDoc2[r][0]):
-                            list_ngramCommun.append(list_ngramDoc2[r])
-                list_ngramCommun.sort(key=lambda start_byte: start_byte[1])     # On tri la liste selon le start_byte pour qu'elle soit ordonné chronologiquement
-                #print(list_ngramCommun)
-                sortie.write(str(list_ngramCommun)+"\n")
-                list_final=list()
-                if(len(list_ngramCommun)>1):
-                    # Rabboutage, renvoie une liste composé d'une liste de ngram chevauché,
-                    #print("Matching test")
-                    sortie.write("Matching test\n")
-                    list_compteur=self.rabboutage(list_ngramCommun,fenetre_rabbout,sortie)
-                    compteur_distance=compteur_distance+list_compteur[0]
-                    compteur_distance_etendue=compteur_distance_etendue+list_compteur[1]
-                    compteur_chevauchement=compteur_chevauchement+list_compteur[2]
-                    compteur_rabboutage=compteur_rabboutage+list_compteur[3]
-                else:
-                    #print("none or one ngram")
-                    sortie.write("none or one ngram"+"\n")
-        #print("compteur_chevauchement: "+str(compteur_chevauchement)+" compteur_distance: "+str(compteur_distance)+" etendue: "+str(compteur_distance_etendue))
-        sortie.write("Total: "+str(compteur_rabboutage)+" chevauchement: "+str(compteur_chevauchement)+" distance: "+str(compteur_distance)+" etendue: "+str(compteur_distance_etendue)+"\n")
-
-    def rabboutage(self,list_ngramCommun,fenetre_rabbout,sortie):
-        """ rabboutage standard: on parcourt la liste en vérifiant les starts et end byte
-        # si le end du 1er est supérieur au start du suivant cela veut dire qu'il y a chevauchement (cause: chevauchement)
-        # si le start du 2eme est supérieur au end du premier mais que la différence vaut moins que fenetre_rabbout*nbr_carac on rabboute (cause: distance)
-        # sinon on considére que le 1er ngram est terminé et on passe au suivant (pas de rabboutage)
-        # rabboutage grossissant: chaque fois qu'on rabboute on augmente fenetre_rabbout*nbr_carac pour ce ngram
-            # deux passage sont nécessaires (du début à la fin et de la fin au début) pour que la fenetre soit correctement appliqué dans les deux sens
-            # ou alors on part du milieu avec ma méthode"""
-        compteur_distance=0
-        compteur_distance_etendue=0
-        compteur_chevauchement=0
-        compteur_rabboutage=0
-        list_final=[[[list_ngramCommun[0][0]],list_ngramCommun[0][1],list_ngramCommun[0][2]]]
-        j=0;
-        distance_max=fenetre_rabbout*6
-        augmentation=60  # de combien on augmente le nombre de caractere dans la fenetre à chaque rabboutage (6 étant à peu près un ngram)
-        for i in range(1,len(list_ngramCommun)):
-            #print("\tfinal_end: "+str(list_final[j][2])+" start_commun: "+str(list_ngramCommun[i][1])+" distance_max: "+str(distance_max))
-            sortie.write("\tfinal_end: "+str(list_final[j][2])+" start_commun: "+str(list_ngramCommun[i][1])+" distance_max: "+str(distance_max)+"\n")
-
-            # Rabboutage par chevauchement simple
-            if(list_final[j][2] > list_ngramCommun[i][1]):
-                #print ("\t\tRabboutage des deux ngram: Chevauchement")
-                sortie.write ("\t\tRabboutage des deux ngram: Chevauchement"+"\n\n")
-                list_final[j][0].append(list_ngramCommun[i][0])
-                list_final[j][2]=list_ngramCommun[i][2]
-                distance_max=distance_max+augmentation
-                compteur_chevauchement=compteur_chevauchement+1
-                compteur_rabboutage=compteur_rabboutage+1
-
-            # Rabboutage à cause d'une distance trop réduite, sans modification de celle ci
-            #elif((list_ngramCommun[i][1]-list_final[j][2]) < distance_max):
-                #print ("\t\tRabboutage des deux ngram: distance")
-                #sortie.write ("\t\tRabboutage des deux ngram: distance"+"\n\n")
-                #list_final[j][0].append(list_ngramCommun[i][0])
-                #list_final[j][2]=list_ngramCommun[i][2]
-                #compteur_distance=compteur_distance+1
-                #compteur_rabboutage=compteur_rabboutage+1
-
-            # Rabboutage à cause d'une distance trop réduite, avec modification de celle ci pour le ngram en cours
-            elif((list_ngramCommun[i][1]-list_final[j][2]) < distance_max):
-                #print ("\t\tRabboutage des deux ngram: distance")
-                sortie.write ("\t\tRabboutage des deux ngram: distance"+"\n\n")
-                list_final[j][0].append(list_ngramCommun[i][0])
-                list_final[j][2]=list_ngramCommun[i][2]
-                distance_max=distance_max+augmentation
-                compteur_distance=compteur_distance+1
-                compteur_rabboutage=compteur_rabboutage+1
-                if((list_ngramCommun[i][1]-list_final[j][2]) > fenetre_rabbout*6):
-                    compteur_distance_etendue=compteur_distance_etendue+1
-
-            else:
-                #print ("\t\tPas de rabboutage")
-                sortie.write ("\t\tPas de rabboutage"+"\n\n")
-                j=j+1
-                distance_max=fenetre_rabbout*6
-                list_final.append([[list_ngramCommun[i][0]],list_ngramCommun[i][1],list_ngramCommun[i][2]])
-        #print("FINAL")
-        sortie.write("FINAL"+"\n")
-        #print(list_final)
-        sortie.write(str(list_final)+"\n")
-        return (compteur_distance,compteur_distance_etendue,compteur_chevauchement,compteur_rabboutage)
-
-    def rabboutage_milieu(self,list_ngramCommun,fenetre_rabbout,sortie):
-        """ rabboutage par le milieu: on du milieu de la liste et on compare dans les deux directions"""
-        print("NgramCommun: ")
-        print(list_ngramCommun)
-        compteur_distance=0
-        compteur_distance_etendue=0
-        compteur_chevauchement=0
-        compteur_rabboutage=0
-        milieu=round(len(list_ngramCommun)/2)
-        list_final=deque()
-        list_final.append([[list_ngramCommun[milieu][0]],list_ngramCommun[milieu][1],list_ngramCommun[milieu][2]])
-        list_left=list_ngramCommun[0:milieu]
-        list_right=list_ngramCommun[(milieu+1):-1]
-        print("liste finale:")
-        print(list_final)
-        print("liste gauche:")
-        print(list_left)
-        print("liste droite:")
-        print(list_right)
-        distance_max=fenetre_rabbout*6
-        augmentation=6  # de combien on augmente le nombre de caractere dans la fenetre à chaque rabboutage (6 étant à peu près un ngram)
-
-        while(list_left or list_right):
-            if(list_left):
-                list_final.appendleft([[list_left[-1][0]],list_left[-1][1],list_left[-1][2]])
-                list_left.pop()
-            if(list_right):
-                list_final.append([[list_right[0][0]],list_right[0][1],list_right[0][2]])
-                list_right.pop(0)
-
-        print("liste finale:")
-        print(list_final)
-        print("liste gauche:")
-        print(list_left)
-        print("liste droite:")
-        print(list_right)
-
-        #print("FINAL")
-        sortie.write("FINAL"+"\n")
-        #print(list_final)
-        sortie.write(str(list_final)+"\n")
-        return (compteur_distance,compteur_distance_etendue,compteur_chevauchement,compteur_rabboutage)
-
 def parse_command_line():
     """Command line parsing function"""
     parser = argparse.ArgumentParser(prog="generate_ngrams")
@@ -569,19 +475,20 @@ def parse_command_line():
                           type=str)
     optional.add_argument("--lemmatizer", help="path to a file where each line contains a token/lemma pair separated by a tab ")
     optional.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%%",
-                          type=str, default="20%%")
+                          type=str, default="80%%")
     optional.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
-                          type=literal_eval, default=True)
+                          type=literal_eval, default=False)
     optional.add_argument("--metadata", help="metadata for input files", default=None)
     optional.add_argument("--text_object_level", help="type of object to split up docs in",
                           type=str, default="doc")
     optional.add_argument("--output_path", help="output path of ngrams",
-                          type=str, default="./ngrams")
+                          type=str, default="./output")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
     optional.add_argument("--skipgram", help="use skipgrams", action='store_true', default=False)
     optional.add_argument("--ngram", help="number of grams", type = int, default=3)
-    optional.add_argument("--gap", help="number of gap", action='store_true', default=10)
+    optional.add_argument("--gap", help="number of gap", action='store_true', default=0)
+    optional.add_argument("--order", help="words order must be respected", action='store_true', default=True)
     optional.add_argument("--db_name", help="name of the sqlite DataBase", type=str, default="")
     optional.add_argument("--db_path", help="path to the sqlite DataBase", type=str, default="")
     args = vars(parser.parse_args())
@@ -595,7 +502,8 @@ if __name__ == '__main__':
     debut = time.time()
     NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"], ngram=ARGS["ngram"], gap=ARGS["gap"])
     NGRAM_GENERATOR.generate(ARGS["file_path"], ARGS["output_path"], db_path=ARGS["db_path"], db_name=ARGS["db_name"],
-            is_philo_db=ARGS["is_philo_db"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"] )
+            is_philo_db=ARGS["is_philo_db"], metadata=ARGS["metadata"], workers=ARGS["cores"], ram=ARGS["mem_usage"],
+            order=ARGS["order"] )
     #NGRAM_GENERATOR.convert2DataBase(db_path=ARGS["db_path"], db_name="test.db",
             #input_file="/local/spinel/ownCloud/Python/source_Comedie/result/ngram")
     #NGRAM_GENERATOR.matchingDB(db_name=ARGS["db_name"], db_path=ARGS["db_path"], nb_doc=84,  fenetre_rabbout=30)
