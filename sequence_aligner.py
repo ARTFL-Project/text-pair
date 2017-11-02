@@ -60,7 +60,7 @@ def parse_command_line():
                     tei_parsing[key] = value
             for key, value in dict(config["PREPROCESSING"]).items():
                 if value:
-                    if key == "skipgram" or key == "numbers":
+                    if key == "skipgram" or key == "numbers" or key == "order":
                         if value.lower() == "yes" or value.lower() == "true":
                             value = True
                         else:
@@ -71,6 +71,9 @@ def parse_command_line():
                         else:
                             preprocessing_params["target"]["text_object_level"] = value
                     elif key == "ngram":
+                        preprocessing_params["source"][key] = int(value)
+                        preprocessing_params["target"][key] = int(value)
+                    elif key == "gap":
                         preprocessing_params["source"][key] = int(value)
                         preprocessing_params["target"][key] = int(value)
                     else:
@@ -119,7 +122,8 @@ def main():
     print("\n### Generating source ngrams ###")
     ngrams = Ngrams(**preprocessing_params["source"], debug=debug)
     ngrams.generate(paths["source"]["input_files_for_ngrams"], paths["source"]["ngram_output_path"],
-                    metadata=paths["source"]["metadata_path"], is_philo_db=paths["source"]["is_philo_db"], workers=workers)
+                    metadata=paths["source"]["metadata_path"], is_philo_db=paths["source"]["is_philo_db"],
+                    workers=workers)
     if paths["target"]:
         if tei_parsing["parse_target_files"] is True:
             print("\n### Parsing target TEI files ###")
