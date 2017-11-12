@@ -140,7 +140,7 @@ class Ngrams:
         return metadata
 
     def __dump_config(self, output_path):
-        with open(str(output_path.joinpath("config/ngram_config.ini")), "w") as ini_file:
+        with open(os.path.join(output_path, "config/ngram_config.ini"), "w") as ini_file:
             ngram_config = configparser.ConfigParser()
             ngram_config.add_section('PREPROCESSING')
             for param, value in self.config.items():
@@ -150,7 +150,7 @@ class Ngrams:
 
     def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="50%", use_db=False, db_name=""):
         """Generate n-grams."""
-        files = glob(str(Path(file_path).joinpath("*")))
+        files = glob(os.path.join(file_path, "*"))
         os.system('mkdir -p {}/ngrams'.format(output_path))
         os.system('mkdir -p {}/metadata'.format(output_path))
         os.system("mkdir -p {}/index".format(output_path))
@@ -203,7 +203,7 @@ class Ngrams:
 
     def generate2(self, file_path, output_path, workers, ram, db_name, db_path, is_philo_db=False):
         """Generate n-grams. Takes a list of files as an argument."""
-        files = glob(str(Path(file_path).joinpath("*")))
+        files = glob(os.path(file_path, "*"))
         print("\nStarting generation...")
         self.db_name = db_name
         self.db_path = os.path.join(output_path, db_path)

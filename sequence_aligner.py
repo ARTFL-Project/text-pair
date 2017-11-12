@@ -6,7 +6,6 @@ import configparser
 import os
 import re
 from ast import literal_eval
-from pathlib import Path
 from collections import defaultdict
 
 from utils.xml_parser import TEIParser
@@ -54,9 +53,9 @@ def parse_command_line():
                 else:
                     if not value:
                         if key.startswith("output_source"):
-                            value = Path(args["output_path"]).joinpath("source")
+                            value = os.path.join(args["output_path"], "source")
                         else:
-                            value = Path(args["output_path"]).joinpath("target")
+                            value = os.path.join(args["output_path"], "target")
                     tei_parsing[key] = value
             for key, value in dict(config["PREPROCESSING"]).items():
                 if value:
@@ -82,28 +81,28 @@ def parse_command_line():
     paths = {"source": {}, "target": defaultdict(str)}
     if tei_parsing["parse_source_files"] is True:
         paths["source"]["tei_input_files"] = args["source_files"]
-        paths["source"]["parse_output"] = Path(args["output_path"]).joinpath("source")
-        paths["source"]["input_files_for_ngrams"] = Path(args["output_path"]).joinpath("source/texts")
-        paths["source"]["ngram_output_path"] = Path(args["output_path"]).joinpath("source/")
-        paths["source"]["metadata_path"] = str(Path(args["output_path"]).joinpath("source/metadata/metadata.json"))
+        paths["source"]["parse_output"] = os.path.join(args["output_path"], "source")
+        paths["source"]["input_files_for_ngrams"] = os.path.join(args["output_path"], "source/texts")
+        paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
+        paths["source"]["metadata_path"] = os.path.join(args["output_path"], "source/metadata/metadata.json")
         paths["source"]["is_philo_db"] = False
     else:
         paths["source"]["input_files_for_ngrams"] = args["source_files"]
-        paths["source"]["ngram_output_path"] = Path(args["output_path"]).joinpath("source/")
-        paths["source"]["metadata_path"] = args["source_metadata"] or str(Path(args["output_path"]).joinpath("source/metadata/metadata.json"))
+        paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
+        paths["source"]["metadata_path"] = args["source_metadata"] or os.path.join(args["output_path"], "source/metadata/metadata.json")
         paths["source"]["is_philo_db"] = args["is_philo_db"]
     if args["target_files"]:
         if tei_parsing["parse_target_files"] is True:
             paths["target"]["tei_input_files"] = args["target_files"]
-            paths["target"]["parse_output"] = Path(args["output_path"]).joinpath("target")
-            paths["target"]["input_files_for_ngrams"] = Path(args["output_path"]).joinpath("target/texts")
-            paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/")
-            paths["target"]["metadata_path"] = str(Path(args["output_path"]).joinpath("target/metadata/metadata.json"))
+            paths["target"]["parse_output"] = os.path.join(args["output_path"], "target")
+            paths["target"]["input_files_for_ngrams"] = os.path.join(args["output_path"], "target/texts")
+            paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
+            paths["target"]["metadata_path"] = os.path.join(args["output_path"], "target/metadata/metadata.json")
             paths["target"]["is_philo_db"] = False
         else:
             paths["target"]["input_files_for_ngrams"] = args["target_files"]
-            paths["target"]["ngram_output_path"] = Path(args["output_path"]).joinpath("target/")
-            paths["target"]["metadata_path"] = args["target_metadata"] or str(Path(args["output_path"]).joinpath("target/metadata/metadata.json"))
+            paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
+            paths["target"]["metadata_path"] = args["target_metadata"] or os.path.join(args["output_path"], "target/metadata/metadata.json")
             paths["target"]["is_philo_db"] = args["is_philo_db"]
     return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], args["debug"]
 
