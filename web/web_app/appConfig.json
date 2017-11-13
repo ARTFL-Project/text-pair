@@ -1,27 +1,27 @@
 {
     "appPath": "",
     "apiServer": "http://condorcet.uchicago.edu/alignment/",
-    "databaseName": "encyc_vs_frantext",
-    "databaseLabel": "Encyclopédie vs TGB alignments",
+    "databaseName": "pre18_vs_tgb",
+    "databaseLabel": "Pre-19th vs TGB alignments",
     "sourceDB": {
-        "philoDB": true,
+        "philoDB": false,
         "link": "http://condorcet.uchicago.edu/philologic/encyclopedie_rc4"
     },
     "targetDB": {
-        "philoDB": true,
+        "philoDB": false,
         "link": "http://condorcet.uchicago.edu/philologic/frantext0917"
     },
     "sourceCitation": [
         {
-            "field": "source_kafauth",
+            "field": "source_author",
             "style": {}
         },
         {
-            "field": "source_head",
+            "field": "source_title",
             "style": {}
         },
         {
-            "field": "source_normclass",
+            "field": "source_year",
             "style": {}
         }
     ],
@@ -43,15 +43,15 @@
         "source": [
             {
                 "label": "Author",
-                "value": "source_kafauth"
+                "value": "source_author"
             },
             {
-                "label": "Headword",
-                "value": "source_head"
+                "label": "Title",
+                "value": "source_title"
             },
             {
-                "label": "Class",
-                "value": "source_normclass"
+                "label": "Year",
+                "value": "source_year"
             }
         ],
         "target": [
@@ -73,15 +73,15 @@
         "source": [
             {
                 "label": "Author",
-                "value": "source_kafauth"
+                "value": "source_author"
             },
             {
-                "label": "Headword",
-                "value": "source_head"
+                "label": "Title",
+                "value": "source_title"
             },
             {
-                "label": "Class",
-                "value": "source_normclass"
+                "label": "Year",
+                "value": "source_year"
             }
         ],
         "target": [

@@ -38,11 +38,17 @@ def main():
     lines = 0
     rows = []
     rowid = 0
+    skipped = 0
+    field_num = len(fields_in_table)-1
     print("Populating main table...")
     for alignment_fields in tqdm(alignments, total=line_count):
+        row = alignment_fields.split("\t")
+        if len(row) != field_num:
+            skipped += 1
+            continue
         lines += 1
         rowid += 1
-        rows.append([rowid] + alignment_fields.split('\t'))
+        rows.append([rowid] + row)
         if lines == 100:
             insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))
             execute_values(CURSOR, insert, rows)
@@ -55,6 +61,9 @@ def main():
     CURSOR.execute("CREATE INDEX {}_target_title_index ON {} USING BTREE(target_title)".format(table_name, table_name))
     CURSOR.execute("CREATE INDEX {}_year_index ON {} USING BTREE(source_year, target_year)".format(table_name, table_name))
     DATABASE.commit()
+
+    if skipped != 0:
+        print("{} rows were skipped due to mismatch".format(skipped))
 
     print("Populating index table...")
     ordered_table = table_name + "_ordered"

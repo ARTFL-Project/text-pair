@@ -56,7 +56,7 @@
                             </div>
                         </div>
                         <div class="text-muted text-center">
-                            <!-- <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br> -->
+                            <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br>
                             <a class="diff-btn" v-on:click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
                         </div>
                     </div>
