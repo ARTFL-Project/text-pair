@@ -11,6 +11,9 @@ CURSOR = DATABASE.cursor()
 CURSOR2 = DATABASE.cursor()
 
 
+DEFAULT_FIELD_TYPE = {"source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER"}
+
+
 def count_lines(filename):
     """Count lines in file"""
     return sum(1 for _ in open(filename, 'rbU'))
@@ -24,6 +27,19 @@ def parse_file(file):
             fields = line.rstrip("\n")
             yield fields
 
+def validate_field_type(row, field_types):
+    """Check field type and modify value type if needed"""
+    values = []
+    for field, value in row:
+        field_type = field_types.get(field, "TEXT")
+        if field_type == "INTEGER":
+            try:
+                value = int(value)
+            except ValueError:
+                value = 0
+        values.append(value)
+    return values
+
 def main():
     line_count = count_lines(sys.argv[1]) - 1 # skip first line with field names
     alignments = parse_file(sys.argv[1])
@@ -32,7 +48,9 @@ def main():
     field_names = ["rowid"]
     with open(sys.argv[1], errors="ignore") as input_file:
         field_names.extend(input_file.readline().rstrip("\n").split("\t"))
-        fields_in_table.extend([i + " TEXT" for i in field_names if i != "rowid"])
+        fields_and_types = ["{} {}".format(f, DEFAULT_FIELD_TYPE.get(f, "TEXT")) for f in field_names if f != "rowid"]
+        fields_in_table.extend(fields_and_types)
+    print(fields_in_table)
     CURSOR.execute("DROP TABLE if exists {}".format(table_name))
     CURSOR.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
     lines = 0
@@ -42,7 +60,8 @@ def main():
     field_num = len(fields_in_table)-1
     print("Populating main table...")
     for alignment_fields in tqdm(alignments, total=line_count):
-        row = alignment_fields.split("\t")
+        row = zip(field_names[1:], alignment_fields.split("\t"))
+        row = validate_field_type(row, DEFAULT_FIELD_TYPE)
         if len(row) != field_num:
             skipped += 1
             continue

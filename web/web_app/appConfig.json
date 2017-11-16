@@ -1,7 +1,7 @@
 {
     "appPath": "",
     "apiServer": "http://condorcet.uchicago.edu/alignment/",
-    "databaseName": "pre18_vs_tgb",
+    "databaseName": "pre_19_vs_tgb",
     "databaseLabel": "Pre-19th vs TGB alignments",
     "sourceDB": {
         "philoDB": false,
@@ -10,6 +10,14 @@
     "targetDB": {
         "philoDB": false,
         "link": "http://condorcet.uchicago.edu/philologic/frantext0917"
+    },
+    "metadataTypes": {
+        "source_author": "text",
+        "source_title": "text",
+        "source_year": "integer",
+        "target_author": "text",
+        "target_title": "text",
+        "target_year": "integer"
     },
     "sourceCitation": [
         {
@@ -43,29 +51,35 @@
         "source": [
             {
                 "label": "Author",
-                "value": "source_author"
+                "value": "source_author",
+                "type": "text"
             },
             {
                 "label": "Title",
-                "value": "source_title"
+                "value": "source_title",
+                "type": "text"
             },
             {
                 "label": "Year",
-                "value": "source_year"
+                "value": "source_year",
+                "type": "integer"
             }
         ],
         "target": [
             {
                 "label": "Author",
-                "value": "target_author"
+                "value": "target_author",
+                "type": "text"
             },
             {
                 "label": "Title",
-                "value": "target_title"
+                "value": "target_title",
+                "type": "text"
             },
             {
                 "label": "Year",
-                "value": "target_year"
+                "value": "target_year",
+                "type": "integer"
             }
         ]
     },
@@ -73,29 +87,35 @@
         "source": [
             {
                 "label": "Author",
-                "value": "source_author"
+                "value": "source_author",
+                "type": "text"
             },
             {
                 "label": "Title",
-                "value": "source_title"
+                "value": "source_title",
+                "type": "text"
             },
             {
                 "label": "Year",
-                "value": "source_year"
+                "value": "source_year",
+                "type": "integer"
             }
         ],
         "target": [
             {
                 "label": "Author",
-                "value": "target_author"
+                "value": "target_author",
+                "type": "text"
             },
             {
                 "label": "Title",
-                "value": "target_title"
+                "value": "target_title",
+                "type": "text"
             },
             {
                 "label": "Year",
-                "value": "target_year"
+                "value": "target_year",
+                "type": "integer"
             }
         ]
     }

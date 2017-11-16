@@ -159,8 +159,8 @@ export default {
             this.facetResults = null // clear facet results with new search
             let params = { ...this.$route.query }
             params.db_table = this.$globalConfig.databaseName
-            this.$http.get(`${this.$globalConfig.apiServer}/search_alignments/?`, {
-                params: params
+            this.$http.post(`${this.$globalConfig.apiServer}/search_alignments/?${this.paramsToUrl(params)}`, {
+                metadata: this.$globalConfig.metadataTypes
             }).then(response => {
                 this.results = response.data
                 this.lastRowID = this.results.alignments[this.results.alignments.length - 1].rowid_ordered
@@ -218,8 +218,8 @@ export default {
             queryParams.db_table = this.$globalConfig.databaseName
             queryParams.facet = field
             this.facetLoading = true
-            this.$http.get(`${this.$globalConfig.apiServer}facets/?`, {
-                params: queryParams
+            this.$http.post(`${this.$globalConfig.apiServer}/facets/?${this.paramsToUrl(queryParams)}`, {
+                metadata: this.$globalConfig.metadataTypes
             }).then(response => {
                 this.facetResults = response.data
             }).catch(error => {
@@ -233,7 +233,11 @@ export default {
             delete queryParams.page
             delete queryParams.id_anchor
             queryParams.db_table = this.$globalConfig.databaseName
-            queryParams[fieldName] = value
+            if (this.$globalConfig.metadataTypes[fieldName] == "text") {
+                queryParams[fieldName] = `"${value}"`
+            } else {
+                queryParams[fieldName] = value
+            }
             EventBus.$emit("urlUpdate", queryParams)
             this.facetResults = null
             this.results = { alignments: [] }
