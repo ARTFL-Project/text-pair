@@ -1,15 +1,15 @@
 {
     "appPath": "",
     "apiServer": "http://condorcet.uchicago.edu/alignment/",
-    "databaseName": "pre_19_vs_tgb",
-    "databaseLabel": "Pre-19th vs TGB alignments",
+    "databaseName": "frantext_vs_frc",
+    "databaseLabel": "Frantext vs FRC alignments",
     "sourceDB": {
-        "philoDB": false,
-        "link": "http://condorcet.uchicago.edu/philologic/encyclopedie_rc4"
+        "philoDB": true,
+        "link": "http://condorcet.uchicago.edu/philologic/frantext0917"
     },
     "targetDB": {
-        "philoDB": false,
-        "link": "http://condorcet.uchicago.edu/philologic/frantext0917"
+        "philoDB": true,
+        "link": "http://condorcet.uchicago.edu/philologic/newberryfrc"
     },
     "metadataTypes": {
         "source_author": "text",

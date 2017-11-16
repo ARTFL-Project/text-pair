@@ -70,28 +70,39 @@ class formArguments():
 
 def query_builder(query_args, field_types):
     """Takes query arguments and returns an SQL WHERE clause"""
-    sql_clause = []
+    sql_fields = []
+    sql_values = []
     for field, value in query_args.items():
         value = value.strip()
         field_type = field_types.get(field, "text")
         if field_type == "text":
             if value.startswith('"'):
-                query = "{}='{}'".format(field, value[1:-1])
+                query = "{}=%s".format(field)
+                sql_values.append(value[1:-1])
+            elif value.startswith("NOT "):
+                split_value = " ".join(value.split()[1:]).strip()
+                query = "{} NOT ILIKE %s".format(field)
+                sql_values.append('%{}%'.format(split_value))
             else:
-                query = "{} ilike '{}'".format(field, value)
+                query = "{} ILIKE %s".format(field)
+                sql_values.append('%{}%'.format(value))
         elif field_type == "integer":
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
                 if values[0] == "-":
-                    query = "{} < {}".format(field, values[1])
+                    query = "{} < %s".format(field)
+                    sql_values.append(values[1])
                 elif values[-1] == "-":
-                    query = "{} > {}".format(field, values[0])
+                    query = "{} > %s".format(field)
+                    sql_values.append(values[0])
                 else:
-                    query = "{} BETWEEN {} AND {}".format(field, values[0], values[2])
+                    query = "{} BETWEEN %s AND %s".format(field)
+                    sql_values.extend([values[0], values[2]])
             else:
-                query = '{} = {}'.format(field, value)
-        sql_clause.append(query)
-    return " AND ".join(sql_clause)
+                query = '{} = %s'.format(field)
+                sql_values.append(value)
+        sql_fields.append(query)
+    return " AND ".join(sql_fields), sql_values
 
 
 @application.route("/")
@@ -103,12 +114,12 @@ def index():
 def search_alignments():
     query_args, other_args = parse_args(request)
     metadata_field_types = request.get_json()["metadata"]
-    sql_where_clause = query_builder(query_args, metadata_field_types)
+    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
     if other_args.direction == "next":
         if query_args:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
                     o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
-                    sql_where_clause, other_args.id_anchor)
+                    sql_fields, other_args.id_anchor)
         else:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
@@ -117,14 +128,17 @@ def search_alignments():
         if query_args:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
-                    sql_where_clause, other_args.id_anchor)
+                    sql_fields, other_args.id_anchor)
         else:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
                     other_args.id_anchor)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(query, ["%{}%".format(v) for v in query_args.values() if v])
+    print("QUERY", query, file=sys.stderr)
+    print("VALUES", repr(sql_values), file=sys.stderr)
+    cursor.execute(query, sql_values)
+    # cursor.execute(query)
     column_names = [desc[0] for desc in cursor.description]
     alignments = []
     for row in cursor:
@@ -178,16 +192,16 @@ def facets():
     """Retrieve facet result"""
     query_args, other_args = parse_args(request)
     metadata_field_types = request.get_json()["metadata"]
-    sql_where_clause = query_builder(query_args, metadata_field_types)
+    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if query_args:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
-            other_args.facet, other_args.db_table, sql_where_clause, other_args.facet)
+            other_args.facet, other_args.db_table, sql_fields, other_args.facet)
     else:
         query = "SELECT {}, COUNT(*) FROM {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
             other_args.facet, other_args.db_table, other_args.facet)
-    cursor.execute(query, ["%{}%".format(v) for v in query_args.values() if v])
+    cursor.execute(query,sql_values)
     results = []
     for result in cursor:
         field_name, count = result
