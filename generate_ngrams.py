@@ -141,7 +141,7 @@ class Ngrams:
         return metadata
 
     def __dump_config(self, output_path):
-        with open(str(output_path.joinpath("config/ngram_config.ini")), "w") as ini_file:
+        with open(os.path.join(output_path, "config/ngram_config.ini"), "w") as ini_file:
             ngram_config = configparser.ConfigParser()
             ngram_config.add_section('PREPROCESSING')
             for param, value in self.config.items():
@@ -151,7 +151,7 @@ class Ngrams:
 
     def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="50%", use_db=False, db_name="DataBase.db"):
         """Generate n-grams."""
-        files = glob(str(Path(file_path).joinpath("*")))
+        files = glob(os.path.join(file_path, "*"))
         os.system('mkdir -p {}/ngrams'.format(output_path))
         os.system('mkdir -p {}/metadata'.format(output_path))
         os.system("mkdir -p {}/index".format(output_path))
@@ -206,8 +206,6 @@ class Ngrams:
 
         print("Cleaning up...")
         os.system("rm -r {}/temp".format(self.output_path))
-
-        ngram_index_path = Path(self.output_path).joinpath("index/index.tab")
 
         # generate a sqlite DataBase
         #if db_path is None:

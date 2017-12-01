@@ -1,27 +1,36 @@
 {
-    "appPath": "",
-    "apiServer": "http://condorcet.uchicago.edu/alignment/",
-    "databaseName": "encyc_vs_frantext",
-    "databaseLabel": "Encyclopédie vs TGB alignments",
+    "webServer": "Apache",
+    "appPath": "text-align/",
+    "apiServer": "http://localhost/text-align-api",
+    "databaseName": "alignment_db",
+    "databaseLabel": "Sequence Alignment",
     "sourceDB": {
-        "philoDB": true,
-        "link": "http://condorcet.uchicago.edu/philologic/encyclopedie_rc4"
+        "philoDB": false,
+        "link": ""
     },
     "targetDB": {
-        "philoDB": true,
-        "link": "http://condorcet.uchicago.edu/philologic/frantext0917"
+        "philoDB": false,
+        "link": ""
+    },
+    "metadataTypes": {
+        "source_author": "text",
+        "source_title": "text",
+        "source_year": "integer",
+        "target_author": "text",
+        "target_title": "text",
+        "target_year": "integer"
     },
     "sourceCitation": [
         {
-            "field": "source_kafauth",
+            "field": "source_author",
             "style": {}
         },
         {
-            "field": "source_head",
+            "field": "source_title",
             "style": {}
         },
         {
-            "field": "source_normclass",
+            "field": "source_year",
             "style": {}
         }
     ],
@@ -43,15 +52,15 @@
         "source": [
             {
                 "label": "Author",
-                "value": "source_kafauth"
+                "value": "source_author"
             },
             {
-                "label": "Headword",
-                "value": "source_head"
+                "label": "Title",
+                "value": "source_title"
             },
             {
-                "label": "Class",
-                "value": "source_normclass"
+                "label": "Year",
+                "value": "source_year"
             }
         ],
         "target": [
@@ -73,15 +82,15 @@
         "source": [
             {
                 "label": "Author",
-                "value": "source_kafauth"
+                "value": "source_author"
             },
             {
-                "label": "Headword",
-                "value": "source_head"
+                "label": "Title",
+                "value": "source_title"
             },
             {
-                "label": "Class",
-                "value": "source_normclass"
+                "label": "Year",
+                "value": "source_year"
             }
         ],
         "target": [

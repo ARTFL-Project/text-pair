@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
+"""Web loading module"""
 
+import argparse
+import configparser
+import os
 import sys
+import json
+from collections import OrderedDict
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -10,6 +16,55 @@ DATABASE = psycopg2.connect(user="alignments", password="martini", database="ali
 CURSOR = DATABASE.cursor()
 CURSOR2 = DATABASE.cursor()
 
+
+DEFAULT_FIELD_TYPES = {"source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER"}
+
+
+class WebAppConfig:
+    """ Web app config class"""
+
+    def __init__(self, field_types, db_name, api_server):
+        with open("web_app/appConfig.json") as app_config:
+            self.options = json.load(app_config, object_pairs_hook=OrderedDict)
+        for field, field_type in field_types.items():
+            self.options["metadataTypes"][field] = field_type
+        self.options["apiServer"] = api_server
+        self.options["appPath"] = os.path.join("text-align", db_name)
+        self.options["databaseName"] = db_name
+
+    def __call__(self):
+        return self.options
+
+    def __getattr__(self, attr):
+        return self.options[attr]
+
+
+def parse_command_line():
+    """Command line parsing function"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", help="configuration file used to override defaults",
+                        type=str, default="")
+    parser.add_argument("--file", help="alignment file to load", type=str, default=None)
+    parser.add_argument("--table", help="name of postgreSQL table", type=str, default=None)
+    args = vars(parser.parse_args())
+    if args["file"] is None:
+        print("Please supply a file argument\nExiting....")
+        exit()
+    if args["table"] is None:
+        print("Please supply a table argument\nExiting....")
+        exit()
+    field_types = DEFAULT_FIELD_TYPES
+    api_server = ""
+    if args["config"]:
+        if os.path.exists(args["config"]):
+            config = configparser.ConfigParser()
+            config.read(args["config"])
+            for key, value in dict(config["WEB_APPLICATION"]).items():
+                if key == "api_server":
+                    api_server = value
+                else:
+                    field_types[key] = value
+    return args["file"], args["table"], field_types, api_server
 
 def count_lines(filename):
     """Count lines in file"""
@@ -24,25 +79,46 @@ def parse_file(file):
             fields = line.rstrip("\n")
             yield fields
 
-def main():
-    line_count = count_lines(sys.argv[1]) - 1 # skip first line with field names
-    alignments = parse_file(sys.argv[1])
-    table_name = sys.argv[2]
+def validate_field_type(row, field_types):
+    """Check field type and modify value type if needed"""
+    values = []
+    for field, value in row:
+        field_type = field_types.get(field, "TEXT")
+        if field_type == "INTEGER":
+            try:
+                value = int(value)
+            except ValueError:
+                value = 0
+        values.append(value)
+    return values
+
+def load_db(file, table_name, field_types):
+    """Load SQL table"""
+    line_count = count_lines(file) - 1 # skip first line with field names
+    alignments = parse_file(file)
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
-    with open(sys.argv[1], errors="ignore") as input_file:
+    with open(file, errors="ignore") as input_file:
         field_names.extend(input_file.readline().rstrip("\n").split("\t"))
-        fields_in_table.extend([i + " TEXT" for i in field_names if i != "rowid"])
+        fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
+        fields_in_table.extend(fields_and_types)
     CURSOR.execute("DROP TABLE if exists {}".format(table_name))
     CURSOR.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
     lines = 0
     rows = []
     rowid = 0
+    skipped = 0
+    field_num = len(fields_in_table)-1
     print("Populating main table...")
     for alignment_fields in tqdm(alignments, total=line_count):
+        row = zip(field_names[1:], alignment_fields.split("\t"))
+        row = validate_field_type(row, field_types)
+        if len(row) != field_num:
+            skipped += 1
+            continue
         lines += 1
         rowid += 1
-        rows.append([rowid] + alignment_fields.split('\t'))
+        rows.append([rowid] + row)
         if lines == 100:
             insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))
             execute_values(CURSOR, insert, rows)
@@ -55,6 +131,9 @@ def main():
     CURSOR.execute("CREATE INDEX {}_target_title_index ON {} USING BTREE(target_title)".format(table_name, table_name))
     CURSOR.execute("CREATE INDEX {}_year_index ON {} USING BTREE(source_year, target_year)".format(table_name, table_name))
     DATABASE.commit()
+
+    if skipped != 0:
+        print("{} rows were skipped due to mismatch".format(skipped))
 
     print("Populating index table...")
     ordered_table = table_name + "_ordered"
@@ -78,8 +157,25 @@ def main():
     DATABASE.commit()
     DATABASE.close()
 
-    print("DB viewable at http://root_url_for_alignment_dbs/{}".format(table_name))
-    print("Configure database at http://root_url_for_alignment_dbs/{}_config.json".format(table_name))
+def set_up_app(web_config, db_path):
+    """Copy and build web application with correct configuration"""
+    print("Copying and building web application...")
+    os.system("rm -rf {}".format(db_path))
+    os.mkdir(db_path)
+    os.system("cp -R web_app/. {}".format(db_path))
+    with open(os.path.join(db_path, "appConfig.json"), "w") as config_file:
+        json.dump(web_config(), config_file)
+    os.system("cd {}; npm run build;".format(db_path))
+    if web_config.webServer == "Apache":
+        os.system("cp apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
+
+def create_web_application():
+    """Main routine"""
+    file, table, field_types, api_server = parse_command_line()
+    web_config = WebAppConfig(field_types, table, api_server)
+    load_db(file, table, field_types)
+    set_up_app(web_config, "/var/www/html/text-align/{}/".format(table))
+    print("DB viewable at {}/{}".format(web_config.apiServer, table))
 
 if __name__ == '__main__':
-    main()
+    create_web_application()

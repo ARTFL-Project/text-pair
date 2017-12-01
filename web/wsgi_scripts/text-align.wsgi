@@ -7,19 +7,15 @@ import re
 import sys
 from ast import literal_eval as eval
 from collections import OrderedDict, Counter, defaultdict
-from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
-from flask import (Flask, jsonify, redirect, render_template, request,
-                   send_from_directory)
-from philologic.runtime.link import byte_range_to_link
+from flask import (Flask, jsonify, render_template, request)
+from flask_cors import CORS
 
-ROOT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./")
-application = Flask(__name__,
-                    template_folder=ROOT_PATH,
-                    static_folder=os.path.join(ROOT_PATH, "assets"))
 
+application = Flask(__name__)
+CORS(application)
 
 class formArguments():
     """Special dict to handle form arguments"""
@@ -59,10 +55,12 @@ class formArguments():
             return False
 
     def items(self):
+        """Mimic items method of dict"""
         for k, v in self.dict.items():
             yield k, v
 
     def values(self):
+        """Mimic values method of dict"""
         for _, v in self.dict.items():
             yield v
 
@@ -70,8 +68,46 @@ class formArguments():
         return repr(self.dict)
 
 
+def query_builder(query_args, field_types):
+    """Takes query arguments and returns an SQL WHERE clause"""
+    sql_fields = []
+    sql_values = []
+    for field, value in query_args.items():
+        value = value.strip()
+        field_type = field_types.get(field, "text")
+        if field_type == "text":
+            if value.startswith('"'):
+                query = "{}=%s".format(field)
+                sql_values.append(value[1:-1])
+            elif value.startswith("NOT "):
+                split_value = " ".join(value.split()[1:]).strip()
+                query = "{} NOT ILIKE %s".format(field)
+                sql_values.append('%{}%'.format(split_value))
+            else:
+                query = "{} ILIKE %s".format(field)
+                sql_values.append('%{}%'.format(value))
+        elif field_type == "integer":
+            if "-" in value:
+                values = [v for v in re.split(r"(-)", value) if v]
+                if values[0] == "-":
+                    query = "{} < %s".format(field)
+                    sql_values.append(values[1])
+                elif values[-1] == "-":
+                    query = "{} > %s".format(field)
+                    sql_values.append(values[0])
+                else:
+                    query = "{} BETWEEN %s AND %s".format(field)
+                    sql_values.extend([values[0], values[2]])
+            else:
+                query = '{} = %s'.format(field)
+                sql_values.append(value)
+        sql_fields.append(query)
+    return " AND ".join(sql_fields), sql_values
+
+
 @application.route("/")
 def index():
+    """Return index.html which lists available databases"""
     return render_template("index.html")
 
 # @application.route('/<path:path>', methods=['GET'])
@@ -80,33 +116,38 @@ def index():
 #     path = path.split('/')[0]
 #     return redirect(main_config[path])
 
-@application.route("/search_alignments/", methods=["GET"])
+@application.route("/search_alignments/", methods=["GET", "POST"])
 def search_alignments():
-    search_args, other_args = parse_args(request)
+    query_args, other_args = parse_args(request)
+    metadata_field_types = request.get_json()["metadata"]
+    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
     if other_args.direction == "next":
-        if search_args:
+        if query_args:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
                     o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
-                    " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
+                    sql_fields, other_args.id_anchor)
         else:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
                     other_args.id_anchor)
     else:
-        if search_args:
+        if query_args:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
-                    " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.id_anchor)
+                    sql_fields, other_args.id_anchor)
         else:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
                     other_args.id_anchor)
-    DATABASE = psycopg2.connect(user="alignments", password="martini", database="alignments")
-    CURSOR = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    CURSOR.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
-    column_names = [desc[0] for desc in CURSOR.description]
+    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    print("QUERY", query, file=sys.stderr)
+    print("VALUES", repr(sql_values), file=sys.stderr)
+    cursor.execute(query, sql_values)
+    # cursor.execute(query)
+    column_names = [desc[0] for desc in cursor.description]
     alignments = []
-    for pos, row in enumerate(CURSOR):
+    for row in cursor:
         metadata = {key: row[key] for key in column_names}
         alignments.append(metadata)
     if other_args.direction == "previous":
@@ -129,14 +170,14 @@ def search_alignments():
 
 @application.route("/search_alignments_full/", methods=["GET"])
 def search_alignments_full():
-    search_args, other_args = parse_args(request)
+    query_args, other_args = parse_args(request)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    if search_args is True:
+    if query_args is True:
         query = "SELECT {}, {} FROM {} WHERE {} != '' and {} != '' and {}".format(
             other_args.source, other_args.target, other_args.db_table, other_args.source, other_args.target,
-            " and ".join([i + " ilike %s " for i in search_args if search_args[i]]))
-        cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
+            " and ".join([i + " ilike %s " for i in query_args if query_args[i]]))
+        cursor.execute(query, ["%{}%".format(v) for v in query_args.values() if v])
     else:
         query = "SELECT {}, {} FROM {} WHERE {} != '' and {} != ''".format(
             other_args.source, other_args.target, other_args.db_table, other_args.source, other_args.target)
@@ -152,18 +193,21 @@ def search_alignments_full():
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
-@application.route("/facets/", methods=["GET"])
+@application.route("/facets/", methods=["POST"])
 def facets():
-    search_args, other_args = parse_args(request)
+    """Retrieve facet result"""
+    query_args, other_args = parse_args(request)
+    metadata_field_types = request.get_json()["metadata"]
+    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    if search_args:
+    if query_args:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
-            other_args.facet, other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.facet)
+            other_args.facet, other_args.db_table, sql_fields, other_args.facet)
     else:
         query = "SELECT {}, COUNT(*) FROM {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
             other_args.facet, other_args.db_table, other_args.facet)
-    cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
+    cursor.execute(query,sql_values)
     results = []
     for result in cursor:
         field_name, count = result
@@ -177,21 +221,21 @@ def facets():
 
 @application.route("/stats/", methods=["GET"])
 def stats():
-    search_args, other_args = parse_args(request)
+    query_args, other_args = parse_args(request)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    if search_args:
+    if query_args:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} AND earliest=%s GROUP BY {} ORDER BY COUNT(*) DESC LIMIT 100".format(
-            other_args.stats_field, other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]]), other_args.stats_field
+            other_args.stats_field, other_args.db_table, " and ".join([i + " ilike %s " for i in query_args if query_args[i]]), other_args.stats_field
         )
     else:
         query = "SELECT {}, COUNT(*) FROM {} WHERE earliest=%s GROUP BY {} ORDER BY COUNT(*) DESC LIMIT 100".format(
             other_args.stats_field, other_args.db_table, other_args.stats_field
         )
     if other_args.direction == "source":
-        cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v] + ["yes"])
+        cursor.execute(query, ["%{}%".format(v) for v in query_args.values() if v] + ["yes"])
     else:
-        cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v] + ["no"])  # give instances where passage is a reuse
+        cursor.execute(query, ["%{}%".format(v) for v in query_args.values() if v] + ["no"])  # give instances where passage is a reuse
     results = []
     for result in cursor:
         field_name, count = result
@@ -206,13 +250,13 @@ def stats():
 
 @application.route("/get_most_reused_passages/", methods=["GET"])
 def get_most_reused_passages():
-    search_args, other_args = parse_args(request)
+    query_args, other_args = parse_args(request)
     database = psycopg2.connect(user="alignments", password="martini", database="alignments")
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     query = "SELECT * FROM {} WHERE {}".format(
-        other_args.db_table, " and ".join([i + " ilike %s " for i in search_args if search_args[i]])
+        other_args.db_table, " and ".join([i + " ilike %s " for i in query_args if query_args[i]])
     )
-    cursor.execute(query, ["%{}%".format(v) for v in search_args.values() if v])
+    cursor.execute(query, ["%{}%".format(v) for v in query_args.values() if v])
     column_names = [desc[0] for desc in cursor.description]
     results = {}
     for pos, row in enumerate(cursor):
@@ -229,18 +273,8 @@ def get_most_reused_passages():
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
-@application.route("/link_to_philologic", methods=["GET"])
-def link_to_philologic():
-    _, other_args = parse_args(request)
-    db_path = str(Path(request.args["filename"]).parent).replace("data/TEXT", "")
-    print(db_path, file=sys.stderr)
-    philologic_link = byte_range_to_link(db_path, request.args["doc_id"], int(request.args["start_byte"]), int(request.args["end_byte"]))
-    response = jsonify({"link": philologic_link})
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    return response
-
 def parse_args(request):
-    search_args = formArguments()
+    query_args = formArguments()
     other_args = formArguments()
     other_args_keys = ["facet", "direction", "source", "target", "stats_field", "db_table", "filter_field", "filter_value", "page", "id_anchor"]
     for key, value in request.args.items():
@@ -266,8 +300,8 @@ def parse_args(request):
                 other_args[key] = value
         else:
             if value:
-                search_args[key] = value
-    return search_args, other_args
+                query_args[key] = value
+    return query_args, other_args
 
 def load_json(path):
     with open(path) as p:
