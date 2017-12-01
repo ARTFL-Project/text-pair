@@ -1,15 +1,16 @@
 {
-    "appPath": "",
-    "apiServer": "http://condorcet.uchicago.edu/alignment/",
-    "databaseName": "frantext_vs_frc",
-    "databaseLabel": "Frantext vs FRC alignments",
+    "webServer": "Apache",
+    "appPath": "text-align/",
+    "apiServer": "http://localhost/text-align-api",
+    "databaseName": "alignment_db",
+    "databaseLabel": "Sequence Alignment",
     "sourceDB": {
-        "philoDB": true,
-        "link": "http://condorcet.uchicago.edu/philologic/frantext0917"
+        "philoDB": false,
+        "link": ""
     },
     "targetDB": {
-        "philoDB": true,
-        "link": "http://condorcet.uchicago.edu/philologic/newberryfrc"
+        "philoDB": false,
+        "link": ""
     },
     "metadataTypes": {
         "source_author": "text",
@@ -51,35 +52,29 @@
         "source": [
             {
                 "label": "Author",
-                "value": "source_author",
-                "type": "text"
+                "value": "source_author"
             },
             {
                 "label": "Title",
-                "value": "source_title",
-                "type": "text"
+                "value": "source_title"
             },
             {
                 "label": "Year",
-                "value": "source_year",
-                "type": "integer"
+                "value": "source_year"
             }
         ],
         "target": [
             {
                 "label": "Author",
-                "value": "target_author",
-                "type": "text"
+                "value": "target_author"
             },
             {
                 "label": "Title",
-                "value": "target_title",
-                "type": "text"
+                "value": "target_title"
             },
             {
                 "label": "Year",
-                "value": "target_year",
-                "type": "integer"
+                "value": "target_year"
             }
         ]
     },
@@ -87,35 +82,29 @@
         "source": [
             {
                 "label": "Author",
-                "value": "source_author",
-                "type": "text"
+                "value": "source_author"
             },
             {
                 "label": "Title",
-                "value": "source_title",
-                "type": "text"
+                "value": "source_title"
             },
             {
                 "label": "Year",
-                "value": "source_year",
-                "type": "integer"
+                "value": "source_year"
             }
         ],
         "target": [
             {
                 "label": "Author",
-                "value": "target_author",
-                "type": "text"
+                "value": "target_author"
             },
             {
                 "label": "Title",
-                "value": "target_title",
-                "type": "text"
+                "value": "target_title"
             },
             {
                 "label": "Year",
-                "value": "target_year",
-                "type": "integer"
+                "value": "target_year"
             }
         ]
     }

@@ -110,6 +110,12 @@ def index():
     """Return index.html which lists available databases"""
     return render_template("index.html")
 
+# @application.route('/<path:path>', methods=['GET'])
+# def return_app(path):
+#     main_config = load_json("{}/db_configs.json".format(ROOT_PATH))
+#     path = path.split('/')[0]
+#     return redirect(main_config[path])
+
 @application.route("/search_alignments/", methods=["GET", "POST"])
 def search_alignments():
     query_args, other_args = parse_args(request)
