@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Web loading module"""
 
 import argparse
 import configparser
@@ -22,11 +23,12 @@ DEFAULT_FIELD_TYPES = {"source_year": "INTEGER", "source_pub_date": "INTEGER", "
 class WebAppConfig:
     """ Web app config class"""
 
-    def __init__(self, field_types, db_name):
+    def __init__(self, field_types, db_name, api_server):
         with open("web_app/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         for field, field_type in field_types.items():
             self.options["metadataTypes"][field] = field_type
+        self.options["apiServer"] = api_server
         self.options["appPath"] = os.path.join("text-align", db_name)
         self.options["databaseName"] = db_name
 
@@ -52,13 +54,17 @@ def parse_command_line():
         print("Please supply a table argument\nExiting....")
         exit()
     field_types = DEFAULT_FIELD_TYPES
+    api_server = ""
     if args["config"]:
         if os.path.exists(args["config"]):
             config = configparser.ConfigParser()
             config.read(args["config"])
-            for key, value in dict(config["DATABASE"]).items():
-                field_types[key] = value
-    return args["file"], args["table"], field_types
+            for key, value in dict(config["WEB_APPLICATION"]).items():
+                if key == "api_server":
+                    api_server = value
+                else:
+                    field_types[key] = value
+    return args["file"], args["table"], field_types, api_server
 
 def count_lines(filename):
     """Count lines in file"""
@@ -87,6 +93,7 @@ def validate_field_type(row, field_types):
     return values
 
 def load_db(file, table_name, field_types):
+    """Load SQL table"""
     line_count = count_lines(file) - 1 # skip first line with field names
     alignments = parse_file(file)
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
@@ -164,12 +171,11 @@ def set_up_app(web_config, db_path):
 
 def create_web_application():
     """Main routine"""
-    file, table, field_types = parse_command_line()
-    web_config = WebAppConfig(field_types, table)
+    file, table, field_types, api_server = parse_command_line()
+    web_config = WebAppConfig(field_types, table, api_server)
     load_db(file, table, field_types)
     set_up_app(web_config, "/var/www/html/text-align/{}/".format(table))
     print("DB viewable at {}/{}".format(web_config.apiServer, table))
 
 if __name__ == '__main__':
     create_web_application()
-
