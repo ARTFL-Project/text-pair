@@ -8,10 +8,8 @@ import re
 from ast import literal_eval
 from collections import defaultdict
 
-from utils.xml_parser import TEIParser
-
-# from compare_ngrams import SequenceAligner
-from generate_ngrams import Ngrams
+from .xml_parser import TEIParser
+from .generate_ngrams import Ngrams
 
 TRIM_LAST_SLASH = re.compile(r'/\Z')
 
@@ -109,7 +107,7 @@ def parse_command_line():
             paths["target"]["is_philo_db"] = args["is_philo_db"]
     return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], args["debug"]
 
-def main():
+def run_alignment():
     """Main function to start sequence alignment"""
     paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, debug = parse_command_line()
     if tei_parsing["parse_source_files"] is True:
@@ -213,4 +211,4 @@ def main():
                   ))
 
 if __name__ == '__main__':
-    main()
+    run_alignment()

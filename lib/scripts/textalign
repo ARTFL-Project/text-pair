@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Sequence aligner script"""
+
+from textalign import run_alignment
+
+if __name__ == '__main__':
+    run_alignment()
