@@ -136,7 +136,7 @@ def run_alignment():
     if paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         paths["target"]["ngram_output_path"] = paths["source"]["ngram_output_path"]
     if matching_params:
-        os.system("./compareNgrams \
+        os.system("compareNgrams \
                   --output_path={}/results \
                   --threads={} \
                   --source_files={}/ngrams \
@@ -194,7 +194,7 @@ def run_alignment():
                       matching_params["ngram_index"],
                   ))
     else:
-        os.system("./compareNgrams \
+        os.system("compareNgrams \
                   --output_path={}/results \
                   --source_files={}/ngrams \
                   --target_files={}/ngrams \

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from multiprocess import Pool
 from tqdm import tqdm
-from itertools import combinations
+from itertools import combinations, permutations
 from unidecode import unidecode
 from mmh3 import hash as hash32
 from Stemmer import Stemmer
@@ -174,8 +174,6 @@ class Ngrams:
             exit()
 
         print("\nGenerating ngrams...", flush=True)
-        self.gap = 0
-        print("\nGap:"+str(self.gap)+" Window: "+str(self.config["window"]), flush=True)
         pool = Pool(workers)
         with tqdm(total=len(files)) as pbar:
             for local_metadata in pool.imap_unordered(self.process_file, files):
@@ -398,8 +396,12 @@ class Ngrams:
                     current_text_id = text_id
                 ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
                 if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
-                    for val in combinations(list(ngram_obj), self.config["ngram"]):    # we combine here ngram object to the window list, so we have a ngram with gap
-                        current_ngram_list, _, start_bytes, end_bytes = zip(*val)
+                    if self.config["word_order"] is True:
+                        iterator = combinations(ngram_obj, self.config["ngram"])
+                    else:
+                        iterator = permutations(ngram_obj)
+                    for value in iterator:
+                        current_ngram_list, _, start_bytes, end_bytes = zip(*value)
                         current_ngram = "_".join(current_ngram_list)
                         hashed_ngram = hash32(current_ngram)
                         ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
