@@ -40,12 +40,12 @@ PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5
 class Ngrams:
     """Generate Ngrams"""
 
-    def __init__(self, text_object_level="doc", ngram=3, gap=0, skipgram=False, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, minimum_word_length=2, debug=False):
+    def __init__(self, text_object_level="doc", ngram=3, gap=0, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
+                 lowercase=True, minimum_word_length=2, word_order=True, debug=False):
         self.config = {
             "ngram": ngram,
             "window": ngram + gap,
-            "skipgram": skipgram,
+            "word_order": word_order,
             "numbers": numbers,
             "stemmer": stemmer,
             "language": language,
@@ -175,7 +175,6 @@ class Ngrams:
 
         print("\nGenerating ngrams...", flush=True)
         self.gap = 0
-        self.config["window"] = self.ngram + self.gap
         print("\nGap:"+str(self.gap)+" Window: "+str(self.config["window"]), flush=True)
         pool = Pool(workers)
         with tqdm(total=len(files)) as pbar:
@@ -211,8 +210,6 @@ class Ngrams:
         #if db_path is None:
         #    self.convert2DataBase(self.db_path, self.db_name, output_path)
 
-        return ngram_index_path
-
     def convert2DataBase(self, db_path, db_name, input_file):
         """convert a generate_ngrams json file to a sqlite3 DataBase"""
 
@@ -223,7 +220,7 @@ class Ngrams:
         # Occurences transfers
         path_ngram_directory = str(Path(input_file))
         if not (os.path.exists(path_ngram_directory)):
-            print("File ngram not exists to: "+ path_ngram_directory)
+            print("File ngram not exists to:", path_ngram_directory)
             exit()
 
         files = glob(str(Path(path_ngram_directory).joinpath("*.json")))
@@ -401,12 +398,7 @@ class Ngrams:
                     current_text_id = text_id
                 ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
                 if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
-                    if self.config["skipgram"] == True:
-                        ngram_obj_to_store = [ngram_obj[0], ngram_obj[-1]]
-                    else:
-                        ngram_obj_to_store = list(ngram_obj)
-
-                    for val in combinations(list(ngram_obj),self.ngram):    # we combine here ngram object to the window list, so we have a ngram with gap
+                    for val in combinations(list(ngram_obj), self.config["ngram"]):    # we combine here ngram object to the window list, so we have a ngram with gap
                         current_ngram_list, _, start_bytes, end_bytes = zip(*val)
                         current_ngram = "_".join(current_ngram_list)
                         hashed_ngram = hash32(current_ngram)
@@ -500,10 +492,9 @@ def parse_command_line():
                           type=str, default="./output")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
-    optional.add_argument("--skipgram", help="use skipgrams", action='store_true', default=False)
     optional.add_argument("--ngram", help="number of grams", type = int, default=3)
     optional.add_argument("--gap", help="number of gap", action='store_true', default=0)
-    optional.add_argument("--order", help="words order must be respected", action='store_true', default=True)
+    optional.add_argument("--word_order", help="words order must be respected", action='store_true', default=True)
     optional.add_argument("--db_name", help="name of the sqlite DataBase", type=str, default="")
     optional.add_argument("--db_path", help="path to the sqlite DataBase", type=str, default="")
     args = vars(parser.parse_args())
@@ -514,9 +505,6 @@ def parse_command_line():
 
 if __name__ == '__main__':
     ARGS = parse_command_line()
-    #NGRAM_GENERATOR.convert2DataBase(db_path=ARGS["db_path"], db_name="test.db",
-            #input_file="/local/spinel/ownCloud/Python/source_Comedie/result/ngram")
-    #NGRAM_GENERATOR.matchingDB(db_name=ARGS["db_name"], db_path=ARGS["db_path"], nb_doc=84,  fenetre_rabbout=30)
-    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], skipgram=ARGS["skipgram"], text_object_level=ARGS["text_object_level"], gap=ARGS["gap"])
+    NGRAM_GENERATOR = Ngrams(stopwords=ARGS["stopwords"], lemmatizer=ARGS["lemmatizer"], text_object_level=ARGS["text_object_level"], gap=ARGS["gap"])
     NGRAM_GENERATOR.generate(ARGS["file_path"], ARGS["output_path"], is_philo_db=ARGS["is_philo_db"], metadata=ARGS["metadata"],
-                             workers=ARGS["cores"], ram=ARGS["mem_usage"], use_db=ARGS["use_db"], db_path=ARGS["db_path"], db_name=ARGS["db_name"], )
+                             workers=ARGS["cores"], ram=ARGS["mem_usage"], use_db=ARGS["use_db"], db_path=ARGS["db_path"], db_name=ARGS["db_name"])

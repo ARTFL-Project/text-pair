@@ -57,7 +57,7 @@ def parse_command_line():
                     tei_parsing[key] = value
             for key, value in dict(config["PREPROCESSING"]).items():
                 if value:
-                    if key == "skipgram" or key == "numbers" or key == "order":
+                    if key == "skipgram" or key == "numbers" or key == "word_order":
                         if value.lower() == "yes" or value.lower() == "true":
                             value = True
                         else:
