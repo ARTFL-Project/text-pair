@@ -222,7 +222,7 @@ class Ngrams:
             exit()
 
         files = glob(str(Path(path_ngram_directory).joinpath("*.json")))
-        list_occurence=list()
+        list_occurence = []
         compteur=0
         for file in files:
             with open(file) as fichier:
@@ -233,7 +233,7 @@ class Ngrams:
                     for i in data[id_ngram]:
                         list_occurence.append((file_name, id_ngram, i[0], i[1], i[2]))
                 compteur=compteur+1
-                if(compteur==10):
+                if compteur == 10:
                     print("10 request send to the DataBase")
                     cursor.executemany("INSERT INTO occurence (filename, ngram_id, position, start_byte, end_byte) VALUES (?, ?, ?, ?, ?)", list_occurence)
                     sqlDataBase.commit()
@@ -256,25 +256,25 @@ class Ngrams:
             cursor = sqlDataBase.cursor()
             for id_json in data:
                 titre = ""
-                if "title" in data[id_json] :
+                if "title" in data[id_json]:
                     titre = data[id_json]["title"]
                 filename = ""
-                if "filename" in data[id_json] :
+                if "filename" in data[id_json]:
                     filename = data[id_json]["filename"]
                 author = ""
-                if "author" in data[id_json] :
+                if "author" in data[id_json]:
                     author = data[id_json]["author"]
                 create_date = ""
-                if "create_date" in data[id_json] :
+                if "create_date" in data[id_json]:
                     create_date = data[id_json]["create_date"]
                 year = ""
-                if "year" in data[id_json] :
+                if "year" in data[id_json]:
                     year = data[id_json]["year"]
                 pub_date = ""
-                if "pub_date" in data[id_json] :
+                if "pub_date" in data[id_json]:
                     pub_date = data[id_json]["pub_date"]
                 publisher = ""
-                if "publisher" in data[id_json] :
+                if "publisher" in data[id_json]:
                     publisher = data[id_json]["publisher"]
                 list_metadata.append((id_json, titre, filename, author, create_date, year, pub_date, publisher))
         cursor.executemany("""INSERT INTO metadata(id_filename, title, filename, author, create_date, year, pub_date, publisher)
@@ -420,7 +420,7 @@ class Ngrams:
     def createDB(self, db_path, db_name):
         """Create a sqlite3 DataBase."""
         try:
-            path_join=os.path.join(db_path,db_name);
+            path_join=os.path.join(db_path,db_name)
             if os.path.isfile(path_join) :
                 print("DB exist in "+path_join+" supression and recreation")
                 os.remove(path_join)

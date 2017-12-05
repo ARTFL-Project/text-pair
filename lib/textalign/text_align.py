@@ -10,6 +10,7 @@ from collections import defaultdict
 
 from .xml_parser import TEIParser
 from .generate_ngrams import Ngrams
+from .web_loader import create_web_app
 
 TRIM_LAST_SLASH = re.compile(r'/\Z')
 
@@ -29,6 +30,8 @@ def parse_command_line():
                         type=str, default="")
     parser.add_argument("--target_metadata", help="path to target metadata if not from PhiloLogic instance",
                         type=str, default="")
+    parser.add_argument("--load_web_app", help="define whether to load results into a database and build a corresponding web app",
+                        type=literal_eval, default=True)
     parser.add_argument("--output_path", help="output path for ngrams and sequence alignment",
                         type=str, default="./output")
     parser.add_argument("--workers", help="How many threads or cores to use for preprocessing and matching",
@@ -38,6 +41,7 @@ def parse_command_line():
     tei_parsing = {}
     preprocessing_params = {"source": {}, "target": {}}
     matching_params = {}
+    web_app_config = {"load": args["load_web_app"]}
     if args["config"]:
         if os.path.exists(args["config"]):
             config = configparser.ConfigParser()
@@ -79,6 +83,16 @@ def parse_command_line():
             for key, value in dict(config["MATCHING"]).items():
                 if value or key not in matching_params:
                     matching_params[key] = value
+            if args["load_web_app"] is True:
+                web_app_config["field_types"] = {}
+                for key, value in dict(config["WEB_APPLICATION"]).items():
+                    if key == "api_server" or key == "table_name":
+                        web_app_config[key] = value
+                    else:
+                        web_app_config["field_types"][key] = value
+                if web_app_config["table_name"] == "":
+                    print("Please define a table_name in the Web Application section of your config file")
+                    exit()
     paths = {"source": {}, "target": defaultdict(str)}
     if tei_parsing["parse_source_files"] is True:
         paths["source"]["tei_input_files"] = args["source_files"]
@@ -105,11 +119,11 @@ def parse_command_line():
             paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
             paths["target"]["metadata_path"] = args["target_metadata"] or os.path.join(args["output_path"], "target/metadata/metadata.json")
             paths["target"]["is_philo_db"] = args["is_philo_db"]
-    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], args["debug"]
+    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"]
 
 def run_alignment():
     """Main function to start sequence alignment"""
-    paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, debug = parse_command_line()
+    paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug = parse_command_line()
     if tei_parsing["parse_source_files"] is True:
         print("\n### Parsing source TEI files ###")
         parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"],
@@ -209,6 +223,9 @@ def run_alignment():
                       paths["target"]["metadata_path"],
                       str(debug).lower()
                   ))
+    if web_app_config["load"] is True:
+        output_file = os.path.join(output_path, "results/alignment_results.tab")
+        create_web_app(output_file, web_app_config["table_name"], web_app_config["field_types"], web_app_config["api_server"])
 
 if __name__ == '__main__':
     run_alignment()
