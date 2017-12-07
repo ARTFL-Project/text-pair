@@ -4,7 +4,6 @@
 import argparse
 import configparser
 import os
-import sys
 import json
 from collections import OrderedDict
 
@@ -55,7 +54,6 @@ def parse_command_line():
     field_types = DEFAULT_FIELD_TYPES
     api_server = ""
     table = ""
-    searchable_fields = ""
     if args["config"]:
         if os.path.exists(args["config"]):
             config = configparser.ConfigParser()
@@ -65,7 +63,7 @@ def parse_command_line():
                     api_server = value
                 else:
                     field_types[key] = value
-    return args["file"], table, field_types, api_server, searchable_fields
+    return args["file"], table, field_types, api_server
 
 def count_lines(filename):
     """Count lines in file"""
@@ -178,6 +176,7 @@ def create_web_app(file, table, field_types, api_server):
     print("DB viewable at {}/{}".format(web_config.apiServer.replace("-api", ""), table))
 
 def main():
+    """Main function"""
     file, table, field_types, api_server = parse_command_line()
     create_web_app(file, table, field_types, api_server)
 
