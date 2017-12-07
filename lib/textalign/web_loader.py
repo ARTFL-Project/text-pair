@@ -174,8 +174,8 @@ def create_web_app(file, table, field_types, api_server):
     """Main routine"""
     web_config = WebAppConfig(field_types, table, api_server)
     load_db(file, table, field_types)
-    set_up_app(web_config, "/var/www/html/text-align/{}/".format(table))
-    print("DB viewable at {}/{}".format(web_config.apiServer, table))
+    set_up_app(web_config, "/var/www/html/text-align/{}/".format(table)) #TODO: need to make this configurable
+    print("DB viewable at {}/{}".format(web_config.apiServer.replace("-api", ""), table))
 
 def main():
     file, table, field_types, api_server = parse_command_line()
