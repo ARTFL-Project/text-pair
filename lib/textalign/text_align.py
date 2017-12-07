@@ -24,7 +24,7 @@ def parse_command_line():
                         type=str)
     parser.add_argument("--target_files", help="path to target files to compared to source files",
                         type=str, default="")
-    parser.add_argument("--is_philo_db", help="define is files are from a PhiloLogic instance",
+    parser.add_argument("--is_philo_db", help="define if files are from a PhiloLogic instance",
                         type=literal_eval, default=False)
     parser.add_argument("--source_metadata", help="path to source metadata if not from PhiloLogic instance",
                         type=str, default="")
