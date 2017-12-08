@@ -54,16 +54,21 @@ def parse_command_line():
     field_types = DEFAULT_FIELD_TYPES
     api_server = ""
     table = ""
+    web_application_directory = ""
     if args["config"]:
         if os.path.exists(args["config"]):
             config = configparser.ConfigParser()
             config.read(args["config"])
             for key, value in dict(config["WEB_APPLICATION"]).items():
-                if key == "api_server" or key == "table_name":
+                if key == "api_server":
                     api_server = value
+                elif key == "table_name":
+                    table = value
+                elif "web_application_directory":
+                    web_application_directory = value
                 else:
                     field_types[key] = value
-    return args["file"], table, field_types, api_server
+    return args["file"], table, field_types, web_application_directory, api_server
 
 def count_lines(filename):
     """Count lines in file"""
@@ -168,17 +173,17 @@ def set_up_app(web_config, db_path):
     if web_config.webServer == "Apache":
         os.system("cp /var/lib/text-align/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
 
-def create_web_app(file, table, field_types, api_server):
+def create_web_app(file, table, field_types, web_app_dir, api_server):
     """Main routine"""
     web_config = WebAppConfig(field_types, table, api_server)
     load_db(file, table, field_types)
-    set_up_app(web_config, "/var/www/html/text-align/{}/".format(table)) #TODO: need to make this configurable
+    set_up_app(web_config, os.path.join("{}/{}/".format(web_app_dir, table)))
     print("DB viewable at {}/{}".format(web_config.apiServer.replace("-api", ""), table))
 
 def main():
     """Main function"""
-    file, table, field_types, api_server = parse_command_line()
-    create_web_app(file, table, field_types, api_server)
+    file, table, field_types, web_app_dir, api_server = parse_command_line()
+    create_web_app(file, table, field_types, web_app_dir, api_server)
 
 if __name__ == '__main__':
     main()

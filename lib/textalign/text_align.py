@@ -86,7 +86,7 @@ def parse_command_line():
             if args["load_web_app"] is True:
                 web_app_config["field_types"] = {}
                 for key, value in dict(config["WEB_APPLICATION"]).items():
-                    if key == "api_server" or key == "table_name":
+                    if key == "api_server" or key == "table_name" or "web_application_directory":
                         web_app_config[key] = value
                     else:
                         web_app_config["field_types"][key] = value
@@ -225,7 +225,8 @@ def run_alignment():
                   ))
     if web_app_config["load"] is True:
         output_file = os.path.join(output_path, "results/alignment_results.tab")
-        create_web_app(output_file, web_app_config["table_name"], web_app_config["field_types"], web_app_config["api_server"])
+        create_web_app(output_file, web_app_config["table_name"], web_app_config["field_types"],
+                       web_app_config["web_application_directory"], web_app_config["api_server"])
 
 if __name__ == '__main__':
     run_alignment()
