@@ -2,17 +2,16 @@
 """Routing and search code for sequence alignment"""
 
 import json
-import os
 import re
 import sys
 from ast import literal_eval as eval
-from collections import OrderedDict, Counter, defaultdict
+from collections import OrderedDict
 
 import psycopg2
 import psycopg2.extras
-from flask import (Flask, jsonify, render_template, request)
-from flask_cors import CORS
+from flask import Flask, jsonify, render_template, request
 
+from flask_cors import CORS
 
 application = Flask(__name__)
 CORS(application)

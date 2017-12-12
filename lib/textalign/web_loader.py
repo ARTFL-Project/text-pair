@@ -4,7 +4,6 @@
 import argparse
 import configparser
 import os
-import sys
 import json
 from collections import OrderedDict
 
@@ -24,7 +23,7 @@ class WebAppConfig:
     """ Web app config class"""
 
     def __init__(self, field_types, db_name, api_server):
-        with open("web_app/appConfig.json") as app_config:
+        with open("/var/lib/text-align/web/web_app/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         for field, field_type in field_types.items():
             self.options["metadataTypes"][field] = field_type
@@ -45,7 +44,6 @@ def parse_command_line():
     parser.add_argument("--config", help="configuration file used to override defaults",
                         type=str, default="")
     parser.add_argument("--file", help="alignment file to load", type=str, default=None)
-    parser.add_argument("--table", help="name of postgreSQL table", type=str, default=None)
     args = vars(parser.parse_args())
     if args["file"] is None:
         print("Please supply a file argument\nExiting....")
@@ -55,6 +53,8 @@ def parse_command_line():
         exit()
     field_types = DEFAULT_FIELD_TYPES
     api_server = ""
+    table = ""
+    web_application_directory = ""
     if args["config"]:
         if os.path.exists(args["config"]):
             config = configparser.ConfigParser()
@@ -62,9 +62,13 @@ def parse_command_line():
             for key, value in dict(config["WEB_APPLICATION"]).items():
                 if key == "api_server":
                     api_server = value
+                elif key == "table_name":
+                    table = value
+                elif "web_application_directory":
+                    web_application_directory = value
                 else:
                     field_types[key] = value
-    return args["file"], args["table"], field_types, api_server
+    return args["file"], table, field_types, web_application_directory, api_server
 
 def count_lines(filename):
     """Count lines in file"""
@@ -162,20 +166,24 @@ def set_up_app(web_config, db_path):
     print("Copying and building web application...")
     os.system("rm -rf {}".format(db_path))
     os.mkdir(db_path)
-    os.system("cp -R web_app/. {}".format(db_path))
+    os.system("cp -R /var/lib/text-align/web/web_app/. {}".format(db_path))
     with open(os.path.join(db_path, "appConfig.json"), "w") as config_file:
         json.dump(web_config(), config_file)
     os.system("cd {}; npm run build;".format(db_path))
     if web_config.webServer == "Apache":
-        os.system("cp apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
+        os.system("cp /var/lib/text-align/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
 
-def create_web_application():
+def create_web_app(file, table, field_types, web_app_dir, api_server):
     """Main routine"""
-    file, table, field_types, api_server = parse_command_line()
     web_config = WebAppConfig(field_types, table, api_server)
     load_db(file, table, field_types)
-    set_up_app(web_config, "/var/www/html/text-align/{}/".format(table))
-    print("DB viewable at {}/{}".format(web_config.apiServer, table))
+    set_up_app(web_config, os.path.join("{}/{}/".format(web_app_dir, table)))
+    print("DB viewable at {}/{}".format(web_config.apiServer.replace("-api", ""), table))
+
+def main():
+    """Main function"""
+    file, table, field_types, web_app_dir, api_server = parse_command_line()
+    create_web_app(file, table, field_types, web_app_dir, api_server)
 
 if __name__ == '__main__':
-    create_web_application()
+    main()
