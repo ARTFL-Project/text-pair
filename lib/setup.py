@@ -9,8 +9,11 @@ from setuptools import setup
 if platform == "linux":
     os.system("rm /usr/local/bin/compareNgrams")
     os.system("cp core/binary/linux_x64/compareNgrams /usr/local/bin/")
+elif platform == "darwin":
+    os.system("rm /usr/local/bin/compareNgrams")
+    os.system("cp core/binary/darwin/compareNgrams /usr/local/bin/")
 else:
-    print("Only 64 bit linux is supported at this time.")
+    print("Only 64 bit linux and MacOS are supported at this time.")
     exit()
 
 setup(name="textalign",
