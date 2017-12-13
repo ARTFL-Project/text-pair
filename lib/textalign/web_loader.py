@@ -11,10 +11,6 @@ import psycopg2
 from psycopg2.extras import execute_values
 from tqdm import tqdm
 
-DATABASE = psycopg2.connect(user="alignments", password="martini", database="alignments")
-CURSOR = DATABASE.cursor()
-CURSOR2 = DATABASE.cursor()
-
 
 DEFAULT_FIELD_TYPES = {"source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER"}
 
@@ -98,6 +94,13 @@ def validate_field_type(row, field_types):
 
 def load_db(file, table_name, field_types):
     """Load SQL table"""
+    config = configparser.ConfigParser()
+    config.read("/etc/text-align/global_settings.ini")
+    database = psycopg2.connect(user=config["DATABASE"]["database_user"],
+                                password=config["DATABASE"]["database_password"],
+                                database=config["DATABASE"]["database_name"])
+    cursor = database.cursor()
+    cursor2 = database.cursor()
     line_count = count_lines(file) - 1 # skip first line with field names
     alignments = parse_file(file)
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
@@ -106,8 +109,8 @@ def load_db(file, table_name, field_types):
         field_names.extend(input_file.readline().rstrip("\n").split("\t"))
         fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
         fields_in_table.extend(fields_and_types)
-    CURSOR.execute("DROP TABLE if exists {}".format(table_name))
-    CURSOR.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
+    cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
+    cursor.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
     lines = 0
     rows = []
     rowid = 0
@@ -125,41 +128,41 @@ def load_db(file, table_name, field_types):
         rows.append([rowid] + row)
         if lines == 100:
             insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))
-            execute_values(CURSOR, insert, rows)
+            execute_values(cursor, insert, rows)
             rows = []
             lines = 0
     print("Creating indexes...")
-    CURSOR.execute("CREATE INDEX {}_source_author_index ON {} USING BTREE(source_author)".format(table_name, table_name))
-    CURSOR.execute("CREATE INDEX {}_target_author_index ON {} USING BTREE(target_author)".format(table_name, table_name))
-    CURSOR.execute("CREATE INDEX {}_source_title_index ON {} USING BTREE(source_title)".format(table_name, table_name))
-    CURSOR.execute("CREATE INDEX {}_target_title_index ON {} USING BTREE(target_title)".format(table_name, table_name))
-    CURSOR.execute("CREATE INDEX {}_year_index ON {} USING BTREE(source_year, target_year)".format(table_name, table_name))
-    DATABASE.commit()
+    cursor.execute("CREATE INDEX {}_source_author_index ON {} USING BTREE(source_author)".format(table_name, table_name))
+    cursor.execute("CREATE INDEX {}_target_author_index ON {} USING BTREE(target_author)".format(table_name, table_name))
+    cursor.execute("CREATE INDEX {}_source_title_index ON {} USING BTREE(source_title)".format(table_name, table_name))
+    cursor.execute("CREATE INDEX {}_target_title_index ON {} USING BTREE(target_title)".format(table_name, table_name))
+    cursor.execute("CREATE INDEX {}_year_index ON {} USING BTREE(source_year, target_year)".format(table_name, table_name))
+    database.commit()
 
     if skipped != 0:
         print("{} rows were skipped due to mismatch".format(skipped))
 
     print("Populating index table...")
     ordered_table = table_name + "_ordered"
-    CURSOR2.execute("DROP TABLE if exists {}".format(ordered_table))
-    CURSOR2.execute("CREATE TABLE {} ({})".format(ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"))
-    CURSOR.execute("SELECT rowid FROM {} ORDER BY source_year, target_year ASC".format(table_name))
+    cursor2.execute("DROP TABLE if exists {}".format(ordered_table))
+    cursor2.execute("CREATE TABLE {} ({})".format(ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"))
+    cursor.execute("SELECT rowid FROM {} ORDER BY source_year, target_year ASC".format(table_name))
     lines = 0
     rows = []
     rowid = 0
-    for row in tqdm(CURSOR, total=line_count):
+    for row in tqdm(cursor, total=line_count):
         lines += 1
         rowid += 1
         rows.append((rowid, row[0],))
         if lines == 100:
             insert = "INSERT INTO {} ({}) VALUES %s".format(ordered_table, "rowid_ordered, source_year_target_year")
-            execute_values(CURSOR2, insert, rows)
+            execute_values(cursor2, insert, rows)
             rows = []
             lines = 0
     print("Creating indexes...")
-    CURSOR2.execute("CREATE INDEX {}_source_year_target_year_rowid_index ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
-    DATABASE.commit()
-    DATABASE.close()
+    cursor2.execute("CREATE INDEX {}_source_year_target_year_rowid_index ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
+    database.commit()
+    database.close()
 
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""

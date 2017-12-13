@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Routing and search code for sequence alignment"""
 
+import configparser
 import json
 import re
-import sys
 from ast import literal_eval as eval
 from collections import OrderedDict
 
@@ -15,6 +15,10 @@ from flask_cors import CORS
 
 application = Flask(__name__)
 CORS(application)
+
+GLOBAL_CONFIG = configparser.ConfigParser()
+GLOBAL_CONFIG.read("/etc/text-align/global_settings.ini")
+
 
 class formArguments():
     """Special dict to handle form arguments"""
@@ -138,12 +142,11 @@ def search_alignments():
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
                     other_args.id_anchor)
-    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    print("QUERY", query, file=sys.stderr)
-    print("VALUES", repr(sql_values), file=sys.stderr)
     cursor.execute(query, sql_values)
-    # cursor.execute(query)
     column_names = [desc[0] for desc in cursor.description]
     alignments = []
     for row in cursor:
@@ -170,7 +173,9 @@ def search_alignments():
 @application.route("/search_alignments_full/", methods=["GET"])
 def search_alignments_full():
     query_args, other_args = parse_args(request)
-    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if query_args is True:
         query = "SELECT {}, {} FROM {} WHERE {} != '' and {} != '' and {}".format(
@@ -198,7 +203,9 @@ def facets():
     query_args, other_args = parse_args(request)
     metadata_field_types = request.get_json()["metadata"]
     sql_fields, sql_values = query_builder(query_args, metadata_field_types)
-    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if query_args:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
@@ -221,7 +228,9 @@ def facets():
 @application.route("/stats/", methods=["GET"])
 def stats():
     query_args, other_args = parse_args(request)
-    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if query_args:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} AND earliest=%s GROUP BY {} ORDER BY COUNT(*) DESC LIMIT 100".format(
@@ -250,7 +259,9 @@ def stats():
 @application.route("/get_most_reused_passages/", methods=["GET"])
 def get_most_reused_passages():
     query_args, other_args = parse_args(request)
-    database = psycopg2.connect(user="alignments", password="martini", database="alignments")
+    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     query = "SELECT * FROM {} WHERE {}".format(
         other_args.db_table, " and ".join([i + " ilike %s " for i in query_args if query_args[i]])
