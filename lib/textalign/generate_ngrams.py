@@ -13,13 +13,14 @@ import unicodedata
 from ast import literal_eval
 from collections import defaultdict, deque
 from glob import glob
+from itertools import combinations, permutations
 from math import floor
 from pathlib import Path
 
 from multiprocess import Pool
 from tqdm import tqdm
-from itertools import combinations, permutations
 from unidecode import unidecode
+
 from mmh3 import hash as hash32
 from Stemmer import Stemmer
 
