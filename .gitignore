@@ -1,3 +1,4 @@
 web/web_app/node_modules
 __pycache__
 .vscode
+output

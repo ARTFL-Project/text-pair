@@ -65,7 +65,7 @@ class Ngrams:
         self.output_path = ""
         self.metadata_done = False
         self.db_name = ""
-        self.db_path=""
+        self.db_path = ""
 
     def __get_stopwords(self, path):
         stopwords = set([])

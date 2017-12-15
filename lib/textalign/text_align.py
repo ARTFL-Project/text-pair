@@ -106,6 +106,7 @@ def parse_command_line():
         paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
         paths["source"]["metadata_path"] = args["source_metadata"] or os.path.join(args["output_path"], "source/metadata/metadata.json")
         paths["source"]["is_philo_db"] = args["is_philo_db"]
+    paths["source"]["common_ngrams"] = os.path.join(args["output_path"], "source/index/most_common_ngrams.txt")
     if args["target_files"]:
         if tei_parsing["parse_target_files"] is True:
             paths["target"]["tei_input_files"] = args["target_files"]
@@ -119,6 +120,7 @@ def parse_command_line():
             paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
             paths["target"]["metadata_path"] = args["target_metadata"] or os.path.join(args["output_path"], "target/metadata/metadata.json")
             paths["target"]["is_philo_db"] = args["is_philo_db"]
+        paths["target"]["common_ngrams"] = os.path.join(args["output_path"], "target/index/most_common_ngrams.txt")
     return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"]
 
 def run_alignment():
@@ -157,11 +159,11 @@ def run_alignment():
                   --target_files={}/ngrams \
                   --source_metadata={} \
                   --target_metadata={} \
+                  --source_common_ngrams={} \
+                  --target_common_ngrams={} \
                   --sort_by={} \
                   --source_batch={} \
                   --target_batch={} \
-                  --source_common_ngrams={} \
-                  --target_common_ngrams={} \
                   --most_common_ngram_threshold={} \
                   --common_ngrams_limit={} \
                   --matching_window_size={} \
@@ -185,11 +187,11 @@ def run_alignment():
                       paths["target"]["ngram_output_path"],
                       paths["source"]["metadata_path"],
                       paths["target"]["metadata_path"],
+                      paths["source"]["common_ngrams"],
+                      paths["target"]["common_ngrams"],
                       matching_params["sort_by"],
                       matching_params["source_batch"],
                       matching_params["target_batch"],
-                      matching_params["source_common_ngrams"],
-                      matching_params["target_common_ngrams"],
                       matching_params["most_common_ngram_threshold"],
                       matching_params["common_ngrams_limit"],
                       matching_params["matching_window_size"],
@@ -214,6 +216,8 @@ def run_alignment():
                   --target_files={}/ngrams \
                   --source_metadata={}/metadata/metadata.json \
                   --target_metadata={}/metadata/metadata.json \
+                  --source_common_ngrams={} \
+                  --target_common_ngrams={} \
                   --debug={}"
                   .format(
                       output_path,
@@ -221,6 +225,8 @@ def run_alignment():
                       paths["target"]["ngram_output_path"],
                       paths["source"]["metadata_path"],
                       paths["target"]["metadata_path"],
+                      paths["source"]["common_ngrams"],
+                      paths["target"]["common_ngrams"],
                       str(debug).lower()
                   ))
     if web_app_config["load"] is True:

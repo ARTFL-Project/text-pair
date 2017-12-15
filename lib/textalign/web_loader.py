@@ -19,7 +19,7 @@ class WebAppConfig:
     """ Web app config class"""
 
     def __init__(self, field_types, db_name, api_server):
-        with open("/var/lib/text-align/web/web_app/appConfig.json") as app_config:
+        with open("/var/lib/text-align/config/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         for field, field_type in field_types.items():
             self.options["metadataTypes"][field] = field_type
