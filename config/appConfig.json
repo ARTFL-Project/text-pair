@@ -107,5 +107,23 @@
                 "value": "target_year"
             }
         ]
-    }
+    },
+    "timeSeriesIntervals": [
+        {
+            "label": "Year",
+            "value": 1
+        },
+        {
+            "label": "Decade",
+            "value": 10
+        },
+        {
+            "label": "Half Century",
+            "value": 50
+        },
+        {
+            "label": "Century",
+            "value": 100
+        }
+    ]
 }
