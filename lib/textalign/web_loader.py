@@ -3,15 +3,14 @@
 
 import argparse
 import configparser
-import os
 import json
+import os
 import re
 from collections import OrderedDict
 
 import psycopg2
 from psycopg2.extras import execute_values
 from tqdm import tqdm
-
 
 DEFAULT_FIELD_TYPES = {"source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER"}
 
@@ -83,7 +82,7 @@ def validate_field_type(row, field_types):
     values = []
     for field, value in row:
         field_type = field_types.get(field, "TEXT")
-        if field_type == "INTEGER":
+        if field_type.upper() == "INTEGER":
             year_match = YEAR_FINDER.search(value)
             if year_match:
                 value = int(year_match.groups()[0])
