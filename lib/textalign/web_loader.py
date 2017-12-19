@@ -5,6 +5,7 @@ import argparse
 import configparser
 import os
 import json
+import re
 from collections import OrderedDict
 
 import psycopg2
@@ -14,12 +15,13 @@ from tqdm import tqdm
 
 DEFAULT_FIELD_TYPES = {"source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER"}
 
+YEAR_FINDER = re.compile(r'^.*?(\d{1,}).*')
 
 class WebAppConfig:
     """ Web app config class"""
 
     def __init__(self, field_types, db_name, api_server):
-        with open("/var/lib/text-align/web/web_app/appConfig.json") as app_config:
+        with open("/var/lib/text-align/config/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         for field, field_type in field_types.items():
             self.options["metadataTypes"][field] = field_type
@@ -44,9 +46,6 @@ def parse_command_line():
     if args["file"] is None:
         print("Please supply a file argument\nExiting....")
         exit()
-    if args["table"] is None:
-        print("Please supply a table argument\nExiting....")
-        exit()
     field_types = DEFAULT_FIELD_TYPES
     api_server = ""
     table = ""
@@ -60,7 +59,7 @@ def parse_command_line():
                     api_server = value
                 elif key == "table_name":
                     table = value
-                elif "web_application_directory":
+                elif key == "web_application_directory":
                     web_application_directory = value
                 else:
                     field_types[key] = value
@@ -85,10 +84,11 @@ def validate_field_type(row, field_types):
     for field, value in row:
         field_type = field_types.get(field, "TEXT")
         if field_type == "INTEGER":
-            try:
-                value = int(value)
-            except ValueError:
-                value = 0
+            year_match = YEAR_FINDER.search(value)
+            if year_match:
+                value = int(year_match.groups()[0])
+            else:
+                value = None
         values.append(value)
     return values
 

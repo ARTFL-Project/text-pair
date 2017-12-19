@@ -6,8 +6,8 @@ sudo pip3 install lib/. --upgrade
 echo "\nMoving web application components into place..."
 sudo rm -rf /var/lib/text-align
 sudo mkdir -p /var/lib/text-align
-sudo cp -R web /var/lib/text-align/
-sudo cp -R config /var/lib/text-align/
+sudo cp -Rf web /var/lib/text-align/
+sudo cp -Rf config /var/lib/text-align/
 
 echo "\nMoving global configuration into place..."
 sudo mkdir -p /etc/text-align

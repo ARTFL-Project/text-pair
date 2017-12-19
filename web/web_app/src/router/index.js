@@ -1,8 +1,7 @@
 import Vue from "vue";
 import Router from "vue-router";
 import searchResults from "../components/searchResults";
-import graphResults from "../components/graphResults";
-import globalStats from "../components/globalStats";
+import timeSeries from "../components/timeSeries";
 
 import globalConfig from "../../appConfig.json";
 
@@ -18,14 +17,9 @@ export default new Router({
             component: searchResults
         },
         {
-            path: "/graph",
-            name: "graphResults",
-            component: graphResults
-        },
-        {
-            path: "/stats",
-            name: "globalStats",
-            component: globalStats
+            path: "/time",
+            name: "timeSeries",
+            component: timeSeries
         }
     ],
     scrollBehavior(to, from, savedPosition) {
