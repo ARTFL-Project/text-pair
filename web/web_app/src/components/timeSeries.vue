@@ -135,11 +135,15 @@ export default {
                         cornerRadius: 0,
                         callbacks: {
                             title: function(tooltipItem) {
-                                return `${tooltipItem[0].xLabel}-${parseInt(
-                                    tooltipItem[0].xLabel
-                                ) +
-                                    vm.interval -
-                                    1}`
+                                if (vm.interval != 1) {
+                                    return `${tooltipItem[0].xLabel}-${parseInt(
+                                        tooltipItem[0].xLabel
+                                    ) +
+                                        vm.interval -
+                                        1}`
+                                } else {
+                                    return tooltipItem[0].xLabel
+                                }
                             },
                             label: function(tooltipItem) {
                                 return `${tooltipItem.yLabel} shared passages`
@@ -154,9 +158,16 @@ export default {
                 if (activePoints.length > 0) {
                     var clickedElementindex = activePoints[0]["_index"]
                     var label = vm.chart.data.labels[clickedElementindex]
-                    var value = vm.chart.data.datasets[0].data[clickedElementindex]
+                    var value =
+                        vm.chart.data.datasets[0].data[clickedElementindex]
                     let params = { ...vm.$route.query }
-                    params[`${params.directionSelected}_year`] = `${label}-${label + vm.interval -1}`
+                    if (vm.interval != 1) {
+                        params[
+                            `${params.directionSelected}_year`
+                        ] = `${label}-${label + vm.interval - 1}`
+                    } else {
+                        params[`${params.directionSelected}_year`] = label
+                    }
                     EventBus.$emit("urlUpdate", params)
                     vm.$router.push(`/search?${vm.paramsToUrl(params)}`)
                 }
