@@ -58,7 +58,7 @@
                                 <li class="my-dropdown-item" v-for="direction in directions" :key="direction.label" @click="selectItem('directionSelected', direction)">{{ direction.label }}</li>
                             </ul>
                         </div>
-                        results by:
+                        results by
                         <div class="my-dropdown" style="display: inline-block">
                             <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ timeSeriesInterval.label }} &#9662;</button>
                             <ul class="my-dropdown-menu shadow-1">
