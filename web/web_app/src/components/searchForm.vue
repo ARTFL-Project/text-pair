@@ -1,8 +1,5 @@
 <template>
-    <div id="search-form" class="card rounded-0 mt-4 shadow-1">
-        <h4 class="card-header text-center">
-            Search {{ globalConfig.dbName }}
-        </h4>
+    <div id="search-form" class="card rounded-0 mt-3 shadow-1">
         <div class="card-body rounded-0">
             <form @submit.prevent="submitForm">
                 <div class="row">

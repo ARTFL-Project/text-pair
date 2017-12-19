@@ -1,5 +1,5 @@
 <template>
-    <div class="mt-5">
+    <div class="mt-3">
         <div class="row">
             <div class="loading" v-if="loading">
                 Loading...
