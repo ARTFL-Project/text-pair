@@ -1,5 +1,5 @@
 <template>
-    <div class="card rounded-0 mt-4 shadow-1">
+    <div id="search-form" class="card rounded-0 mt-4 shadow-1">
         <h4 class="card-header text-center">
             Search {{ globalConfig.dbName }}
         </h4>
@@ -42,69 +42,31 @@
                         <a class="nav-link active" id="search-alignments-tab" data-toggle="tab" href="#search-alignments" role="tab" aria-controls="search-alignments" aria-expanded="true">Search Alignments</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" id="graph-tab" data-toggle="tab" href="#graph" role="tab" aria-controls="graph" aria-expanded="true">Display Network Graph</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" id="stats-tab" data-toggle="tab" href="#global-stats" role="tab" aria-controls="global-stats" aria-expanded="true">Display Global Stats</a>
+                        <a class="nav-link" id="time-series-tab" data-toggle="tab" href="#time-series" role="tab" aria-controls="time-series" aria-expanded="true">Display Time Series</a>
                     </li>
                 </ul>
                 <div class="tab-content mt-3" id="myTabContent">
                     <div class="tab-pane fade show active" id="search-alignments" role="tabpanel" aria-labelledby="search-alignments-tab">
-                        <button class="btn btn-primary rounded-0" type="submit">Search</button>
+                        <button class="btn btn-primary rounded-0" type="button" @click="search()">Search</button>
                         <button type="button" class="btn btn-secondary rounded-0" @click="clearForm()">Reset</button>
                     </div>
-                    <div class="tab-pane fade" id="graph" role="tabpanel" aria-labelledby="graph-tab">
-                        <div class="row">
-                            <div class="col-1">
-                                Source metadata:
-                            </div>
-                            <div class="col-2">
-                                <div class="my-dropdown">
-                                    <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ formGraphValues.source.label }} &#9662;</button>
-                                    <ul class="my-dropdown-menu shadow-1">
-                                        <li class="my-dropdown-item" v-for="field in globalConfig.metadataFields.source" :key="field.label" @click="selectItem('source', field)">{{ field.label }}</li>
-                                    </ul>
-                                </div>
-                            </div>
+                    <div class="tab-pane fade" id="time-series" role="tabpanel" aria-labelledby="time-series-tab">
+                        Group
+                        <div class="my-dropdown" style="display: inline-block">
+                            <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ directionSelected.label }} &#9662;</button>
+                            <ul class="my-dropdown-menu shadow-1">
+                                <li class="my-dropdown-item" v-for="direction in directions" :key="direction.label" @click="selectItem('directionSelected', direction)">{{ direction.label }}</li>
+                            </ul>
                         </div>
-                        <div class="row mt-3">
-                            <div class="col-1">
-                                Target metadata:
-                            </div>
-                            <div class="col-2">
-                                <div class="my-dropdown">
-                                    <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ formGraphValues.target.label }} &#9662;</button>
-                                    <ul class="my-dropdown-menu shadow-1">
-                                        <li class="my-dropdown-item" v-for="field in globalConfig.metadataFields.target" :key="field.label" @click="selectItem('target', field)">{{ field.label }}</li>
-                                    </ul>
-                                </div>
-                            </div>
+                        results by:
+                        <div class="my-dropdown" style="display: inline-block">
+                            <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ timeSeriesInterval.label }} &#9662;</button>
+                            <ul class="my-dropdown-menu shadow-1">
+                                <li class="my-dropdown-item" v-for="interval in globalConfig.timeSeriesIntervals" :key="interval.label" @click="selectItem('timeSeriesInterval', interval)">{{ interval.label }}</li>
+                            </ul>
                         </div>
                         <div class="mt-3">
-                            <button class="btn btn-primary rounded-0" type="button" @click="getGraphData()">Display network graph</button>
-                            <button type="button" class="btn btn-secondary rounded-0" @click="clearForm()">Reset</button>
-                        </div>
-                    </div>
-                    <div class="tab-pane fade show" id="global-stats" role="tabpanel" aria-labelledby="global-stats-tab">
-                        <div class="row">
-                            <div class="col-1">
-                                Display stats for:
-                            </div>
-                            <div class="col-2">
-                                <div class="my-dropdown">
-                                    <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ formStatsValues.selected.label }} &#9662;</button>
-                                    <ul class="my-dropdown-menu shadow-1">
-                                        <h6 class="dropdown-header">Source</h6>
-                                        <li class="my-dropdown-item" v-for="field in globalConfig.metadataFields.source" :key="field.label" @click="selectStatsItem('Source', field)">{{ field.label }}</li>
-                                        <div class="dropdown-divider"></div>
-                                        <h6 class="dropdown-header">Target</h6>
-                                        <li class="my-dropdown-item" v-for="field in globalConfig.metadataFields.target" :key="field.label" @click="selectStatsItem('Target', field)">{{ field.label }}</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="mt-3">
-                            <button class="btn btn-primary rounded-0" type="button" @click="getStats()">Display stats</button>
+                            <button class="btn btn-primary rounded-0" type="button" @click="displayTimeSeries()">Display Time Series</button>
                             <button type="button" class="btn btn-secondary rounded-0" @click="clearForm()">Reset</button>
                         </div>
                     </div>
@@ -115,169 +77,154 @@
 </template>
 
 <script>
-import { EventBus } from "../main.js";
+import { EventBus } from "../main.js"
 
 export default {
-  name: "search-form",
-  data: function() {
-    return {
-      globalConfig: this.$globalConfig,
-      formValues: this.populateSearchForm(),
-      formGraphValues: {
-        source: this.$globalConfig.metadataFields.source[0],
-        target: this.$globalConfig.metadataFields.target[0]
-      },
-      formStatsValues: {
-        values: [
-          ...this.$globalConfig.metadataFields.source,
-          ...this.$globalConfig.metadataFields.target
-        ],
-        selected: {
-          label: `Source ${this.$globalConfig.metadataFields.source[0].label}`,
-          value: this.$globalConfig.metadataFields.source[0].value,
-          direction: "source"
+    name: "search-form",
+    data: function() {
+        return {
+            globalConfig: this.$globalConfig,
+            formValues: this.populateSearchForm(),
+            timeSeriesInterval: this.$globalConfig.timeSeriesIntervals[0],
+            formBanalityValues: [
+                {
+                    label: "Filter all banalities",
+                    value: false
+                },
+                {
+                    label: "Don't filter banalities",
+                    value: ""
+                },
+                {
+                    label: "Search only banalities",
+                    value: true
+                }
+            ],
+            banalitySelected: "Filter all banalities",
+            directions: [
+                {
+                    label: "Source",
+                    value: "source"
+                },
+                {
+                    label: "Target",
+                    value: "target"
+                }
+            ],
+            directionSelected: {
+                    label: "Source",
+                    value: "source"
+                }
         }
-      },
-      formBanalityValues: [
-          {
-              label: "Filter all banalities",
-              value: false
-          },
-          {
-              label: "Don't filter banalities",
-              value: ""
-          },
-          {
-              label: "Search only banalities",
-              value: true
-          }
-      ],
-      banalitySelected: "Filter all banalities"
-    };
-  },
-  created() {
-    var vm = this;
-    EventBus.$on("urlUpdate", updatedParams => {
-      for (let key in updatedParams) {
-        if (key in vm.formValues) {
-          vm.formValues[key] = updatedParams[key];
+    },
+    created() {
+        var vm = this
+        EventBus.$on("urlUpdate", updatedParams => {
+            for (let key in updatedParams) {
+                if (key in vm.formValues) {
+                    vm.formValues[key] = updatedParams[key]
+                }
+            }
+        })
+    },
+    methods: {
+        populateSearchForm() {
+            let formValues = {}
+            if (!this.$route.query) {
+                formValues.page = 1
+            } else {
+                for (const key of this.$globalConfig.metadataFields.source) {
+                    if (key.value in this.$route.query) {
+                        formValues[key.value] = this.$route.query[key.value]
+                    } else {
+                        formValues[key.value] = ""
+                    }
+                }
+                for (const key of this.$globalConfig.metadataFields.target) {
+                    if (key.value in this.$route.query) {
+                        formValues[key.value] = this.$route.query[key.value]
+                    } else {
+                        formValues[key.value] = ""
+                    }
+                }
+            }
+            formValues.banality = false
+            return formValues
+        },
+        banalitySelect(index) {
+            this.formValues.banality = this.formBanalityValues[index].value
+            this.banalitySelected = this.formBanalityValues[index].label
+            this.toggleDropdown()
+        },
+        search() {
+            this.$router.push(`/search?${this.paramsToUrl(this.formValues)}`)
+        },
+        submitForm() {
+            var element = document.querySelector("myTabContent")
+            console.log(element, "NOT WORKING")
+        },
+        displayTimeSeries() {
+            this.$router.push(`/time?${this.paramsToUrl(this.formValues)}`)
+        },
+        clearForm() {
+            for (const key in this.formValues) {
+                this.formValues[key] = ""
+            }
+        },
+        toggleDropdown() {
+            let element = event.srcElement
+                .closest(".my-dropdown")
+                .querySelector("ul")
+            if (element.style.display != "inline-block") {
+                element.style.display = "inline-block"
+            } else {
+                element.style.display = "none"
+            }
+        },
+        selectItem(key, item) {
+            this[key] = item
+            this.formValues[key] = item.value
+            this.toggleDropdown()
         }
-      }
-    });
-  },
-  methods: {
-    populateSearchForm() {
-      let formValues = {};
-      if (!this.$route.query) {
-        formValues.page = 1;
-      } else {
-        for (const key of this.$globalConfig.metadataFields.source) {
-          if (key.value in this.$route.query) {
-            formValues[key.value] = this.$route.query[key.value];
-          } else {
-            formValues[key.value] = "";
-          }
-        }
-        for (const key of this.$globalConfig.metadataFields.target) {
-          if (key.value in this.$route.query) {
-            formValues[key.value] = this.$route.query[key.value];
-          } else {
-            formValues[key.value] = "";
-          }
-        }
-      }
-      formValues.banality = false;
-      return formValues;
-    },
-    banalitySelect(index) {
-      this.formValues.banality = this.formBanalityValues[index].value
-      this.banalitySelected = this.formBanalityValues[index].label
-      this.toggleDropdown();
-    },
-    submitForm() {
-      this.$router.push(`/search?${this.paramsToUrl(this.formValues)}`);
-    },
-    clearForm() {
-      for (const key in this.formValues) {
-        this.formValues[key] = "";
-      }
-    },
-    toggleDropdown() {
-      let element = event.srcElement
-        .closest(".my-dropdown")
-        .querySelector("ul");
-      if (element.style.display != "table") {
-        element.style.display = "table";
-      } else {
-        element.style.display = "none";
-      }
-    },
-    selectGraphItem(key, item) {
-      this.formGraphValues[key] = item;
-      this.toggleDropdown();
-    },
-    getGraphData() {
-      let params = {
-        ...this.formValues,
-        source: this.formGraphValues.source.value,
-        target: this.formGraphValues.target.value
-      };
-      this.$router.push(`/graph?${this.paramsToUrl(params)}`);
-    },
-    selectStatsItem(direction, item) {
-      this.formStatsValues.selected.label = `${direction} ${item.label}`;
-      this.formStatsValues.selected.value = item.value;
-      this.formStatsValues.direction = direction.toLowerCase();
-      this.toggleDropdown();
-    },
-    getStats() {
-      let params = {
-        ...this.formValues,
-        stats_field: this.formStatsValues.selected.value,
-        direction: this.formStatsValues.selected.direction
-      };
-      this.$router.push(`/stats?${this.paramsToUrl(params)}`);
     }
-  }
-};
+}
 </script>
 
 <style>
 .input-group > span {
-  font-size: 0.85rem !important;
+    font-size: 0.85rem !important;
 }
 
 .my-dropdown {
-  display: inline-block;
-  position: relative;
+    position: relative;
 }
 
 .my-dropdown .btn:focus,
 my-dropdown .btn:active {
-  outline: none !important;
+    outline: none !important;
 }
 
 .my-dropdown-menu {
-  position: absolute;
-  display: none;
-  left: 0;
-  top: 38px;
-  background-color: #fff;
-  width: 100%;
-  line-height: 200%;
-  z-index: 5;
-  list-style-type: none;
-  margin: 0;
-  padding: 0;
+    position: absolute;
+    display: none;
+    left: 0;
+    top: 38px;
+    background-color: #fff;
+    width: auto;
+    line-height: 200%;
+    z-index: 5;
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
 }
 
 .my-dropdown-item {
-  cursor: pointer;
-  padding-left: 0.75rem;
+    cursor: pointer;
+    padding: 0 0.75rem;
 }
 
 .my-dropdown-item:hover {
-  background: #ddd;
+    background: #ddd;
 }
 </style>
 

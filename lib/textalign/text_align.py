@@ -86,7 +86,7 @@ def parse_command_line():
             if args["load_web_app"] is True:
                 web_app_config["field_types"] = {}
                 for key, value in dict(config["WEB_APPLICATION"]).items():
-                    if key == "api_server" or key == "table_name" or "web_application_directory":
+                    if key == "api_server" or key == "table_name" or key == "web_application_directory":
                         web_app_config[key] = value
                     else:
                         web_app_config["field_types"][key] = value

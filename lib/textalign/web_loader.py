@@ -44,9 +44,6 @@ def parse_command_line():
     if args["file"] is None:
         print("Please supply a file argument\nExiting....")
         exit()
-    if args["table"] is None:
-        print("Please supply a table argument\nExiting....")
-        exit()
     field_types = DEFAULT_FIELD_TYPES
     api_server = ""
     table = ""
@@ -60,7 +57,7 @@ def parse_command_line():
                     api_server = value
                 elif key == "table_name":
                     table = value
-                elif "web_application_directory":
+                elif key == "web_application_directory":
                     web_application_directory = value
                 else:
                     field_types[key] = value
