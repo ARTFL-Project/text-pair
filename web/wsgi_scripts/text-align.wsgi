@@ -82,6 +82,7 @@ def query_builder(query_args, field_types):
     for field, value in query_args.items():
         value = value.strip()
         field_type = field_types.get(field, "text")
+        query = ""
         if field_type == "text":
             if value.startswith('"'):
                 query = "{}=%s".format(field)
@@ -93,7 +94,7 @@ def query_builder(query_args, field_types):
             else:
                 query = "{} ILIKE %s".format(field)
                 sql_values.append('%{}%'.format(value))
-        elif field_type == "integer":
+        elif field_type.lower() == "integer":
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
                 if values[0] == "-":
@@ -108,6 +109,8 @@ def query_builder(query_args, field_types):
             else:
                 query = '{} = %s'.format(field)
                 sql_values.append(value)
+        else:
+            continue
         sql_fields.append(query)
     return " AND ".join(sql_fields), sql_values
 
@@ -192,6 +195,8 @@ def generate_time_series():
     total_results = 0
     next_year = None
     for year, count in cursor:
+        if year is None:
+            continue
         if next_year is not None:
             while year > next_year:
                 results.append({"year": next_year, "count": 0})
