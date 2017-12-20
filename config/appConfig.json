@@ -3,7 +3,7 @@
     "appPath": "text-align/",
     "apiServer": "http://localhost/text-align-api",
     "databaseName": "alignment_db",
-    "databaseLabel": "Sequence Alignment",
+    "databaseLabel": "Text Alignments",
     "sourceDB": {
         "philoDB": false,
         "link": ""
@@ -13,12 +13,14 @@
         "link": ""
     },
     "metadataTypes": {
-        "source_author": "text",
-        "source_title": "text",
-        "source_year": "integer",
-        "target_author": "text",
-        "target_title": "text",
-        "target_year": "integer"
+        "source_passage": "TEXT",
+        "source_author": "TEXT",
+        "source_title": "TEXT",
+        "source_year": "INTEGER",
+        "target_passage": "TEXT",
+        "target_author": "TEXT",
+        "target_title": "TEXT",
+        "target_year": "INTEGER"
     },
     "sourceCitation": [
         {
@@ -51,6 +53,10 @@
     "metadataFields": {
         "source": [
             {
+                "label": "Passage",
+                "value": "source_passage"
+            },
+            {
                 "label": "Author",
                 "value": "source_author"
             },
@@ -64,6 +70,10 @@
             }
         ],
         "target": [
+            {
+                "label": "Passage",
+                "value": "target_passage"
+            },
             {
                 "label": "Author",
                 "value": "target_author"

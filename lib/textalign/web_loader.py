@@ -34,6 +34,14 @@ class WebAppConfig:
     def __getattr__(self, attr):
         return self.options[attr]
 
+    def searchable_fields(self):
+        fields = []
+        for field in self.options["metadataFields"]["source"]:
+            print(field)
+            fields.append(field["value"])
+        for field in self.options["metadataFields"]["target"]:
+            fields.append(field["value"])
+        return fields
 
 def parse_command_line():
     """Command line parsing function"""
@@ -91,7 +99,7 @@ def validate_field_type(row, field_types):
         values.append(value)
     return values
 
-def load_db(file, table_name, field_types):
+def load_db(file, table_name, field_types, searchable_fields):
     """Load SQL table"""
     config = configparser.ConfigParser()
     config.read("/etc/text-align/global_settings.ini")
@@ -130,12 +138,17 @@ def load_db(file, table_name, field_types):
             execute_values(cursor, insert, rows)
             rows = []
             lines = 0
-    print("Creating indexes...")
-    cursor.execute("CREATE INDEX {}_source_author_index ON {} USING BTREE(source_author)".format(table_name, table_name))
-    cursor.execute("CREATE INDEX {}_target_author_index ON {} USING BTREE(target_author)".format(table_name, table_name))
-    cursor.execute("CREATE INDEX {}_source_title_index ON {} USING BTREE(source_title)".format(table_name, table_name))
-    cursor.execute("CREATE INDEX {}_target_title_index ON {} USING BTREE(target_title)".format(table_name, table_name))
-    cursor.execute("CREATE INDEX {}_year_index ON {} USING BTREE(source_year, target_year)".format(table_name, table_name))
+    print("Creating indexes for all searchable fields...")
+    for field in searchable_fields:
+        field_type = field_types.get(field, "TEXT").upper()
+        print(field, field_type)
+        if field_type == "TEXT":
+            cursor.execute("CREATE INDEX {}_{}_trigrams_index ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
+            if not field.endswith("passage"):
+                cursor.execute("CREATE INDEX {}_{}_index ON {} USING BTREE({})".format(field, table_name, table_name, field))
+        elif not field.endswith("year") and field_type == "INTEGER": # year is a special case used for results ordering
+            cursor.execute("CREATE INDEX {}_{}_index ON {} USING BTREE({})".format(field, table_name, table_name, field))
+    cursor.execute("CREATE INDEX year_{}_index ON {} USING BTREE(source_year, target_year)".format(table_name, table_name))
     database.commit()
 
     if skipped != 0:
@@ -178,7 +191,7 @@ def set_up_app(web_config, db_path):
 def create_web_app(file, table, field_types, web_app_dir, api_server):
     """Main routine"""
     web_config = WebAppConfig(field_types, table, api_server)
-    load_db(file, table, field_types)
+    load_db(file, table, field_types, web_config.searchable_fields())
     set_up_app(web_config, os.path.join("{}/{}/".format(web_app_dir, table)))
     print("DB viewable at {}/{}".format(web_config.apiServer.replace("-api", ""), table))
 
