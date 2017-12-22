@@ -81,9 +81,9 @@ def query_builder(query_args, field_types):
     sql_values = []
     for field, value in query_args.items():
         value = value.strip()
-        field_type = field_types.get(field, "text")
+        field_type = field_types.get(field, "TEXT").upper()
         query = ""
-        if field_type == "text":
+        if field_type == "TEXT":
             if value.startswith('"'):
                 query = "{}=%s".format(field)
                 sql_values.append(value[1:-1])
@@ -94,7 +94,7 @@ def query_builder(query_args, field_types):
             else:
                 query = "{} ILIKE %s".format(field)
                 sql_values.append('%{}%'.format(value))
-        elif field_type.lower() == "integer":
+        elif field_type.lower() == "INTEGER":
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
                 if values[0] == "-":

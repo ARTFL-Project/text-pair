@@ -233,11 +233,12 @@ export default {
             delete queryParams.page
             delete queryParams.id_anchor
             queryParams.db_table = this.$globalConfig.databaseName
-            if (this.$globalConfig.metadataTypes[fieldName] == "text") {
+            if (this.$globalConfig.metadataTypes[fieldName] == "TEXT") {
                 queryParams[fieldName] = `"${value}"`
             } else {
                 queryParams[fieldName] = value
             }
+            console.log(this.$globalConfig.metadataTypes[fieldName], queryParams)
             EventBus.$emit("urlUpdate", queryParams)
             this.facetResults = null
             this.results = { alignments: [] }
