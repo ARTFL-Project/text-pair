@@ -6,3 +6,4 @@ pystemmer
 flask
 flask-cors
 mod_wsgi
+psycopg2
