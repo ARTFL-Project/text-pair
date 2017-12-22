@@ -107,7 +107,7 @@ class Ngrams:
                     pass
         if self.config["stemmer"]:
             input_str = stemmer.stemWord(input_str)
-        if len(input_str) < self.config["minimum_word_length"]:
+        if len(input_str) < int(self.config["minimum_word_length"]):
             return ""
         if self.config["numbers"] is True:
             if NUMBERS.search(input_str):
