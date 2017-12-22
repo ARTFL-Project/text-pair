@@ -16,6 +16,7 @@ DEFAULT_FIELD_TYPES = {"source_year": "INTEGER", "source_pub_date": "INTEGER", "
 
 YEAR_FINDER = re.compile(r'^.*?(\d{1,}).*')
 
+
 class WebAppConfig:
     """ Web app config class"""
 
@@ -35,13 +36,14 @@ class WebAppConfig:
         return self.options[attr]
 
     def searchable_fields(self):
+        """Return list of all searchable fields"""
         fields = []
         for field in self.options["metadataFields"]["source"]:
-            print(field)
             fields.append(field["value"])
         for field in self.options["metadataFields"]["target"]:
             fields.append(field["value"])
         return fields
+
 
 def parse_command_line():
     """Command line parsing function"""
@@ -141,11 +143,10 @@ def load_db(file, table_name, field_types, searchable_fields):
     print("Creating indexes for all searchable fields...")
     for field in searchable_fields:
         field_type = field_types.get(field, "TEXT").upper()
-        print(field, field_type)
         if field_type == "TEXT":
             cursor.execute("CREATE INDEX {}_{}_trigrams_index ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
             if not field.endswith("passage"):
-                cursor.execute("CREATE INDEX {}_{}_index ON {} USING BTREE({})".format(field, table_name, table_name, field))
+                cursor.execute("CREATE INDEX {}_{}_index ON {} USING HASH({})".format(field, table_name, table_name, field))
         elif not field.endswith("year") and field_type == "INTEGER": # year is a special case used for results ordering
             cursor.execute("CREATE INDEX {}_{}_index ON {} USING BTREE({})".format(field, table_name, table_name, field))
     cursor.execute("CREATE INDEX year_{}_index ON {} USING BTREE(source_year, target_year)".format(table_name, table_name))
