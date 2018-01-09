@@ -59,7 +59,7 @@
                         <div class="my-dropdown" style="display: inline-block">
                             <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ timeSeriesInterval.label }} &#9662;</button>
                             <ul class="my-dropdown-menu shadow-1">
-                                <li class="my-dropdown-item" v-for="interval in globalConfig.timeSeriesIntervals" :key="interval.label" @click="selectItem('timeSeriesInterval', interval)">{{ interval.label }}</li>
+                                <li class="my-dropdown-item text-nowrap" v-for="interval in globalConfig.timeSeriesIntervals" :key="interval.label" @click="selectItem('timeSeriesInterval', interval)">{{ interval.label }}</li>
                             </ul>
                         </div>
                         <div class="mt-3">
