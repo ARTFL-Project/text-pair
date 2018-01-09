@@ -4,8 +4,8 @@
             <div class="loading" v-if="loading">
                 Loading...
             </div>
-            <div v-if="error" class="error">
-                {{ error }}
+            <div class="ml-4" style="font-size: 120%" v-if="error">
+                No results for your query
             </div>
             <div class="col">
                 <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter" v-on:enter="enter">
@@ -157,6 +157,7 @@ export default {
         fetchData() {
             this.results = { alignments: [] } // clear alignments with new search
             this.facetResults = null // clear facet results with new search
+            this.error = null
             let params = { ...this.$route.query }
             params.db_table = this.$globalConfig.databaseName
             this.$http.post(`${this.$globalConfig.apiServer}/search_alignments/?${this.paramsToUrl(params)}`, {
