@@ -9,7 +9,6 @@ from collections import OrderedDict
 import psycopg2
 import psycopg2.extras
 from flask import Flask, jsonify, render_template, request
-
 from flask_cors import CORS
 
 application = Flask(__name__)

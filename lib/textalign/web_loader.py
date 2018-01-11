@@ -215,6 +215,11 @@ def load_db(file, table_name, field_types, searchable_fields):
             execute_values(cursor2, insert, rows)
             rows = []
             lines = 0
+    if lines:
+            insert = "INSERT INTO {} ({}) VALUES %s".format(ordered_table, "rowid_ordered, source_year_target_year")
+            execute_values(cursor2, insert, rows)
+            rows = []
+            lines = 0
     print("Creating indexes...")
     cursor2.execute("CREATE INDEX {}_source_year_target_year_rowid_index ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
     database.commit()
@@ -228,7 +233,7 @@ def set_up_app(web_config, db_path):
     os.mkdir(db_path)
     os.system("cp -R /var/lib/text-align/web/web_app/. {}".format(db_path))
     with open(os.path.join(db_path, "appConfig.json"), "w") as config_file:
-        json.dump(web_config(), config_file)
+        json.dump(web_config(), config_file, indent=4)
     os.system("cd {}; npm run build;".format(db_path))
     if web_config.webServer == "Apache":
         os.system("cp /var/lib/text-align/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
