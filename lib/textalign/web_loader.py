@@ -44,6 +44,41 @@ class WebAppConfig:
             fields.append(field["value"])
         return fields
 
+    def update(self, available_fields):
+        """Only store fields that are actually in the table in config"""
+        source_fields = []
+        target_fields = []
+        for field in self.options["metadataFields"]["source"]:
+            if field["value"] in available_fields:
+                source_fields.append(field)
+        for field in self.options["metadataFields"]["target"]:
+            if field["value"] in available_fields:
+                target_fields.append(field)
+        self.options["metadataFields"]["source"] = source_fields
+        self.options["metadataFields"]["target"] = target_fields
+
+        source_fields = []
+        target_fields = []
+        for field in self.options["facetsFields"]["source"]:
+            if field["value"] in available_fields:
+                source_fields.append(field)
+        for field in self.options["facetsFields"]["target"]:
+            if field["value"] in available_fields:
+                target_fields.append(field)
+        self.options["facetsFields"]["source"] = source_fields
+        self.options["facetsFields"]["target"] = target_fields
+
+        source_fields = []
+        target_fields = []
+        for field in self.options["sourceCitation"]:
+            if field["field"] in available_fields:
+                source_fields.append(field)
+        for field in self.options["targetCitation"]:
+            if field["field"] in available_fields:
+                target_fields.append(field)
+        self.options["sourceCitation"] = source_fields
+        self.options["targetCitation"] = target_fields
+
 
 def parse_command_line():
     """Command line parsing function"""
@@ -140,8 +175,16 @@ def load_db(file, table_name, field_types, searchable_fields):
             execute_values(cursor, insert, rows)
             rows = []
             lines = 0
+    if lines:
+        insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))
+        execute_values(cursor, insert, rows)
+        rows = []
+        lines = 0
+
     print("Creating indexes for all searchable fields...")
     for field in searchable_fields:
+        if field not in field_names:
+            continue
         field_type = field_types.get(field, "TEXT").upper()
         if field_type == "TEXT":
             cursor.execute("CREATE INDEX {}_{}_trigrams_index ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
@@ -176,6 +219,7 @@ def load_db(file, table_name, field_types, searchable_fields):
     cursor2.execute("CREATE INDEX {}_source_year_target_year_rowid_index ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
     database.commit()
     database.close()
+    return field_names
 
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
@@ -192,7 +236,8 @@ def set_up_app(web_config, db_path):
 def create_web_app(file, table, field_types, web_app_dir, api_server):
     """Main routine"""
     web_config = WebAppConfig(field_types, table, api_server)
-    load_db(file, table, field_types, web_config.searchable_fields())
+    fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
+    web_config.update(fields_in_table)
     set_up_app(web_config, os.path.join("{}/{}/".format(web_app_dir, table)))
     print("DB viewable at {}/{}".format(web_config.apiServer.replace("-api", ""), table))
 
