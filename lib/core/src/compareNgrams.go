@@ -344,6 +344,10 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 		ngramIndex = map[int32]string{}
 	}
 	fmt.Printf("\nLoading metadata...")
+	if *sourceMetadataArg == "" {
+		fmt.Println("\nNo source metadata provided, stopping now...")
+		os.Exit(-1)
+	}
 	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	targetMetadata := openJSONMetadata(targetMetadataArg)
 	fmt.Println("done.")
@@ -352,6 +356,10 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 		*targetFilesArg = ""
 	}
 	targetFiles := getFiles(*targetFilesArg, targetMetadata, *sortField)
+	if len(targetFiles) > 0 && *targetMetadataArg == "" {
+		fmt.Println("\nNo target metadata provided, stopping now...")
+		os.Exit(-1)
+	}
 	mostCommonNgrams := compileMostCommonNgrams(sourceCommonNgramsArg, targetCommonNgramsArg, mostCommonNgramThreshold)
 	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, mostCommonNgrams, config, ngramIndex
 }
