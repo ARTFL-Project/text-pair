@@ -2,15 +2,13 @@
 """Routing and search code for sequence alignment"""
 
 import configparser
-import json
 import re
 from ast import literal_eval as eval
-from collections import OrderedDict, Counter
+from collections import OrderedDict
 
 import psycopg2
 import psycopg2.extras
 from flask import Flask, jsonify, render_template, request
-
 from flask_cors import CORS
 
 application = Flask(__name__)
@@ -89,11 +87,11 @@ def query_builder(query_args, field_types):
                 sql_values.append(value[1:-1])
             elif value.startswith("NOT "):
                 split_value = " ".join(value.split()[1:]).strip()
-                query = "{} NOT ILIKE %s".format(field)
-                sql_values.append('%{}%'.format(split_value))
+                query = "{} ~* %s".format(field)
+                sql_values.append('[^\\m{}\\M]'.format(split_value))
             else:
-                query = "{} ILIKE %s".format(field)
-                sql_values.append('%{}%'.format(value))
+                query = "{} ~* %s".format(field)
+                sql_values.append('\m{}\M'.format(value))
         elif field_type.lower() == "INTEGER":
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
@@ -122,6 +120,7 @@ def index():
 
 @application.route("/search_alignments/", methods=["GET", "POST"])
 def search_alignments():
+    """Search alignments according to URL params"""
     query_args, other_args = parse_args(request)
     metadata_field_types = request.get_json()["metadata"]
     sql_fields, sql_values = query_builder(query_args, metadata_field_types)
@@ -236,14 +235,14 @@ def facets():
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
-def parse_args(request):
+def parse_args(api_request):
     """Parse URL args"""
     query_args = formArguments()
     other_args = formArguments()
     other_args_keys = ["facet", "direction", "source", "target", "stats_field", "db_table",
                        "filter_field", "filter_value", "page", "id_anchor", "directionSelected",
                        "timeSeriesInterval"]
-    for key, value in request.args.items():
+    for key, value in api_request.args.items():
         if key in other_args_keys:
             if key == "full":
                 try:
@@ -272,7 +271,3 @@ def parse_args(request):
             if value:
                 query_args[key] = value
     return query_args, other_args
-
-def load_json(path):
-    with open(path) as p:
-        return json.load(p)

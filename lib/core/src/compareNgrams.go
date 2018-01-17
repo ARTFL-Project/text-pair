@@ -146,6 +146,9 @@ func main() {
 	sourceFilesDone := make(map[string]bool)
 
 	// Split source and target files into config.batchSize batches
+	if config.sourceBatch > len(sourceFiles) {
+		config.sourceBatch = len(sourceFiles)
+	}
 	sourceFileBatches := makeSliceOfSlices(sourceFiles, config.sourceBatch)
 	var targetFileBatches [][]string
 	if len(targetFiles) == 0 {
@@ -153,6 +156,9 @@ func main() {
 		sourceAgainstSource = true
 		targetFileBatches = sourceFileBatches
 	} else {
+		if config.targetBatch > len(targetFiles) {
+			config.targetBatch = len(targetFiles)
+		}
 		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
 	mergedOutput, sourceFields, targetFields := createOutputFile(config, sourceMetadata, targetMetadata)
