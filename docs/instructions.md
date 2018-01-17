@@ -31,6 +31,8 @@ Voici les arguments principales:
 * `--source_files`: Repertoire ou se situe les fichiers de ngrams sources générés par `textalign`
 * `--target_files`: Repertoire ou se situe les fichiers de ngrams cibles générés par `textalign`. Si cette option
 n'est pas specifiée, la comparaison s'effectuera entre les fichiers sources.
+* `--source_metadata`: Chemin vers le fichier metadata.json pour les fichiers sources. Option obligatoire.
+* `--target_metadata`: Chemin vers le fichier metadata.json pour les fichiers cibles. Option obligatoire si on spécifie des fichiers cibles.
 * `--output_path`: Répertoire où sauvegarder les resultats.
 * `--debug`: Activer le debuggage
 * `--threads`: Nombres de threads à utiliser pour la comparaison.
