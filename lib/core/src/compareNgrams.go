@@ -1057,17 +1057,12 @@ func addAlignment(m *matchValues, config *matchingParams, alignments *[]Alignmen
 func buildPercentMap(total int) map[int]int {
 	percentSteps := make(map[int]int)
 	count := 0
-	if total >= 100 {
-		step := total / 100
-		for i := step; i < total; i += step {
-			count++
-			percentSteps[i] = count
-		}
-	} else {
-		multiplier := float64(100 / total)
-		for i := 0; i < total; i++ {
-			percentSteps[i] = int(multiplier * float64(i))
-		}
+	totalFloat := float64(total)
+	step := totalFloat / 100.0
+	for i := step; i < totalFloat; i += step {
+		count++
+		floor := int(math.Floor(i))
+		percentSteps[floor] = count
 	}
 	return percentSteps
 }
