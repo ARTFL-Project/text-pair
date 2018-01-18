@@ -9,9 +9,9 @@ For docs in French see [here](docs/french/quickstart.md)
 
 Note that Text-Align will only run on 64 bit Linux and MacOS. Windows will NOT be supported.
 
-- Run install.sh script. This should install all needed components
-- Make sure you include /etc/text-align/apache_wsgi.conf in your main Apache configuration file to enable searching
-- Install node and npm for the web application build system
+- Run `install.sh` script. This should install all needed components
+- Make sure you include `/etc/text-align/apache_wsgi.conf` in your main Apache configuration file to enable searching
+- Install `node` and `npm` for the web application build system
 
 ## Quick start ##
 
