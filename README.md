@@ -54,6 +54,6 @@ Many more options are available, execute `compareNgrams -h` to see them all.
 
 Example:
 
-`compareNgrams --source_files=montesquieu/ngrams/* --target_files=encyclopedie/ngrams/* --threads=10 --output_path=results/
+`compareNgrams --source_files=montesquieu/ngrams/* --target_files=encyclopedie/ngrams/* --threads=10 --output_path=results/`
 
 
