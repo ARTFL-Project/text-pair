@@ -1026,6 +1026,7 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	checkErr(err, "getText (reading in file)")
 	f.Close()
 	passage = bytes.Trim(passage, "\x00")
+	passage = bytes.Replace(passage, []byte("\xc2\xa0"), []byte(" "), -1) // remove non-breaking spaces
 	text := string(passage)
 	text = html.UnescapeString(text)
 	text = tags.ReplaceAllString(text, "")
