@@ -5,7 +5,7 @@ Built in collaboration with <a href="https://www.lip6.fr/?LANG=en">LIP6</a>
 
 For docs in French see [here](docs/french/quickstart.md)
 
-## Install instructions ##
+## Installation ##
 
 - Run install.sh script. This should install all needed components
 - Make sure you include /etc/text-align/apache_wsgi.conf in your main Apache configuration file to enable searching
