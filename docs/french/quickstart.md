@@ -1,4 +1,10 @@
-# Instructions #
+## Installation ##
+
+- Installer node et npm pour l'interface web.
+- Exécuter le script install.sh. Cela devrait installer tous les composants nécessaires
+- Inclure /etc/text-align/apache_wsgi.conf dans votre configuration Apache pour autoriser la recherche depuis l'interface web
+
+## Utilisation ##
 
 L'alignement de séquence s'exécute à partir de la command `textalign`
 
