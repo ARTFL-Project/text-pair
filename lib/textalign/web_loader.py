@@ -234,7 +234,7 @@ def set_up_app(web_config, db_path):
     os.system("cp -R /var/lib/text-align/web/web_app/. {}".format(db_path))
     with open(os.path.join(db_path, "appConfig.json"), "w") as config_file:
         json.dump(web_config(), config_file, indent=4)
-    os.system("cd {}; npm run build;".format(db_path))
+    os.system("cd {}; npm install; npm run build;".format(db_path))
     if web_config.webServer == "Apache":
         os.system("cp /var/lib/text-align/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
 

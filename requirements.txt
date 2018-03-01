@@ -1,9 +1,0 @@
-multiprocess
-mmh3
-unidecode
-tqdm
-pystemmer
-flask
-flask-cors
-mod_wsgi
-psycopg2

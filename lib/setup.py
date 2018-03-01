@@ -23,5 +23,9 @@ setup(name="textalign",
       author="The ARTFL Project and OBVIL",
       author_email="clovisgladstone@gmail.com",
       packages=["textalign"],
-      scripts=["scripts/textalign"]
+      scripts=["scripts/textalign"],
+      install_requires=[
+          "multiprocess", "mmh3", "unidecode", "tqdm",
+          "pystemmer", "flask", "flask-cors", "mod_wsgi", "psycopg2"
+          ]
      )

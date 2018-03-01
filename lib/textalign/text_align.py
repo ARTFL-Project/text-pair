@@ -93,6 +93,10 @@ def parse_command_line():
                 if web_app_config["table_name"] == "":
                     print("Please define a table_name in the Web Application section of your config file")
                     exit()
+        else:
+            print("config file does not exist at the location {} you provided.".format(args["config"]))
+            print("Exiting...")
+            exit()
     paths = {"source": {}, "target": defaultdict(str)}
     if tei_parsing["parse_source_files"] is True:
         paths["source"]["tei_input_files"] = args["source_files"]

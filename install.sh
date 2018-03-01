@@ -1,11 +1,15 @@
 #!/bin/sh
 
-sudo -H pip3 install -r requirements.txt
 sudo pip3 install lib/. --upgrade
 
 echo "\nMoving web application components into place..."
 sudo rm -rf /var/lib/text-align
 sudo mkdir -p /var/lib/text-align
+
+if [ -d web/web_app/node_modules ]
+    then
+        sudo rm -rf web/web_app/node_modules
+fi
 sudo cp -Rf web /var/lib/text-align/
 sudo cp -Rf config /var/lib/text-align/
 
