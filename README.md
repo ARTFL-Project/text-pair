@@ -21,13 +21,13 @@ The sequence aligner is executed via the `textalign` command.
 
 * `--config`: path to the configuration file where preprocessing, matching, and web application settings are set
 * `--source_files`: path to source files
-* `--source_metadata`: path to source metadata
-* `--target_files`: path to target files
-* `--target-metadata`: path to target metadata
-* `--is_philo_db`: Define if files are from a PhiloLogic database. If so, no need to define metadata arguments. Set to False by default.
+* `--source_metadata`: path to source metadata. Only define if not using a PhiloLogic database.
+* `--target_files`: path to target files. Only define if not using a PhiloLogic database.
+* `--target_metadata`: path to target metadata
+* `--is_philo_db`: Define if files are from a PhiloLogic database. If set to `True` metadata will be fetched using the PhiloLogic metadata index. Set to False by default.
 * `--output_path`: path to results
 * `--debug`: turn on debugging
-* `--workers`: Set number of workers/threads.
+* `--workers`: Set number of workers/threads to use for parsing, ngram generation, and alignment.
 * `--load_web_app`: Define whether to load results into a database viewable via a web application. Set to True by default.
 
 
