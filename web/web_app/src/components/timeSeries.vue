@@ -85,6 +85,7 @@ export default {
                 data.push(key.count)
             }
             var vm = this
+            console.log("INTERVAL", this.interval)
             vm.chart = new Chart(ctx, {
                 type: "bar",
                 data: {

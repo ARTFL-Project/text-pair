@@ -92,7 +92,7 @@ def query_builder(query_args, field_types):
             else:
                 query = "{} ~* %s".format(field)
                 sql_values.append('\m{}\M'.format(value))
-        elif field_type.lower() == "INTEGER":
+        elif field_type == "INTEGER":
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
                 if values[0] == "-":
@@ -110,6 +110,8 @@ def query_builder(query_args, field_types):
         else:
             continue
         sql_fields.append(query)
+    import sys
+    print(sql_fields, file=sys.stderr)
     return " AND ".join(sql_fields), sql_values
 
 
