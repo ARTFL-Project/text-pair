@@ -72,14 +72,14 @@ class Ngrams:
             lemmatizer = self.__get_lemmatizer()
         else:
             lemmatizer = None
-        with open(path) as stopword_file:
+        with open(path, encoding='utf8') as stopword_file:
             for line in stopword_file:
                 stopwords.add(self.__normalize(line.strip(), stemmer, lemmatizer))
         return stopwords
 
     def __get_lemmatizer(self):
         lemmas = {}
-        with open(self.config["lemmatizer"]) as input_file:
+        with open(self.config["lemmatizer"], encoding='utf8') as input_file:
             for line in input_file:
                 word, lemma = line.strip().split("\t")
                 lemmas[word] = lemma
@@ -151,6 +151,7 @@ class Ngrams:
     def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="50%"):
         """Generate n-grams."""
         files = glob(os.path.join(file_path, "*"))
+        os.system('rm -rf {}/ngrams'.format(output_path))
         os.system('mkdir -p {}/ngrams'.format(output_path))
         os.system('mkdir -p {}/metadata'.format(output_path))
         os.system("mkdir -p {}/index".format(output_path))
@@ -160,7 +161,6 @@ class Ngrams:
             self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
         else:
             self.input_path = db_path
-            self.db_name = db_name
             self.db_path = db_path
         self.output_path = output_path
         if is_philo_db:
