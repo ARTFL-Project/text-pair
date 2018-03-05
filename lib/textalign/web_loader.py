@@ -115,7 +115,7 @@ def count_lines(filename):
 
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
-    with open(file, errors="ignore") as input_file:
+    with open(file, encoding="utf8", errors="ignore") as input_file:
         for pos, line in enumerate(input_file):
             if pos < 2:
                 continue

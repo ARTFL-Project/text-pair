@@ -16,15 +16,19 @@
                 </div>
                 <div class="row">
                     <div class="col">
-                        <div class="input-group rounded-0 pb-3" v-for="field in globalConfig.metadataFields.source" :key="field.label">
-                            <span class="input-group-addon rounded-0">{{ field.label }}</span>
-                            <input type="text" class="form-control" :name="field.value" v-model="formValues[field.value]">
+                        <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.source" :key="field.label">
+                            <span class="input-group-prepend">
+                                <span class="input-group-text rounded-0">{{ field.label }}</span>
+                            </span>
+                            <input type="text" class="form-control rounded-0" :name="field.value" v-model="formValues[field.value]">
                         </div>
                     </div>
                     <div class="col border border-top-0 border-right-0 border-bottom-0">
                         <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.target" :key="field.label">
-                            <span class="input-group-addon rounded-0">{{ field.label }}</span>
-                            <input type="text" class="form-control" :name="field.value" v-model="formValues[field.value]">
+                            <span class="input-group-prepend">
+                                <span class="input-group-text rounded-0">{{ field.label }}</span>
+                            </span>
+                            <input type="text" class="form-control rounded-0" :name="field.value" v-model="formValues[field.value]">
                         </div>
                     </div>
                 </div>
@@ -146,6 +150,8 @@ export default {
                 }
             }
             formValues.banality = false
+            formValues.timeSeriesInterval = this.$globalConfig.timeSeriesIntervals[0].value
+            formValues.directionSelected = "source"
             return formValues
         },
         banalitySelect(index) {

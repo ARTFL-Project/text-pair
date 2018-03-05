@@ -57,7 +57,7 @@
                         </div>
                         <div class="text-muted text-center">
                             <!-- <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br> -->
-                            <a class="diff-btn" v-on:click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
+                            <a class="diff-btn" diffed="false" v-on:click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
                         </div>
                     </div>
                 </transition-group>
@@ -246,24 +246,35 @@ export default {
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
         showDifferences(sourceText, targetText) {
-            let sourceElement = event.srcElement.parentNode.parentNode.querySelector(".source-passage")
-            let targetElement = event.srcElement.parentNode.parentNode.querySelector(".target-passage")
-            let differences = differ.diffChars(sourceText, targetText, { ignoreCase: true })
-            let newSourceString = ""
-            let newTargetString = ""
-            let deleted = ""
-            for (let text of differences) {
-                if (!text.hasOwnProperty("added") && !text.hasOwnProperty("removed")) {
-                    newTargetString += text.value
-                    newSourceString += text.value
-                } else if (text.added) {
-                    newTargetString += `<span class="added">${text.value}</span>`
-                } else {
-                    newSourceString += `<span class="removed">${text.value}</span>`
+            let parent = event.srcElement.parentNode.parentNode
+            let sourceElement = parent.querySelector(".source-passage")
+            let targetElement = parent.querySelector(".target-passage")
+            if (event.srcElement.getAttribute("diffed") == "false") {
+                let differences = differ.diffChars(sourceText, targetText, { ignoreCase: true })
+                let newSourceString = ""
+                let newTargetString = ""
+                let deleted = ""
+                for (let text of differences) {
+                    if (!text.hasOwnProperty("added") && !text.hasOwnProperty("removed")) {
+                        newTargetString += text.value
+                        newSourceString += text.value
+                    } else if (text.added) {
+                        newTargetString += `<span class="added">${text.value}</span>`
+                    } else {
+                        newSourceString += `<span class="removed">${text.value}</span>`
+                    }
                 }
+                sourceElement.innerHTML = newSourceString
+                targetElement.innerHTML = newTargetString
+                event.srcElement.setAttribute("diffed", "true")
+                event.srcElement.innerHTML = "Hide differences"
+            } else {
+                sourceElement.innerHTML = sourceText
+                targetElement.innerHTML = targetText
+                event.srcElement.setAttribute("diffed", "false")
+                event.srcElement.innerHTML = "Show differences"
             }
-            sourceElement.innerHTML = newSourceString
-            targetElement.innerHTML = newTargetString
+
         },
         beforeEnter: function(el) {
             el.style.opacity = 0
