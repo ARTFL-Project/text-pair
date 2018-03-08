@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/pkg/profile"
 	"html"
 	"io/ioutil"
 	"log"
@@ -22,8 +23,9 @@ import (
 )
 
 type docIndex struct {
-	DocID  string
-	Ngrams map[int32][]indexedNgram
+	DocID       string
+	Ngrams      map[int32][]indexedNgram
+	NgramLength int
 }
 
 type indexedNgram struct {
@@ -141,6 +143,7 @@ var cleanStart = regexp.MustCompile(`^\S+ `)
 var cleanEnd = regexp.MustCompile(` \S+$`)
 
 func main() {
+	defer profile.Start().Stop()
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
 	sourceAgainstSource := false
 	sourceFilesDone := make(map[string]bool)
@@ -479,7 +482,7 @@ func getJSONDocs(fileLocations []string, prefixString string, threads int) []doc
 					}
 				}
 				docID := path.Base(strings.Replace(fileLocation, ".json", "", 1))
-				docObject := docIndex{docID, doc}
+				docObject := docIndex{docID, doc, len(doc)}
 				c <- docObject
 			}(fileLocation)
 		}
@@ -547,7 +550,7 @@ func loadNgramIndex(fileLocation string) map[int32]string {
 
 func getIntersection(sourceFile *docIndex, targetFile *docIndex) map[int32]int {
 	intersectCount := make(map[int32]int)
-	if len(sourceFile.Ngrams) < len(targetFile.Ngrams) {
+	if sourceFile.NgramLength < targetFile.NgramLength {
 		for ngram := range sourceFile.Ngrams {
 			if _, ok := targetFile.Ngrams[ngram]; ok {
 				intersectCount[ngram] = len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram])
@@ -992,8 +995,8 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
 			targetPassages := alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)
 			fields = append(fields, targetPassages...)
-			passageSimilarity := passageSimilarity(sourcePassages[1], targetPassages[1])
-			fields = append(fields, fmt.Sprintf("%d%%", passageSimilarity))
+			// passageSimilarity := passageSimilarity(sourcePassages[1], targetPassages[1])
+			fields = append(fields, fmt.Sprintf("%d%%", 0))
 			fields = append(fields, fmt.Sprintf("%v", alignment.banality))
 			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
 		}
