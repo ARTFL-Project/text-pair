@@ -10,7 +10,7 @@
             <div class="col">
                 <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter" v-on:enter="enter">
                     <div class="card mb-3 rounded-0 shadow-1" style="position: relative" v-for="(alignment, index) in results.alignments" :key="results.start_position + index + 1" v-bind:data-index="index">
-                        <div class="border border-top-0 border-left-0" style="position: absolute; padding: 5px; overflow: hidden;">
+                        <div class="border border-top-0 border-left-0 result-number">
                             {{ results.start_position + index + 1 }}
                         </div>
                         <div class="row">
@@ -70,7 +70,10 @@
             <div class="col-3 pl-0">
                 <div class="card rounded-0 shadow-1">
                     <h6 class="card-header text-center">Browse by Metadata Counts</h6>
-                    <div class="mt-3 p-3">
+                    <div id="metadata-list" class="mx-auto p-2" @click="toggleFacetList()">
+                        Show options
+                    </div>
+                    <div class="mt-3 mb-3 pr-3 pl-3 facet-list">
                         <h6 class="text-center">Source</h6>
                         <div class="list-group">
                             <button type="button" class="list-group-item list-group-item-action" v-for="(field, index) in globalConfig.metadataFields.source" :key="index" v-on:click="facetSearch(field.value)">
@@ -78,7 +81,7 @@
                             </button>
                         </div>
                     </div>
-                    <div class="mt-3 p-3">
+                    <div class="mb-3 pr-3 pl-3 facet-list">
                         <h6 class="text-center">Target</h6>
                         <div class="list-group">
                             <button type="button" class="list-group-item list-group-item-action" v-for="(field, index) in globalConfig.metadataFields.target" :key="index" v-on:click="facetSearch(field.value)">
@@ -88,13 +91,16 @@
                     </div>
                 </div>
                 <div class="card rounded-0 shadow-1 mt-3" v-if="facetResults">
+                    <div class="border border-top-0 border-right-0 close-btn" @click="closeFacetResults()">
+                        X
+                    </div>
                     <h6 class="card-header text-center">Frequency by {{ facetResults.facet }}</h6>
                     <div class="mt-3 p-3">
                         <div class="list-group">
                             <div class="list-group-item list-group-item-action facet-result" v-for="(field, index) in facetResults.results" :key="index" v-on:click="filteredSearch(facetResults.facet, field.field)">
                                 <div class="row">
-                                    <div class="col">{{ field.field }}</div>
-                                    <div class="col-4 facet-count">{{ field.count }}</div>
+                                    <div class="col pr-1 pl-1">{{ field.field }}</div>
+                                    <div class="col-4 pr-1 pl-1 facet-count">{{ field.count }}</div>
                                 </div>
                             </div>
                         </div>
@@ -223,11 +229,22 @@ export default {
                 metadata: this.$globalConfig.metadataTypes
             }).then(response => {
                 this.facetResults = response.data
+                this.toggleFacetList()
             }).catch(error => {
                 this.facetLoading = false
                 this.error = error.toString();
                 console.log("ERROR", error)
             });
+        },
+        toggleFacetList() {
+            Array.from(document.getElementsByClassName("facet-list")).forEach(function(element) {
+                element.classList.toggle('hide')
+            })
+            document.querySelector("#metadata-list").classList.toggle('show')
+        },
+        closeFacetResults() {
+            this.facetResults = null
+            this.toggleFacetList()
         },
         filteredSearch(fieldName, value) {
             let queryParams = { ...this.$route.query }
@@ -329,6 +346,13 @@ export default {
     cursor: pointer;
 }
 
+.result-number {
+    position: absolute;
+    padding: 5px;
+    overflow: hidden;
+    line-height: 1;
+}
+
 .list-group-item:first-child,
 .list-group-item:last-child {
     border-radius: 0 !important;
@@ -378,5 +402,46 @@ export default {
 
 .separator {
     padding: 5px;
+}
+
+.facet-list {
+    /* height: auto; */
+    transition: all .2s ease-in-out;
+}
+
+.facet-list.hide {
+    max-height: 0px;
+    opacity: 0;
+    margin: 0 !important;
+}
+
+.close-btn {
+    position: absolute;
+    right: 0;
+    padding: 5px;
+    line-height: 1;
+    overflow: hidden;
+}
+
+.close-btn:hover {
+    background-color: #565656;
+    color: #f8f8f8;
+    cursor: pointer;
+}
+
+#metadata-list {
+    display: none;
+    opacity: 0;
+    cursor: pointer;
+    transition: all .2s ease-in-out;
+}
+
+#metadata-list.show {
+    display: block;
+    opacity: 1;
+}
+
+#metadata-list:hover {
+    color: #565656;
 }
 </style>

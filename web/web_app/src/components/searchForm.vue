@@ -229,5 +229,9 @@ my-dropdown .btn:active {
 .my-dropdown-item:hover {
     background: #ddd;
 }
+
+.input-group-text, .form-control {
+    font-size: inherit;
+}
 </style>
 
