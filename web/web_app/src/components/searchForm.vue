@@ -1,6 +1,9 @@
 <template>
     <div id="search-form" class="card rounded-0 mt-3 shadow-1">
         <div class="card-body rounded-0">
+            <h5 id="show-form" class="p-2 hide" @click="toggleSearchForm()">
+                Show search form
+            </h5>
             <form @submit.prevent="submitForm">
                 <div class="row">
                     <div class="col">
@@ -32,7 +35,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="my-dropdown mb-3">
+                <div id="banality-filter" class="my-dropdown mb-3">
                     <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ banalitySelected }}&nbsp;&nbsp;&#9662;</button>
                     <ul class="my-dropdown-menu shadow-1">
                         <li class="my-dropdown-item" v-for="(option, optionIndex) in formBanalityValues" :key="optionIndex" @click="banalitySelect(optionIndex)">{{ option.label }}</li>
@@ -160,6 +163,7 @@ export default {
             this.toggleDropdown()
         },
         search() {
+            this.toggleSearchForm()
             this.$router.push(`/search?${this.paramsToUrl(this.formValues)}`)
         },
         submitForm() {
@@ -167,6 +171,7 @@ export default {
             console.log(element, "NOT WORKING")
         },
         displayTimeSeries() {
+            this.toggleSearchForm()
             this.$router.push(`/time?${this.paramsToUrl(this.formValues)}`)
         },
         clearForm() {
@@ -188,6 +193,11 @@ export default {
             this[key] = item
             this.formValues[key] = item.value
             this.toggleDropdown()
+        },
+        toggleSearchForm() {
+            document.querySelector("form").classList.toggle("hide")
+            document.querySelector("#show-form").classList.toggle("hide")
+            document.querySelector("form").parentNode.classList.toggle("shrink-padding")
         }
     }
 }
@@ -232,6 +242,31 @@ my-dropdown .btn:active {
 
 .input-group-text, .form-control {
     font-size: inherit;
+}
+
+form {
+    transition: all .2s ease-out;
+}
+
+.hide {
+    opacity: 0;
+    height: 0;
+    margin: 0;
+    padding: 0;
+}
+
+.shrink-padding {
+    padding: .5rem;
+    text-align: center;
+}
+
+#show-form {
+    cursor: pointer;
+    margin-bottom: 0 !important;
+}
+
+#show-form:hover {
+    color: #565656;
 }
 </style>
 

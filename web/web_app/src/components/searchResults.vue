@@ -55,7 +55,7 @@
                                 <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.targetDB.philoDB" v-on:click="goToContext(alignment, 'target')">View passage in context</a>
                             </div>
                         </div>
-                        <div class="text-muted text-center">
+                        <div class="text-muted text-center mb-2">
                             <!-- <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br> -->
                             <a class="diff-btn" diffed="false" v-on:click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
                         </div>
@@ -174,6 +174,10 @@ export default {
                 this.page++
                 this.loading = false
                 this.done = true
+                Array.from(document.getElementsByClassName("facet-list")).forEach(function(element) {
+                    element.classList.remove('hide')
+                })
+                document.querySelector("#metadata-list").classList.remove("show")
             }).catch(error => {
                 this.loading = false
                 this.error = error.toString();
@@ -405,8 +409,11 @@ export default {
 }
 
 .facet-list {
-    /* height: auto; */
-    transition: all .2s ease-in-out;
+    transition: all .2s ease-out;
+}
+
+.facet-list button:hover {
+    cursor: pointer;
 }
 
 .facet-list.hide {
@@ -433,7 +440,7 @@ export default {
     display: none;
     opacity: 0;
     cursor: pointer;
-    transition: all .2s ease-in-out;
+    transition: all .2s ease-out;
 }
 
 #metadata-list.show {
