@@ -4,7 +4,7 @@
             <h5 id="show-form" class="p-2 hide" @click="toggleSearchForm()">
                 Show search form
             </h5>
-            <form @submit.prevent @keyup.enter="submitForm()">
+            <form @submit.prevent @keyup.enter="searchSelected()">
                 <div class="row">
                     <div class="col">
                         <h6 class="text-center pb-2">
@@ -43,10 +43,10 @@
                 </div>
                 <ul class="nav nav-tabs" id="myTab" role="tablist">
                     <li class="nav-item">
-                        <a class="nav-link active" id="search-alignments-tab" data-toggle="tab" href="#search-alignments" role="tab" aria-controls="search-alignments" aria-expanded="true" @click="searchSelected = 'search'">Search Alignments</a>
+                        <a class="nav-link active" id="search-alignments-tab" data-toggle="tab" href="#search-alignments" role="tab" aria-controls="search-alignments" aria-expanded="true" @click="searchSelected = search">Search Alignments</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" id="time-series-tab" data-toggle="tab" href="#time-series" role="tab" aria-controls="time-series" aria-expanded="true" @click="searchSelected = 'displayTimeSeries'">Display Time Series</a>
+                        <a class="nav-link" id="time-series-tab" data-toggle="tab" href="#time-series" role="tab" aria-controls="time-series" aria-expanded="true" @click="searchSelected = displayTimeSeries">Display Time Series</a>
                     </li>
                 </ul>
                 <div class="tab-content mt-3" id="myTabContent">
@@ -119,7 +119,7 @@ export default {
                     label: "Source",
                     value: "source"
                 },
-            searchSelected: "search"
+            searchSelected: this.search
         }
     },
     created() {
@@ -166,13 +166,6 @@ export default {
         search() {
             this.toggleSearchForm()
             this.$router.push(`/search?${this.paramsToUrl(this.formValues)}`)
-        },
-        submitForm() {
-            if (this.searchSelected == 'search') {
-                this.search()
-            } else {
-                this.displayTimeSeries()
-            }
         },
         displayTimeSeries() {
             this.toggleSearchForm()
