@@ -5,7 +5,6 @@ import App from "./App";
 import router from "./router";
 import store from "./store";
 import axios from "axios";
-import Velocity from "velocity-animate";
 import InfiniteLoading from "vue-infinite-loading";
 
 import globalConfig from "../appConfig.json";

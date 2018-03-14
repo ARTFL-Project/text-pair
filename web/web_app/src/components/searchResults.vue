@@ -4,9 +4,14 @@
             <div class="loading" v-if="loading">
                 Loading...
             </div>
-            <div class="ml-4" style="font-size: 120%" v-if="error">
+            <div class="m-4" style="font-size: 120%" v-if="error">
                 No results for your query
             </div>
+            <div class="m-4" style="font-size: 120%" v-if="counts && !error">
+                {{ counts }} results for your <span class="diff-btn" @click="toggleSearchForm()">query</span>
+            </div>
+        </div>
+        <div class="row">
             <div class="col">
                 <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter" v-on:enter="enter">
                     <div class="card mb-3 rounded-0 shadow-1" style="position: relative" v-for="(alignment, index) in results.alignments" :key="results.start_position + index + 1" v-bind:data-index="index">
@@ -44,7 +49,7 @@
                                     <span class="source-passage">{{ alignment.source_passage }}</span>
                                     {{ alignment.source_context_after }}
                                 </p>
-                                <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.sourceDB.philoDB" v-on:click="goToContext(alignment, 'source')">View passage in context</a>
+                                <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.sourceDB.philoDB" @click="goToContext(alignment, 'source')">View passage in context</a>
                             </div>
                             <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
@@ -52,12 +57,12 @@
                                     <span class="target-passage">{{ alignment.target_passage }}</span>
                                     {{ alignment.target_context_after }}
                                 </p>
-                                <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.targetDB.philoDB" v-on:click="goToContext(alignment, 'target')">View passage in context</a>
+                                <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.targetDB.philoDB" @click="goToContext(alignment, 'target')">View passage in context</a>
                             </div>
                         </div>
                         <div class="text-muted text-center mb-2">
                             <!-- <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br> -->
-                            <a class="diff-btn" diffed="false" v-on:click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
+                            <a class="diff-btn" diffed="false" @click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
                         </div>
                     </div>
                 </transition-group>
@@ -119,7 +124,7 @@
                 <li class="page-item">
                     <a class="page-link">Page {{ results.page }}</a>
                 </li>
-                <li class="page-item" v-if="results.next_url != ''">
+                <li class="page-item" v-if="this.resultsLeft > 0">
                     <a class="page-link" v-on:click="nextPage()" aria-label="Next">
                         <span aria-hidden="true">&raquo;</span>
                         <span class="sr-only">Next</span>
@@ -133,6 +138,7 @@
 <script>
 import { EventBus } from '../main.js';
 import * as differ from 'diff';
+import Velocity from 'velocity-animate'
 // import { InfiniteLoading } from '../main.js';
 
 export default {
@@ -142,6 +148,8 @@ export default {
             loading: false,
             done: false,
             results: { alignments: [] },
+            counts: null,
+            resultsLeft: 0,
             lastRowID: null,
             page: 0,
             error: null,
@@ -174,6 +182,16 @@ export default {
                 this.page++
                 this.loading = false
                 this.done = true
+                this.$http.post(`${this.$globalConfig.apiServer}/count_results/?${this.paramsToUrl(params)}`, {
+                    metadata: this.$globalConfig.metadataTypes
+                }).then(response => {
+                    this.counts = response.data.counts
+                    this.resultsLeft = this.counts - (this.results.start_position + this.results.alignments.length)
+                }).catch(error => {
+                    // this.loading = false
+                    // this.error = error.toString();
+                    console.log(error)
+                });
                 Array.from(document.getElementsByClassName("facet-list")).forEach(function(element) {
                     element.classList.remove('hide')
                 })
@@ -260,7 +278,6 @@ export default {
             } else {
                 queryParams[fieldName] = value
             }
-            console.log(this.$globalConfig.metadataTypes[fieldName], queryParams)
             EventBus.$emit("urlUpdate", queryParams)
             this.facetResults = null
             this.results = { alignments: [] }
@@ -336,6 +353,10 @@ export default {
             });
             // }, 10)
         },
+        toggleSearchForm() {
+            console.log("click")
+            EventBus.$emit("toggleSearchForm")
+        }
     }
 }
 </script>

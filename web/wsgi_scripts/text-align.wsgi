@@ -172,6 +172,23 @@ def search_alignments():
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
+@application.route("/count_results/", methods=["GET", "POST"])
+def count_results():
+    """Search alignments according to URL params"""
+    query_args, other_args = parse_args(request)
+    metadata_field_types = request.get_json()["metadata"]
+    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
+    query = "SELECT COUNT(*) FROM {} WHERE {}".format(other_args.db_table, sql_fields)
+    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
+    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute(query, sql_values)
+    result_object = {"counts": cursor.fetchone()[0]}
+    response = jsonify(result_object)
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
+
 @application.route("/generate_time_series/", methods=["GET", "POST"])
 def generate_time_series():
     """Generate a time series from search results"""
