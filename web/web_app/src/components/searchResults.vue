@@ -354,7 +354,6 @@ export default {
             // }, 10)
         },
         toggleSearchForm() {
-            console.log("click")
             EventBus.$emit("toggleSearchForm")
         }
     }

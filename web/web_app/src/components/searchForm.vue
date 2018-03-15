@@ -4,7 +4,7 @@
             <h5 id="show-form" class="p-2 hide" @click="toggleSearchForm()">
                 Show search form
             </h5>
-            <form id="form" @submit.prevent @keyup.enter="searchSelected()">
+            <form @submit.prevent @keyup.enter="searchSelected()">
                 <div class="row">
                     <div class="col">
                         <h6 class="text-center pb-2">
@@ -82,7 +82,6 @@
 
 <script>
 import { EventBus } from "../main.js"
-import Velocity from 'velocity-animate'
 
 export default {
     name: "search-form",
@@ -196,32 +195,9 @@ export default {
             this.toggleDropdown()
         },
         toggleSearchForm() {
-            let form = document.querySelector("form")
-            if (form.style.display == 'none') {
-                form.style.display = 'block'
-                document.querySelector("#show-form").classList.add("hide")
-                document.querySelector("form").parentNode.classList.toggle("shrink-padding")
-                Velocity(form, {
-                    opacity: 1,
-                    height: 'auto',
-                }, {
-                    easing: "ease-out",
-                    duration: 200,
-                })
-            } else {
-                Velocity(form, {
-                    opacity: 0,
-                    height: 0,
-                }, {
-                    easing: "ease-out",
-                    duration: 200,
-                    complete: function() {
-                        form.style.display = 'none'
-                        document.querySelector("#show-form").classList.remove("hide")
-                        document.querySelector("form").parentNode.classList.toggle("shrink-padding")
-                        }
-                })
-            }
+            document.querySelector("form").classList.toggle("hide")
+            document.querySelector("#show-form").classList.toggle("hide")
+            document.querySelector("form").parentNode.classList.toggle("shrink-padding")
         }
     }
 }
@@ -268,13 +244,15 @@ my-dropdown .btn:active {
     font-size: inherit;
 }
 
-/* form {
+form {
     transition: all .2s ease-out;
-} */
+    max-height: 400px;
+    overflow-y: scroll;
+}
 
 .hide {
     opacity: 0;
-    height: 0;
+    max-height: 0;
     margin: 0;
     padding: 0;
 }
@@ -286,7 +264,6 @@ my-dropdown .btn:active {
 
 #show-form {
     cursor: pointer;
-    /* transition: all .05s ease-out; */
     margin-bottom: 0 !important;
 }
 
