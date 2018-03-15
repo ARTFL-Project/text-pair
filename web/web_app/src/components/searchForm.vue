@@ -1,6 +1,6 @@
 <template>
     <div id="search-form" class="card rounded-0 mt-3 shadow-1">
-        <div class="card-body rounded-0">
+        <div class="card-body rounded-0" style="position:relative">
             <h5 id="show-form" class="p-2 hide" @click="toggleSearchForm()">
                 Show search form
             </h5>
@@ -195,9 +195,22 @@ export default {
             this.toggleDropdown()
         },
         toggleSearchForm() {
-            document.querySelector("form").classList.toggle("hide")
-            document.querySelector("#show-form").classList.toggle("hide")
-            document.querySelector("form").parentNode.classList.toggle("shrink-padding")
+            let form = document.querySelector("form")
+            if (form.style.display == 'none') {
+                document.querySelector("#show-form").classList.toggle("hide")
+                Velocity(form, "slideDown", {
+                duration: 200,
+                easing: "ease-out",
+            })
+            } else {
+                Velocity(form, "slideUp", {
+                duration: 200,
+                easing: "ease-out",
+                complete: function() {
+                    document.querySelector("#show-form").classList.toggle("hide")
+                }
+            })
+            }
         }
     }
 }
@@ -244,27 +257,20 @@ my-dropdown .btn:active {
     font-size: inherit;
 }
 
-form {
-    transition: all .2s ease-out;
-    max-height: 400px;
-    overflow-y: scroll;
-}
-
 .hide {
     opacity: 0;
-    max-height: 0;
+    max-height: 0 !important;
     margin: 0;
     padding: 0;
 }
 
-.shrink-padding {
-    padding: .5rem;
-    text-align: center;
-}
-
 #show-form {
+    position: absolute;
+    transition: all .2s ease-out;
     cursor: pointer;
-    margin-bottom: 0 !important;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
 }
 
 #show-form:hover {
