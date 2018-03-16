@@ -91,8 +91,8 @@ def query_builder(query_args, field_types):
                     sql_values.append(value[1:-1])
             elif value.startswith("NOT "):
                 split_value = " ".join(value.split()[1:]).strip()
-                query = "{} ~* %s".format(field)
-                sql_values.append('[^\\m{}\\M]'.format(split_value))
+                query = "{} !~* %s".format(field)
+                sql_values.append('\m{}\M'.format(split_value))
             else:
                 query = "{} ~* %s".format(field)
                 sql_values.append('\m{}\M'.format(value))
@@ -115,7 +115,7 @@ def query_builder(query_args, field_types):
             continue
         sql_fields.append(query)
     import sys
-    print(sql_fields, sql_values, file=sys.stderr)
+    print("FIELDS", sql_fields, sql_values, file=sys.stderr)
     return " AND ".join(sql_fields), sql_values
 
 

@@ -47,6 +47,7 @@ body,
 
 .corner-btn {
     position: absolute;
+    transition: all .1s ease-out;
     padding: 5px;
     line-height: 1;
     top: 0;
