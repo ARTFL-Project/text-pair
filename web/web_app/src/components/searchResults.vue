@@ -7,15 +7,13 @@
             <div class="m-4" style="font-size: 120%" v-if="error">
                 No results for your query
             </div>
-            <div class="m-4" style="font-size: 120%" v-if="counts && !error">
-                {{ counts }} results for your <span class="diff-btn" @click="toggleSearchForm()">query</span>
-            </div>
+            <search-arguments></search-arguments>
         </div>
         <div class="row">
             <div class="col">
                 <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter" v-on:enter="enter">
                     <div class="card mb-3 rounded-0 shadow-1" style="position: relative" v-for="(alignment, index) in results.alignments" :key="results.start_position + index + 1" v-bind:data-index="index">
-                        <div class="border border-top-0 border-left-0 result-number">
+                        <div class="corner-btn left">
                             {{ results.start_position + index + 1 }}
                         </div>
                         <div class="row">
@@ -96,7 +94,7 @@
                     </div>
                 </div>
                 <div class="card rounded-0 shadow-1 mt-3" v-if="facetResults">
-                    <div class="border border-top-0 border-right-0 close-btn" @click="closeFacetResults()">
+                    <div class="corner-btn destroy right" @click="closeFacetResults()">
                         X
                     </div>
                     <h6 class="card-header text-center">Frequency by {{ facetResults.facet }}</h6>
@@ -138,11 +136,15 @@
 <script>
 import { EventBus } from '../main.js';
 import * as differ from 'diff';
-import Velocity from 'velocity-animate'
+import searchArguments from "./searchArguments"
+
 // import { InfiniteLoading } from '../main.js';
 
 export default {
     name: "searchResults",
+    components: {
+        searchArguments
+    },
     data() {
         return {
             loading: false,
@@ -185,8 +187,9 @@ export default {
                 this.$http.post(`${this.$globalConfig.apiServer}/count_results/?${this.paramsToUrl(params)}`, {
                     metadata: this.$globalConfig.metadataTypes
                 }).then(response => {
-                    this.counts = response.data.counts
-                    this.resultsLeft = this.counts - (this.results.start_position + this.results.alignments.length)
+                    let counts = response.data.counts
+                    EventBus.$emit("searchArgsUpdate", {counts: counts, searchParams : params})
+                    this.resultsLeft = counts - (this.results.start_position + this.results.alignments.length)
                 }).catch(error => {
                     // this.loading = false
                     // this.error = error.toString();
@@ -360,7 +363,7 @@ export default {
 }
 </script>
 
-<style>
+<style scoped>
 .card-link {
     color: #007bff !important;
 }
@@ -368,13 +371,6 @@ export default {
 .card-link:hover,
 .page-link {
     cursor: pointer;
-}
-
-.result-number {
-    position: absolute;
-    padding: 5px;
-    overflow: hidden;
-    line-height: 1;
 }
 
 .list-group-item:first-child,
@@ -440,20 +436,6 @@ export default {
     max-height: 0px;
     opacity: 0;
     margin: 0 !important;
-}
-
-.close-btn {
-    position: absolute;
-    right: 0;
-    padding: 5px;
-    line-height: 1;
-    overflow: hidden;
-}
-
-.close-btn:hover {
-    background-color: #565656;
-    color: #f8f8f8;
-    cursor: pointer;
 }
 
 #metadata-list {

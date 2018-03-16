@@ -216,7 +216,7 @@ export default {
 }
 </script>
 
-<style>
+<style scoped>
 .input-group > span {
     font-size: 0.85rem !important;
 }
