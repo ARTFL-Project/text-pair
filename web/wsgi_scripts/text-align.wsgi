@@ -83,8 +83,12 @@ def query_builder(query_args, field_types):
         query = ""
         if field_type == "TEXT":
             if value.startswith('"'):
-                query = "{}=%s".format(field)
-                sql_values.append(value[1:-1])
+                if value == '""':
+                    query = '{} = %s'.format(field)
+                    sql_values.append("")
+                else:
+                    query = "{}=%s".format(field)
+                    sql_values.append(value[1:-1])
             elif value.startswith("NOT "):
                 split_value = " ".join(value.split()[1:]).strip()
                 query = "{} ~* %s".format(field)
@@ -111,7 +115,7 @@ def query_builder(query_args, field_types):
             continue
         sql_fields.append(query)
     import sys
-    print(sql_fields, file=sys.stderr)
+    print(sql_fields, sql_values, file=sys.stderr)
     return " AND ".join(sql_fields), sql_values
 
 
