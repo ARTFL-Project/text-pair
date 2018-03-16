@@ -97,10 +97,11 @@
                     <div class="corner-btn destroy right" @click="closeFacetResults()">
                         X
                     </div>
-                    <h6 class="card-header text-center">Frequency by {{ facetResults.facet }}</h6>
-                    <div class="mt-3 p-3">
+                    <h6 class="card-header text-center">Frequency by <span class="text-capitalize">{{ facetResults.facet.split("_").join(" ") }}</span></h6>
+                    <div class="mt-1 p-2">
+                        <div class="pb-2 text-center" style="opacity: .5" >Showing top 100 results</div>
                         <div class="list-group">
-                            <div class="list-group-item list-group-item-action facet-result" v-for="(field, index) in facetResults.results" :key="index" v-on:click="filteredSearch(facetResults.facet, field.field)">
+                            <div class="list-group-item list-group-item-action facet-result" v-for="(field, index) in facetResults.results.slice(0, 100)" :key="index" v-on:click="filteredSearch(facetResults.facet, field.field)">
                                 <div class="row">
                                     <div class="col pr-1 pl-1">{{ field.field }}</div>
                                     <div class="col-4 pr-1 pl-1 facet-count">{{ field.count }}</div>
