@@ -1,16 +1,16 @@
 <template>
     <div class="mt-3">
         <div class="row">
-            <div class="loading" v-if="loading">
-                Loading...
-            </div>
             <div class="m-4" style="font-size: 120%" v-if="error">
                 No results for your query
             </div>
             <search-arguments></search-arguments>
         </div>
         <div class="row">
-            <div class="col">
+            <div class="col position-relative">
+                <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%);" v-if="loading">
+                    <atom-spinner :animation-duration="800" :size="65" color="#000"/>
+                </div>
                 <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter" v-on:enter="enter">
                     <div class="card mb-3 rounded-0 shadow-1" style="position: relative" v-for="(alignment, index) in results.alignments" :key="results.start_position + index + 1" v-bind:data-index="index">
                         <div class="corner-btn left">
@@ -59,18 +59,12 @@
                             </div>
                         </div>
                         <div class="text-muted text-center mb-2">
-                            <!-- <span style="padding: .25rem .5rem;">{{ alignment.passage_similarity }} similar:</span><br> -->
                             <a class="diff-btn" diffed="false" @click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
                         </div>
                     </div>
                 </transition-group>
-                <!-- <infinite-loading v-if="results.alignments.length > 0" @infinite="infiniteHandler">
-                        <span slot="no-more">
-                            There is no more Hacker News :(
-                        </span>
-                    </infinite-loading> -->
             </div>
-            <div class="col-3 pl-0">
+            <div class="col-3 pl-0 position-relative">
                 <div class="card rounded-0 shadow-1">
                     <h6 class="card-header text-center">Browse by Metadata Counts</h6>
                     <div id="metadata-list" class="mx-auto p-2" @click="toggleFacetList()">
@@ -92,6 +86,9 @@
                             </button>
                         </div>
                     </div>
+                </div>
+                <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%);" v-if="facetLoading">
+                    <atom-spinner :animation-duration="800" :size="65" color="#000"/>
                 </div>
                 <div class="card rounded-0 shadow-1 mt-3" v-if="facetResults">
                     <div class="corner-btn destroy right" @click="closeFacetResults()">
@@ -137,18 +134,19 @@
 <script>
 import { EventBus } from '../main.js';
 import * as differ from 'diff';
-import searchArguments from "./searchArguments"
-
-// import { InfiniteLoading } from '../main.js';
+import searchArguments from "./searchArguments";
+import { AtomSpinner } from 'epic-spinners';
 
 export default {
     name: "searchResults",
     components: {
-        searchArguments
+        searchArguments,
+        AtomSpinner
     },
     data() {
         return {
             loading: false,
+            facetLoading: false,
             done: false,
             results: { alignments: [] },
             counts: null,
@@ -175,6 +173,7 @@ export default {
             this.results = { alignments: [] } // clear alignments with new search
             this.facetResults = null // clear facet results with new search
             this.error = null
+            this.loading = true
             let params = { ...this.$route.query }
             params.db_table = this.$globalConfig.databaseName
             this.$http.post(`${this.$globalConfig.apiServer}/search_alignments/?${this.paramsToUrl(params)}`, {
@@ -256,6 +255,7 @@ export default {
             }).then(response => {
                 this.facetResults = response.data
                 this.toggleFacetList()
+                this.facetLoading = false
             }).catch(error => {
                 this.facetLoading = false
                 this.error = error.toString();
@@ -331,31 +331,6 @@ export default {
                     { complete: done }
                 )
             }, delay)
-        },
-        infiniteHandler($state) {
-            // setTimeout(function() {
-            console.log("hi", this.results.alignments.length)
-            let queryParams = { ...this.$route.query }
-            queryParams.page = this.page + 1
-            queryParams.direction = "next"
-            queryParams.id_anchor = this.lastRowID
-            queryParams.db_table = this.$globalConfig.databaseName
-            this.$http.get(`${this.$globalConfig.apiServer}/search_alignments/?`, {
-                params: queryParams
-            }).then(response => {
-                if (response.data.length) {
-                    this.results.alignments = this.results.alignments.concat(response.data.alignments);
-                    this.page++
-                    this.lastRowID = this.results.alignments[this.results.alignments.length - 1].rowid_ordered
-                    $state.loaded();
-                } else {
-                    $state.complete();
-                }
-            }).catch(error => {
-                this.error = error.toString();
-                console.log("ERROR", error)
-            });
-            // }, 10)
         },
         toggleSearchForm() {
             EventBus.$emit("toggleSearchForm")

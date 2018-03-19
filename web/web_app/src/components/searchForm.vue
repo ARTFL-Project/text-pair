@@ -92,19 +92,19 @@ export default {
             timeSeriesInterval: this.$globalConfig.timeSeriesIntervals[0],
             formBanalityValues: [
                 {
-                    label: "Filter all banalities",
-                    value: false
-                },
-                {
                     label: "Don't filter banalities",
                     value: ""
+                },
+                {
+                    label: "Filter all banalities",
+                    value: false
                 },
                 {
                     label: "Search only banalities",
                     value: true
                 }
             ],
-            banalitySelected: "Filter all banalities",
+            banalitySelected: "Don't filter banalities",
             directions: [
                 {
                     label: "Source",
@@ -156,7 +156,7 @@ export default {
                     }
                 }
             }
-            formValues.banality = false
+            formValues.banality = ""
             formValues.timeSeriesInterval = this.$globalConfig.timeSeriesIntervals[0].value
             formValues.directionSelected = "source"
             return formValues

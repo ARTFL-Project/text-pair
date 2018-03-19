@@ -59,6 +59,12 @@ class formArguments():
         else:
             return False
 
+    def __contains__(self, key):
+        if key in self.dict:
+            return True
+        else:
+            return False
+
     def items(self):
         """Mimic items method of dict"""
         for k, v in self.dict.items():
@@ -73,7 +79,46 @@ class formArguments():
         return repr(self.dict)
 
 
-def query_builder(query_args, field_types):
+def parse_args(request):
+    """Parse URL args"""
+    query_args = formArguments()
+    other_args = formArguments()
+    other_args_keys = ["facet", "direction", "source", "target", "stats_field", "db_table",
+                       "filter_field", "filter_value", "page", "id_anchor", "directionSelected",
+                       "timeSeriesInterval"]
+    for key, value in request.args.items():
+        if key in other_args_keys:
+            if key == "full":
+                try:
+                    other_args["full"] = eval(value.title())
+                except ValueError:
+                    pass
+            elif key == "page":
+                try:
+                    other_args["page"] = int(value)
+                except TypeError:
+                    pass
+            elif key == "id_anchor":
+                try:
+                    other_args["id_anchor"] = int(value)
+                except TypeError:
+                    pass
+            elif key == "direction":
+                other_args["direction"] = value or "next"
+            elif key == "directionSelected":
+                other_args["directionSelected"] = value or "source"
+            elif key == "timeSeriesInterval":
+                other_args["interval"] = int(value)
+            else:
+                other_args[key] = value
+        else:
+            if value:
+                query_args[key] = value
+    metadata_field_types = request.get_json()["metadata"]
+    sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
+    return sql_fields, sql_values, other_args
+
+def query_builder(query_args, other_args, field_types):
     """Takes query arguments and returns an SQL WHERE clause"""
     sql_fields = []
     sql_values = []
@@ -114,6 +159,9 @@ def query_builder(query_args, field_types):
         else:
             continue
         sql_fields.append(query)
+    if other_args.banality != "":
+        sql_fields.append("banality=%s")
+        sql_values.append(other_args.banality)
     import sys
     print("FIELDS", sql_fields, sql_values, file=sys.stderr)
     return " AND ".join(sql_fields), sql_values
@@ -127,11 +175,9 @@ def index():
 @application.route("/search_alignments/", methods=["GET", "POST"])
 def search_alignments():
     """Search alignments according to URL params"""
-    query_args, other_args = parse_args(request)
-    metadata_field_types = request.get_json()["metadata"]
-    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
+    sql_fields, sql_values, other_args = parse_args(request)
     if other_args.direction == "next":
-        if query_args:
+        if sql_fields:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
                     o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
                     sql_fields, other_args.id_anchor)
@@ -140,7 +186,7 @@ def search_alignments():
                     o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
                     other_args.id_anchor)
     else:
-        if query_args:
+        if sql_fields:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
                     sql_fields, other_args.id_anchor)
@@ -179,10 +225,11 @@ def search_alignments():
 @application.route("/count_results/", methods=["GET", "POST"])
 def count_results():
     """Search alignments according to URL params"""
-    query_args, other_args = parse_args(request)
-    metadata_field_types = request.get_json()["metadata"]
-    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
-    query = "SELECT COUNT(*) FROM {} WHERE {}".format(other_args.db_table, sql_fields)
+    sql_fields, sql_values, other_args = parse_args(request)
+    if sql_fields:
+        query = "SELECT COUNT(*) FROM {} WHERE {}".format(other_args.db_table, sql_fields)
+    else:
+        query = "SELECT COUNT(*) FROM {}".format(other_args.db_table)
     database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
                                 password=GLOBAL_CONFIG["DATABASE"]["database_password"],
                                 database=GLOBAL_CONFIG["DATABASE"]["database_name"])
@@ -197,10 +244,8 @@ def count_results():
 def generate_time_series():
     """Generate a time series from search results"""
     #TODO: don't assume year is the field to use
-    query_args, other_args = parse_args(request)
-    metadata_field_types = request.get_json()["metadata"]
-    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
-    if query_args:
+    sql_fields, sql_values, other_args = parse_args(request)
+    if sql_fields:
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {} WHERE {}) t \
                 GROUP BY interval ORDER BY interval".format(other_args.directionSelected, other_args.interval, other_args.interval, other_args.db_table, sql_fields)
@@ -233,14 +278,12 @@ def generate_time_series():
 @application.route("/facets/", methods=["POST"])
 def facets():
     """Retrieve facet result"""
-    query_args, other_args = parse_args(request)
-    metadata_field_types = request.get_json()["metadata"]
-    sql_fields, sql_values = query_builder(query_args, metadata_field_types)
+    sql_fields, sql_values, other_args = parse_args(request)
     database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
                                 password=GLOBAL_CONFIG["DATABASE"]["database_password"],
                                 database=GLOBAL_CONFIG["DATABASE"]["database_name"])
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    if query_args:
+    if sql_fields:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
             other_args.facet, other_args.db_table, sql_fields, other_args.facet)
     else:
@@ -257,40 +300,3 @@ def facets():
     response = jsonify({"facet": other_args.facet, "results": results})
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
-
-def parse_args(api_request):
-    """Parse URL args"""
-    query_args = formArguments()
-    other_args = formArguments()
-    other_args_keys = ["facet", "direction", "source", "target", "stats_field", "db_table",
-                       "filter_field", "filter_value", "page", "id_anchor", "directionSelected",
-                       "timeSeriesInterval"]
-    for key, value in api_request.args.items():
-        if key in other_args_keys:
-            if key == "full":
-                try:
-                    other_args["full"] = eval(value.title())
-                except ValueError:
-                    pass
-            elif key == "page":
-                try:
-                    other_args["page"] = int(value)
-                except TypeError:
-                    pass
-            elif key == "id_anchor":
-                try:
-                    other_args["id_anchor"] = int(value)
-                except TypeError:
-                    pass
-            elif key == "direction":
-                other_args["direction"] = value or "next"
-            elif key == "directionSelected":
-                other_args["directionSelected"] = value or "source"
-            elif key == "timeSeriesInterval":
-                other_args["interval"] = int(value)
-            else:
-                other_args[key] = value
-        else:
-            if value:
-                query_args[key] = value
-    return query_args, other_args
