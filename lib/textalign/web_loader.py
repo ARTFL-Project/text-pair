@@ -12,9 +12,13 @@ import psycopg2
 from psycopg2.extras import execute_values
 from tqdm import tqdm
 
-DEFAULT_FIELD_TYPES = {"source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER"}
+DEFAULT_FIELD_TYPES = {
+    "source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER",
+    "source_passage_length": "INTEGER", "target_passage_length": "INTEGER"
+}
 
 YEAR_FINDER = re.compile(r'^.*?(\d{1,}).*')
+TOKENIZER = re.compile(r"\w+")
 
 
 class WebAppConfig:
@@ -117,7 +121,7 @@ def parse_file(file):
     """Parse tab delimited file and insert into table"""
     with open(file, encoding="utf8", errors="ignore") as input_file:
         for pos, line in enumerate(input_file):
-            if pos < 2:
+            if pos < 1:
                 continue
             fields = line.rstrip("\n")
             yield fields
@@ -153,13 +157,17 @@ def load_db(file, table_name, field_types, searchable_fields):
         field_names.extend(input_file.readline().rstrip("\n").split("\t"))
         fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
         fields_in_table.extend(fields_and_types)
+        fields_in_table.extend(["source_passage_length INTEGER", "target_passage_length INTEGER"])
+        field_names.extend(["source_passage_length", "target_passage_length"])
+    source_passage_index = fields_in_table.index("source_passage TEXT") - 1  # account for rowid which is prepended
+    target_passage_index = fields_in_table.index("target_passage TEXT") - 1
     cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
     cursor.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
     lines = 0
     rows = []
     rowid = 0
     skipped = 0
-    field_num = len(fields_in_table)-1
+    field_num = len(fields_in_table)-3 # we are excluding rowid and passage lengths
     print("Populating main table...")
     for alignment_fields in tqdm(alignments, total=line_count):
         row = zip(field_names[1:], alignment_fields.split("\t"))
@@ -169,6 +177,13 @@ def load_db(file, table_name, field_types, searchable_fields):
             continue
         lines += 1
         rowid += 1
+        try:
+            source_passage_length = len(TOKENIZER.findall(row[source_passage_index]))
+            target_passage_length = len(TOKENIZER.findall(row[target_passage_index]))
+            row.extend([source_passage_length, target_passage_length])
+        except IndexError:
+            skipped += 1
+            continue
         rows.append([rowid] + row)
         if lines == 100:
             insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))

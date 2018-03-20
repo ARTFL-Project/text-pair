@@ -17,10 +17,12 @@
         "source_author": "TEXT",
         "source_title": "TEXT",
         "source_year": "INTEGER",
+        "source_passage_length": "INTEGER",
         "target_passage": "TEXT",
         "target_author": "TEXT",
         "target_title": "TEXT",
-        "target_year": "INTEGER"
+        "target_year": "INTEGER",
+        "target_passage_length": "INTEGER"
     },
     "sourceCitation": [
         {
@@ -67,6 +69,10 @@
             {
                 "label": "Year",
                 "value": "source_year"
+            },
+            {
+                "label": "Passage Length",
+                "value": "source_passage_length"
             }
         ],
         "target": [
@@ -85,6 +91,10 @@
             {
                 "label": "Year",
                 "value": "target_year"
+            },
+            {
+                "label": "Passage Length",
+                "value": "target_passage_length"
             }
         ]
     },
@@ -101,6 +111,10 @@
             {
                 "label": "Year",
                 "value": "source_year"
+            },
+            {
+                "label": "Passage Length",
+                "value": "source_passage_length"
             }
         ],
         "target": [
@@ -115,6 +129,10 @@
             {
                 "label": "Year",
                 "value": "target_year"
+            },
+            {
+                "label": "Passage Length",
+                "value": "source_passage_length"
             }
         ]
     },
