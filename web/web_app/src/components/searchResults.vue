@@ -101,7 +101,7 @@
                             <div class="list-group-item list-group-item-action facet-result" v-for="(field, index) in facetResults.results.slice(0, 100)" :key="index" v-on:click="filteredSearch(facetResults.facet, field.field)">
                                 <div class="row">
                                     <div class="col pr-1 pl-1">{{ field.field || "N/A"}}</div>
-                                    <div class="col-4 pr-1 pl-1 facet-count">{{ field.count }}</div>
+                                    <div class="col-4 pr-1 pl-1 facet-count">{{ field.count.toLocaleString() }}</div>
                                 </div>
                             </div>
                         </div>

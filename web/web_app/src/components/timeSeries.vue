@@ -157,7 +157,7 @@ export default {
                                 }
                             },
                             label: function(tooltipItem) {
-                                return `${tooltipItem.yLabel} shared passages`
+                                return `${tooltipItem.yLabel.toLocaleString()} shared passages`
                             },
                             displayColors: false
                         }
