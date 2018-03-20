@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/pkg/profile"
 	"html"
 	"io/ioutil"
 	"log"
@@ -143,7 +142,6 @@ var cleanStart = regexp.MustCompile(`^\S+ `)
 var cleanEnd = regexp.MustCompile(` \S+$`)
 
 func main() {
-	defer profile.Start().Stop()
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
 	sourceAgainstSource := false
 	sourceFilesDone := make(map[string]bool)
@@ -329,7 +327,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
 	contextSize := flag.Int("context_size", 300, "size of context for before and after matching passages")
 	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
-	duplicateThreshold := flag.Int("duplicate_threshold", 50, "dimiss comparison if two texts share n or more percent of ngrams")
+	duplicateThreshold := flag.Int("duplicate_threshold", 50, "dismiss comparison if two texts share n or more percent of ngrams")
 	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option. Value between 0 and 1")
 	mergeOnNgramDistance := flag.Bool("merge_passages_on_ngram_distance", true, "Merge passages within x number of ngrams: the value used is the matching_window_size defaulting to 20")
 	passageDistance := flag.Float64("passage_distance_multiplier", 0.5, "Combine passage which are within (multiplier*length of previous passage) bytes")
@@ -588,19 +586,6 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, comm
 
 func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) (*os.File, []string, []string) {
 	os.MkdirAll(config.outputPath, 0755)
-
-	// t := time.Now()
-	// year, month, day := t.Date()
-	// hour, minute, _ := t.Clock()
-	// var timeStamp string
-	// if minute < 10 {
-	// 	timeStamp = fmt.Sprintf("%d-%d-%d_%d:0%d", day, month, year, hour, minute)
-	// } else {
-	// 	timeStamp = fmt.Sprintf("%d-%d-%d_%d:%d", day, month, year, hour, minute)
-	// }
-
-	// Save alignment config first
-	// configOutput, err := os.Create(filepath.Join(config.outputPath, fmt.Sprintf("alignment_config_%s.tab", timeStamp)))
 	configOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_config.tab"))
 	configOutput.WriteString("## Alignment Parameters ##\n\n")
 	matchingParameters := []string{
@@ -632,7 +617,6 @@ func createOutputFile(config *matchingParams, sourceMetadata map[string]map[stri
 	configOutput.Sync()
 	configOutput.Close()
 
-	// mergedOutput, err := os.Create(filepath.Join(config.outputPath, fmt.Sprintf("alignments_result_%s.tab", timeStamp)))
 	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_results.tab"))
 	checkErr(err, "createOutputFile")
 	var firstSourceKey string
@@ -658,7 +642,7 @@ func createOutputFile(config *matchingParams, sourceMetadata map[string]map[stri
 		firstRow = append(firstRow, "target_"+field)
 	}
 	firstRow = append(firstRow, []string{"target_start_byte", "target_end_byte"}...)
-	firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after", "passage_similarity", "banality"}...)
+	firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after", "banality"}...)
 	mergedOutput.WriteString(strings.Join(firstRow, "\t"))
 	return mergedOutput, sourceFields, targetFields
 }
@@ -803,13 +787,11 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			}
 			if targetMatch.target.startByte < sourceMatch.source.startByte && targetMatch.target.endByte >= sourceMatch.source.startByte && targetMatch.source.startByte < sourceMatch.target.startByte && targetMatch.source.endByte >= sourceMatch.target.startByte {
 				if targetMatch.target.endByte > sourceMatch.source.endByte {
-					// fmt.Println("1 Extended source from", sourceMatch.source, "to", targetMatch.target)
 					alignments[sourceMatchIndex] = Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams, sourceMatch.banality}
 				} else {
 					sourcePosition := position{targetMatch.target.startByte, sourceMatch.source.endByte, targetMatch.target.startNgramIndex, sourceMatch.source.endNgramIndex}
 					targetPosition := position{targetMatch.source.startByte, sourceMatch.target.endByte, targetMatch.source.startNgramIndex, sourceMatch.target.endNgramIndex}
 					alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams, sourceMatch.banality}
-					// fmt.Println("2 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams})
 				}
 				targetMergeSet[targetMatchIndex] = true
 				break innerTwoWay
@@ -817,7 +799,6 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 				sourcePosition := position{sourceMatch.source.startByte, targetMatch.target.endByte, sourceMatch.source.startNgramIndex, targetMatch.target.endNgramIndex}
 				targetPosition := position{sourceMatch.target.startByte, targetMatch.source.endByte, sourceMatch.target.startNgramIndex, targetMatch.source.endNgramIndex}
 				alignments[sourceMatchIndex] = Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams, sourceMatch.banality}
-				// fmt.Println("3 Extended source from", sourceMatch.source, sourceMatch.target, "to", Alignment{sourcePosition, targetPosition, targetMatch.totalMatchingNgrams})
 				targetMergeSet[targetMatchIndex] = true
 				break innerTwoWay
 			}
@@ -826,7 +807,6 @@ func reverseMatch(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	for targetMatchIndex, targetMatch := range reverseAlignments {
 		if _, ok := targetMergeSet[targetMatchIndex]; !ok {
 			alignments = append(alignments, Alignment{targetMatch.target, targetMatch.source, targetMatch.totalMatchingNgrams, targetMatch.banality})
-			// fmt.Println("Adding", targetMatchIndex, targetMatch.target, targetMatch.source)
 		}
 	}
 	sort.Slice(alignments, func(i, j int) bool {
@@ -995,8 +975,6 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
 			targetPassages := alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)
 			fields = append(fields, targetPassages...)
-			// passageSimilarity := passageSimilarity(sourcePassages[1], targetPassages[1])
-			fields = append(fields, fmt.Sprintf("%d%%", 0))
 			fields = append(fields, fmt.Sprintf("%v", alignment.banality))
 			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
 		}
@@ -1106,42 +1084,4 @@ func mapToSliceOfValues(metadata map[string]string, fields []string) []string {
 		values = append(values, metadata[v])
 	}
 	return values
-}
-
-func passageSimilarity(a, b string) int {
-	// Using Jaro distance code from https://github.com/xrash/smetrics
-	la := float64(len(a))
-	lb := float64(len(b))
-	matchRange := int(math.Floor(math.Max(la, lb)/2.0)) - 1
-	matchRange = int(math.Max(0, float64(matchRange-1)))
-	var matches, halfs float64
-	transposed := make([]bool, len(b))
-
-	for i := 0; i < len(a); i++ {
-		start := int(math.Max(0, float64(i-matchRange)))
-		end := int(math.Min(lb-1, float64(i+matchRange)))
-
-		for j := start; j <= end; j++ {
-			if transposed[j] {
-				continue
-			}
-
-			if a[i] == b[j] {
-				if i != j {
-					halfs++
-				}
-				matches++
-				transposed[j] = true
-				break
-			}
-		}
-	}
-
-	if matches == 0 {
-		return 0
-	}
-
-	transposes := math.Floor(float64(halfs / 2))
-	jaroScore := ((matches / la) + (matches / lb) + (matches-transposes)/matches) / 3.0
-	return int(math.Floor(jaroScore * 100))
 }
