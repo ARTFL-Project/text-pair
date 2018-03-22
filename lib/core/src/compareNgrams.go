@@ -973,7 +973,6 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams, sourceFields []string, targetFields []string, counts *int) {
 	var combinedOutput []string
 	sourceValues := mapToSliceOfValues(sourceMetadata[*sourceDocID], sourceFields)
-	fmt.Println(sourceMetadata, targetMetadata)
 	for _, alignments := range combinedAlignments.alignments {
 		targetValues := mapToSliceOfValues(targetMetadata[alignments.docID], targetFields)
 		*counts += len(alignments.matches)
