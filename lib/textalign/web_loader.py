@@ -14,7 +14,6 @@ from tqdm import tqdm
 
 DEFAULT_FIELD_TYPES = {
     "source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER",
-    "source_passage_length": "INTEGER", "target_passage_length": "INTEGER"
 }
 
 YEAR_FINDER = re.compile(r'^.*?(\d{1,}).*')
@@ -200,7 +199,13 @@ def load_db(file, table_name, field_types, searchable_fields):
     for field in searchable_fields:
         if field not in field_names:
             continue
-        field_type = field_types.get(field, "TEXT").upper()
+        try:
+            field_type = field_types[field].upper()
+        except KeyError:
+            if field == "source_passage_length" or field == "target_passage_length":
+                field_type = "INTEGER"
+            else:
+                field_type = "TEXT"
         if field_type == "TEXT":
             cursor.execute("CREATE INDEX {}_{}_trigrams_index ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
             if not field.endswith("passage"):
@@ -217,7 +222,7 @@ def load_db(file, table_name, field_types, searchable_fields):
     ordered_table = table_name + "_ordered"
     cursor2.execute("DROP TABLE if exists {}".format(ordered_table))
     cursor2.execute("CREATE TABLE {} ({})".format(ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"))
-    cursor.execute("SELECT rowid FROM {} ORDER BY source_year, target_year ASC".format(table_name))
+    cursor.execute("SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte ASC".format(table_name))
     lines = 0
     rows = []
     rowid = 0

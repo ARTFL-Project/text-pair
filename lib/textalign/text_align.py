@@ -30,6 +30,14 @@ def parse_command_line():
                         type=str, default="")
     parser.add_argument("--target_metadata", help="path to target metadata if not from PhiloLogic instance",
                         type=str, default="")
+    parser.add_argument("--only_align", help="skip parsing or ngram generation phase to go straight to the aligner",
+                        type=literal_eval, default=False)
+    parser.add_argument("--source_common_ngrams", help="path to source common ngrams when using --only_align",
+                        type=str, default="")
+    parser.add_argument("--target_common_ngrams", help="path to target common ngrams when using --only_align",
+                        type=str, default="")
+    parser.add_argument("--ngram_index", help="path to ngram index when using --only_align with debug",
+                        type=str, default="")
     parser.add_argument("--load_web_app", help="define whether to load results into a database and build a corresponding web app",
                         type=literal_eval, default=True)
     parser.add_argument("--output_path", help="output path for ngrams and sequence alignment",
@@ -97,61 +105,77 @@ def parse_command_line():
             print("config file does not exist at the location {} you provided.".format(args["config"]))
             print("Exiting...")
             exit()
-    paths = {"source": {}, "target": defaultdict(str)}
-    if tei_parsing["parse_source_files"] is True:
-        paths["source"]["tei_input_files"] = args["source_files"]
-        paths["source"]["parse_output"] = os.path.join(args["output_path"], "source")
-        paths["source"]["input_files_for_ngrams"] = os.path.join(args["output_path"], "source/texts")
-        paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
-        paths["source"]["metadata_path"] = os.path.join(args["output_path"], "source/metadata/metadata.json")
-        paths["source"]["is_philo_db"] = False
     else:
-        paths["source"]["input_files_for_ngrams"] = args["source_files"]
-        paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
-        paths["source"]["metadata_path"] = args["source_metadata"] or os.path.join(args["output_path"], "source/metadata/metadata.json")
-        paths["source"]["is_philo_db"] = args["is_philo_db"]
-    paths["source"]["common_ngrams"] = os.path.join(args["output_path"], "source/index/most_common_ngrams.txt")
-    if args["target_files"]:
-        if tei_parsing["parse_target_files"] is True:
-            paths["target"]["tei_input_files"] = args["target_files"]
-            paths["target"]["parse_output"] = os.path.join(args["output_path"], "target")
-            paths["target"]["input_files_for_ngrams"] = os.path.join(args["output_path"], "target/texts")
-            paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
-            paths["target"]["metadata_path"] = os.path.join(args["output_path"], "target/metadata/metadata.json")
-            paths["target"]["is_philo_db"] = False
+        print("No config file provided.")
+        print("Exiting...")
+        exit()
+    paths = {"source": {}, "target": defaultdict(str)}
+    if args['only_align'] is False:
+        if tei_parsing["parse_source_files"] is True:
+            paths["source"]["tei_input_files"] = args["source_files"]
+            paths["source"]["parse_output"] = os.path.join(args["output_path"], "source")
+            paths["source"]["input_files_for_ngrams"] = os.path.join(args["output_path"], "source/texts")
+            paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
+            paths["source"]["metadata_path"] = os.path.join(args["output_path"], "source/metadata/metadata.json")
+            paths["source"]["is_philo_db"] = False
         else:
-            paths["target"]["input_files_for_ngrams"] = args["target_files"]
-            paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
-            paths["target"]["metadata_path"] = args["target_metadata"] or os.path.join(args["output_path"], "target/metadata/metadata.json")
-            paths["target"]["is_philo_db"] = args["is_philo_db"]
-        paths["target"]["common_ngrams"] = os.path.join(args["output_path"], "target/index/most_common_ngrams.txt")
-    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"]
+            paths["source"]["input_files_for_ngrams"] = args["source_files"]
+            paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
+            paths["source"]["metadata_path"] = args["source_metadata"] or os.path.join(args["output_path"], "source/metadata/metadata.json")
+            paths["source"]["is_philo_db"] = args["is_philo_db"]
+        paths["source"]["common_ngrams"] = os.path.join(args["output_path"], "source/index/most_common_ngrams.txt")
+        matching_params["ngram_index"] = os.path.join(args["output_path"], "source/index/index.tab")
+        if args["target_files"]:
+            if tei_parsing["parse_target_files"] is True:
+                paths["target"]["tei_input_files"] = args["target_files"]
+                paths["target"]["parse_output"] = os.path.join(args["output_path"], "target")
+                paths["target"]["input_files_for_ngrams"] = os.path.join(args["output_path"], "target/texts")
+                paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
+                paths["target"]["metadata_path"] = os.path.join(args["output_path"], "target/metadata/metadata.json")
+                paths["target"]["is_philo_db"] = False
+            else:
+                paths["target"]["input_files_for_ngrams"] = args["target_files"]
+                paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
+                paths["target"]["metadata_path"] = args["target_metadata"] or os.path.join(args["output_path"], "target/metadata/metadata.json")
+                paths["target"]["is_philo_db"] = args["is_philo_db"]
+            paths["target"]["common_ngrams"] = os.path.join(args["output_path"], "target/index/most_common_ngrams.txt")
+    else:
+        paths["source"]["ngram_output_path"] = args["source_files"].replace("/ngrams", "") # we add the path furth below, so we assume it's been given on the CLI
+        paths["source"]["metadata_path"] = args["target_metadata"]
+        paths["source"]["common_ngrams"] = args["source_common_ngrams"]
+        matching_params["ngram_index"] = args["ngram_index"]
+        paths["target"]["ngram_output_path"] = args["target_files"].replace("/ngrams", "")
+        paths["target"]["metadata_path"] = args["target_metadata"]
+        paths["target"]["common_ngrams"] = args["target_common_ngrams"]
+
+    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"], args["only_align"]
 
 def run_alignment():
     """Main function to start sequence alignment"""
-    paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug = parse_command_line()
-    if tei_parsing["parse_source_files"] is True:
-        print("\n### Parsing source TEI files ###")
-        parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"],
-                           words_to_keep=tei_parsing["source_words_to_keep"], cores=workers, debug=debug)
-        parser.get_metadata()
-        parser.get_text()
-    print("\n### Generating source ngrams ###")
-    ngrams = Ngrams(**preprocessing_params["source"], debug=debug)
-    ngrams.generate(paths["source"]["input_files_for_ngrams"], paths["source"]["ngram_output_path"],
-                    metadata=paths["source"]["metadata_path"], is_philo_db=paths["source"]["is_philo_db"],
-                    workers=workers)
-    if paths["target"]:
-        if tei_parsing["parse_target_files"] is True:
-            print("\n### Parsing target TEI files ###")
-            parser = TEIParser(paths["target"]["tei_input_files"], output_path=paths["target"]["parse_output"], cores=workers,
-                               words_to_keep=tei_parsing["target_words_to_keep"], debug=debug)
+    paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align = parse_command_line()
+    if only_align is False:
+        if tei_parsing["parse_source_files"] is True:
+            print("\n### Parsing source TEI files ###")
+            parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"],
+                            words_to_keep=tei_parsing["source_words_to_keep"], cores=workers, debug=debug)
             parser.get_metadata()
             parser.get_text()
-        print("\n### Generating target ngrams ###")
-        ngrams = Ngrams(**preprocessing_params["target"], debug=debug)
-        ngrams.generate(paths["target"]["input_files_for_ngrams"], paths["target"]["ngram_output_path"],
-                        metadata=paths["target"]["metadata_path"], is_philo_db=paths["target"]["is_philo_db"], workers=workers)
+        print("\n### Generating source ngrams ###")
+        ngrams = Ngrams(**preprocessing_params["source"], debug=debug)
+        ngrams.generate(paths["source"]["input_files_for_ngrams"], paths["source"]["ngram_output_path"],
+                        metadata=paths["source"]["metadata_path"], is_philo_db=paths["source"]["is_philo_db"],
+                        workers=workers)
+        if paths["target"]:
+            if tei_parsing["parse_target_files"] is True:
+                print("\n### Parsing target TEI files ###")
+                parser = TEIParser(paths["target"]["tei_input_files"], output_path=paths["target"]["parse_output"], cores=workers,
+                                words_to_keep=tei_parsing["target_words_to_keep"], debug=debug)
+                parser.get_metadata()
+                parser.get_text()
+            print("\n### Generating target ngrams ###")
+            ngrams = Ngrams(**preprocessing_params["target"], debug=debug)
+            ngrams.generate(paths["target"]["input_files_for_ngrams"], paths["target"]["ngram_output_path"],
+                            metadata=paths["target"]["metadata_path"], is_philo_db=paths["target"]["is_philo_db"], workers=workers)
     print("\n### Starting sequence alignment ###")
     if paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         paths["target"]["ngram_output_path"] = paths["source"]["ngram_output_path"]

@@ -17,10 +17,9 @@ from math import floor
 
 from multiprocess import Pool
 from tqdm import tqdm
-from unidecode import unidecode
 
 from mmh3 import hash as hash32
-from Stemmer import Stemmer
+from text_preprocessing import PreProcessor, modernize
 
 try:
     from philologic.DB import DB
@@ -29,9 +28,7 @@ except ImportError:
 
 
 # See https://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python/266162#266162
-PUNCTUATION_MAP = dict.fromkeys(i for i in range(sys.maxunicode) if unicodedata.category(chr(i)).startswith('P'))
 TRIM_LAST_SLASH = re.compile(r'/\Z')
-NUMBERS = re.compile(r'\d')
 
 PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5, 'sent': 6, 'word': 7}
 
@@ -40,13 +37,14 @@ class Ngrams:
     """Generate Ngrams"""
 
     def __init__(self, text_object_level="doc", ngram=3, gap=0, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, minimum_word_length=2, word_order=True, debug=False):
+                 lowercase=True, minimum_word_length=2, word_order=True, modernize=True, debug=False):
         self.config = {
             "ngram": ngram,
             "window": ngram + gap,
             "word_order": word_order,
             "numbers": numbers,
             "stemmer": stemmer,
+            "modernize": modernize,
             "language": language,
             "lowercase": lowercase,
             "minimum_word_length": minimum_word_length,
@@ -54,10 +52,6 @@ class Ngrams:
             "stopwords": stopwords,
             "text_object_level": text_object_level
         }
-        if stopwords is not None and os.path.isfile(stopwords):
-            self.stopwords = self.__get_stopwords(stopwords)
-        else:
-            self.stopwords = set()
         self.debug = debug
         self.input_path = ""
         self.output_path = ""
@@ -65,56 +59,9 @@ class Ngrams:
         self.db_name = ""
         self.db_path = ""
 
-    def __get_stopwords(self, path):
-        stopwords = set([])
-        stemmer = Stemmer(self.config["language"])
-        if self.config["lemmatizer"]:
-            lemmatizer = self.__get_lemmatizer()
-        else:
-            lemmatizer = None
-        with open(path, encoding='utf8') as stopword_file:
-            for line in stopword_file:
-                stopwords.add(self.__normalize(line.strip(), stemmer, lemmatizer))
-        return stopwords
-
-    def __get_lemmatizer(self):
-        lemmas = {}
-        with open(self.config["lemmatizer"], encoding='utf8') as input_file:
-            for line in input_file:
-                word, lemma = line.strip().split("\t")
-                lemmas[word] = lemma
-        return lemmas
-
-    def __normalize(self, input_str, stemmer, lemmatizer):
-        if self.config["numbers"] is False:
-            if NUMBERS.search(input_str):
-                return ""
-        input_str = input_str.translate(PUNCTUATION_MAP)
-        if input_str == "":
-            return ""
-        input_str = html.unescape(input_str)
-        if self.config["lowercase"]:
-            input_str = input_str.lower()
-        if self.config["lemmatizer"]:
-            try:
-                input_str = lemmatizer[input_str]
-            except KeyError:
-                try:
-                    input_str = lemmatizer[unidecode(input_str)]
-                except KeyError:
-                    pass
-        if self.config["stemmer"]:
-            input_str = stemmer.stemWord(input_str)
-        if len(input_str) < int(self.config["minimum_word_length"]):
-            return ""
-        if self.config["numbers"] is True:
-            if NUMBERS.search(input_str):
-                return ""
-        return unidecode(input_str)
-
     def __write_to_disk(self, ngrams, text_id):
         with open("%s/debug/%s_ngrams.json" % (self.output_path, text_id), "w") as output:
-            json.dump(ngrams, output)
+            json.dump(list(ngrams), output)
 
     def __build_text_index(self, ngrams, text_id):
         """Build a file representation used for ngram comparisons"""
@@ -147,12 +94,16 @@ class Ngrams:
                 ngram_config.set("PREPROCESSING", param, repr(value))
             ngram_config.write(ini_file)
 
-
     def generate(self, file_path, output_path, is_philo_db=False, db_path=None, metadata=None, workers=4, ram="50%"):
         """Generate n-grams."""
-        files = glob(os.path.join(file_path, "*"))
+        if os.path.isfile(file_path):
+            files = [file_path]
+        else:
+            files = glob(os.path.join(file_path, "*"))
         os.system('rm -rf {}/ngrams'.format(output_path))
         os.system('mkdir -p {}/ngrams'.format(output_path))
+        if self.debug:
+            os.system("mkdir {}/debug".format(output_path))
         os.system('mkdir -p {}/metadata'.format(output_path))
         os.system("mkdir -p {}/index".format(output_path))
         os.system("mkdir -p {}/config".format(output_path))
@@ -205,14 +156,10 @@ class Ngrams:
 
     def process_file(self, input_file):
         """Convert each file into an inverted index of ngrams"""
-        if self.config["stemmer"]:
-            stemmer = Stemmer(self.config["language"])  # we initialize here since it creates a deadlock with in self
-        else:
-            stemmer = None
-        if self.config["lemmatizer"]:
-            lemmatizer = self.__get_lemmatizer()  # we initialize here since it is faster than copying between procs
-        else:
-            lemmatizer = None
+        preprocessor = PreProcessor(language=self.config["language"], stemmer=self.config["stemmer"],
+                                    lemmatizer=self.config["lemmatizer"], modernize=True, lowercase=self.config["lowercase"],
+                                    min_word_length=self.config["minimum_word_length"], strip_numbers=self.config["numbers"],
+                                    stopwords=self.config["stopwords"])
         doc_ngrams = []
         metadata = {}
         with open(input_file) as filehandle:
@@ -222,8 +169,11 @@ class Ngrams:
             for line in filehandle:
                 word_obj = json.loads(line.strip())
                 word = word_obj["token"]
-                word = self.__normalize(word, stemmer, lemmatizer)
-                if word in self.stopwords:
+                if self.config["modernize"] is True:
+                    word = modernize(word, self.config["language"])
+                word = preprocessor.lemmatizer.get(word, word)
+                word = preprocessor.normalize(word)
+                if word == "":
                     continue
                 position = word_obj["position"]
                 if self.config["text_object_level"] == 'doc':
