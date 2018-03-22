@@ -141,7 +141,7 @@ def parse_command_line():
             paths["target"]["common_ngrams"] = os.path.join(args["output_path"], "target/index/most_common_ngrams.txt")
     else:
         paths["source"]["ngram_output_path"] = args["source_files"].replace("/ngrams", "") # we add the path furth below, so we assume it's been given on the CLI
-        paths["source"]["metadata_path"] = args["target_metadata"]
+        paths["source"]["metadata_path"] = args["source_metadata"]
         paths["source"]["common_ngrams"] = args["source_common_ngrams"]
         matching_params["ngram_index"] = args["ngram_index"]
         paths["target"]["ngram_output_path"] = args["target_files"].replace("/ngrams", "")
@@ -179,84 +179,65 @@ def run_alignment():
     print("\n### Starting sequence alignment ###")
     if paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         paths["target"]["ngram_output_path"] = paths["source"]["ngram_output_path"]
-    if matching_params:
-        os.system("compareNgrams \
-                  --output_path={}/results \
-                  --threads={} \
-                  --source_files={}/ngrams \
-                  --target_files={}/ngrams \
-                  --source_metadata={} \
-                  --target_metadata={} \
-                  --source_common_ngrams={} \
-                  --target_common_ngrams={} \
-                  --sort_by={} \
-                  --source_batch={} \
-                  --target_batch={} \
-                  --most_common_ngram_threshold={} \
-                  --common_ngrams_limit={} \
-                  --matching_window_size={} \
-                  --max_gap={} \
-                  --minimum_matching_ngrams={} \
-                  --minimum_matching_ngrams_in_window={} \
-                  --minimum_matching_ngrams_in_docs={} \
-                  --context_size={} \
-                  --banal_ngrams={} \
-                  --duplicate_threshold={} \
-                  --merge_passages_on_byte_distance={} \
-                  --merge_passages_on_ngram_distance={} \
-                  --passage_distance_multiplier={} \
-                  --one_way_matching={} \
-                  --debug={} \
-                  --ngram_index={}"
-                  .format(
-                      output_path,
-                      workers,
-                      paths["source"]["ngram_output_path"],
-                      paths["target"]["ngram_output_path"],
-                      paths["source"]["metadata_path"],
-                      paths["target"]["metadata_path"],
-                      paths["source"]["common_ngrams"],
-                      paths["target"]["common_ngrams"],
-                      matching_params["sort_by"],
-                      matching_params["source_batch"],
-                      matching_params["target_batch"],
-                      matching_params["most_common_ngram_threshold"],
-                      matching_params["common_ngrams_limit"],
-                      matching_params["matching_window_size"],
-                      matching_params["max_gap"],
-                      matching_params["minimum_matching_ngrams"],
-                      matching_params["minimum_matching_ngrams_in_window"],
-                      matching_params["minimum_matching_ngrams_in_docs"],
-                      matching_params["context_size"],
-                      matching_params["banal_ngrams"],
-                      matching_params["duplicate_threshold"],
-                      matching_params["merge_passages_on_byte_distance"],
-                      matching_params["merge_passages_on_ngram_distance"],
-                      matching_params["passage_distance_multiplier"],
-                      str(matching_params["one_way_matching"]).lower(),
-                      str(debug).lower(),
-                      matching_params["ngram_index"],
-                  ))
-    else:
-        os.system("compareNgrams \
-                  --output_path={}/results \
-                  --source_files={}/ngrams \
-                  --target_files={}/ngrams \
-                  --source_metadata={}/metadata/metadata.json \
-                  --target_metadata={}/metadata/metadata.json \
-                  --source_common_ngrams={} \
-                  --target_common_ngrams={} \
-                  --debug={}"
-                  .format(
-                      output_path,
-                      paths["source"]["ngram_output_path"],
-                      paths["target"]["ngram_output_path"],
-                      paths["source"]["metadata_path"],
-                      paths["target"]["metadata_path"],
-                      paths["source"]["common_ngrams"],
-                      paths["target"]["common_ngrams"],
-                      str(debug).lower()
-                  ))
+    command = "compareNgrams \
+                --output_path={}/results \
+                --threads={} \
+                --source_files={}/ngrams \
+                --target_files={}/ngrams \
+                --source_metadata={} \
+                --target_metadata={} \
+                --source_common_ngrams={} \
+                --target_common_ngrams={} \
+                --sort_by={} \
+                --source_batch={} \
+                --target_batch={} \
+                --most_common_ngram_threshold={} \
+                --common_ngrams_limit={} \
+                --matching_window_size={} \
+                --max_gap={} \
+                --minimum_matching_ngrams={} \
+                --minimum_matching_ngrams_in_window={} \
+                --minimum_matching_ngrams_in_docs={} \
+                --context_size={} \
+                --banal_ngrams={} \
+                --duplicate_threshold={} \
+                --merge_passages_on_byte_distance={} \
+                --merge_passages_on_ngram_distance={} \
+                --passage_distance_multiplier={} \
+                --one_way_matching={} \
+                --debug={} \
+                --ngram_index={}".format(
+                    output_path,
+                    workers,
+                    paths["source"]["ngram_output_path"],
+                    paths["target"]["ngram_output_path"],
+                    paths["source"]["metadata_path"],
+                    paths["target"]["metadata_path"],
+                    paths["source"]["common_ngrams"],
+                    paths["target"]["common_ngrams"],
+                    matching_params["sort_by"],
+                    matching_params["source_batch"],
+                    matching_params["target_batch"],
+                    matching_params["most_common_ngram_threshold"],
+                    matching_params["common_ngrams_limit"],
+                    matching_params["matching_window_size"],
+                    matching_params["max_gap"],
+                    matching_params["minimum_matching_ngrams"],
+                    matching_params["minimum_matching_ngrams_in_window"],
+                    matching_params["minimum_matching_ngrams_in_docs"],
+                    matching_params["context_size"],
+                    matching_params["banal_ngrams"],
+                    matching_params["duplicate_threshold"],
+                    matching_params["merge_passages_on_byte_distance"],
+                    matching_params["merge_passages_on_ngram_distance"],
+                    matching_params["passage_distance_multiplier"],
+                    str(matching_params["one_way_matching"]).lower(),
+                    str(debug).lower(),
+                    matching_params["ngram_index"],
+                )
+    if debug:
+        print("Running alignment with following arguments:\n{}".format(" ".join(command.split())))
+    os.system(command)
     if web_app_config["load"] is True:
         output_file = os.path.join(output_path, "results/alignment_results.tab")
         create_web_app(output_file, web_app_config["table_name"], web_app_config["field_types"],

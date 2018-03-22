@@ -881,7 +881,6 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 			maxSourceDistance <= previousAlignment.source.endByte &&
 			previousAlignment.target.startByte <= maxTargetDistance &&
 			maxTargetDistance <= previousAlignment.target.endByte {
-			println("case 1")
 			currentAlignmentMerged = true
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
@@ -890,7 +889,6 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 			sourceNgramDistance <= maxNgramDistance &&
 			targetNgramDistance >= 0 &&
 			targetNgramDistance <= maxNgramDistance {
-			println("case 2")
 			currentAlignmentMerged = true
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
@@ -900,25 +898,20 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 			var sourcePosition position
 			currentAlignmentMerged = true
 			if currentAlignment.source.endNgramIndex >= previousAlignment.source.endNgramIndex {
-				println("case 3")
 				sourcePosition = position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			} else {
-				println("case 4")
 				sourcePosition = previousAlignment.source
 			}
 			if currentAlignment.target.startNgramIndex <= previousAlignment.target.startNgramIndex && // intersection of current target with previous target with extended end
 				currentAlignment.target.startNgramIndex <= previousAlignment.target.endNgramIndex {
 				if currentAlignment.target.endNgramIndex >= previousAlignment.target.endNgramIndex {
-					println("case 5")
 					targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
 					previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, previousAlignment.banality}
 				} else {
-					println("case 6")
 					previousAlignment = Alignment{sourcePosition, previousAlignment.target, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, previousAlignment.banality}
 				}
 			} else if targetNgramDistance >= 0 && // current target is within targetNgramDistance
 				targetNgramDistance <= config.matchingWindowSize {
-				println("case 7")
 				targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
 				previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, previousAlignment.banality}
 			}
@@ -980,6 +973,7 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams, sourceFields []string, targetFields []string, counts *int) {
 	var combinedOutput []string
 	sourceValues := mapToSliceOfValues(sourceMetadata[*sourceDocID], sourceFields)
+	fmt.Println(sourceMetadata, targetMetadata)
 	for _, alignments := range combinedAlignments.alignments {
 		targetValues := mapToSliceOfValues(targetMetadata[alignments.docID], targetFields)
 		*counts += len(alignments.matches)

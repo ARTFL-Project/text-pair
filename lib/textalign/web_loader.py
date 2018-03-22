@@ -226,7 +226,7 @@ def load_db(file, table_name, field_types, searchable_fields):
     lines = 0
     rows = []
     rowid = 0
-    for row in tqdm(cursor, total=line_count):
+    for row in tqdm(cursor, total=line_count, leave=False):
         lines += 1
         rowid += 1
         rows.append((rowid, row[0],))
