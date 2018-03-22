@@ -173,7 +173,7 @@ class Ngrams:
                     word = modernize(word, self.config["language"])
                 word = preprocessor.lemmatizer.get(word, word)
                 word = preprocessor.normalize(word)
-                if word == "":
+                if word == "" or len(word) < self.config["minimum_word_length"]:
                     continue
                 position = word_obj["position"]
                 if self.config["text_object_level"] == 'doc':

@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 DEFAULT_FIELD_TYPES = {
     "source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER",
+    "source_start_byte": "INTEGER", "target_start_byte": "INTEGER"
 }
 
 YEAR_FINDER = re.compile(r'^.*?(\d{1,}).*')
@@ -23,7 +24,8 @@ TOKENIZER = re.compile(r"\w+")
 class WebAppConfig:
     """ Web app config class"""
 
-    def __init__(self, field_types, db_name, api_server):
+    def __init__(self, field_types, db_name, api_server, source_database,
+                 source_database_link, target_database, target_database_link):
         with open("/var/lib/text-align/config/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         for field, field_type in field_types.items():
@@ -31,6 +33,8 @@ class WebAppConfig:
         self.options["apiServer"] = api_server
         self.options["appPath"] = os.path.join("text-align", db_name)
         self.options["databaseName"] = db_name
+        self.options["sourceDB"] = OrderedDict([("philoDB", source_database), ("link", source_database_link)])
+        self.options["targetDB"] = OrderedDict([("philoDB", target_database), ("link", target_database_link)])
 
     def __call__(self):
         return self.options
@@ -108,9 +112,18 @@ def parse_command_line():
                     table = value
                 elif key == "web_application_directory":
                     web_application_directory = value
+                elif key == "source_database":
+                    source_database = value
+                elif key == "source_database_link":
+                    source_database_link = value
+                elif key == "target_database":
+                    target_database = value
+                elif key == "target_database_link":
+                    target_database_link = value
                 else:
                     field_types[key] = value
-    return args["file"], table, field_types, web_application_directory, api_server
+    return args["file"], table, field_types, web_application_directory, api_server, \
+           source_database, source_database_link, target_database, target_database_link
 
 def count_lines(filename):
     """Count lines in file"""
@@ -207,12 +220,12 @@ def load_db(file, table_name, field_types, searchable_fields):
             else:
                 field_type = "TEXT"
         if field_type == "TEXT":
-            cursor.execute("CREATE INDEX {}_{}_trigrams_index ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
+            cursor.execute("CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
             if not field.endswith("passage"):
-                cursor.execute("CREATE INDEX {}_{}_index ON {} USING HASH({})".format(field, table_name, table_name, field))
+                cursor.execute("CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field))
         elif not field.endswith("year") and field_type == "INTEGER": # year is a special case used for results ordering
-            cursor.execute("CREATE INDEX {}_{}_index ON {} USING BTREE({})".format(field, table_name, table_name, field))
-    cursor.execute("CREATE INDEX year_{}_index ON {} USING BTREE(source_year, target_year)".format(table_name, table_name))
+            cursor.execute("CREATE INDEX {}_{}_idx ON {} USING BTREE({})".format(field, table_name, table_name, field))
+    cursor.execute("CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(table_name, table_name))
     database.commit()
 
     if skipped != 0:
@@ -222,7 +235,7 @@ def load_db(file, table_name, field_types, searchable_fields):
     ordered_table = table_name + "_ordered"
     cursor2.execute("DROP TABLE if exists {}".format(ordered_table))
     cursor2.execute("CREATE TABLE {} ({})".format(ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"))
-    cursor.execute("SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte ASC".format(table_name))
+    cursor.execute("SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC".format(table_name))
     lines = 0
     rows = []
     rowid = 0
@@ -241,7 +254,7 @@ def load_db(file, table_name, field_types, searchable_fields):
             rows = []
             lines = 0
     print("Creating indexes...")
-    cursor2.execute("CREATE INDEX {}_source_year_target_year_rowid_index ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
+    cursor2.execute("CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
     database.commit()
     database.close()
     return field_names
@@ -258,18 +271,23 @@ def set_up_app(web_config, db_path):
     if web_config.webServer == "Apache":
         os.system("cp /var/lib/text-align/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
 
-def create_web_app(file, table, field_types, web_app_dir, api_server):
+def create_web_app(file, table, field_types, web_app_dir, api_server, source_database,
+                   source_database_link, target_database, target_database_link):
     """Main routine"""
-    web_config = WebAppConfig(field_types, table, api_server)
+    web_config = WebAppConfig(field_types, table, api_server, source_database,
+                              source_database_link, target_database, target_database_link)
     fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
     web_config.update(fields_in_table)
     set_up_app(web_config, os.path.join("{}/{}/".format(web_app_dir, table)))
-    print("DB viewable at {}/{}".format(web_config.apiServer.replace("-api", ""), table))
+    print("DB viewable at {}".format(os.path.join(web_config.apiServer.replace("-api", ""), table)))
 
 def main():
     """Main function"""
-    file, table, field_types, web_app_dir, api_server = parse_command_line()
-    create_web_app(file, table, field_types, web_app_dir, api_server)
+    file, table, field_types, web_app_dir, api_server, source_database, \
+    source_database_link, target_database, target_database_link = parse_command_line()
+    create_web_app(file, table, field_types, web_app_dir, api_server,
+                   source_database, source_database_link, target_database,
+                   target_database_link)
 
 if __name__ == '__main__':
     main()
