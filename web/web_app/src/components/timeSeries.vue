@@ -1,14 +1,17 @@
 <template>
-    <div id="time-series-chart" class="mt-5">
-        <div class="row">
-            <div class="loading" v-if="loading">
-                Loading...
+    <div id="time-series-chart" class="mt-3">
+         <div class="row">
+            <div class="m-4" style="font-size: 120%" v-if="error">
+                No results for your query
             </div>
-            <div v-if="error" class="error">
-                {{ error }}
+            <search-arguments></search-arguments>
+        </div>
+        <div class="row mt-3">
+            <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%);" v-if="loading">
+                <atom-spinner :animation-duration="800" :size="65" color="#000"/>
             </div>
             <div class="col">
-                <canvas id="myChart" height="700"></canvas>
+                <canvas id="myChart" height="800"></canvas>
             </div>
         </div>
     </div>
@@ -17,12 +20,18 @@
 <script>
 import { EventBus } from "../main.js"
 import Chart from "chart.js"
+import searchArguments from "./searchArguments";
+import { AtomSpinner } from 'epic-spinners';
 
 export default {
     name: "timeSeries",
+    components: {
+        searchArguments,
+        AtomSpinner
+    },
     data() {
         return {
-            loading: false,
+            loading: true,
             done: false,
             results: { alignments: [] },
             lastRowID: null,
@@ -51,6 +60,7 @@ export default {
             let params = { ...this.$route.query }
             this.interval = parseInt(params.timeSeriesInterval)
             params.db_table = this.$globalConfig.databaseName
+            this.loading = true
             this.$http
                 .post(
                     `${this.$globalConfig
@@ -64,6 +74,7 @@ export default {
                 .then(response => {
                     this.loading = false
                     this.done = true
+                    EventBus.$emit("searchArgsUpdate", {counts: response.data.counts, searchParams : params})
                     this.drawChart(response.data.results)
                 })
                 .catch(error => {
@@ -85,7 +96,6 @@ export default {
                 data.push(key.count)
             }
             var vm = this
-            console.log("INTERVAL", this.interval)
             vm.chart = new Chart(ctx, {
                 type: "bar",
                 data: {
@@ -147,7 +157,7 @@ export default {
                                 }
                             },
                             label: function(tooltipItem) {
-                                return `${tooltipItem.yLabel} shared passages`
+                                return `${tooltipItem.yLabel.toLocaleString()} shared passages`
                             },
                             displayColors: false
                         }

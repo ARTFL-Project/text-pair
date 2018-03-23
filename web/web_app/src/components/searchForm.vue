@@ -1,7 +1,10 @@
 <template>
     <div id="search-form" class="card rounded-0 mt-3 shadow-1">
-        <div class="card-body rounded-0">
-            <form @submit.prevent="submitForm">
+        <div class="card-body rounded-0" style="position:relative">
+            <h5 id="show-form" class="p-2 hide" @click="toggleSearchForm()">
+                Show search form
+            </h5>
+            <form @submit.prevent @keyup.enter="searchSelected()">
                 <div class="row">
                     <div class="col">
                         <h6 class="text-center pb-2">
@@ -32,7 +35,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="my-dropdown mb-3">
+                <div id="banality-filter" class="my-dropdown mb-3">
                     <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ banalitySelected }}&nbsp;&nbsp;&#9662;</button>
                     <ul class="my-dropdown-menu shadow-1">
                         <li class="my-dropdown-item" v-for="(option, optionIndex) in formBanalityValues" :key="optionIndex" @click="banalitySelect(optionIndex)">{{ option.label }}</li>
@@ -40,10 +43,10 @@
                 </div>
                 <ul class="nav nav-tabs" id="myTab" role="tablist">
                     <li class="nav-item">
-                        <a class="nav-link active" id="search-alignments-tab" data-toggle="tab" href="#search-alignments" role="tab" aria-controls="search-alignments" aria-expanded="true">Search Alignments</a>
+                        <a class="nav-link active" id="search-alignments-tab" data-toggle="tab" href="#search-alignments" role="tab" aria-controls="search-alignments" aria-expanded="true" @click="searchSelected = search">Search Alignments</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" id="time-series-tab" data-toggle="tab" href="#time-series" role="tab" aria-controls="time-series" aria-expanded="true">Display Time Series</a>
+                        <a class="nav-link" id="time-series-tab" data-toggle="tab" href="#time-series" role="tab" aria-controls="time-series" aria-expanded="true" @click="searchSelected = displayTimeSeries">Display Time Series</a>
                     </li>
                 </ul>
                 <div class="tab-content mt-3" id="myTabContent">
@@ -89,19 +92,19 @@ export default {
             timeSeriesInterval: this.$globalConfig.timeSeriesIntervals[0],
             formBanalityValues: [
                 {
-                    label: "Filter all banalities",
-                    value: false
-                },
-                {
                     label: "Don't filter banalities",
                     value: ""
+                },
+                {
+                    label: "Filter all banalities",
+                    value: false
                 },
                 {
                     label: "Search only banalities",
                     value: true
                 }
             ],
-            banalitySelected: "Filter all banalities",
+            banalitySelected: "Don't filter banalities",
             directions: [
                 {
                     label: "Source",
@@ -115,7 +118,8 @@ export default {
             directionSelected: {
                     label: "Source",
                     value: "source"
-                }
+                },
+            searchSelected: this.search
         }
     },
     created() {
@@ -126,6 +130,9 @@ export default {
                     vm.formValues[key] = updatedParams[key]
                 }
             }
+        })
+        EventBus.$on("toggleSearchForm", function() {
+            vm.toggleSearchForm()
         })
     },
     methods: {
@@ -149,7 +156,7 @@ export default {
                     }
                 }
             }
-            formValues.banality = false
+            formValues.banality = ""
             formValues.timeSeriesInterval = this.$globalConfig.timeSeriesIntervals[0].value
             formValues.directionSelected = "source"
             return formValues
@@ -160,13 +167,11 @@ export default {
             this.toggleDropdown()
         },
         search() {
+            this.toggleSearchForm()
             this.$router.push(`/search?${this.paramsToUrl(this.formValues)}`)
         },
-        submitForm() {
-            var element = document.querySelector("myTabContent")
-            console.log(element, "NOT WORKING")
-        },
         displayTimeSeries() {
+            this.toggleSearchForm()
             this.$router.push(`/time?${this.paramsToUrl(this.formValues)}`)
         },
         clearForm() {
@@ -188,12 +193,30 @@ export default {
             this[key] = item
             this.formValues[key] = item.value
             this.toggleDropdown()
+        },
+        toggleSearchForm() {
+            let form = document.querySelector("form")
+            if (form.style.display == 'none') {
+                document.querySelector("#show-form").classList.toggle("hide")
+                Velocity(form, "slideDown", {
+                duration: 200,
+                easing: "ease-out",
+            })
+            } else {
+                Velocity(form, "slideUp", {
+                duration: 200,
+                easing: "ease-out",
+                complete: function() {
+                    document.querySelector("#show-form").classList.toggle("hide")
+                }
+            })
+            }
         }
     }
 }
 </script>
 
-<style>
+<style scoped>
 .input-group > span {
     font-size: 0.85rem !important;
 }
@@ -228,6 +251,30 @@ my-dropdown .btn:active {
 
 .my-dropdown-item:hover {
     background: #ddd;
+}
+
+.input-group-text, .form-control {
+    font-size: inherit;
+}
+
+.hide {
+    opacity: 0;
+    max-height: 0 !important;
+    margin: 0;
+    padding: 0;
+}
+
+#show-form {
+    position: absolute;
+    transition: all .2s ease-out;
+    cursor: pointer;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+#show-form:hover {
+    color: #565656;
 }
 </style>
 

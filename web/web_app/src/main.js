@@ -6,7 +6,6 @@ import router from "./router";
 import store from "./store";
 import axios from "axios";
 import Velocity from "velocity-animate";
-import InfiniteLoading from "vue-infinite-loading";
 
 import globalConfig from "../appConfig.json";
 
@@ -15,15 +14,7 @@ Vue.prototype.$http = axios;
 Vue.prototype.$globalConfig = globalConfig;
 
 export const EventBus = new Vue(); // To pass messages between components
-// export const InfiniteLoading = InfiniteLoading
 
-// export default {
-//     components: {
-//         InfiniteLoading
-//     }
-// };
-
-Vue.component('infinite-loading', InfiniteLoading)
 
 Vue.mixin({
     methods: {
