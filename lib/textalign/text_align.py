@@ -208,7 +208,6 @@ def run_alignment():
                 --merge_passages_on_byte_distance={} \
                 --merge_passages_on_ngram_distance={} \
                 --passage_distance_multiplier={} \
-                --one_way_matching={} \
                 --debug={} \
                 --ngram_index={}".format(
                     output_path,
@@ -236,7 +235,6 @@ def run_alignment():
                     matching_params["merge_passages_on_byte_distance"],
                     matching_params["merge_passages_on_ngram_distance"],
                     matching_params["passage_distance_multiplier"],
-                    str(matching_params["one_way_matching"]).lower(),
                     str(debug).lower(),
                     matching_params["ngram_index"],
                 )
