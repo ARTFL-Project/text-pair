@@ -690,6 +690,7 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			neededMatches = config.minimumMatchingNgrams
 		}
 		maxGap := config.maxGap
+		matchingWindowSize := config.matchingWindowSize
 	innerMatchingLoop:
 		for pos, match := range matches[matchIndex+1:] {
 			source, target := match.source, match.target
@@ -717,9 +718,9 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 						m.inAlignment = false
 					} else {
 						m.sourceAnchor = source.index
-						m.sourceWindowBoundary = m.sourceAnchor + config.matchingWindowSize
+						m.sourceWindowBoundary = m.sourceAnchor + matchingWindowSize
 						m.targetAnchor = target.index
-						m.targetWindowBoundary = m.targetAnchor + config.matchingWindowSize
+						m.targetWindowBoundary = m.targetAnchor + matchingWindowSize
 						m.matchesInCurrentWindow = 0
 					}
 				}
@@ -748,8 +749,9 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			if config.flexGap { // TODO: make sure we are not causing weirdness with window requirements
 				neededMatches--
 				if neededMatches == 0 {
-					if maxGap < config.matchingWindowSize {
+					if maxGap < matchingWindowSize {
 						maxGap += config.minimumMatchingNgrams
+						matchingWindowSize += config.minimumMatchingNgrams
 					}
 					neededMatches = config.minimumMatchingNgrams
 				}
