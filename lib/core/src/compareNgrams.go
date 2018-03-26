@@ -42,6 +42,7 @@ type ngramMatch struct {
 type matchingParams struct {
 	matchingWindowSize            int32
 	maxGap                        int32
+	flexGap                       bool
 	minimumMatchingNgrams         int32
 	minimumMatchingNgramsInWindow int32
 	commonNgramsLimit             float32
@@ -322,6 +323,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	commonNgramsLimit := flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")
 	matchingWindowSize := flag.Int("matching_window_size", 20, "size of sliding window for matches")
 	maxGap := flag.Int("max_gap", 10, "maximum gap between two matching ngrams")
+	flexGap := flag.Bool("flex_gap", false, "Gradually increment the max_gap once minimum_matching_ngrams is met")
 	minimumMatchingNgrams := flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match")
 	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngrams_in_window", 3, "minimum matching ngrams per sliding window")
 	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
@@ -336,7 +338,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	flag.Parse()
 	oneWayMatching, _ := strconv.ParseBool(*oneWayMatchingArg)
 	debug, _ := strconv.ParseBool(*debugArg)
-	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
+	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), *flexGap, int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
 		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), oneWayMatching, *duplicateThreshold, *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
 	ngramIndex := make(map[int32]string)
 	if config.debug && *ngramIndexLocation != "" {
@@ -591,6 +593,7 @@ func createOutputFile(config *matchingParams, sourceMetadata map[string]map[stri
 	matchingParameters := []string{
 		"matchingWindowSize",
 		"maxGap",
+		"flexGap",
 		"minimumMatchingNgrams",
 		"minimumMatchingNgramsInWindow",
 		"commonNgramsLimit",
@@ -663,6 +666,7 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	m := &matchValues{}
 	m.lastSourcePosition = 0
 	m.inAlignment = false
+	var neededMatches int32
 	for matchIndex, currentAnchor := range matches {
 		if currentAnchor.source.index < m.lastSourcePosition {
 			continue
@@ -689,6 +693,10 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			m.debug = append(m.debug, ngramIndex[currentAnchor.ngram])
 		}
 		currentMatchesLength := len(matches)
+		if config.flexGap {
+			neededMatches = config.minimumMatchingNgrams
+		}
+		maxGap := config.maxGap
 	innerMatchingLoop:
 		for pos, match := range matches[matchIndex+1:] {
 			source, target := match.source, match.target
@@ -738,12 +746,21 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 				break innerMatchingLoop
 			}
 			m.lastSourcePosition = source.index
-			m.maxSourceGap = m.lastSourcePosition + config.maxGap
+			m.maxSourceGap = m.lastSourcePosition + maxGap
 			m.lastTargetPosition = target.index
-			m.maxTargetGap = m.lastTargetPosition + config.maxGap
+			m.maxTargetGap = m.lastTargetPosition + maxGap
 			m.previousSourceIndex = source.index
 			m.matchesInCurrentWindow++
 			m.matchesInCurrentAlignment++
+			if config.flexGap { // TODO: make sure we are not causing weirdness with window requirements
+				neededMatches--
+				if neededMatches == 0 {
+					if maxGap < config.matchingWindowSize {
+						maxGap += config.minimumMatchingNgrams
+					}
+					neededMatches = config.minimumMatchingNgrams
+				}
+			}
 			m.lastMatch = []indexedNgram{source, target} // save last matching ngrams
 			if _, ok := mostCommonNgrams[match.ngram]; ok {
 				m.commonNgramMatches++

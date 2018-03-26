@@ -63,6 +63,25 @@
                         </div>
                     </div>
                 </transition-group>
+                <nav aria-label="Page navigation" v-if="done">
+                    <ul class="pagination justify-content-center mb-4">
+                        <li class="page-item" v-if="results.page > 1">
+                            <a class="page-link" v-on:click="previousPage()" aria-label="Previous">
+                                <span aria-hidden="true">&laquo;</span>
+                                <span class="sr-only">Previous</span>
+                            </a>
+                        </li>
+                        <li class="page-item">
+                            <a class="page-link">Page {{ results.page }}</a>
+                        </li>
+                        <li class="page-item" v-if="this.resultsLeft > 0">
+                            <a class="page-link" v-on:click="nextPage()" aria-label="Next">
+                                <span aria-hidden="true">&raquo;</span>
+                                <span class="sr-only">Next</span>
+                            </a>
+                        </li>
+                    </ul>
+                </nav>
             </div>
             <div class="col-3 pl-0 position-relative">
                 <div class="card rounded-0 shadow-1">
@@ -109,25 +128,6 @@
                 </div>
             </div>
         </div>
-        <nav aria-label="Page navigation" v-if="done">
-            <ul class="pagination justify-content-center mb-4">
-                <li class="page-item" v-if="results.page > 1">
-                    <a class="page-link" v-on:click="previousPage()" aria-label="Previous">
-                        <span aria-hidden="true">&laquo;</span>
-                        <span class="sr-only">Previous</span>
-                    </a>
-                </li>
-                <li class="page-item">
-                    <a class="page-link">Page {{ results.page }}</a>
-                </li>
-                <li class="page-item" v-if="this.resultsLeft > 0">
-                    <a class="page-link" v-on:click="nextPage()" aria-label="Next">
-                        <span aria-hidden="true">&raquo;</span>
-                        <span class="sr-only">Next</span>
-                    </a>
-                </li>
-            </ul>
-        </nav>
     </div>
 </template>
 
@@ -176,6 +176,7 @@ export default {
             this.loading = true
             let params = { ...this.$route.query }
             params.db_table = this.$globalConfig.databaseName
+            EventBus.$emit("searchArgsUpdate", {counts: '', searchParams : params})
             this.$http.post(`${this.$globalConfig.apiServer}/search_alignments/?${this.paramsToUrl(params)}`, {
                 metadata: this.$globalConfig.metadataTypes
             }).then(response => {
@@ -191,8 +192,6 @@ export default {
                     EventBus.$emit("searchArgsUpdate", {counts: counts, searchParams : params})
                     this.resultsLeft = counts - (this.results.start_position + this.results.alignments.length)
                 }).catch(error => {
-                    // this.loading = false
-                    // this.error = error.toString();
                     console.log(error)
                 });
                 Array.from(document.getElementsByClassName("facet-list")).forEach(function(element) {

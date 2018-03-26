@@ -158,8 +158,7 @@ class Ngrams:
         """Convert each file into an inverted index of ngrams"""
         preprocessor = PreProcessor(language=self.config["language"], stemmer=self.config["stemmer"],
                                     lemmatizer=self.config["lemmatizer"], modernize=True, lowercase=self.config["lowercase"],
-                                    min_word_length=self.config["minimum_word_length"], strip_numbers=self.config["numbers"],
-                                    stopwords=self.config["stopwords"])
+                                    strip_numbers=self.config["numbers"], stopwords=self.config["stopwords"])
         doc_ngrams = []
         metadata = {}
         with open(input_file) as filehandle:
