@@ -31,8 +31,6 @@ class formArguments():
             return 1
         elif item == "id_anchor":
             return 0
-        elif item == "full":
-            return False
         elif item == "direction":
             return "next"
         elif item == "interval":
@@ -88,27 +86,13 @@ def parse_args(request):
                        "timeSeriesInterval"]
     for key, value in request.args.items():
         if key in other_args_keys:
-            if key == "full":
-                try:
-                    other_args["full"] = eval(value.title())
-                except ValueError:
-                    pass
-            elif key == "page":
-                try:
-                    other_args["page"] = int(value)
-                except TypeError:
-                    pass
-            elif key == "id_anchor":
-                try:
-                    other_args["id_anchor"] = int(value)
-                except TypeError:
-                    pass
+            if key == "page" or key == "id_anchor" or key == "timeSeriesInterval":
+                if value.isdigit():
+                    other_args[key] = int(value)
             elif key == "direction":
                 other_args["direction"] = value or "next"
             elif key == "directionSelected":
                 other_args["directionSelected"] = value or "source"
-            elif key == "timeSeriesInterval":
-                other_args["interval"] = int(value)
             else:
                 other_args[key] = value
         else:

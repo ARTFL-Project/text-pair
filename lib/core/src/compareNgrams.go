@@ -659,7 +659,6 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	m := &matchValues{}
 	m.lastSourcePosition = 0
 	m.inAlignment = false
-	var neededMatches int32
 	for matchIndex, currentAnchor := range matches {
 		if currentAnchor.source.index < m.lastSourcePosition {
 			continue
@@ -686,9 +685,6 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			m.debug = append(m.debug, ngramIndex[currentAnchor.ngram])
 		}
 		currentMatchesLength := len(matches)
-		if config.flexGap {
-			neededMatches = config.minimumMatchingNgrams
-		}
 		maxGap := config.maxGap
 		matchingWindowSize := config.matchingWindowSize
 	innerMatchingLoop:
@@ -707,7 +703,7 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 					m.inAlignment = false
 				}
 			}
-			if source.index > m.maxSourceGap {
+			if source.index > m.maxSourceGap && m.matchesInCurrentWindow < config.minimumMatchingNgramsInWindow {
 				m.inAlignment = false
 			}
 			if source.index > m.sourceWindowBoundary || target.index > m.targetWindowBoundary {
@@ -746,14 +742,13 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			m.previousSourceIndex = source.index
 			m.matchesInCurrentWindow++
 			m.matchesInCurrentAlignment++
-			if config.flexGap { // TODO: make sure we are not causing weirdness with window requirements
-				neededMatches--
-				if neededMatches == 0 {
-					if maxGap < matchingWindowSize {
-						maxGap += config.minimumMatchingNgrams
-						matchingWindowSize += config.minimumMatchingNgrams
-					}
-					neededMatches = config.minimumMatchingNgrams
+			if config.flexGap {
+				if m.matchesInCurrentAlignment == config.minimumMatchingNgrams {
+					maxGap += config.minimumMatchingNgrams
+					matchingWindowSize += config.minimumMatchingNgrams
+				} else if m.matchesInCurrentAlignment > config.minimumMatchingNgrams {
+					maxGap++
+					matchingWindowSize++
 				}
 			}
 			m.lastMatch = []indexedNgram{source, target} // save last matching ngrams

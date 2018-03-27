@@ -371,12 +371,12 @@ export default {
     color: dodgerblue;
 }
 
-.added {
+/deep/ .added {
     color: darkblue;
     font-weight: 700;
 }
 
-.removed {
+/deep/ .removed {
     color: green;
     font-weight: 700;
     text-decoration: line-through;
