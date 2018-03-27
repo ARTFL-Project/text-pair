@@ -87,6 +87,11 @@ def parse_command_line():
                         preprocessing_params["target"][key] = value
             for key, value in dict(config["MATCHING"]).items():
                 if value or key not in matching_params:
+                    if key == "flex_gap":
+                        if value.lower() == "yes" or value.lower() == "true":
+                            value = "true"
+                        else:
+                            value = "false"
                     matching_params[key] = value
             if args["load_web_app"] is True:
                 web_app_config["field_types"] = {}
@@ -193,6 +198,7 @@ def run_alignment():
                 --common_ngrams_limit={} \
                 --matching_window_size={} \
                 --max_gap={} \
+                --flex_gap={} \
                 --minimum_matching_ngrams={} \
                 --minimum_matching_ngrams_in_window={} \
                 --minimum_matching_ngrams_in_docs={} \
@@ -202,7 +208,6 @@ def run_alignment():
                 --merge_passages_on_byte_distance={} \
                 --merge_passages_on_ngram_distance={} \
                 --passage_distance_multiplier={} \
-                --one_way_matching={} \
                 --debug={} \
                 --ngram_index={}".format(
                     output_path,
@@ -220,6 +225,7 @@ def run_alignment():
                     matching_params["common_ngrams_limit"],
                     matching_params["matching_window_size"],
                     matching_params["max_gap"],
+                    matching_params["flex_gap"],
                     matching_params["minimum_matching_ngrams"],
                     matching_params["minimum_matching_ngrams_in_window"],
                     matching_params["minimum_matching_ngrams_in_docs"],
@@ -229,7 +235,6 @@ def run_alignment():
                     matching_params["merge_passages_on_byte_distance"],
                     matching_params["merge_passages_on_ngram_distance"],
                     matching_params["passage_distance_multiplier"],
-                    str(matching_params["one_way_matching"]).lower(),
                     str(debug).lower(),
                     matching_params["ngram_index"],
                 )

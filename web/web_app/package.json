@@ -12,7 +12,7 @@
   "dependencies": {
     "axios": "^0.16.2",
     "chart.js": "^2.7.2",
-    "diff": "^3.4.0",
+    "diff": "^3.5.0",
     "epic-spinners": "^1.0.3",
     "velocity-animate": "^1.5.1",
     "vue": "^2.5.13",

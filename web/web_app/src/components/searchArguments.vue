@@ -3,6 +3,17 @@
         <div class="mb-1 p-2" style="font-size: 1rem" v-if="counts && !error">
             {{ counts }} results for the following query:
         </div>
+        <div class="m-2 pt-2 pb-1" v-if="banality">
+            <span class="metadata-label">
+                Banality filter
+            </span>
+            <span class="metadata-value">
+                {{ banality }}
+            </span>
+            <span class="remove-metata">
+                <span class="corner-btn destroy right" @click="removeMetadata({fieldName: 'banality'})">x</span>
+            </span>
+        </div>
         <div class="row pl-2" v-if="!error">
             <div class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams" :key="groupIndex">
                 <h6 class="text-center text-capitalize">{{ paramGroup.direction }} Parameters:</h6>
@@ -34,13 +45,17 @@ export default {
             EventBus.$on("searchArgsUpdate", params => {
                 vm.counts = params.counts.toLocaleString()
                 vm.searchParams = this.processParams(params.searchParams)
+                if ("banality" in params.searchParams && params.searchParams.banality.length > 0) {
+                    vm.banality = params.searchParams.banality
+                }
             })
         },
         data() {
             return {
                counts: null,
                error: null,
-               searchParams: null
+               searchParams: null,
+               banality: null
             }
         },
         methods: {

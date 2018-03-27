@@ -158,10 +158,11 @@ class Ngrams:
         """Convert each file into an inverted index of ngrams"""
         preprocessor = PreProcessor(language=self.config["language"], stemmer=self.config["stemmer"],
                                     lemmatizer=self.config["lemmatizer"], modernize=True, lowercase=self.config["lowercase"],
-                                    min_word_length=self.config["minimum_word_length"], strip_numbers=self.config["numbers"],
-                                    stopwords=self.config["stopwords"])
+                                    strip_numbers=self.config["numbers"], stopwords=self.config["stopwords"])
         doc_ngrams = []
         metadata = {}
+        if self.debug:
+            debug_ngrams = []
         with open(input_file) as filehandle:
             ngrams = deque([])
             ngram_obj = deque([])
@@ -171,6 +172,8 @@ class Ngrams:
                 word = word_obj["token"]
                 if self.config["modernize"] is True:
                     word = modernize(word, self.config["language"])
+                if len(word) < self.config["minimum_word_length"]:
+                    continue
                 word = preprocessor.lemmatizer.get(word, word)
                 word = preprocessor.normalize(word)
                 if word == "" or len(word) < self.config["minimum_word_length"]:
@@ -184,7 +187,7 @@ class Ngrams:
                     current_text_id = text_id
                 if current_text_id != text_id:
                     if self.debug:
-                        self.__write_to_disk(ngrams, current_text_id)
+                        self.__write_to_disk(debug_ngrams, current_text_id)
                     if self.metadata_done is False:
                         metadata[current_text_id] = self.__get_metadata(current_text_id)
                     self.__build_text_index(ngrams, current_text_id)
@@ -203,10 +206,12 @@ class Ngrams:
                         hashed_ngram = hash32(current_ngram)
                         ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
                         doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
+                        if self.debug is True:
+                            debug_ngrams.append(value)
                     ngram_obj.popleft()
             if self.config["text_object_level"] == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
                 if self.debug:
-                    self.__write_to_disk(ngrams, current_text_id)
+                    self.__write_to_disk(debug_ngrams, current_text_id)
                 if self.metadata_done is False:
                     metadata[current_text_id] = self.__get_metadata(current_text_id)
                 self.__build_text_index(ngrams, current_text_id)
