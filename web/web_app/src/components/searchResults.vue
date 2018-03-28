@@ -59,7 +59,12 @@
                             </div>
                         </div>
                         <div class="text-muted text-center mb-2">
-                            <a class="diff-btn" diffed="false" @click="showDifferences(alignment.source_passage, alignment.target_passage)">Show differences</a>
+                            <a class="diff-btn" diffed="false" @click="showDifferences(alignment.source_passage, alignment.target_passage)">
+                                Show differences
+                            </a>
+                            <div class="loading position-absolute" style="display:none; left: 50%; transform: translateX(-50%);">
+                                <atom-spinner :animation-duration="800" :size="25" color="#000"/>
+                            </div>
                         </div>
                     </div>
                 </transition-group>
@@ -136,6 +141,7 @@ import { EventBus } from '../main.js';
 import * as differ from 'diff';
 import searchArguments from "./searchArguments";
 import { AtomSpinner } from 'epic-spinners';
+import Worker from 'worker-loader!./diffStrings';
 
 export default {
     name: "searchResults",
@@ -288,32 +294,40 @@ export default {
         },
         showDifferences(sourceText, targetText) {
             let parent = event.srcElement.parentNode.parentNode
+            let loading = parent.querySelector(".loading")
             let sourceElement = parent.querySelector(".source-passage")
             let targetElement = parent.querySelector(".target-passage")
             if (event.srcElement.getAttribute("diffed") == "false") {
-                let differences = differ.diffChars(sourceText, targetText, { ignoreCase: true })
-                let newSourceString = ""
-                let newTargetString = ""
-                let deleted = ""
-                for (let text of differences) {
-                    if (!text.hasOwnProperty("added") && !text.hasOwnProperty("removed")) {
-                        newTargetString += text.value
-                        newSourceString += text.value
-                    } else if (text.added) {
-                        newTargetString += `<span class="added">${text.value}</span>`
-                    } else {
-                        newSourceString += `<span class="removed">${text.value}</span>`
+                loading.style.display = "initial"
+                let outerEvent = event
+                this.worker = new Worker()
+                this.worker.postMessage([sourceText, targetText])
+                this.worker.onmessage = function(response) {
+                    let differences = response.data
+                    let newSourceString = ""
+                    let newTargetString = ""
+                    let deleted = ""
+                    for (let text of differences) {
+                        if (!text.hasOwnProperty("added") && !text.hasOwnProperty("removed")) {
+                            newTargetString += text.value
+                            newSourceString += text.value
+                        } else if (text.added) {
+                            newTargetString += `<span class="added">${text.value}</span>`
+                        } else {
+                            newSourceString += `<span class="removed">${text.value}</span>`
+                        }
                     }
+                    sourceElement.innerHTML = newSourceString
+                    targetElement.innerHTML = newTargetString
+                    outerEvent.srcElement.setAttribute("diffed", "true")
+                    loading.style.display = "none"
+                    outerEvent.srcElement.textContent = "Hide differences"
                 }
-                sourceElement.innerHTML = newSourceString
-                targetElement.innerHTML = newTargetString
-                event.srcElement.setAttribute("diffed", "true")
-                event.srcElement.innerHTML = "Hide differences"
             } else {
                 sourceElement.innerHTML = sourceText
                 targetElement.innerHTML = targetText
                 event.srcElement.setAttribute("diffed", "false")
-                event.srcElement.innerHTML = "Show differences"
+                event.srcElement.textContent = "Show differences"
             }
 
         },
