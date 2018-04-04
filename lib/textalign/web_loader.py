@@ -6,6 +6,7 @@ import configparser
 import json
 import os
 import re
+import sys
 from collections import OrderedDict
 
 import psycopg2
@@ -87,13 +88,13 @@ class WebAppConfig:
         self.options["targetCitation"] = target_fields
 
 
-def parse_command_line():
+def parse_command_line(args):
     """Command line parsing function"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", help="configuration file used to override defaults",
                         type=str, default="")
     parser.add_argument("--file", help="alignment file to load", type=str, default=None)
-    args = vars(parser.parse_args())
+    args = vars(parser.parse_args(args=args))
     if args["file"] is None:
         print("Please supply a file argument\nExiting....")
         exit()
@@ -281,13 +282,17 @@ def create_web_app(file, table, field_types, web_app_dir, api_server, source_dat
     set_up_app(web_config, os.path.join("{}/{}/".format(web_app_dir, table)))
     print("DB viewable at {}".format(os.path.join(web_config.apiServer.replace("-api", ""), table)))
 
-def main():
+def load_from_cli():
+    """Called from textalign script"""
+    main(sys.argv[2:])
+
+def main(args):
     """Main function"""
     file, table, field_types, web_app_dir, api_server, source_database, \
-    source_database_link, target_database, target_database_link = parse_command_line()
+    source_database_link, target_database, target_database_link = parse_command_line(args)
     create_web_app(file, table, field_types, web_app_dir, api_server,
                    source_database, source_database_link, target_database,
                    target_database_link)
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv[1:])

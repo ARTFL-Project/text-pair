@@ -46,13 +46,13 @@ type matchingParams struct {
 	minimumMatchingNgrams         int32
 	minimumMatchingNgramsInWindow int32
 	commonNgramsLimit             float32
-	minimumMatchingNgramsInDocs   int32
+	minimumMatchingNgramsInDocs   int
 	contextSize                   int32
 	banalNgrams                   int
 	mergeOnByteDistance           bool
 	mergeOnNgramDistance          bool
 	passageDistanceMultiplier     float32
-	duplicateThreshold            int
+	duplicateThreshold            float64
 	sourceBatch                   int
 	targetBatch                   int
 	outputPath                    string
@@ -98,8 +98,9 @@ type position struct {
 }
 
 type alignmentsPerDoc struct {
-	docID   string
-	matches []Alignment
+	docID      string
+	matches    []Alignment
+	duplicates [][]string
 }
 
 // CombinedAlignments holds all alignments for a single source doc
@@ -163,6 +164,7 @@ func main() {
 		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
 	mergedOutput, sourceFields, targetFields := createOutputFile(config, sourceMetadata, targetMetadata)
+	duplicateFilesOutput := creatDuplicateFilesOutputFile(config)
 	counts := 0
 	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
 		prefixString := "Loading source files"
@@ -228,8 +230,12 @@ func main() {
 					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config *matchingParams, commonNgrams map[int32]bool) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
+						duplicates := [][]string{}
 					innerTargetMatching:
 						for _, targetFile := range splitTargets {
+							if len(duplicates) > 0 {
+								fmt.Println(duplicates)
+							}
 							if sourceAgainstSource {
 								if sourceMetadata[sourceFile.DocID]["filename"] == targetMetadata[targetFile.DocID]["filename"] {
 									continue innerTargetMatching
@@ -241,9 +247,13 @@ func main() {
 							if config.debug {
 								debugOutput = createDebugOutputFile(config, sourceFile.DocID, targetFile.DocID)
 							}
-							sourceTargetIntersection := getIntersection(&sourceFile, &targetFile)
-							if int32(len(sourceTargetIntersection)) < config.minimumMatchingNgramsInDocs {
-								continue
+							sourceTargetIntersection, totalCommonNgrams := getIntersection(&sourceFile, &targetFile)
+							if len(sourceTargetIntersection) < config.minimumMatchingNgramsInDocs {
+								continue innerTargetMatching
+							} else if float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100 > config.duplicateThreshold {
+								duplicates = append(duplicates, []string{sourceMetadata[sourceFile.DocID]["filename"], targetMetadata[targetFile.DocID]["filename"]})
+								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, []Alignment{}, duplicates})
+								continue innerTargetMatching
 							}
 							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams, commonNgrams)
 							var matches = []ngramMatch{}
@@ -267,7 +277,7 @@ func main() {
 								alignments = mergeWithPrevious(alignments, config, debugOutput)
 							}
 							if len(alignments) > 0 {
-								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments})
+								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments, duplicates})
 							}
 							debugOutput.Sync()
 							debugOutput.Close()
@@ -283,7 +293,7 @@ func main() {
 					}
 				}
 				if len(combinedAlignments.alignments) > 0 {
-					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, config, sourceFields, targetFields, &counts)
+					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, sourceFields, targetFields, &counts)
 				}
 				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
 					localSourceFilesDone[sourceFile.DocID] = true
@@ -331,8 +341,8 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	debugArg := flag.String("debug", "false", "set debugging: you need to also provide the --ngram_index option with a path to the ngram index to debug the matching logic.")
 	flag.Parse()
 	debug, _ := strconv.ParseBool(*debugArg)
-	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), *flexGap, int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, int32(*minimumMatchingNgramsInDocs),
-		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), *duplicateThreshold, *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
+	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), *flexGap, int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, *minimumMatchingNgramsInDocs,
+		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), float64(*duplicateThreshold), *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
 	ngramIndex := make(map[int32]string)
 	if config.debug && *ngramIndexLocation != "" {
 		ngramIndex = loadNgramIndex(*ngramIndexLocation)
@@ -541,22 +551,25 @@ func loadNgramIndex(fileLocation string) map[int32]string {
 	return ngramIndex
 }
 
-func getIntersection(sourceFile *docIndex, targetFile *docIndex) map[int32]int {
+func getIntersection(sourceFile *docIndex, targetFile *docIndex) (map[int32]int, int) {
 	intersectCount := make(map[int32]int)
+	totalCommonNgrams := 0
 	if sourceFile.NgramLength < targetFile.NgramLength {
 		for ngram := range sourceFile.Ngrams {
 			if _, ok := targetFile.Ngrams[ngram]; ok {
 				intersectCount[ngram] = len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram])
+				totalCommonNgrams++
 			}
 		}
 	} else {
 		for ngram := range targetFile.Ngrams {
 			if _, ok := sourceFile.Ngrams[ngram]; ok {
 				intersectCount[ngram] = len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram])
+				totalCommonNgrams++
 			}
 		}
 	}
-	return intersectCount
+	return intersectCount, totalCommonNgrams
 }
 
 func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, commonNgrams map[int32]bool) map[int32]bool {
@@ -652,6 +665,13 @@ func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDoc
 	debugOutput, err := os.Create(filepath.Join(debugOutputPath, outputFile))
 	checkErr(err, "createDebugOutputFile")
 	return debugOutput
+}
+
+func creatDuplicateFilesOutputFile(config *matchingParams) *os.File {
+	duplicateFiles, err := os.Create(fmt.Sprintf(filepath.Join(config.outputPath, "duplicate_files.txt")))
+	checkErr(err, "creatDuplicateFilesOutputFile")
+	duplicateFiles.WriteString("## Duplicates of source files in target files\n")
+	return duplicateFiles
 }
 
 func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMatch, config *matchingParams, mostCommonNgrams map[int32]bool, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
@@ -893,7 +913,7 @@ func writeDebugOutput(m *matchValues, config *matchingParams, currentAnchor *ngr
 }
 
 func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string, sourceMetadata map[string]map[string]string,
-	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams, sourceFields []string, targetFields []string, counts *int) {
+	targetMetadata map[string]map[string]string, f *os.File, duplicatesFile *os.File, config *matchingParams, sourceFields []string, targetFields []string, counts *int) {
 	var combinedOutput []string
 	sourceValues := mapToSliceOfValues(sourceMetadata[*sourceDocID], sourceFields)
 	for _, alignments := range combinedAlignments.alignments {
@@ -912,6 +932,9 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			fields = append(fields, targetPassages...)
 			fields = append(fields, fmt.Sprintf("%v", alignment.banality))
 			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
+		}
+		for _, duplicate := range alignments.duplicates {
+			duplicatesFile.WriteString(fmt.Sprintf("%s\n", strings.Join(duplicate, "\t")))
 		}
 	}
 	f.WriteString("\n" + strings.Join(combinedOutput, "\n"))
