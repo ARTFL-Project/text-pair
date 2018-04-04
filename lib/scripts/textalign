@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Sequence aligner script"""
 
+import sys
+
 from textalign import run_alignment
+from textalign import load_from_cli
 
 if __name__ == '__main__':
-    run_alignment()
+    if sys.argv[1] == '--load_only_web_app':
+        load_from_cli()
+    else:
+        run_alignment()
