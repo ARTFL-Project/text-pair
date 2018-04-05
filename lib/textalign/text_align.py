@@ -60,13 +60,6 @@ def parse_command_line():
                         tei_parsing[key] = True
                     else:
                         tei_parsing[key] = False
-                elif key == "custom_parser" and value:
-                    try:
-                        from pydoc import locate
-                        TEIParser = locate(value)
-                    except Exception:
-                        print("Importing custom parser failed")
-                        exit()
                 else:
                     if not value:
                         if key.startswith("output_source"):
