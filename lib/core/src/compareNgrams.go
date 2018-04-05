@@ -100,7 +100,7 @@ type position struct {
 type alignmentsPerDoc struct {
 	docID      string
 	matches    []Alignment
-	duplicates [][]string
+	duplicates []string
 }
 
 // CombinedAlignments holds all alignments for a single source doc
@@ -230,12 +230,9 @@ func main() {
 					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config *matchingParams, commonNgrams map[int32]bool) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
-						duplicates := [][]string{}
+						// duplicates := [][]string{}
 					innerTargetMatching:
 						for _, targetFile := range splitTargets {
-							if len(duplicates) > 0 {
-								fmt.Println(duplicates)
-							}
 							if sourceAgainstSource {
 								if sourceMetadata[sourceFile.DocID]["filename"] == targetMetadata[targetFile.DocID]["filename"] {
 									continue innerTargetMatching
@@ -251,8 +248,8 @@ func main() {
 							if len(sourceTargetIntersection) < config.minimumMatchingNgramsInDocs {
 								continue innerTargetMatching
 							} else if float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100 > config.duplicateThreshold {
-								duplicates = append(duplicates, []string{sourceMetadata[sourceFile.DocID]["filename"], targetMetadata[targetFile.DocID]["filename"]})
-								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, []Alignment{}, duplicates})
+								// duplicates = append(duplicates, []string{sourceMetadata[sourceFile.DocID]["filename"], targetMetadata[targetFile.DocID]["filename"]})
+								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, []Alignment{}, []string{sourceMetadata[sourceFile.DocID]["filename"], targetMetadata[targetFile.DocID]["filename"]}})
 								continue innerTargetMatching
 							}
 							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams, commonNgrams)
@@ -277,7 +274,7 @@ func main() {
 								alignments = mergeWithPrevious(alignments, config, debugOutput)
 							}
 							if len(alignments) > 0 {
-								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments, duplicates})
+								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments, []string{}})
 							}
 							debugOutput.Sync()
 							debugOutput.Close()
@@ -933,8 +930,8 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			fields = append(fields, fmt.Sprintf("%v", alignment.banality))
 			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
 		}
-		for _, duplicate := range alignments.duplicates {
-			duplicatesFile.WriteString(fmt.Sprintf("%s\n", strings.Join(duplicate, "\t")))
+		if len(alignments.duplicates) > 0 {
+			duplicatesFile.WriteString(fmt.Sprintf("%s\n", strings.Join(alignments.duplicates, "\t")))
 		}
 	}
 	f.WriteString("\n" + strings.Join(combinedOutput, "\n"))
