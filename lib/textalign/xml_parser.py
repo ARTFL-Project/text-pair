@@ -206,7 +206,7 @@ class TEIParser:
         header = file_content[start_header_index:end_header_index]
         header = convert_entities(header)
         if self.debug:
-            print("parsing %s header..." % file.name)
+            print("parsing %s header..." % file)
         parser = etree.XMLParser(recover=True)
         try:
             tree = etree.fromstring(header, parser)
@@ -235,7 +235,7 @@ class TEIParser:
             ]
             metadata = self.create_year_field(metadata)
             if self.debug:
-                print(data)
+                print(metadata)
             metadata["options"] = {"metadata_xpaths": trimmed_metadata_xpaths}
         except etree.XMLSyntaxError:
             return file_id, metadata, file
