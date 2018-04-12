@@ -323,8 +323,8 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	targetCommonNgramsArg := flag.String("target_common_ngrams", "", "path to a text file containing the most common ngrams in target files")
 	mostCommonNgramThreshold := flag.Int("most_common_ngram_threshold", 1000, "take the n most common ngrams from source and target common ngrams")
 	commonNgramsLimit := flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")
-	matchingWindowSize := flag.Int("matching_window_size", 20, "size of sliding window for matches")
-	maxGap := flag.Int("max_gap", 10, "maximum gap between two matching ngrams")
+	matchingWindowSize := flag.Int("matching_window_size", 30, "size of sliding window for matches")
+	maxGap := flag.Int("max_gap", 15, "maximum gap between two matching ngrams")
 	flexGap := flag.Bool("flex_gap", false, "Gradually increment the max_gap once minimum_matching_ngrams is met")
 	minimumMatchingNgrams := flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match")
 	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngrams_in_window", 3, "minimum matching ngrams per sliding window")
@@ -699,7 +699,7 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 		}
 		m.lastMatch = []indexedNgram{currentAnchor.source, currentAnchor.target}
 		if config.debug {
-			m.debug = append(m.debug, ngramIndex[currentAnchor.ngram])
+			m.debug = []string{ngramIndex[currentAnchor.ngram]}
 		}
 		currentMatchesLength := len(matches)
 		maxGap := config.maxGap
@@ -741,15 +741,13 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			if !m.inAlignment {
 				if m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
 					addAlignment(m, config, &alignments)
-					// Looking for small match within max_gap
-				} else if (m.lastMatch[0].index-currentAnchor.source.index) <= config.maxGap && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
-					addAlignment(m, config, &alignments)
+					if config.debug {
+						writeDebugOutput(m, true, &currentAnchor, debugOutput)
+					}
+				} else if config.debug {
+					writeDebugOutput(m, false, &currentAnchor, debugOutput)
 				}
 				m.lastSourcePosition = m.lastMatch[0].index + 1 // Make sure we start the next match at index that follows last source match
-				if config.debug {
-					writeDebugOutput(m, config, &currentAnchor, debugOutput)
-				}
-				m.debug = []string{}
 				break innerMatchingLoop
 			}
 			m.lastSourcePosition = source.index
@@ -800,7 +798,7 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 			previousAlignment = currentAlignment
 			continue
 		}
-		currentAlignmentMerged := true
+		currentAlignmentMerged := false
 		if config.mergeOnByteDistance {
 			distanceValue := int32((float32(previousAlignment.source.endByte - previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
 			maxSourceDistance := currentAlignment.source.startByte - distanceValue
@@ -877,16 +875,7 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 	return mergedAlignments
 }
 
-func writeDebugOutput(m *matchValues, config *matchingParams, currentAnchor *ngramMatch, debugOutput *os.File) {
-	match := false
-	if float32(m.commonNgramMatches/m.matchesInCurrentAlignment) < config.commonNgramsLimit {
-		if m.matchesInCurrentAlignment >= config.minimumMatchingNgramsInWindow {
-			match = true
-			// Looking for small match within max_gap
-		} else if (m.lastMatch[0].index-currentAnchor.source.index) <= config.maxGap && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
-			match = true
-		}
-	}
+func writeDebugOutput(m *matchValues, match bool, currentAnchor *ngramMatch, debugOutput *os.File) {
 	var stringOutput string
 	if match {
 		stringOutput = "\n\n## MATCH ##\n"
@@ -964,13 +953,13 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	passage = bytes.Trim(passage, "\x00")
 	passage = bytes.Replace(passage, []byte("\xc2\xa0"), []byte(" "), -1) // remove non-breaking spaces
 	text := string(passage)
-	text = html.UnescapeString(text)
 	text = tags.ReplaceAllString(text, "")
+	text = brokenBeginTags.ReplaceAllString(text, "")
+	text = brokenEndTags.ReplaceAllString(text, "")
+	text = html.UnescapeString(text)
 	text = strings.Replace(text, "\\n", "\n", -1)
 	text = strings.Replace(text, "\\t", "\t", -1)
 	text = strings.Replace(text, "\\r", "\r", -1)
-	text = brokenBeginTags.ReplaceAllString(text, "")
-	text = brokenEndTags.ReplaceAllString(text, "")
 	text = strings.Replace(text, "\t", " ", -1)
 	text = tabEntities.ReplaceAllString(text, " ")
 	text = strings.Replace(text, "\n", " ", -1)
