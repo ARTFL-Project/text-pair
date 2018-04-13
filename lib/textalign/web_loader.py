@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 DEFAULT_FIELD_TYPES = {
     "source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER",
-    "source_start_byte": "INTEGER", "target_start_byte": "INTEGER"
+    "source_start_byte": "INTEGER", "target_start_byte": "INTEGER", "source_end_byte": "INTEGER", "target_end_byte": "INTEGER"
 }
 
 YEAR_FINDER = re.compile(r'^.*?(\d{1,}).*')
@@ -134,15 +134,17 @@ def parse_file(file):
     """Parse tab delimited file and insert into table"""
     with open(file, encoding="utf8", errors="ignore") as input_file:
         for pos, line in enumerate(input_file):
-            if pos < 1:
-                continue
-            fields = line.rstrip("\n")
+            fields = json.loads(line.rstrip("\n"))
             yield fields
 
-def validate_field_type(row, field_types):
+def validate_field_type(fields, field_types, field_names):
     """Check field type and modify value type if needed"""
     values = []
-    for field, value in row:
+    for field in field_names:
+        try:
+            value = fields[field]
+        except KeyError: # rowid and passage lengths are defined later
+            continue
         field_type = field_types.get(field, "TEXT")
         if field_type.upper() == "INTEGER":
             year_match = YEAR_FINDER.search(value)
@@ -167,7 +169,8 @@ def load_db(file, table_name, field_types, searchable_fields):
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
     with open(file, errors="ignore") as input_file:
-        field_names.extend(input_file.readline().rstrip("\n").split("\t"))
+        extra_fields = json.loads(input_file.readline().rstrip("\n")).keys()
+        field_names.extend(extra_fields)
         fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
         fields_in_table.extend(fields_and_types)
         fields_in_table.extend(["source_passage_length INTEGER", "target_passage_length INTEGER"])
@@ -179,24 +182,14 @@ def load_db(file, table_name, field_types, searchable_fields):
     lines = 0
     rows = []
     rowid = 0
-    skipped = 0
-    field_num = len(fields_in_table)-3 # we are excluding rowid and passage lengths
     print("Populating main table...")
     for alignment_fields in tqdm(alignments, total=line_count):
-        row = zip(field_names[1:], alignment_fields.split("\t"))
-        row = validate_field_type(row, field_types)
-        if len(row) != field_num:
-            skipped += 1
-            continue
+        row = validate_field_type(alignment_fields, field_types, field_names)
         lines += 1
         rowid += 1
-        try:
-            source_passage_length = len(TOKENIZER.findall(row[source_passage_index]))
-            target_passage_length = len(TOKENIZER.findall(row[target_passage_index]))
-            row.extend([source_passage_length, target_passage_length])
-        except IndexError:
-            skipped += 1
-            continue
+        source_passage_length = len(TOKENIZER.findall(row[source_passage_index]))
+        target_passage_length = len(TOKENIZER.findall(row[target_passage_index]))
+        row.extend([source_passage_length, target_passage_length])
         rows.append([rowid] + row)
         if lines == 100:
             insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))
@@ -228,9 +221,6 @@ def load_db(file, table_name, field_types, searchable_fields):
             cursor.execute("CREATE INDEX {}_{}_idx ON {} USING BTREE({})".format(field, table_name, table_name, field))
     cursor.execute("CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(table_name, table_name))
     database.commit()
-
-    if skipped != 0:
-        print("{} rows were skipped due to mismatch".format(skipped))
 
     print("Populating index table...")
     ordered_table = table_name + "_ordered"

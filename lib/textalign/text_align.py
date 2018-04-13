@@ -40,6 +40,8 @@ def parse_command_line():
                         type=str, default="")
     parser.add_argument("--load_web_app", help="define whether to load results into a database and build a corresponding web app",
                         type=literal_eval, default=True)
+    parser.add_argument("--load_only_web_app", help="define whether to load results into a database and build a corresponding web app",
+                        type=literal_eval, default=False)
     parser.add_argument("--output_path", help="output path for ngrams and sequence alignment",
                         type=str, default="./output")
     parser.add_argument("--workers", help="How many threads or cores to use for preprocessing and matching",

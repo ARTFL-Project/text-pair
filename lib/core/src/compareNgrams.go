@@ -163,7 +163,7 @@ func main() {
 		}
 		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
-	mergedOutput, sourceFields, targetFields := createOutputFile(config, sourceMetadata, targetMetadata)
+	mergedOutput := createOutputFile(config)
 	duplicateFilesOutput := creatDuplicateFilesOutputFile(config)
 	counts := 0
 	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
@@ -290,7 +290,7 @@ func main() {
 					}
 				}
 				if len(combinedAlignments.alignments) > 0 {
-					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, sourceFields, targetFields, &counts)
+					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, &counts)
 				}
 				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
 					localSourceFilesDone[sourceFile.DocID] = true
@@ -589,7 +589,7 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, comm
 	return mostCommonNgrams
 }
 
-func createOutputFile(config *matchingParams, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string) (*os.File, []string, []string) {
+func createOutputFile(config *matchingParams) *os.File {
 	os.MkdirAll(config.outputPath, 0755)
 	configOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_config.tab"))
 	configOutput.WriteString("## Alignment Parameters ##\n\n")
@@ -625,32 +625,32 @@ func createOutputFile(config *matchingParams, sourceMetadata map[string]map[stri
 
 	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_results.tab"))
 	checkErr(err, "createOutputFile")
-	var firstSourceKey string
-	for sourceKey := range sourceMetadata {
-		firstSourceKey = sourceKey
-		break
-	}
-	firstRow := []string{"source_doc_id"}
-	sourceFields := mapToSliceOfKeys(sourceMetadata[firstSourceKey])
-	for _, field := range sourceFields {
-		firstRow = append(firstRow, "source_"+field)
-	}
-	firstRow = append(firstRow, []string{"source_start_byte", "source_end_byte"}...)
-	firstRow = append(firstRow, []string{"source_context_before", "source_passage", "source_context_after"}...)
-	var firstTargetKey string
-	for targetKey := range targetMetadata {
-		firstTargetKey = targetKey
-		break
-	}
-	firstRow = append(firstRow, "target_doc_id")
-	targetFields := mapToSliceOfKeys(targetMetadata[firstTargetKey])
-	for _, field := range targetFields {
-		firstRow = append(firstRow, "target_"+field)
-	}
-	firstRow = append(firstRow, []string{"target_start_byte", "target_end_byte"}...)
-	firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after", "banality"}...)
-	mergedOutput.WriteString(strings.Join(firstRow, "\t"))
-	return mergedOutput, sourceFields, targetFields
+	// var firstSourceKey string
+	// for sourceKey := range sourceMetadata {
+	// 	firstSourceKey = sourceKey
+	// 	break
+	// }
+	// firstRow := []string{"source_doc_id"}
+	// sourceFields := mapToSliceOfKeys(sourceMetadata[firstSourceKey])
+	// for _, field := range sourceFields {
+	// 	firstRow = append(firstRow, "source_"+field)
+	// }
+	// firstRow = append(firstRow, []string{"source_start_byte", "source_end_byte"}...)
+	// firstRow = append(firstRow, []string{"source_context_before", "source_passage", "source_context_after"}...)
+	// var firstTargetKey string
+	// for targetKey := range targetMetadata {
+	// 	firstTargetKey = targetKey
+	// 	break
+	// }
+	// firstRow = append(firstRow, "target_doc_id")
+	// targetFields := mapToSliceOfKeys(targetMetadata[firstTargetKey])
+	// for _, field := range targetFields {
+	// 	firstRow = append(firstRow, "target_"+field)
+	// }
+	// firstRow = append(firstRow, []string{"target_start_byte", "target_end_byte"}...)
+	// firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after", "banality"}...)
+	// mergedOutput.WriteString(strings.Join(firstRow, "\t"))
+	return mergedOutput
 }
 
 func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDocID string) *os.File {
@@ -899,31 +899,41 @@ func writeDebugOutput(m *matchValues, match bool, currentAnchor *ngramMatch, deb
 }
 
 func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string, sourceMetadata map[string]map[string]string,
-	targetMetadata map[string]map[string]string, f *os.File, duplicatesFile *os.File, config *matchingParams, sourceFields []string, targetFields []string, counts *int) {
-	var combinedOutput []string
-	sourceValues := mapToSliceOfValues(sourceMetadata[*sourceDocID], sourceFields)
+	targetMetadata map[string]map[string]string, f *os.File, duplicatesFile *os.File, config *matchingParams, counts *int) {
 	for _, alignments := range combinedAlignments.alignments {
-		targetValues := mapToSliceOfValues(targetMetadata[alignments.docID], targetFields)
 		*counts += len(alignments.matches)
+		fullAlignment := map[string]string{}
+		for key, value := range sourceMetadata[*sourceDocID] {
+			fullAlignment["source_"+key] = value
+		}
+		for key, value := range targetMetadata[alignments.docID] {
+			fullAlignment["target_"+key] = value
+		}
+		fullAlignment["source_doc_id"] = *sourceDocID
+		fullAlignment["target_doc_id"] = alignments.docID
 		for _, alignment := range alignments.matches {
-			fields := []string{*sourceDocID}
-			fields = append(fields, sourceValues...)
-			fields = append(fields, []string{strconv.Itoa(int(alignment.source.startByte)), strconv.Itoa(int(alignment.source.endByte))}...)
+			localAlignment := fullAlignment
+			localAlignment["source_start_byte"] = strconv.Itoa(int(alignment.source.startByte))
+			localAlignment["source_end_byte"] = strconv.Itoa(int(alignment.source.endByte))
 			sourcePassages := alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)
-			fields = append(fields, sourcePassages...)
-			fields = append(fields, alignments.docID)
-			fields = append(fields, targetValues...)
-			fields = append(fields, []string{strconv.Itoa(int(alignment.target.startByte)), strconv.Itoa(int(alignment.target.endByte))}...)
+			localAlignment["source_context_before"] = sourcePassages[0]
+			localAlignment["source_passage"] = sourcePassages[1]
+			localAlignment["source_context_after"] = sourcePassages[2]
+			localAlignment["target_start_byte"] = strconv.Itoa(int(alignment.target.startByte))
+			localAlignment["target_end_byte"] = strconv.Itoa(int(alignment.target.endByte))
 			targetPassages := alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)
-			fields = append(fields, targetPassages...)
-			fields = append(fields, fmt.Sprintf("%v", alignment.banality))
-			combinedOutput = append(combinedOutput, strings.Join(fields, "\t"))
+			localAlignment["target_context_before"] = targetPassages[0]
+			localAlignment["target_passage"] = targetPassages[1]
+			localAlignment["target_context_after"] = targetPassages[2]
+			localAlignment["banality"] = fmt.Sprintf("%v", alignment.banality)
+			jsonString, _ := json.Marshal(localAlignment)
+			jsonString = append(jsonString, "\n"...)
+			f.Write(jsonString)
 		}
 		if len(alignments.duplicates) > 0 {
 			duplicatesFile.WriteString(fmt.Sprintf("%s\n", strings.Join(alignments.duplicates, "\t")))
 		}
 	}
-	f.WriteString("\n" + strings.Join(combinedOutput, "\n"))
 }
 
 // Returns three passages: the context before, the match itself, and the context after
