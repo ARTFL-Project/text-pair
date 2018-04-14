@@ -15,7 +15,8 @@ from tqdm import tqdm
 
 DEFAULT_FIELD_TYPES = {
     "source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER",
-    "source_start_byte": "INTEGER", "target_start_byte": "INTEGER", "source_end_byte": "INTEGER", "target_end_byte": "INTEGER"
+    "source_start_byte": "INTEGER", "target_start_byte": "INTEGER", "source_end_byte": "INTEGER", "target_end_byte": "INTEGER",
+    "source_passage_length": "INTEGER", "target_passage_length": "INTEGER"
 }
 
 YEAR_FINDER = re.compile(r'^.*?(\d{1,}).*')
@@ -141,12 +142,9 @@ def validate_field_type(fields, field_types, field_names):
     """Check field type and modify value type if needed"""
     values = []
     for field in field_names:
-        try:
-            value = fields[field]
-        except KeyError: # rowid and passage lengths are defined later
-            continue
+        value = fields.get(field, "")
         field_type = field_types.get(field, "TEXT")
-        if field_type.upper() == "INTEGER":
+        if field_type.upper() == "INTEGER" and not field.endswith("passage_length") and field != "rowid":
             year_match = YEAR_FINDER.search(value)
             if year_match:
                 value = int(year_match.groups()[0])
@@ -169,14 +167,11 @@ def load_db(file, table_name, field_types, searchable_fields):
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
     with open(file, errors="ignore") as input_file:
-        extra_fields = json.loads(input_file.readline().rstrip("\n")).keys()
+        extra_fields = json.loads(input_file.readline().rstrip("\n")).keys() # TODO: we need to add fields on the fly as they occur, since not all are in the first line
         field_names.extend(extra_fields)
+        field_names.extend(["source_passage_length", "target_passage_length"])
         fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
         fields_in_table.extend(fields_and_types)
-        fields_in_table.extend(["source_passage_length INTEGER", "target_passage_length INTEGER"])
-        field_names.extend(["source_passage_length", "target_passage_length"])
-    source_passage_index = fields_in_table.index("source_passage TEXT") - 1  # account for rowid which is prepended
-    target_passage_index = fields_in_table.index("target_passage TEXT") - 1
     cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
     cursor.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
     lines = 0
@@ -184,13 +179,13 @@ def load_db(file, table_name, field_types, searchable_fields):
     rowid = 0
     print("Populating main table...")
     for alignment_fields in tqdm(alignments, total=line_count):
-        row = validate_field_type(alignment_fields, field_types, field_names)
-        lines += 1
         rowid += 1
-        source_passage_length = len(TOKENIZER.findall(row[source_passage_index]))
-        target_passage_length = len(TOKENIZER.findall(row[target_passage_index]))
-        row.extend([source_passage_length, target_passage_length])
-        rows.append([rowid] + row)
+        alignment_fields["rowid"] = rowid
+        alignment_fields["source_passage_length"] = len(TOKENIZER.findall(alignment_fields["source_passage"]))
+        alignment_fields["target_passage_length"] = len(TOKENIZER.findall(alignment_fields["target_passage"]))
+        row = validate_field_type(alignment_fields, field_types, field_names)
+        rows.append(row)
+        lines += 1
         if lines == 100:
             insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))
             execute_values(cursor, insert, rows)
