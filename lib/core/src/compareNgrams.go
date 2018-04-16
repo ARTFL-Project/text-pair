@@ -770,6 +770,7 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 	var mergedAlignments []Alignment
 	var previousAlignment Alignment
 	lastIndex := len(alignments) - 1
+	fmt.Println(alignments)
 	for index, currentAlignment := range alignments { // This code assumes that alignments are sorted, with source first, then target
 		if index == 0 {
 			previousAlignment = currentAlignment
@@ -784,14 +785,20 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 		sourceNgramDistance := previousAlignment.source.endNgramIndex + maxNgramDistance
 		targetNgramDistance := previousAlignment.target.endNgramIndex + maxNgramDistance
 
+		if currentAlignment.target.startByte == 220016 {
+			fmt.Println(currentAlignment.target.startByte, previousAlignment.target.endByte)
+		}
+
 		if currentAlignment.source.startByte <= maxSourceDistance &&
-			currentAlignment.target.startByte <= maxTargetDistance {
+			currentAlignment.target.startByte <= maxTargetDistance &&
+			currentAlignment.target.startByte > previousAlignment.target.endByte {
 			currentAlignmentMerged = true
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
 			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, false} // we consider merged passages as non-banality
 		} else if currentAlignment.source.startNgramIndex <= sourceNgramDistance &&
-			currentAlignment.target.startNgramIndex <= targetNgramDistance {
+			currentAlignment.target.startNgramIndex <= targetNgramDistance &&
+			currentAlignment.target.startNgramIndex > previousAlignment.target.endNgramIndex {
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
 			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, false} // we consider merged passages as non-banality
@@ -857,12 +864,14 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			localAlignment := fullAlignment
 			localAlignment["source_start_byte"] = strconv.Itoa(int(alignment.source.startByte))
 			localAlignment["source_end_byte"] = strconv.Itoa(int(alignment.source.endByte))
+			fmt.Println("fetching source file", *sourceDocID, alignment.source.startByte, "-", alignment.source.endByte)
 			sourcePassages := alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)
 			localAlignment["source_context_before"] = sourcePassages[0]
 			localAlignment["source_passage"] = sourcePassages[1]
 			localAlignment["source_context_after"] = sourcePassages[2]
 			localAlignment["target_start_byte"] = strconv.Itoa(int(alignment.target.startByte))
 			localAlignment["target_end_byte"] = strconv.Itoa(int(alignment.target.endByte))
+			fmt.Println("fetching target file", alignments.docID, alignment.target.startByte, "-", alignment.target.endByte)
 			targetPassages := alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)
 			localAlignment["target_context_before"] = targetPassages[0]
 			localAlignment["target_passage"] = targetPassages[1]
