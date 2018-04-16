@@ -51,7 +51,7 @@ type matchingParams struct {
 	banalNgrams                   int
 	mergeOnByteDistance           bool
 	mergeOnNgramDistance          bool
-	passageDistanceMultiplier     float32
+	passageDistanceMultiplier     float64
 	duplicateThreshold            float64
 	sourceBatch                   int
 	targetBatch                   int
@@ -339,7 +339,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	flag.Parse()
 	debug, _ := strconv.ParseBool(*debugArg)
 	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), *flexGap, int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), float32(*commonNgramsLimit) / 100, *minimumMatchingNgramsInDocs,
-		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float32(*passageDistance), float64(*duplicateThreshold), *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
+		int32(*contextSize), *banalNgrams, *mergeOnByteDistance, *mergeOnNgramDistance, float64(*passageDistance), float64(*duplicateThreshold), *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
 	ngramIndex := make(map[int32]string)
 	if config.debug && *ngramIndexLocation != "" {
 		ngramIndex = loadNgramIndex(*ngramIndexLocation)
@@ -625,31 +625,6 @@ func createOutputFile(config *matchingParams) *os.File {
 
 	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_results.tab"))
 	checkErr(err, "createOutputFile")
-	// var firstSourceKey string
-	// for sourceKey := range sourceMetadata {
-	// 	firstSourceKey = sourceKey
-	// 	break
-	// }
-	// firstRow := []string{"source_doc_id"}
-	// sourceFields := mapToSliceOfKeys(sourceMetadata[firstSourceKey])
-	// for _, field := range sourceFields {
-	// 	firstRow = append(firstRow, "source_"+field)
-	// }
-	// firstRow = append(firstRow, []string{"source_start_byte", "source_end_byte"}...)
-	// firstRow = append(firstRow, []string{"source_context_before", "source_passage", "source_context_after"}...)
-	// var firstTargetKey string
-	// for targetKey := range targetMetadata {
-	// 	firstTargetKey = targetKey
-	// 	break
-	// }
-	// firstRow = append(firstRow, "target_doc_id")
-	// targetFields := mapToSliceOfKeys(targetMetadata[firstTargetKey])
-	// for _, field := range targetFields {
-	// 	firstRow = append(firstRow, "target_"+field)
-	// }
-	// firstRow = append(firstRow, []string{"target_start_byte", "target_end_byte"}...)
-	// firstRow = append(firstRow, []string{"target_context_before", "target_passage", "target_context_after", "banality"}...)
-	// mergedOutput.WriteString(strings.Join(firstRow, "\t"))
 	return mergedOutput
 }
 
@@ -785,74 +760,41 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutput *os.File) []Alignment {
 	var maxSourceDistance, maxTargetDistance int32
 	var maxNgramDistance int32
+	maxSourceDistance = 0
+	maxTargetDistance = 0
 	if config.mergeOnNgramDistance {
 		maxNgramDistance = config.matchingWindowSize
 	} else {
-		maxNgramDistance = math.MaxInt32
+		maxNgramDistance = 0
 	}
 	var mergedAlignments []Alignment
 	var previousAlignment Alignment
 	lastIndex := len(alignments) - 1
-	for index, currentAlignment := range alignments {
+	for index, currentAlignment := range alignments { // This code assumes that alignments are sorted, with source first, then target
 		if index == 0 {
 			previousAlignment = currentAlignment
 			continue
 		}
 		currentAlignmentMerged := false
 		if config.mergeOnByteDistance {
-			distanceValue := int32((float32(previousAlignment.source.endByte - previousAlignment.source.startByte)) * config.passageDistanceMultiplier)
-			maxSourceDistance := currentAlignment.source.startByte - distanceValue
-			if maxSourceDistance < 0 {
-				maxSourceDistance = 0
-			}
-			maxTargetDistance := currentAlignment.target.startByte - distanceValue
-			if maxTargetDistance < 0 {
-				maxTargetDistance = 0
-			}
-		} else {
-			maxSourceDistance = math.MaxInt32
-			maxTargetDistance = math.MaxInt32
+			distanceValue := int32(math.Floor((float64(previousAlignment.source.endByte - previousAlignment.source.startByte)) * config.passageDistanceMultiplier))
+			maxSourceDistance = previousAlignment.source.endByte + distanceValue
+			maxTargetDistance = previousAlignment.target.endByte + distanceValue
 		}
-		sourceNgramDistance := currentAlignment.source.startNgramIndex - previousAlignment.source.endNgramIndex
-		targetNgramDistance := currentAlignment.target.startNgramIndex - previousAlignment.target.endNgramIndex
-		if previousAlignment.source.startByte <= maxSourceDistance &&
-			maxSourceDistance <= previousAlignment.source.endByte &&
-			previousAlignment.target.startByte <= maxTargetDistance &&
-			maxTargetDistance <= previousAlignment.target.endByte {
+		sourceNgramDistance := previousAlignment.source.endNgramIndex + maxNgramDistance
+		targetNgramDistance := previousAlignment.target.endNgramIndex + maxNgramDistance
+
+		if currentAlignment.source.startByte <= maxSourceDistance &&
+			currentAlignment.target.startByte <= maxTargetDistance {
 			currentAlignmentMerged = true
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, previousAlignment.banality}
-		} else if sourceNgramDistance >= 0 &&
-			sourceNgramDistance <= maxNgramDistance &&
-			targetNgramDistance >= 0 &&
-			targetNgramDistance <= maxNgramDistance {
-			currentAlignmentMerged = true
+			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, false} // we consider merged passages as non-banality
+		} else if currentAlignment.source.startNgramIndex <= sourceNgramDistance &&
+			currentAlignment.target.startNgramIndex <= targetNgramDistance {
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, previousAlignment.banality}
-		} else if currentAlignment.source.startNgramIndex >= previousAlignment.source.startNgramIndex && //intersection of current source with previous source with extended end
-			currentAlignment.source.startNgramIndex <= previousAlignment.source.endNgramIndex {
-			var sourcePosition position
-			currentAlignmentMerged = true
-			if currentAlignment.source.endNgramIndex >= previousAlignment.source.endNgramIndex {
-				sourcePosition = position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
-			} else {
-				sourcePosition = previousAlignment.source
-			}
-			if currentAlignment.target.startNgramIndex <= previousAlignment.target.startNgramIndex && // intersection of current target with previous target with extended end
-				currentAlignment.target.startNgramIndex <= previousAlignment.target.endNgramIndex {
-				if currentAlignment.target.endNgramIndex >= previousAlignment.target.endNgramIndex {
-					targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-					previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, previousAlignment.banality}
-				} else {
-					previousAlignment = Alignment{sourcePosition, previousAlignment.target, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, previousAlignment.banality}
-				}
-			} else if targetNgramDistance >= 0 && // current target is within targetNgramDistance
-				targetNgramDistance <= config.matchingWindowSize {
-				targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
-				previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, previousAlignment.banality}
-			}
+			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, false} // we consider merged passages as non-banality
 		} else {
 			mergedAlignments = append(mergedAlignments, previousAlignment) // we store previous since it can no longer be merged with next
 			previousAlignment = currentAlignment                           // current match was not merged with previous so now becomes previous
