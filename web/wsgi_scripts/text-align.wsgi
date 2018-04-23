@@ -4,7 +4,7 @@
 import configparser
 import re
 from ast import literal_eval as eval
-from collections import OrderedDict
+from collections import OrderedDict, Counter
 
 import psycopg2
 import psycopg2.extras
@@ -33,7 +33,7 @@ class formArguments():
             return 0
         elif item == "direction":
             return "next"
-        elif item == "interval":
+        elif item == "timeSeriesInterval":
             return 1
         elif item == "directionSelected":
             return "source"
@@ -98,6 +98,7 @@ def parse_args(request):
         else:
             if value:
                 query_args[key] = value
+    import sys
     metadata_field_types = request.get_json()["metadata"]
     sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
     return sql_fields, sql_values, other_args
@@ -129,10 +130,10 @@ def query_builder(query_args, other_args, field_types):
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
                 if values[0] == "-":
-                    query = "{} < %s".format(field)
+                    query = "{} <= %s".format(field)
                     sql_values.append(values[1])
                 elif values[-1] == "-":
-                    query = "{} > %s".format(field)
+                    query = "{} >= %s".format(field)
                     sql_values.append(values[0])
                 else:
                     query = "{} BETWEEN %s AND %s".format(field)
@@ -146,8 +147,6 @@ def query_builder(query_args, other_args, field_types):
     if other_args.banality != "":
         sql_fields.append("banality=%s")
         sql_values.append(other_args.banality)
-    import sys
-    print("FIELDS", sql_fields, sql_values, file=sys.stderr)
     return " AND ".join(sql_fields), sql_values
 
 
@@ -232,11 +231,11 @@ def generate_time_series():
     if sql_fields:
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {} WHERE {}) t \
-                GROUP BY interval ORDER BY interval".format(other_args.directionSelected, other_args.interval, other_args.interval, other_args.db_table, sql_fields)
+                GROUP BY interval ORDER BY interval".format(other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table, sql_fields)
     else:
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {}) t \
-                GROUP BY interval ORDER BY interval".format(other_args.directionSelected, other_args.interval, other_args.interval, other_args.db_table)
+                GROUP BY interval ORDER BY interval".format(other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table)
     database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
                                 password=GLOBAL_CONFIG["DATABASE"]["database_password"],
                                 database=GLOBAL_CONFIG["DATABASE"]["database_name"])
@@ -251,9 +250,9 @@ def generate_time_series():
         if next_year is not None:
             while year > next_year:
                 results.append({"year": next_year, "count": 0})
-                next_year += other_args.interval
+                next_year += other_args.timeSeriesInterval
         results.append({"year": year, "count": count})
-        next_year = year + other_args.interval
+        next_year = year + other_args.timeSeriesInterval
         total_results += count
     response = jsonify({"counts": total_results, "results": results})
     response.headers.add('Access-Control-Allow-Origin', '*')
@@ -275,12 +274,31 @@ def facets():
             other_args.facet, other_args.db_table, other_args.facet)
     cursor.execute(query,sql_values)
     results = []
-    for result in cursor:
-        field_name, count = result
-        results.append({
-            "field": field_name,
-            "count": count
-        })
+    if not other_args.facet.endswith("passage_length"):
+        for result in cursor:
+            field_name, count = result
+            results.append({
+                "field": field_name,
+                "count": count
+            })
+    else:
+        counts = Counter()
+        for length, count in cursor:
+            if length < 26:
+                counts["1-25"] += count
+            if 25 < length < 101:
+                counts["26-100"] += count
+            elif 100 < length < 251:
+                counts["101-250"] += count
+            elif 250 < length < 501:
+                counts["251-500"] += count
+            elif 500 < length < 1001:
+                counts["501-1000"] += count
+            elif 1000 < length < 3001:
+                counts["1001-3000"] += count
+            elif length > 3000:
+                counts["3001-"] += count
+        results = [{"field": interval, "count": count} for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)]
     response = jsonify({"facet": other_args.facet, "results": results})
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response

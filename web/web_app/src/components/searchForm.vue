@@ -7,14 +7,10 @@
             <form @submit.prevent @keyup.enter="searchSelected()">
                 <div class="row">
                     <div class="col">
-                        <h6 class="text-center pb-2">
-                            Source
-                        </h6>
+                        <h6 class="text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
                     </div>
                     <div class="col border border-top-0 border-right-0 border-bottom-0">
-                        <h6 class="text-center pb-2">
-                            Target
-                        </h6>
+                        <h6 class="text-center pb-2" v-html="globalConfig.targetLabel"></h6>
                     </div>
                 </div>
                 <div class="row">
@@ -130,6 +126,7 @@ export default {
                     vm.formValues[key] = updatedParams[key]
                 }
             }
+            console.log(updatedParams)
         })
         EventBus.$on("toggleSearchForm", function() {
             vm.toggleSearchForm()

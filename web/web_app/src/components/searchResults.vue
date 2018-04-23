@@ -18,9 +18,7 @@
                         </div>
                         <div class="row">
                             <div class="col mt-4">
-                                <h6 class="text-center pb-2">
-                                    Source
-                                </h6>
+                                <h6 class="text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
                                 <p class="pt-3 px-3">
                                     <span v-for="(citation, citationIndex) in globalConfig.sourceCitation" :key="citation.field" v-if="alignment[citation.field]">
                                         <span :style="citation.style">{{ alignment[citation.field] }}</span>
@@ -29,9 +27,7 @@
                                 </p>
                             </div>
                             <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0">
-                                <h6 class="text-center pb-2">
-                                    Target
-                                </h6>
+                                <h6 class="text-center pb-2" v-html="globalConfig.targetLabel"></h6>
                                 <p class="pt-3 px-3">
                                     <span v-for="(citation, citationIndex) in globalConfig.targetCitation" :key="citation.field" v-if="alignment[citation.field]">
                                         <span :style="citation.style">{{ alignment[citation.field] }}</span>
@@ -44,7 +40,7 @@
                             <div class="col mb-2">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.source_context_before }}
-                                    <span class="source-passage">{{ alignment.source_passage }}</span>
+                                    <span class="source-passage">{{ alignment.source_passage.replace(/<|>/g, "") }}</span>
                                     {{ alignment.source_context_after }}
                                 </p>
                                 <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.sourceDB.philoDB" @click="goToContext(alignment, 'source')">View passage in context</a>
@@ -52,14 +48,14 @@
                             <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.target_context_before }}
-                                    <span class="target-passage">{{ alignment.target_passage }}</span>
+                                    <span class="target-passage">{{ alignment.target_passage.replace(/<|>/g, "") }}</span>
                                     {{ alignment.target_context_after }}
                                 </p>
                                 <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.targetDB.philoDB" @click="goToContext(alignment, 'target')">View passage in context</a>
                             </div>
                         </div>
                         <div class="text-muted text-center mb-2">
-                            <a class="diff-btn" diffed="false" @click="showDifferences(alignment.source_passage, alignment.target_passage)">
+                            <a class="diff-btn" diffed="false" @click="showDifferences(alignment.source_passage, alignment.target_passage, alignment.source_passage_length)">
                                 Show differences
                             </a>
                             <div class="loading position-absolute" style="display:none; left: 50%; transform: translateX(-50%);">
@@ -95,7 +91,7 @@
                         Show options
                     </div>
                     <div class="mt-3 mb-3 pr-3 pl-3 facet-list">
-                        <h6 class="text-center">Source</h6>
+                        <h6 class="text-center" v-html="globalConfig.sourceLabel"></h6>
                         <div class="list-group">
                             <button type="button" class="list-group-item list-group-item-action" v-for="(field, index) in globalConfig.metadataFields.source" :key="index" v-on:click="facetSearch(field.value)">
                                 {{ field.label }}
@@ -103,7 +99,7 @@
                         </div>
                     </div>
                     <div class="mb-3 pr-3 pl-3 facet-list">
-                        <h6 class="text-center">Target</h6>
+                        <h6 class="text-center" v-html="globalConfig.targetLabel"></h6>
                         <div class="list-group">
                             <button type="button" class="list-group-item list-group-item-action" v-for="(field, index) in globalConfig.metadataFields.target" :key="index" v-on:click="facetSearch(field.value)">
                                 {{ field.label }}
@@ -118,7 +114,7 @@
                     <div class="corner-btn destroy right" @click="closeFacetResults()">
                         X
                     </div>
-                    <h6 class="card-header text-center">Frequency by <span class="text-capitalize">{{ facetResults.facet.split("_").join(" ") }}</span></h6>
+                    <h6 class="card-header text-center">Frequency by <span v-html="facetDirectionLabel"></span> <span class="text-capitalize">{{ facetResults.facet.split("_")[1] }}</span></h6>
                     <div class="mt-1 p-2">
                         <div class="pb-2 text-center" style="opacity: .5" >Showing top 100 results</div>
                         <div class="list-group">
@@ -258,6 +254,7 @@ export default {
             this.$http.post(`${this.$globalConfig.apiServer}/facets/?${this.paramsToUrl(queryParams)}`, {
                 metadata: this.$globalConfig.metadataTypes
             }).then(response => {
+                this.facetDirectionLabel = this.$globalConfig[`${response.data.facet.split("_")[0]}Label`]
                 this.facetResults = response.data
                 this.toggleFacetList()
                 this.facetLoading = false
@@ -292,7 +289,10 @@ export default {
             this.results = { alignments: [] }
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
-        showDifferences(sourceText, targetText) {
+        showDifferences(sourceText, targetText, sourcePassageLength) {
+            if (sourcePassageLength > 3000) {
+                alert("Passage of 3000 words or more may take a (very) long time to compare")
+            }
             let parent = event.srcElement.parentNode.parentNode
             let loading = parent.querySelector(".loading")
             let sourceElement = parent.querySelector(".source-passage")

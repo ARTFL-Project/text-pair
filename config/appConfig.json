@@ -12,6 +12,8 @@
         "philoDB": false,
         "link": ""
     },
+    "sourceLabel": "Source",
+    "targetLabel": "Target",
     "metadataTypes": {
         "source_passage": "TEXT",
         "source_author": "TEXT",
