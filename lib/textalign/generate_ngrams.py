@@ -235,7 +235,7 @@ def parse_command_line():
     optional.add_argument("--mem_usage", help="how much max RAM to use: expressed in percentage, no higher than 90%%",
                           type=str, default="80%%")
     optional.add_argument("--is_philo_db", help="define is files are from a PhiloLogic4 instance",
-                          type=literal_eval, default=False)
+                          action='store_true', default=False)
     optional.add_argument("--metadata", help="metadata for input files", default=None)
     optional.add_argument("--text_object_level", help="type of object to split up docs in",
                           type=str, default="doc")

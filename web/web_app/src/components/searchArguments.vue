@@ -16,8 +16,8 @@
         </div>
         <div class="row pl-2" v-if="!error">
             <div class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams" :key="groupIndex">
-                <h6 class="text-center text-capitalize">{{ paramGroup.direction }} Parameters:</h6>
-                <div class="metadata-args" v-for="(metadata, index) in paramGroup.params" :key="index" v-if="paramGroup.params !=null">
+                <h6 class="text-center text-capitalize" v-html="paramGroup.direction">{{ paramGroup.direction }} Parameters:</h6>
+                <div class="metadata-args" v-for="metadata in paramGroup.params" :key="metadata.field" v-if="paramGroup.params !=null">
                     <span class="metadata-label">
                         {{ metadata.label }}
                     </span>
@@ -52,6 +52,7 @@ export default {
         },
         data() {
             return {
+               globalConfig: this.$globalConfig,
                counts: null,
                error: null,
                searchParams: null,
@@ -72,9 +73,9 @@ export default {
                         }
                     }
                     if (paramGroup.length > 0) {
-                        searchParams.push({direction: direction, params: paramGroup})
+                        searchParams.push({direction: this.globalConfig[`${direction}Label`], params: paramGroup})
                     } else {
-                        searchParams.push({direction: direction, params: null})
+                        searchParams.push({direction: this.globalConfig[`${direction}Label`], params: null})
                     }
                 }
                 return searchParams
@@ -103,12 +104,12 @@ export default {
 </script>
 <style scoped>
 .metadata-args {
+    display: block !important;
     margin-top: 20px;
     white-space: nowrap;
 }
 
 .metadata-label {
-    /* margin-left: 10px; */
     border: 1px solid #ddd;
     border-width: 1px 1px 1px 1px;
     padding: 5px;

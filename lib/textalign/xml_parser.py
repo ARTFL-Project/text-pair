@@ -9,7 +9,6 @@ from glob import glob
 from html.entities import name2codepoint
 from json import dump, dumps
 from pathlib import Path
-from time import sleep
 
 from lxml import etree
 from multiprocess import Pool
@@ -191,12 +190,13 @@ class TEIParser:
         if os.path.isdir(file):
             return file_id, metadata, file
         try:
+            file_content = ""
             with open(file) as text_file:
-                try:
-                    file_content = "".join(text_file.readlines())
-                except UnicodeDecodeError:
-                    return file_id, metadata, file
-        except PermissionError:
+                for line in text_file:
+                    file_content += line
+                    if "</teiHeader" in line or "<teiheader" in line:
+                        break
+        except (PermissionError, UnicodeDecodeError):
             return file_id, metadata, file
         try:
             start_header_index = re.search(r'<teiheader', file_content, re.I).start()
@@ -265,7 +265,7 @@ class TEIParser:
         print("\nParsing text body of all files...", flush=True)
         pool = Pool(self.workers)
         chunksize = len(self.files)//self.workers//10
-        with tqdm(total=len(self.files)) as pbar:
+        with tqdm(total=len(self.files), leave=self.debug) as pbar:
             for _ in pool.imap_unordered(self.parse_file, self.files, chunksize=chunksize or 1):
                 pbar.update()
         pool.close()

@@ -737,8 +737,10 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 					maxGap += config.minimumMatchingNgrams
 					matchingWindowSize += config.minimumMatchingNgrams
 				} else if m.matchesInCurrentAlignment > config.minimumMatchingNgrams {
-					maxGap++
-					matchingWindowSize++
+					if maxGap < config.matchingWindowSize { // Gaps should not go beyond initial window size: prevents huge jumps with one ngram at the end
+						maxGap++
+						matchingWindowSize++
+					}
 				}
 			}
 			m.lastMatch = []indexedNgram{source, target} // save last matching ngrams
