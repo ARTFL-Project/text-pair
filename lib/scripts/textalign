@@ -173,7 +173,7 @@ def main():
     paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, load_only_web_app, output_file = parse_command_line()
     if load_only_web_app is True:
         load_web_app(web_app_config, output_file)
-        return
+        return ''
     if only_align is False:
         if tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")

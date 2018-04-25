@@ -7,11 +7,11 @@
             <span class="metadata-label">
                 Banality filter
             </span>
-            <span class="metadata-value">
-                {{ banality }}
-            </span>
             <span class="remove-metata">
                 <span class="corner-btn destroy right" @click="removeMetadata({fieldName: 'banality'})">x</span>
+            </span>
+            <span class="metadata-value">
+                {{ banality }}
             </span>
         </div>
         <div class="row pl-2" v-if="!error">
@@ -21,14 +21,14 @@
                     <span class="metadata-label">
                         {{ metadata.label }}
                     </span>
-                    <span class="metadata-value">
-                        {{ checkValue(metadata.value) }}
-                    </span>
                     <span class="remove-metata">
                         <span class="corner-btn destroy right" @click="removeMetadata(metadata)">x</span>
                     </span>
+                    <span class="metadata-value">
+                        {{ checkValue(metadata.value) }}
+                    </span>
                 </div>
-                <div class="metadata-args" v-if="paramGroup.params == null">
+                <div class="metadata-args none" v-if="paramGroup.params == null">
                     None
                 </div>
             </div>
@@ -104,35 +104,42 @@ export default {
 </script>
 <style scoped>
 .metadata-args {
-    display: block !important;
+    display: inline-block !important;
     margin-top: 20px;
-    white-space: nowrap;
+    border: 1px solid #ddd;
+    text-align: justify;
+}
+
+.metadata-args.none {
+    border-width: 0px !important;
 }
 
 .metadata-label {
     border: 1px solid #ddd;
-    border-width: 1px 1px 1px 1px;
-    padding: 5px;
+    border-width: 0px 1px 0px 0px;
+    padding: 0px 5px;
     background-color: #e9ecef;
+    float: left;
+    line-height: 29px;
 }
 
 .metadata-value {
-    border: 1px solid #ddd;
-    border-width: 1px 1px 1px 0px;
-    padding: 5px;
+    padding: 6px 10px 10px 10px;
+    line-height: 29px;
+    /* Needs prefixing */
+    box-decoration-break: clone;
+   -webkit-box-decoration-break: clone;
 }
 
 .remove-metata {
-    padding-right: 20px;
-    position: relative;
+    float: right;
 }
 
 .corner-btn.right {
-    right: inherit;
-    margin-top: -6px;
-    line-height: inherit;
-    padding: 5px 6px 4px 6px;
-    border-width: 1px 1px 1px 0px;
+    position: initial;
+    line-height: 29px;
+    padding: 5px;
+    border-width: 0px 0px 1px 1px;
 }
 
 .search-args-group:last-of-type {
