@@ -45,7 +45,6 @@ def parse_command_line():
                         type=literal_eval, default=True, choices=["True", "False"])
     parser.add_argument("--load_only_web_app", help="define whether to load results into a database and build a corresponding web app",
                         action='store_true', default=False)
-    parser.add_argument("--file", help="alignment file to load", type=str, default=None)
     parser.add_argument("--output_path", help="output path for ngrams and sequence alignment",
                         type=str, default="./output")
     parser.add_argument("--workers", help="How many threads or cores to use for preprocessing and matching",
@@ -89,6 +88,9 @@ def parse_command_line():
                     elif key == "ngram" or key == "gap" or key == "minimum_word_length":
                         preprocessing_params["source"][key] = int(value)
                         preprocessing_params["target"][key] = int(value)
+                    elif key == "pos_to_keep":
+                        preprocessing_params["source"][key] = [i.strip() for i in value.split(",")]
+                        preprocessing_params["target"][key] = preprocessing_params["source"][key]
                     else:
                         preprocessing_params["source"][key] = value
                         preprocessing_params["target"][key] = value
@@ -158,27 +160,16 @@ def parse_command_line():
         paths["target"]["metadata_path"] = args["target_metadata"]
         paths["target"]["common_ngrams"] = args["target_common_ngrams"]
 
-    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"], args["only_align"], args["load_only_web_app"], args["file"]
+    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"], args["only_align"]
 
-def load_web_app(web_app_config, output_file):
-    """Load web application"""
-    FIELD_TYPES.update(web_app_config["field_types"])
-    create_web_app(output_file, web_app_config["table_name"], FIELD_TYPES,
-                   web_app_config["web_application_directory"], web_app_config["api_server"],
-                   web_app_config["source_database"], web_app_config["source_database_link"],
-                   web_app_config["target_database"], web_app_config["target_database_link"])
-
-def main():
+def run_alignment():
     """Main function to start sequence alignment"""
-    paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, load_only_web_app, output_file = parse_command_line()
-    if load_only_web_app is True:
-        load_web_app(web_app_config, output_file)
-        return ''
+    paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align = parse_command_line()
     if only_align is False:
         if tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")
             parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"],
-                               words_to_keep=tei_parsing["source_words_to_keep"], cores=workers, debug=debug)
+                            words_to_keep=tei_parsing["source_words_to_keep"], cores=workers, debug=debug)
             parser.get_metadata()
             parser.get_text()
         print("\n### Generating source ngrams ###")
@@ -190,7 +181,7 @@ def main():
             if tei_parsing["parse_target_files"] is True:
                 print("\n### Parsing target TEI files ###")
                 parser = TEIParser(paths["target"]["tei_input_files"], output_path=paths["target"]["parse_output"], cores=workers,
-                                   words_to_keep=tei_parsing["target_words_to_keep"], debug=debug)
+                                words_to_keep=tei_parsing["target_words_to_keep"], debug=debug)
                 parser.get_metadata()
                 parser.get_text()
             print("\n### Generating target ngrams ###")
@@ -261,7 +252,11 @@ def main():
     os.system(command)
     if web_app_config["load"] is True:
         output_file = os.path.join(output_path, "results/alignment_results.tab")
-        load_web_app(web_app_config, output_file)
+        FIELD_TYPES.update(web_app_config["field_types"])
+        create_web_app(output_file, web_app_config["table_name"], FIELD_TYPES,
+                       web_app_config["web_application_directory"], web_app_config["api_server"],
+                       web_app_config["source_database"], web_app_config["source_database_link"],
+                       web_app_config["target_database"], web_app_config["target_database_link"])
 
 if __name__ == '__main__':
-    main()
+    run_alignment()

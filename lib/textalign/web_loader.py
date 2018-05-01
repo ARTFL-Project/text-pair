@@ -170,6 +170,10 @@ def load_db(file, table_name, field_types, searchable_fields):
         extra_fields = json.loads(input_file.readline().rstrip("\n")).keys() # TODO: we need to add fields on the fly as they occur, since not all are in the first line
         field_names.extend(extra_fields)
         field_names.extend(["source_passage_length", "target_passage_length"])
+        if "source_year" not in field_names:
+            field_names.append("source_year")
+        if "target_year" not in field_names:
+            field_names.append("target_year")
         fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
         fields_in_table.extend(fields_and_types)
     cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))

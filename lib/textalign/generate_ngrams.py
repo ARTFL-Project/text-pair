@@ -37,7 +37,7 @@ class Ngrams:
     """Generate Ngrams"""
 
     def __init__(self, text_object_level="doc", ngram=3, gap=0, stemmer=True, lemmatizer="", stopwords=None, numbers=False, language="french",
-                 lowercase=True, minimum_word_length=2, word_order=True, modernize=True, debug=False):
+                 lowercase=True, minimum_word_length=2, word_order=True, modernize=True, pos_to_keep=[], debug=False):
         self.config = {
             "ngram": ngram,
             "window": ngram + gap,
@@ -50,7 +50,8 @@ class Ngrams:
             "minimum_word_length": minimum_word_length,
             "lemmatizer": lemmatizer,
             "stopwords": stopwords,
-            "text_object_level": text_object_level
+            "text_object_level": text_object_level,
+            "pos_to_keep": set(pos_to_keep)
         }
         self.debug = debug
         self.input_path = ""
@@ -58,6 +59,10 @@ class Ngrams:
         self.metadata_done = False
         self.db_name = ""
         self.db_path = ""
+        if pos_to_keep:
+            self.use_pos = True
+        else:
+            self.use_pos = False
 
     def __write_to_disk(self, ngrams, text_id):
         with open("%s/debug/%s_ngrams.json" % (self.output_path, text_id), "w") as output:
@@ -158,66 +163,85 @@ class Ngrams:
         """Convert each file into an inverted index of ngrams"""
         preprocessor = PreProcessor(language=self.config["language"], stemmer=self.config["stemmer"],
                                     lemmatizer=self.config["lemmatizer"], modernize=True, lowercase=self.config["lowercase"],
-                                    strip_numbers=self.config["numbers"], stopwords=self.config["stopwords"])
+                                    strip_numbers=self.config["numbers"], stopwords=self.config["stopwords"],
+                                    with_pos=self.use_pos)
         doc_ngrams = []
         metadata = {}
         if self.debug:
             debug_ngrams = []
-        with open(input_file) as filehandle:
-            ngrams = deque([])
-            ngram_obj = deque([])
-            current_text_id = None
-            for line in filehandle:
-                word_obj = json.loads(line.strip())
-                word = word_obj["token"]
-                if self.config["modernize"] is True:
-                    word = modernize(word, self.config["language"])
-                if len(word) < self.config["minimum_word_length"]:
-                    continue
-                word = preprocessor.lemmatizer.get(word, word)
-                word = preprocessor.normalize(word)
-                if word == "" or len(word) < self.config["minimum_word_length"]:
-                    continue
-                position = word_obj["position"]
-                if self.config["text_object_level"] == 'doc':
-                    text_id = position.split()[0]
-                else:
-                    text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]])
-                if current_text_id is None:
-                    current_text_id = text_id
-                if current_text_id != text_id:
-                    if self.debug:
-                        self.__write_to_disk(debug_ngrams, current_text_id)
-                    if self.metadata_done is False:
-                        metadata[current_text_id] = self.__get_metadata(current_text_id)
-                    self.__build_text_index(ngrams, current_text_id)
-                    ngrams = deque([])
-                    ngram_obj = deque([])
-                    current_text_id = text_id
-                ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
-                if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
-                    if self.config["word_order"] is True:
-                        iterator = combinations(ngram_obj, self.config["ngram"])
-                    else:
-                        iterator = permutations(ngram_obj)
-                    for value in iterator:
-                        current_ngram_list, _, start_bytes, end_bytes = zip(*value)
-                        current_ngram = "_".join(current_ngram_list)
-                        hashed_ngram = hash32(current_ngram)
-                        ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
-                        doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
-                        if self.debug is True:
-                            debug_ngrams.append(value)
-                    ngram_obj.popleft()
-            if self.config["text_object_level"] == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
+        with open(input_file) as file:
+            if self.use_pos is True:
+                doc = self.filter_by_pos(file, preprocessor)
+            else:
+                doc = (json.loads(line.strip()) for line in file)
+        ngrams = deque([])
+        ngram_obj = deque([])
+        current_text_id = None
+        for word_obj in doc:
+            word = word_obj["token"]
+            if self.config["modernize"] is True:
+                word = modernize(word, self.config["language"])
+            if len(word) < self.config["minimum_word_length"]:
+                continue
+            word = preprocessor.lemmatizer.get(word, word)
+            word = preprocessor.normalize(word)
+            if word == "" or len(word) < self.config["minimum_word_length"]:
+                continue
+            position = word_obj["position"]
+            if self.config["text_object_level"] == 'doc':
+                text_id = position.split()[0]
+            else:
+                text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]])
+            if current_text_id is None:
+                current_text_id = text_id
+            if current_text_id != text_id:
                 if self.debug:
                     self.__write_to_disk(debug_ngrams, current_text_id)
                 if self.metadata_done is False:
                     metadata[current_text_id] = self.__get_metadata(current_text_id)
                 self.__build_text_index(ngrams, current_text_id)
-            with open("{}/temp/{}".format(self.output_path, os.path.basename(input_file)), "w") as output:
-                output.write("\n".join(sorted(doc_ngrams)))
+                ngrams = deque([])
+                ngram_obj = deque([])
+                current_text_id = text_id
+            ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
+            if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
+                if self.config["word_order"] is True:
+                    iterator = combinations(ngram_obj, self.config["ngram"])
+                else:
+                    iterator = permutations(ngram_obj)
+                for value in iterator:
+                    current_ngram_list, _, start_bytes, end_bytes = zip(*value)
+                    current_ngram = "_".join(current_ngram_list)
+                    hashed_ngram = hash32(current_ngram)
+                    ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
+                    doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
+                    if self.debug is True:
+                        debug_ngrams.append(value)
+                ngram_obj.popleft()
+        if self.config["text_object_level"] == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
+            if self.debug:
+                self.__write_to_disk(debug_ngrams, current_text_id)
+            if self.metadata_done is False:
+                metadata[current_text_id] = self.__get_metadata(current_text_id)
+            self.__build_text_index(ngrams, current_text_id)
+        with open("{}/temp/{}".format(self.output_path, os.path.basename(input_file)), "w") as output:
+            output.write("\n".join(sorted(doc_ngrams)))
         return metadata
+
+    def filter_by_pos(self, file, preprocessor):
+        """Filters text based on POS"""
+        text_object = []
+        text_tokens = []
+        for line in file:
+            word_obj = json.loads(line.strip())
+            text_object.append(word_obj)
+            text_tokens.append(word_obj["token"])
+        doc = preprocessor.process_text(text_tokens)
+        filtered_text_object = []
+        for word_obj, token in zip(text_object, doc):
+            if token.pos_ in self.config["pos_to_keep"]:
+                filtered_text_object.append(word_obj)
+        return filtered_text_object
 
 def parse_command_line():
     """Command line parsing function"""
