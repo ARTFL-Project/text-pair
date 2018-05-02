@@ -173,7 +173,9 @@ class Ngrams:
             if self.use_pos is True:
                 doc = self.filter_by_pos(file, preprocessor)
             else:
-                doc = (json.loads(line.strip()) for line in file)
+                doc = []
+                for line in file:
+                    doc.append(json.loads(line.strip()))
         ngrams = deque([])
         ngram_obj = deque([])
         current_text_id = None
