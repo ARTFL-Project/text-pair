@@ -152,7 +152,7 @@ class Ngrams:
             with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
                 json.dump(combined_metadata, metadata_output)
         else:
-            os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
+            os.system("cp -f {} {}/metadata/metadata.json".format(metadata, self.output_path))
 
         self.__dump_config(output_path)
 
@@ -173,53 +173,51 @@ class Ngrams:
             if self.use_pos is True:
                 doc = self.filter_by_pos(file, preprocessor)
             else:
-                doc = []
-                for line in file:
-                    doc.append(json.loads(line.strip()))
-        ngrams = deque([])
-        ngram_obj = deque([])
-        current_text_id = None
-        for word_obj in doc:
-            word = word_obj["token"]
-            if self.config["modernize"] is True:
-                word = modernize(word, self.config["language"])
-            if len(word) < self.config["minimum_word_length"]:
-                continue
-            word = preprocessor.lemmatizer.get(word, word)
-            word = preprocessor.normalize(word)
-            if word == "" or len(word) < self.config["minimum_word_length"]:
-                continue
-            position = word_obj["position"]
-            if self.config["text_object_level"] == 'doc':
-                text_id = position.split()[0]
-            else:
-                text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]])
-            if current_text_id is None:
-                current_text_id = text_id
-            if current_text_id != text_id:
-                if self.debug:
-                    self.__write_to_disk(debug_ngrams, current_text_id)
-                if self.metadata_done is False:
-                    metadata[current_text_id] = self.__get_metadata(current_text_id)
-                self.__build_text_index(ngrams, current_text_id)
-                ngrams = deque([])
-                ngram_obj = deque([])
-                current_text_id = text_id
-            ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
-            if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
-                if self.config["word_order"] is True:
-                    iterator = combinations(ngram_obj, self.config["ngram"])
+                doc = (json.loads(line.strip()) for line in file)
+            ngrams = deque([])
+            ngram_obj = deque([])
+            current_text_id = None
+            for word_obj in doc:
+                word = word_obj["token"]
+                if self.config["modernize"] is True:
+                    word = modernize(word, self.config["language"])
+                if len(word) < self.config["minimum_word_length"]:
+                    continue
+                word = preprocessor.lemmatizer.get(word, word)
+                word = preprocessor.normalize(word)
+                if word == "" or len(word) < self.config["minimum_word_length"]:
+                    continue
+                position = word_obj["position"]
+                if self.config["text_object_level"] == 'doc':
+                    text_id = position.split()[0]
                 else:
-                    iterator = permutations(ngram_obj)
-                for value in iterator:
-                    current_ngram_list, _, start_bytes, end_bytes = zip(*value)
-                    current_ngram = "_".join(current_ngram_list)
-                    hashed_ngram = hash32(current_ngram)
-                    ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
-                    doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
-                    if self.debug is True:
-                        debug_ngrams.append(value)
-                ngram_obj.popleft()
+                    text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]])
+                if current_text_id is None:
+                    current_text_id = text_id
+                if current_text_id != text_id:
+                    if self.debug:
+                        self.__write_to_disk(debug_ngrams, current_text_id)
+                    if self.metadata_done is False:
+                        metadata[current_text_id] = self.__get_metadata(current_text_id)
+                    self.__build_text_index(ngrams, current_text_id)
+                    ngrams = deque([])
+                    ngram_obj = deque([])
+                    current_text_id = text_id
+                ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
+                if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
+                    if self.config["word_order"] is True:
+                        iterator = combinations(ngram_obj, self.config["ngram"])
+                    else:
+                        iterator = permutations(ngram_obj)
+                    for value in iterator:
+                        current_ngram_list, _, start_bytes, end_bytes = zip(*value)
+                        current_ngram = "_".join(current_ngram_list)
+                        hashed_ngram = hash32(current_ngram)
+                        ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
+                        doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
+                        if self.debug is True:
+                            debug_ngrams.append(value)
+                    ngram_obj.popleft()
         if self.config["text_object_level"] == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
             if self.debug:
                 self.__write_to_disk(debug_ngrams, current_text_id)
