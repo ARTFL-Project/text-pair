@@ -152,7 +152,7 @@ class Ngrams:
             with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
                 json.dump(combined_metadata, metadata_output)
         else:
-            os.system("cp -f {} {}/metadata/metadata.json".format(metadata, self.output_path))
+            os.system("cp {} {}/metadata/metadata.json 2>/dev/null".format(metadata, self.output_path))
 
         self.__dump_config(output_path)
 
