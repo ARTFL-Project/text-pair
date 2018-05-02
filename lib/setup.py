@@ -26,7 +26,9 @@ setup(name="textalign",
       scripts=["scripts/textalign"],
       install_requires=[
           "multiprocess", "mmh3", "unidecode", "tqdm",
-          "pystemmer", "flask", "flask-cors", "psycopg2-binary", "mod_wsgi",
-          "argcomplete", "lxml"
-          ]
+          "pystemmer", "argcomplete", "lxml"
+          ],
+     extras_require={
+         "web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]
+     }
      )

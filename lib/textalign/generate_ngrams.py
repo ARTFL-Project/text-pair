@@ -49,7 +49,7 @@ class Ngrams:
             "lowercase": lowercase,
             "minimum_word_length": minimum_word_length,
             "lemmatizer": lemmatizer,
-            "stopwords": stopwords,
+            "stopwords": stopwords, #TODO: generate error if file not found
             "text_object_level": text_object_level,
             "pos_to_keep": set(pos_to_keep)
         }
@@ -173,7 +173,9 @@ class Ngrams:
             if self.use_pos is True:
                 doc = self.filter_by_pos(file, preprocessor)
             else:
-                doc = (json.loads(line.strip()) for line in file)
+                doc = []
+                for line in file:
+                    doc.append(json.loads(line.strip()))
         ngrams = deque([])
         ngram_obj = deque([])
         current_text_id = None
