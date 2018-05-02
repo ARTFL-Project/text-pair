@@ -49,7 +49,7 @@ class Ngrams:
             "lowercase": lowercase,
             "minimum_word_length": minimum_word_length,
             "lemmatizer": lemmatizer,
-            "stopwords": stopwords,
+            "stopwords": stopwords, #TODO: generate error if file not found
             "text_object_level": text_object_level,
             "pos_to_keep": set(pos_to_keep)
         }
