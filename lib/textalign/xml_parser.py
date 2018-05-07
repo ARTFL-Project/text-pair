@@ -161,7 +161,7 @@ class TEIParser:
             self.words_to_keep = set()
 
     def get_metadata(self):
-        print("\nParsing headers in all files...", flush=True)
+        print("Parsing headers in all files...", flush=True)
         metadata = {}
         invalid_files = []
         pool = Pool(self.workers)

@@ -128,7 +128,7 @@ class Ngrams:
             print("No metadata provided: exiting...")
             exit()
 
-        print("\nGenerating ngrams...", flush=True)
+        print("Generating ngrams...", flush=True)
         pool = Pool(workers)
         with tqdm(total=len(files), leave=self.debug) as pbar:
             for local_metadata in pool.imap_unordered(self.process_file, files):

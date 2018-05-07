@@ -305,7 +305,7 @@ func main() {
 	}
 	mergedOutput.Sync()
 	mergedOutput.Close()
-	fmt.Printf("\n\n%d pairwise alignments found...\n", counts)
+	fmt.Printf("%d pairwise alignments found...\n", counts)
 }
 
 func parseFlags() ([]string, []string, map[string]map[string]string, map[string]map[string]string, map[int32]bool, *matchingParams, map[int32]string) {
@@ -346,7 +346,7 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	} else {
 		ngramIndex = map[int32]string{}
 	}
-	fmt.Printf("\nLoading metadata...")
+	fmt.Printf("Loading metadata...")
 	if *sourceMetadataArg == "" {
 		fmt.Println("\nNo source metadata provided, stopping now...")
 		os.Exit(-1)

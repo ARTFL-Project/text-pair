@@ -252,6 +252,7 @@ def set_up_app(web_config, db_path):
 def create_web_app(file, table, field_types, web_app_dir, api_server, source_database,
                    source_database_link, target_database, target_database_link):
     """Main routine"""
+    print("\n### Bulding Web Application ###", flush=True)
     web_config = WebAppConfig(field_types, table, api_server, source_database,
                               source_database_link, target_database, target_database_link)
     fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
