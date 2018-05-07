@@ -9,9 +9,16 @@ import re
 import sys
 from collections import OrderedDict
 
-import psycopg2
 from psycopg2.extras import execute_values
+from textalign import parse_config
 from tqdm import tqdm
+
+try:
+    import psycopg2
+except ImportError:
+    print("The textalign lib was not installed with the web components. Please \
+    run pip3 install .[web] from the lib/ directory to install missing dependencies \
+    or run the texalign command with --disable_web_app")
 
 DEFAULT_FIELD_TYPES = {
     "source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER",
@@ -100,32 +107,13 @@ def parse_command_line(args):
         print("Please supply a file argument\nExiting....")
         exit()
     field_types = DEFAULT_FIELD_TYPES
-    api_server = ""
-    table = ""
-    web_application_directory = ""
     if args["config"]:
         if os.path.exists(args["config"]):
-            config = configparser.ConfigParser()
-            config.read(args["config"])
-            for key, value in dict(config["WEB_APPLICATION"]).items():
-                if key == "api_server":
-                    api_server = value
-                elif key == "table_name":
-                    table = value
-                elif key == "web_application_directory":
-                    web_application_directory = value
-                elif key == "source_database":
-                    source_database = value
-                elif key == "source_database_link":
-                    source_database_link = value
-                elif key == "target_database":
-                    target_database = value
-                elif key == "target_database_link":
-                    target_database_link = value
-                else:
-                    field_types[key] = value
-    return args["file"], table, field_types, web_application_directory, api_server, \
-           source_database, source_database_link, target_database, target_database_link
+            _, _, _, web_app_config = parse_config(args["config"])
+            field_types.update(web_app_config["field_types"])
+    return args["file"], web_app_config["table_name"], field_types, web_app_config["web_application_directory"], \
+           web_app_config["api_server"], web_app_config["source_database"], web_app_config["source_database_link"], \
+           web_app_config["target_database"], web_app_config["target_database_link"]
 
 def count_lines(filename):
     """Count lines in file"""
@@ -134,7 +122,7 @@ def count_lines(filename):
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
     with open(file, encoding="utf8", errors="ignore") as input_file:
-        for pos, line in enumerate(input_file):
+        for line in input_file:
             fields = json.loads(line.rstrip("\n"))
             yield fields
 
@@ -182,7 +170,7 @@ def load_db(file, table_name, field_types, searchable_fields):
     rows = []
     rowid = 0
     print("Populating main table...")
-    for alignment_fields in tqdm(alignments, total=line_count):
+    for alignment_fields in tqdm(alignments, total=line_count, leave=False):
         rowid += 1
         alignment_fields["rowid"] = rowid
         alignment_fields["source_passage_length"] = len(TOKENIZER.findall(alignment_fields["source_passage"]))
@@ -239,10 +227,10 @@ def load_db(file, table_name, field_types, searchable_fields):
             rows = []
             lines = 0
     if lines:
-            insert = "INSERT INTO {} ({}) VALUES %s".format(ordered_table, "rowid_ordered, source_year_target_year")
-            execute_values(cursor2, insert, rows)
-            rows = []
-            lines = 0
+        insert = "INSERT INTO {} ({}) VALUES %s".format(ordered_table, "rowid_ordered, source_year_target_year")
+        execute_values(cursor2, insert, rows)
+        rows = []
+        lines = 0
     print("Creating indexes...")
     cursor2.execute("CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
     database.commit()

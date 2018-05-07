@@ -1,6 +1,6 @@
 #!/bin/sh
 
-sudo pip3 install lib/. --upgrade
+sudo pip3 install lib/.[web] --upgrade
 
 echo "\nMoving web application components into place..."
 sudo rm -rf /var/lib/text-align

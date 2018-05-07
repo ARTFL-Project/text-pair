@@ -3,16 +3,13 @@
 
 import argparse
 import configparser
-import html
 import json
 import os
 import re
 import sys
-import unicodedata
-from ast import literal_eval
 from collections import defaultdict, deque
 from glob import glob
-from itertools import combinations, permutations
+from itertools import combinations
 from math import floor
 
 from multiprocess import Pool
@@ -26,6 +23,9 @@ try:
 except ImportError:
     DB = None
 
+
+# https://github.com/tqdm/tqdm/issues/481
+tqdm.monitor_interval = 0
 
 # See https://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python/266162#266162
 TRIM_LAST_SLASH = re.compile(r'/\Z')
@@ -205,13 +205,14 @@ class Ngrams:
                     current_text_id = text_id
                 ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
                 if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
-                    if self.config["word_order"] is True:
-                        iterator = combinations(ngram_obj, self.config["ngram"])
-                    else:
-                        iterator = permutations(ngram_obj)
+                    iterator = combinations(ngram_obj, self.config["ngram"])
                     for value in iterator:
                         current_ngram_list, _, start_bytes, end_bytes = zip(*value)
-                        current_ngram = "_".join(current_ngram_list)
+                        if self.config["word_order"] is True:
+                            current_ngram = "_".join(current_ngram_list)
+                        else:
+                            current_ngram = sorted(current_ngram_list) # we sort ngram by word so as to make word order irrelevant
+                            current_ngram = "_".join(current_ngram_list)
                         hashed_ngram = hash32(current_ngram)
                         ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
                         doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
@@ -267,7 +268,7 @@ def parse_command_line():
                           type=str, default="./output")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
-    optional.add_argument("--ngram", help="number of grams", type = int, default=3)
+    optional.add_argument("--ngram", help="number of grams", type=int, default=3)
     optional.add_argument("--gap", help="number of gap", action='store_true', default=0)
     optional.add_argument("--word_order", help="words order must be respected", action='store_true', default=True)
     args = vars(parser.parse_args())
