@@ -3,16 +3,13 @@
 
 import argparse
 import configparser
-import html
 import json
 import os
 import re
 import sys
-import unicodedata
-from ast import literal_eval
 from collections import defaultdict, deque
 from glob import glob
-from itertools import combinations, permutations
+from itertools import combinations
 from math import floor
 
 from multiprocess import Pool
@@ -26,6 +23,9 @@ try:
 except ImportError:
     DB = None
 
+
+# https://github.com/tqdm/tqdm/issues/481
+tqdm.monitor_interval = 0
 
 # See https://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python/266162#266162
 TRIM_LAST_SLASH = re.compile(r'/\Z')
@@ -128,7 +128,7 @@ class Ngrams:
             print("No metadata provided: exiting...")
             exit()
 
-        print("\nGenerating ngrams...", flush=True)
+        print("Generating ngrams...", flush=True)
         pool = Pool(workers)
         with tqdm(total=len(files), leave=self.debug) as pbar:
             for local_metadata in pool.imap_unordered(self.process_file, files):
@@ -152,7 +152,7 @@ class Ngrams:
             with open("%s/metadata/metadata.json" % self.output_path, "w") as metadata_output:
                 json.dump(combined_metadata, metadata_output)
         else:
-            os.system("cp {} {}/metadata/metadata.json".format(metadata, self.output_path))
+            os.system("cp {} {}/metadata/metadata.json 2>/dev/null".format(metadata, self.output_path))
 
         self.__dump_config(output_path)
 
@@ -173,53 +173,52 @@ class Ngrams:
             if self.use_pos is True:
                 doc = self.filter_by_pos(file, preprocessor)
             else:
-                doc = []
-                for line in file:
-                    doc.append(json.loads(line.strip()))
-        ngrams = deque([])
-        ngram_obj = deque([])
-        current_text_id = None
-        for word_obj in doc:
-            word = word_obj["token"]
-            if self.config["modernize"] is True:
-                word = modernize(word, self.config["language"])
-            if len(word) < self.config["minimum_word_length"]:
-                continue
-            word = preprocessor.lemmatizer.get(word, word)
-            word = preprocessor.normalize(word)
-            if word == "" or len(word) < self.config["minimum_word_length"]:
-                continue
-            position = word_obj["position"]
-            if self.config["text_object_level"] == 'doc':
-                text_id = position.split()[0]
-            else:
-                text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]])
-            if current_text_id is None:
-                current_text_id = text_id
-            if current_text_id != text_id:
-                if self.debug:
-                    self.__write_to_disk(debug_ngrams, current_text_id)
-                if self.metadata_done is False:
-                    metadata[current_text_id] = self.__get_metadata(current_text_id)
-                self.__build_text_index(ngrams, current_text_id)
-                ngrams = deque([])
-                ngram_obj = deque([])
-                current_text_id = text_id
-            ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
-            if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
-                if self.config["word_order"] is True:
-                    iterator = combinations(ngram_obj, self.config["ngram"])
+                doc = (json.loads(line.strip()) for line in file)
+            ngrams = deque([])
+            ngram_obj = deque([])
+            current_text_id = None
+            for word_obj in doc:
+                word = word_obj["token"]
+                if self.config["modernize"] is True:
+                    word = modernize(word, self.config["language"])
+                if len(word) < self.config["minimum_word_length"]:
+                    continue
+                word = preprocessor.lemmatizer.get(word, word)
+                word = preprocessor.normalize(word)
+                if word == "" or len(word) < self.config["minimum_word_length"]:
+                    continue
+                position = word_obj["position"]
+                if self.config["text_object_level"] == 'doc':
+                    text_id = position.split()[0]
                 else:
-                    iterator = permutations(ngram_obj)
-                for value in iterator:
-                    current_ngram_list, _, start_bytes, end_bytes = zip(*value)
-                    current_ngram = "_".join(current_ngram_list)
-                    hashed_ngram = hash32(current_ngram)
-                    ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
-                    doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
-                    if self.debug is True:
-                        debug_ngrams.append(value)
-                ngram_obj.popleft()
+                    text_id = '_'.join(position.split()[:PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]])
+                if current_text_id is None:
+                    current_text_id = text_id
+                if current_text_id != text_id:
+                    if self.debug:
+                        self.__write_to_disk(debug_ngrams, current_text_id)
+                    if self.metadata_done is False:
+                        metadata[current_text_id] = self.__get_metadata(current_text_id)
+                    self.__build_text_index(ngrams, current_text_id)
+                    ngrams = deque([])
+                    ngram_obj = deque([])
+                    current_text_id = text_id
+                ngram_obj.append((word, position, word_obj["start_byte"], word_obj["end_byte"]))
+                if len(ngram_obj) == self.config["window"]:   # window is ngram+gap
+                    iterator = combinations(ngram_obj, self.config["ngram"])
+                    for value in iterator:
+                        current_ngram_list, _, start_bytes, end_bytes = zip(*value)
+                        if self.config["word_order"] is True:
+                            current_ngram = "_".join(current_ngram_list)
+                        else:
+                            current_ngram = sorted(current_ngram_list) # we sort ngram by word so as to make word order irrelevant
+                            current_ngram = "_".join(current_ngram_list)
+                        hashed_ngram = hash32(current_ngram)
+                        ngrams.append((hashed_ngram, start_bytes[0], end_bytes[-1]))
+                        doc_ngrams.append("\t".join((current_ngram, str(hashed_ngram))))
+                        if self.debug is True:
+                            debug_ngrams.append(value)
+                    ngram_obj.popleft()
         if self.config["text_object_level"] == "doc" and current_text_id is not None:  # make sure the file is not empty (no lines so never entered loop)
             if self.debug:
                 self.__write_to_disk(debug_ngrams, current_text_id)
@@ -269,7 +268,7 @@ def parse_command_line():
                           type=str, default="./output")
     optional.add_argument("--debug", help="add debugging", action='store_true', default=False)
     optional.add_argument("--stopwords", help="path to stopword list", type=str, default=None)
-    optional.add_argument("--ngram", help="number of grams", type = int, default=3)
+    optional.add_argument("--ngram", help="number of grams", type=int, default=3)
     optional.add_argument("--gap", help="number of gap", action='store_true', default=0)
     optional.add_argument("--word_order", help="words order must be respected", action='store_true', default=True)
     args = vars(parser.parse_args())

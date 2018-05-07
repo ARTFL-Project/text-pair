@@ -161,7 +161,7 @@ class TEIParser:
             self.words_to_keep = set()
 
     def get_metadata(self):
-        print("\nParsing headers in all files...", flush=True)
+        print("Parsing headers in all files...", flush=True)
         metadata = {}
         invalid_files = []
         pool = Pool(self.workers)
@@ -262,7 +262,7 @@ class TEIParser:
                 for line in input_file:
                     word = line.strip()
                     self.words_to_keep.add(word)
-        print("\nParsing text body of all files...", flush=True)
+        print("Parsing text body of all files...", flush=True)
         pool = Pool(self.workers)
         chunksize = len(self.files)//self.workers//10
         with tqdm(total=len(self.files), leave=self.debug) as pbar:
