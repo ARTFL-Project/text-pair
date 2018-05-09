@@ -191,7 +191,7 @@ class TEIParser:
             return file_id, metadata, file
         try:
             file_content = ""
-            with open(file) as text_file:
+            with open(file, errors='ignore') as text_file:
                 for line in text_file:
                     file_content += line
                     if "</teiHeader" in line or "<teiheader" in line:
@@ -274,7 +274,7 @@ class TEIParser:
     def parse_file(self, file_with_id):
         file_id, file = file_with_id
         with open(os.path.join(self.text_path, str(file_id)), "w") as output_file:
-            with open(file, "r", newline="") as text_file:
+            with open(file, "r", newline="", errors='ignore') as text_file:
                 text_content = text_file.read()
             text_content = self.prepare_content(text_content)
             bytes_read_in = 0
