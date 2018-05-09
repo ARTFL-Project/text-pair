@@ -183,7 +183,8 @@ class Ngrams:
                     word = modernize(word, self.config["language"])
                 if len(word) < self.config["minimum_word_length"]:
                     continue
-                word = preprocessor.lemmatizer.get(word, word)
+                if self.config["lemmatizer"]:
+                    word = preprocessor.lemmatizer.get(word, word)
                 word = preprocessor.normalize(word)
                 if word == "" or len(word) < self.config["minimum_word_length"]:
                     continue

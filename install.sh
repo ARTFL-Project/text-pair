@@ -1,6 +1,10 @@
 #!/bin/sh
 
 sudo pip3 install lib/.[web] --upgrade
+git clone git@github.com:ARTFL-Project/text-preprocessing.git
+sudo pip3 install text-preprocessing/. --upgrade
+rm -rf text-preprocessing
+
 
 echo "\nMoving web application components into place..."
 sudo rm -rf /var/lib/text-align
