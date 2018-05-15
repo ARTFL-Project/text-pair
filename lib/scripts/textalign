@@ -44,6 +44,7 @@ def parse_command_line():
                         action='store_true', default=False)
     parser.add_argument("--load_only_web_app", help="define whether to load results into a database and build a corresponding web app",
                         action='store_true', default=False)
+    parser.add_argument("--file", help="alignment file to load", type=str, default=None)
     parser.add_argument("--output_path", help="output path for ngrams and sequence alignment",
                         type=str, default="./output")
     parser.add_argument("--workers", help="How many threads or cores to use for preprocessing and matching",
@@ -64,7 +65,7 @@ def parse_command_line():
         exit()
     web_app_config["skip_web_app"] = args["skip_web_app"]
     paths = {"source": {}, "target": defaultdict(str)}
-    if args['only_align'] is False:
+    elif args['only_align'] is False:
         if tei_parsing["parse_source_files"] is True:
             paths["source"]["tei_input_files"] = args["source_files"]
             paths["source"]["parse_output"] = os.path.join(args["output_path"], "source")
@@ -102,11 +103,18 @@ def parse_command_line():
         paths["target"]["metadata_path"] = args["target_metadata"]
         paths["target"]["common_ngrams"] = args["target_common_ngrams"]
 
-    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"], args["only_align"]
+    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"], args["only_align"], args["load_only_web_app"], file
 
 def run_alignment():
     """Main function to start sequence alignment"""
-    paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align = parse_command_line()
+    paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, file = parse_command_line()
+    if only_web_app is True:
+        FIELD_TYPES.update(web_app_config["field_types"])
+        create_web_app(file, web_app_config["table_name"], FIELD_TYPES,
+                       web_app_config["web_application_directory"], web_app_config["api_server"],
+                       web_app_config["source_database"], web_app_config["source_database_link"],
+                       web_app_config["target_database"], web_app_config["target_database_link"])
+        return
     if only_align is False:
         if tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")
