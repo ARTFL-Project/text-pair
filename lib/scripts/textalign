@@ -103,7 +103,7 @@ def parse_command_line():
         paths["target"]["metadata_path"] = args["target_metadata"]
         paths["target"]["common_ngrams"] = args["target_common_ngrams"]
 
-    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"], args["only_align"], args["load_only_web_app"], file
+    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"], args["only_align"], args["load_only_web_app"], args["file"]
 
 def run_alignment():
     """Main function to start sequence alignment"""
