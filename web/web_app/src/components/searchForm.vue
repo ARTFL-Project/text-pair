@@ -204,7 +204,7 @@ export default {
             }
             formValues.banality = ""
             formValues.timeSeriesInterval = this.$globalConfig.timeSeriesIntervals[0].value
-            formValues.directionSelected = this.$route.query.directionSelected
+            formValues.directionSelected = "source"
             return formValues
         },
         banalitySelect(index) {
