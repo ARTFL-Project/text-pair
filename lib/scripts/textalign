@@ -65,7 +65,7 @@ def parse_command_line():
         exit()
     web_app_config["skip_web_app"] = args["skip_web_app"]
     paths = {"source": {}, "target": defaultdict(str)}
-    elif args['only_align'] is False:
+    if args['only_align'] is False:
         if tei_parsing["parse_source_files"] is True:
             paths["source"]["tei_input_files"] = args["source_files"]
             paths["source"]["parse_output"] = os.path.join(args["output_path"], "source")
