@@ -26,10 +26,7 @@ except ImportError:
 
 # https://github.com/tqdm/tqdm/issues/481
 tqdm.monitor_interval = 0
-
-# See https://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python/266162#266162
 TRIM_LAST_SLASH = re.compile(r'/\Z')
-
 PHILO_TEXT_OBJECT_LEVELS = {'doc': 1, 'div1': 2, 'div2': 3, 'div3': 4, 'para': 5, 'sent': 6, 'word': 7}
 
 

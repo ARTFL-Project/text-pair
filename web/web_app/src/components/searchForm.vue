@@ -13,6 +13,8 @@
                         <h6 class="text-center pb-2" v-html="globalConfig.targetLabel"></h6>
                     </div>
                 </div>
+
+                <!-- Metadata Fields -->
                 <div class="row">
                     <div class="col">
                         <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.source" :key="field.label">
@@ -31,26 +33,30 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Banality filter -->
                 <div id="banality-filter" class="my-dropdown mb-3">
                     <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ banalitySelected }}&nbsp;&nbsp;&#9662;</button>
                     <ul class="my-dropdown-menu shadow-1">
                         <li class="my-dropdown-item" v-for="(option, optionIndex) in formBanalityValues" :key="optionIndex" @click="banalitySelect(optionIndex)">{{ option.label }}</li>
                     </ul>
                 </div>
+
+                <!-- Search reports -->
                 <ul class="nav nav-tabs" id="myTab" role="tablist">
                     <li class="nav-item">
-                        <a class="nav-link active" id="search-alignments-tab" data-toggle="tab" href="#search-alignments" role="tab" aria-controls="search-alignments" aria-expanded="true" @click="searchSelected = search">Search Alignments</a>
+                        <a class="nav-link" id="search-alignments-tab" data-toggle="tab" href="#search-alignments" role="tab" aria-controls="search-alignments" aria-expanded="true" v-bind:class="{ active: searchActive }" @click="searchSelected = search">Search Alignments</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" id="time-series-tab" data-toggle="tab" href="#time-series" role="tab" aria-controls="time-series" aria-expanded="true" @click="searchSelected = displayTimeSeries">Display Time Series</a>
+                        <a class="nav-link" id="time-series-tab" data-toggle="tab" href="#time-series" role="tab" aria-controls="time-series" aria-expanded="true" v-bind:class="{ active: timeActive }" @click="searchSelected = displayTimeSeries">Display Time Series</a>
                     </li>
                 </ul>
                 <div class="tab-content mt-3" id="myTabContent">
-                    <div class="tab-pane fade show active" id="search-alignments" role="tabpanel" aria-labelledby="search-alignments-tab">
+                    <div class="tab-pane fade" id="search-alignments" role="tabpanel" aria-labelledby="search-alignments-tab" v-bind:class="{ show: searchActive, active: searchActive }">
                         <button class="btn btn-primary rounded-0" type="button" @click="search()">Search</button>
                         <button type="button" class="btn btn-secondary rounded-0" @click="clearForm()">Reset</button>
                     </div>
-                    <div class="tab-pane fade" id="time-series" role="tabpanel" aria-labelledby="time-series-tab">
+                    <div class="tab-pane fade" id="time-series" role="tabpanel" aria-labelledby="time-series-tab" v-bind:class="{ show: timeActive, active: timeActive }">
                         Group
                         <div class="my-dropdown" style="display: inline-block">
                             <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ directionSelected.label }} &#9662;</button>
@@ -115,7 +121,9 @@ export default {
                     label: "Source",
                     value: "source"
                 },
-            searchSelected: this.search
+            searchSelected: this.search,
+            searchActive: true,
+            timeActive: false
         }
     },
     created() {
@@ -126,11 +134,52 @@ export default {
                     vm.formValues[key] = updatedParams[key]
                 }
             }
-            console.log(updatedParams)
         })
         EventBus.$on("toggleSearchForm", function() {
             vm.toggleSearchForm()
         })
+        if ("banality" in this.$route.query) {
+            if (this.$route.query.banality == "true") {
+                this.banalitySelected = "Search only banalities"
+            } else {
+                this.banalitySelected = "Filter all banalities"
+            }
+        } else {
+            this.banalitySelected = "Don't filter banalities"
+        }
+        if (this.$route.path != "/") {
+            if (this.$route.path == "/search") {
+                this.searchActive = true
+                this.timeActive = false
+            } else {
+                this.searchActive = false
+                this.timeActive = true
+            }
+        }
+        if (this.$route.query.directionSelected == "source") {
+            vm.directionSelected = {
+                    label: "Source",
+                    value: "source"
+                }
+        } else if (this.$route.query.directionSelected == "target") {
+            vm.directionSelected = {
+                    label: "Target",
+                    value: "target"
+                }
+        } else {
+            vm.directionSelected = {
+                    label: "Source",
+                    value: "source"
+                }
+        }
+        if ("timeSeriesInterval" in this.$route.query) {
+            for (let interval of this.$globalConfig.timeSeriesIntervals) {
+                if (this.$route.query.timeSeriesInterval == interval.value) {
+                    vm.timeSeriesInterval = interval
+                    break
+                }
+            }
+        }
     },
     methods: {
         populateSearchForm() {
@@ -155,7 +204,7 @@ export default {
             }
             formValues.banality = ""
             formValues.timeSeriesInterval = this.$globalConfig.timeSeriesIntervals[0].value
-            formValues.directionSelected = "source"
+            formValues.directionSelected = this.$route.query.directionSelected
             return formValues
         },
         banalitySelect(index) {
