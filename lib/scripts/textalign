@@ -115,7 +115,7 @@ def run_alignment():
             parser.get_metadata()
             parser.get_text()
         print("\n### Generating source ngrams ###")
-        ngrams = Ngrams(**preprocessing_params["source"], debug=debug)
+        ngrams = Ngrams(debug=debug, **preprocessing_params["source"])
         ngrams.generate(paths["source"]["input_files_for_ngrams"], paths["source"]["ngram_output_path"],
                         metadata=paths["source"]["metadata_path"], is_philo_db=paths["source"]["is_philo_db"],
                         workers=workers)
@@ -127,7 +127,7 @@ def run_alignment():
                 parser.get_metadata()
                 parser.get_text()
             print("\n### Generating target ngrams ###")
-            ngrams = Ngrams(**preprocessing_params["target"], debug=debug)
+            ngrams = Ngrams(debug=debug, **preprocessing_params["target"])
             ngrams.generate(paths["target"]["input_files_for_ngrams"], paths["target"]["ngram_output_path"],
                             metadata=paths["target"]["metadata_path"], is_philo_db=paths["target"]["is_philo_db"], workers=workers)
     print("\n### Starting sequence alignment ###")

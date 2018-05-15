@@ -4,15 +4,17 @@
             {{ counts }} results for the following query:
         </div>
         <div class="m-2 pt-2 pb-1" v-if="banality">
-            <span class="metadata-label">
-                Banality filter
-            </span>
-            <span class="remove-metata">
-                <span class="corner-btn destroy right" @click="removeMetadata({fieldName: 'banality'})">x</span>
-            </span>
-            <span class="metadata-value">
-                {{ banality }}
-            </span>
+            <div class="metadata-args">
+                <span class="metadata-label">
+                    Banality filter
+                </span>
+                <span class="remove-metadata">
+                    <span class="corner-btn destroy right" @click="removeMetadata({fieldName: 'banality'})">x</span>
+                </span>
+                <span class="metadata-value">
+                    {{ banality }}
+                </span>
+            </div>
         </div>
         <div class="row pl-2" v-if="!error">
             <div class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams" :key="groupIndex">
@@ -21,7 +23,7 @@
                     <span class="metadata-label">
                         {{ metadata.label }}
                     </span>
-                    <span class="remove-metata">
+                    <span class="remove-metadata">
                         <span class="corner-btn destroy right" @click="removeMetadata(metadata)">x</span>
                     </span>
                     <span class="metadata-value">
@@ -46,7 +48,13 @@ export default {
                 vm.counts = params.counts.toLocaleString()
                 vm.searchParams = this.processParams(params.searchParams)
                 if ("banality" in params.searchParams && params.searchParams.banality.length > 0) {
-                    vm.banality = params.searchParams.banality
+                    if (params.searchParams.banality == "false") {
+                        vm.banality = "Filter all"
+                    } else {
+                        vm.banality = "Only banalities"
+                    }
+                } else {
+                    vm.banality = false
                 }
             })
         },
@@ -131,7 +139,7 @@ export default {
    -webkit-box-decoration-break: clone;
 }
 
-.remove-metata {
+.remove-metadata {
     float: right;
 }
 
