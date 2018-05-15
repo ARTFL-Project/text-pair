@@ -145,7 +145,6 @@ var cleanEnd = regexp.MustCompile(` \S+$`)
 func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
 	sourceAgainstSource := false
-	sourceFilesDone := make(map[string]bool)
 
 	// Split source and target files into config.batchSize batches
 	if config.sourceBatch > len(sourceFiles) {
@@ -157,6 +156,7 @@ func main() {
 		targetMetadata = sourceMetadata
 		sourceAgainstSource = true
 		targetFileBatches = sourceFileBatches
+		config.targetBatch = config.sourceBatch
 	} else {
 		if config.targetBatch > len(targetFiles) {
 			config.targetBatch = len(targetFiles)
@@ -189,11 +189,7 @@ func main() {
 			}
 			var localSourceFilesDone map[string]bool
 			if sourceAgainstSource {
-				if len(sourceFilesDone) > 0 {
-					localSourceFilesDone = sourceFilesDone
-				} else {
-					localSourceFilesDone = make(map[string]bool)
-				}
+				localSourceFilesDone = make(map[string]bool)
 			}
 			percentSteps := buildPercentMap(len(sourceFileIndexes))
 			fmt.Printf("Comparing files... 0%%")
@@ -230,11 +226,10 @@ func main() {
 					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config *matchingParams, commonNgrams map[int32]bool) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
-						// duplicates := [][]string{}
 					innerTargetMatching:
 						for _, targetFile := range splitTargets {
 							if sourceAgainstSource {
-								if sourceMetadata[sourceFile.DocID]["filename"] == targetMetadata[targetFile.DocID]["filename"] {
+								if sourceFile.DocID == targetFile.DocID {
 									continue innerTargetMatching
 								} else if _, ok := localSourceFilesDone[targetFile.DocID]; ok {
 									continue innerTargetMatching
@@ -248,8 +243,9 @@ func main() {
 							if len(sourceTargetIntersection) < config.minimumMatchingNgramsInDocs {
 								continue innerTargetMatching
 							} else if float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100 > config.duplicateThreshold {
-								// duplicates = append(duplicates, []string{sourceMetadata[sourceFile.DocID]["filename"], targetMetadata[targetFile.DocID]["filename"]})
-								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, []Alignment{}, []string{sourceMetadata[sourceFile.DocID]["filename"], targetMetadata[targetFile.DocID]["filename"]}})
+								sourceInfo := fmt.Sprintf("%s (%s) [%s]", sourceMetadata[sourceFile.DocID]["title"], sourceMetadata[sourceFile.DocID]["author"], sourceMetadata[sourceFile.DocID]["filename"])
+								targetInfo := fmt.Sprintf("%s (%s) [%s]", targetMetadata[targetFile.DocID]["title"], targetMetadata[targetFile.DocID]["author"], targetMetadata[targetFile.DocID]["filename"])
+								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, []Alignment{}, []string{sourceInfo, targetInfo}})
 								continue innerTargetMatching
 							}
 							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams, commonNgrams)
@@ -296,9 +292,6 @@ func main() {
 					localSourceFilesDone[sourceFile.DocID] = true
 				}
 			}
-			for sourceFileDocID := range localSourceFilesDone {
-				sourceFilesDone[sourceFileDocID] = true
-			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
 			os.Stdout.Sync()
 		}
@@ -322,16 +315,16 @@ func parseFlags() ([]string, []string, map[string]map[string]string, map[string]
 	sourceCommonNgramsArg := flag.String("source_common_ngrams", "", "path to a text file containing the most common ngrams in source files")
 	targetCommonNgramsArg := flag.String("target_common_ngrams", "", "path to a text file containing the most common ngrams in target files")
 	mostCommonNgramThreshold := flag.Int("most_common_ngram_threshold", 1000, "take the n most common ngrams from source and target common ngrams")
-	commonNgramsLimit := flag.Int("common_ngrams_limit", 75, "percentage of common ngrams to dismiss a match as banal")
+	commonNgramsLimit := flag.Int("common_ngrams_limit", 25, "percentage of common ngrams to dismiss a match as banal")
 	matchingWindowSize := flag.Int("matching_window_size", 30, "size of sliding window for matches")
 	maxGap := flag.Int("max_gap", 15, "maximum gap between two matching ngrams")
 	flexGap := flag.Bool("flex_gap", false, "Gradually increment the max_gap once minimum_matching_ngrams is met")
 	minimumMatchingNgrams := flag.Int("minimum_matching_ngrams", 4, "minimum matching ngrams to constitue a match")
-	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngrams_in_window", 3, "minimum matching ngrams per sliding window")
+	minimumMatchingNgramsInWindow := flag.Int("minimum_matching_ngrams_in_window", 4, "minimum matching ngrams per sliding window")
 	minimumMatchingNgramsInDocs := flag.Int("minimum_matching_ngrams_in_docs", 4, "minimum unique ngrams matching between docs to start comparison")
 	contextSize := flag.Int("context_size", 300, "size of context for before and after matching passages")
 	banalNgrams := flag.Int("banal_ngrams", 25, "The top banal ngrams between two docs: used to define common, or banal ngrams")
-	duplicateThreshold := flag.Int("duplicate_threshold", 50, "dismiss comparison if two texts share n or more percent of ngrams")
+	duplicateThreshold := flag.Int("duplicate_threshold", 80, "dismiss comparison if two texts share n or more percent of ngrams")
 	mergeOnByteDistance := flag.Bool("merge_passages_on_byte_distance", true, "Merge passages within x number of byte: number defined by passage length and the passage_distance_multiplier option. Value between 0 and 1")
 	mergeOnNgramDistance := flag.Bool("merge_passages_on_ngram_distance", true, "Merge passages within x number of ngrams: the value used is the matching_window_size defaulting to 20")
 	passageDistance := flag.Float64("passage_distance_multiplier", 0.5, "Combine passage which are within (multiplier*length of previous passage) bytes")
