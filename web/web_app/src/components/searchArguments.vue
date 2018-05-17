@@ -98,7 +98,8 @@ export default {
                 EventBus.$emit("urlUpdate", queryParams)
                 this.facetResults = null
                 this.results = { alignments: [] }
-                this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
+                let route = this.$route.path
+                this.$router.push(`${route}?${this.paramsToUrl(queryParams)}`)
             },
             checkValue(value) {
                 if (value == '""') {
