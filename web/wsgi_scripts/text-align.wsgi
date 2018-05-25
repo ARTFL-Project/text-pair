@@ -100,6 +100,7 @@ def parse_args(request):
                 query_args[key] = value
     import sys
     metadata_field_types = request.get_json()["metadata"]
+    metadata_field_types["rowid"] = "INTEGER"
     sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
     return sql_fields, sql_values, other_args
 

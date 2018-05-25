@@ -40,7 +40,7 @@
                             <div class="col mb-2">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.source_context_before }}
-                                    <span class="source-passage">{{ alignment.source_passage.replace(/<|>/g, "") }}</span>
+                                    <span class="source-passage">{{ alignment.source_passage }}</span>
                                     {{ alignment.source_context_after }}
                                 </p>
                                 <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.sourceDB.philoDB" @click="goToContext(alignment, 'source')">View passage in context</a>
@@ -48,14 +48,14 @@
                             <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.target_context_before }}
-                                    <span class="target-passage">{{ alignment.target_passage.replace(/<|>/g, "") }}</span>
+                                    <span class="target-passage">{{ alignment.target_passage }}</span>
                                     {{ alignment.target_context_after }}
                                 </p>
                                 <a class="card-link px-3 pt-2" style="position: absolute; bottom: 0" v-if="globalConfig.targetDB.philoDB" @click="goToContext(alignment, 'target')">View passage in context</a>
                             </div>
                         </div>
                         <div class="text-muted text-center mb-2">
-                            <a class="diff-btn" diffed="false" @click="showDifferences(alignment.source_passage, alignment.target_passage, alignment.source_passage_length)">
+                            <a class="diff-btn" diffed="false" @click="showDifferences(alignment.source_passage, alignment.target_passage, alignment.source_passage_length, alignment.target_passage.length)">
                                 Show differences
                             </a>
                             <div class="loading position-absolute" style="display:none; left: 50%; transform: translateX(-50%);">
@@ -134,10 +134,10 @@
 
 <script>
 import { EventBus } from '../main.js';
-import * as differ from 'diff';
 import searchArguments from "./searchArguments";
 import { AtomSpinner } from 'epic-spinners';
 import Worker from 'worker-loader!./diffStrings';
+import diff_match_patch from "./googleDiff.js"
 
 export default {
     name: "searchResults",
@@ -289,9 +289,9 @@ export default {
             this.results = { alignments: [] }
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
-        showDifferences(sourceText, targetText, sourcePassageLength) {
-            if (sourcePassageLength > 3000) {
-                alert("Passage of 3000 words or more may take a (very) long time to compare")
+        showDifferences(sourceText, targetText, sourcePassageLength, targetPassageLength) {
+            if (sourcePassageLength > 10000 || targetPassageLength > 10000) {
+                alert("Passage of 10000 words or more may take up a long time to compare")
             }
             let parent = event.srcElement.parentNode.parentNode
             let loading = parent.querySelector(".loading")
@@ -307,14 +307,15 @@ export default {
                     let newSourceString = ""
                     let newTargetString = ""
                     let deleted = ""
-                    for (let text of differences) {
-                        if (!text.hasOwnProperty("added") && !text.hasOwnProperty("removed")) {
-                            newTargetString += text.value
-                            newSourceString += text.value
-                        } else if (text.added) {
-                            newTargetString += `<span class="added">${text.value}</span>`
-                        } else {
-                            newSourceString += `<span class="removed">${text.value}</span>`
+                    for (let diffObj of differences) {
+                        let [diffCode, text] = diffObj
+                        if (diffCode === 0) {
+                            newSourceString += text
+                            newTargetString += text
+                        } else if (diffCode === -1) {
+                            newSourceString += `<span class="removed">${text}</span>`
+                        } else if (diffCode === 1) {
+                            newTargetString += `<span class="added">${text}</span>`
                         }
                     }
                     sourceElement.innerHTML = newSourceString
@@ -329,7 +330,6 @@ export default {
                 event.srcElement.setAttribute("diffed", "false")
                 event.srcElement.textContent = "Show differences"
             }
-
         },
         beforeEnter: function(el) {
             el.style.opacity = 0
