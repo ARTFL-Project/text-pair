@@ -17,6 +17,8 @@ CORS(application)
 GLOBAL_CONFIG = configparser.ConfigParser()
 GLOBAL_CONFIG.read("/etc/text-align/global_settings.ini")
 
+BOOLEAN_ARGS = re.compile(r"(NOT \w+)|(OR \w+)|(\w+)")
+
 
 class formArguments():
     """Special dict to handle form arguments"""
@@ -113,20 +115,32 @@ def query_builder(query_args, other_args, field_types):
         field_type = field_types.get(field, "TEXT").upper()
         query = ""
         if field_type == "TEXT":
-            if value.startswith('"'):
-                if value == '""':
-                    query = '{} = %s'.format(field)
-                    sql_values.append("")
+            for not_query, or_query, regular_query in BOOLEAN_ARGS.findall(value):
+                if not_query != "":
+                    value = not_query
+                elif or_query != "":
+                    value = or_query
                 else:
-                    query = "{}=%s".format(field)
-                    sql_values.append(value[1:-1])
-            elif value.startswith("NOT "):
-                split_value = " ".join(value.split()[1:]).strip()
-                query = "{} !~* %s".format(field)
-                sql_values.append('\m{}\M'.format(split_value))
-            else:
-                query = "{} ~* %s".format(field)
-                sql_values.append('\m{}\M'.format(value))
+                    value = regular_query
+                if value.startswith('"'):
+                    if value == '""':
+                        query = '{} = %s'.format(field)
+                        sql_values.append("")
+                    else:
+                        query = "{}=%s".format(field)
+                        sql_values.append(value[1:-1])
+                elif value.startswith("NOT "):
+                    split_value = " ".join(value.split()[1:]).strip()
+                    query = "{} !~* %s".format(field)
+                    sql_values.append('\m{}\M'.format(split_value))
+                # elif value.startswith("OR "):  ## TODO: add support to OR queries by changing the join logic at the end of the function
+                #     split_value = " ".join(value.split()[1:]).strip()
+                #     query = "{} !~* %s".format(field)
+                #     sql_values.append('\m{}\M'.format(split_value))
+                else:
+                    query = "{} ~* %s".format(field)
+                    sql_values.append('\m{}\M'.format(value))
+                sql_fields.append(query)
         elif field_type == "INTEGER":
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
@@ -142,9 +156,9 @@ def query_builder(query_args, other_args, field_types):
             else:
                 query = '{} = %s'.format(field)
                 sql_values.append(value)
+            sql_fields.append(query)
         else:
             continue
-        sql_fields.append(query)
     if other_args.banality != "":
         sql_fields.append("banality=%s")
         sql_values.append(other_args.banality)

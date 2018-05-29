@@ -1,4 +1,6 @@
 web/web_app/node_modules
+web/web_app/dist
+web/web_app/appConfig.json
 __pycache__
 .vscode
 output
