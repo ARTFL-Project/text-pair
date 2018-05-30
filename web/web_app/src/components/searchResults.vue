@@ -137,7 +137,6 @@ import { EventBus } from '../main.js';
 import searchArguments from "./searchArguments";
 import { AtomSpinner } from 'epic-spinners';
 import Worker from 'worker-loader!./diffStrings';
-import diff_match_patch from "./googleDiff.js"
 
 export default {
     name: "searchResults",
