@@ -144,7 +144,7 @@ def validate_field_type(fields, field_types, field_names):
                 value = int(year_match.groups()[0])
             else:
                 value = None
-        if field_type == "TEXT":
+        if field_type == "TEXT" and isinstance(value, str):
             value = clean_text(value)
         values.append(value)
     return values
