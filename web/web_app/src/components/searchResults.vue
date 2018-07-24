@@ -137,6 +137,7 @@ import { EventBus } from '../main.js';
 import searchArguments from "./searchArguments";
 import { AtomSpinner } from 'epic-spinners';
 import Worker from 'worker-loader!./diffStrings';
+import Velocity from "velocity-animate";
 
 export default {
     name: "searchResults",
@@ -147,7 +148,6 @@ export default {
     data() {
         return {
             loading: false,
-            facetLoading: false,
             done: false,
             results: { alignments: [] },
             counts: null,
@@ -211,14 +211,14 @@ export default {
             if (direction == "source") {
                 rootURL = this.globalConfig.sourceDB.link
                 params = {
-                    doc_id: alignment.source_doc_id,
+                    filename: alignment.source_filename.substr(alignment.source_filename.lastIndexOf ("/") + 1),
                     start_byte: alignment.source_start_byte,
                     end_byte: alignment.source_end_byte
                 }
             } else {
                 rootURL = this.globalConfig.targetDB.link
                 params = {
-                    doc_id: alignment.target_doc_id,
+                    filename: alignment.target_filename.substr(alignment.target_filename.lastIndexOf ("/") + 1),
                     start_byte: alignment.target_start_byte,
                     end_byte: alignment.target_end_byte
                 }
@@ -238,7 +238,7 @@ export default {
             queryParams.id_anchor = this.results.alignments[0].rowid_ordered
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
         },
-        nextPage(urlEnd) {
+        nextPage() {
             let queryParams = { ...this.$route.query }
             queryParams.page = parseInt(this.results.page) + 1
             queryParams.direction = "next"
@@ -305,7 +305,6 @@ export default {
                     let differences = response.data
                     let newSourceString = ""
                     let newTargetString = ""
-                    let deleted = ""
                     for (let diffObj of differences) {
                         let [diffCode, text] = diffObj
                         if (diffCode === 0) {

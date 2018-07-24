@@ -23,6 +23,7 @@ import Chart from "chart.js"
 import searchArguments from "./searchArguments";
 import { AtomSpinner } from 'epic-spinners';
 
+
 export default {
     name: "timeSeries",
     components: {
@@ -169,8 +170,6 @@ export default {
                 if (activePoints.length > 0) {
                     var clickedElementindex = activePoints[0]["_index"]
                     var label = vm.chart.data.labels[clickedElementindex]
-                    var value =
-                        vm.chart.data.datasets[0].data[clickedElementindex]
                     let params = { ...vm.$route.query }
                     if (vm.interval != 1) {
                         params[
@@ -183,144 +182,6 @@ export default {
                     vm.$router.push(`/search?${vm.paramsToUrl(params)}`)
                 }
             }
-        },
-        goToContext(alignment, direction) {
-            let rootURL = ""
-            let params = {}
-            if (direction == "source") {
-                rootURL = this.globalConfig.sourceDB.link
-                params = {
-                    doc_id: alignment.source_doc_id,
-                    start_byte: alignment.source_start_byte,
-                    end_byte: alignment.source_end_byte
-                }
-            } else {
-                rootURL = this.globalConfig.targetDB.link
-                params = {
-                    doc_id: alignment.target_doc_id,
-                    start_byte: alignment.target_start_byte,
-                    end_byte: alignment.target_end_byte
-                }
-            }
-            this.$http
-                .get(`${rootURL}/scripts/alignment_to_text.py?`, {
-                    params: params
-                })
-                .then(response => {
-                    window.open(`${rootURL}/${response.data.link}`, "_blank")
-                })
-                .catch(error => {
-                    alert(error)
-                })
-        },
-        facetSearch(field) {
-            let queryParams = { ...this.$route.query }
-            queryParams.db_table = this.$globalConfig.databaseName
-            queryParams.facet = field
-            this.facetLoading = true
-            this.$http
-                .post(
-                    `${this.$globalConfig.apiServer}/facets/?${this.paramsToUrl(
-                        queryParams
-                    )}`,
-                    {
-                        metadata: this.$globalConfig.metadataTypes
-                    }
-                )
-                .then(response => {
-                    this.facetResults = response.data
-                })
-                .catch(error => {
-                    this.facetLoading = false
-                    this.error = error.toString()
-                    console.log("ERROR", error)
-                })
-        },
-        filteredSearch(fieldName, value) {
-            let queryParams = { ...this.$route.query }
-            delete queryParams.page
-            delete queryParams.id_anchor
-            queryParams.db_table = this.$globalConfig.databaseName
-            if (this.$globalConfig.metadataTypes[fieldName] == "text") {
-                queryParams[fieldName] = `"${value}"`
-            } else {
-                queryParams[fieldName] = value
-            }
-            EventBus.$emit("urlUpdate", queryParams)
-            this.facetResults = null
-            this.results = { alignments: [] }
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`)
-        },
-        showDifferences(sourceText, targetText) {
-            let sourceElement = event.srcElement.parentNode.parentNode.querySelector(
-                ".source-passage"
-            )
-            let targetElement = event.srcElement.parentNode.parentNode.querySelector(
-                ".target-passage"
-            )
-            let differences = differ.diffChars(sourceText, targetText, {
-                ignoreCase: true
-            })
-            let newSourceString = ""
-            let newTargetString = ""
-            let deleted = ""
-            for (let text of differences) {
-                if (
-                    !text.hasOwnProperty("added") &&
-                    !text.hasOwnProperty("removed")
-                ) {
-                    newTargetString += text.value
-                    newSourceString += text.value
-                } else if (text.added) {
-                    newTargetString += `<span class="added">${text.value}</span>`
-                } else {
-                    newSourceString += `<span class="removed">${text.value}</span>`
-                }
-            }
-            sourceElement.innerHTML = newSourceString
-            targetElement.innerHTML = newTargetString
-        },
-        beforeEnter: function(el) {
-            el.style.opacity = 0
-            el.style.height = 0
-        },
-        enter: function(el, done) {
-            var delay = el.dataset.index * 100
-            setTimeout(function() {
-                Velocity(el, { opacity: 1, height: "100%" }, { complete: done })
-            }, delay)
-        },
-        infiniteHandler($state) {
-            // setTimeout(function() {
-            console.log("hi", this.results.alignments.length)
-            let queryParams = { ...this.$route.query }
-            queryParams.page = this.page + 1
-            queryParams.direction = "next"
-            queryParams.id_anchor = this.lastRowID
-            queryParams.db_table = this.$globalConfig.databaseName
-            this.$http
-                .get(`${this.$globalConfig.apiServer}/search_alignments/?`, {
-                    params: queryParams
-                })
-                .then(response => {
-                    if (response.data.length) {
-                        this.results.alignments = this.results.alignments.concat(
-                            response.data.alignments
-                        )
-                        this.page++
-                        this.lastRowID = this.results.alignments[
-                            this.results.alignments.length - 1
-                        ].rowid_ordered
-                        $state.loaded()
-                    } else {
-                        $state.complete()
-                    }
-                })
-                .catch(error => {
-                    this.error = error.toString()
-                    console.log("ERROR", error)
-                })
-            // }, 10)
         }
     }
 }
