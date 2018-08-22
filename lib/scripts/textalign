@@ -2,10 +2,8 @@
 """Sequence aligner script"""
 
 import argparse
-import configparser
 import os
 import re
-from ast import literal_eval
 from collections import defaultdict
 
 import argcomplete
@@ -103,7 +101,8 @@ def parse_command_line():
         paths["target"]["metadata_path"] = args["target_metadata"]
         paths["target"]["common_ngrams"] = args["target_common_ngrams"]
 
-    return paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"], web_app_config, args["debug"], args["only_align"], args["load_only_web_app"], args["file"]
+    return (paths, tei_parsing, preprocessing_params, matching_params, args["output_path"], args["workers"],
+            web_app_config, args["debug"], args["only_align"], args["load_only_web_app"], args["file"])
 
 def run_alignment():
     """Main function to start sequence alignment"""
@@ -119,7 +118,7 @@ def run_alignment():
         if tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")
             parser = TEIParser(paths["source"]["tei_input_files"], output_path=paths["source"]["parse_output"],
-                            words_to_keep=tei_parsing["source_words_to_keep"], cores=workers, debug=debug)
+                               words_to_keep=tei_parsing["source_words_to_keep"], cores=workers, debug=debug)
             parser.get_metadata()
             parser.get_text()
         print("\n### Generating source ngrams ###")
@@ -131,7 +130,7 @@ def run_alignment():
             if tei_parsing["parse_target_files"] is True:
                 print("\n### Parsing target TEI files ###")
                 parser = TEIParser(paths["target"]["tei_input_files"], output_path=paths["target"]["parse_output"], cores=workers,
-                                words_to_keep=tei_parsing["target_words_to_keep"], debug=debug)
+                                   words_to_keep=tei_parsing["target_words_to_keep"], debug=debug)
                 parser.get_metadata()
                 parser.get_text()
             print("\n### Generating target ngrams ###")
@@ -201,7 +200,7 @@ def run_alignment():
         print("Running alignment with following arguments:\n{}".format(" ".join(command.split())))
     os.system(command)
     if web_app_config["skip_web_app"] is False:
-        output_file = os.path.join(output_path, "results/alignment_results.tab")
+        output_file = os.path.join(output_path, "results/alignment.results")
         FIELD_TYPES.update(web_app_config["field_types"])
         create_web_app(output_file, web_app_config["table_name"], FIELD_TYPES,
                        web_app_config["web_application_directory"], web_app_config["api_server"],

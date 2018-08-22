@@ -59,9 +59,9 @@
                     <div class="tab-pane fade" id="time-series" role="tabpanel" aria-labelledby="time-series-tab" v-bind:class="{ show: timeActive, active: timeActive }">
                         Group
                         <div class="my-dropdown" style="display: inline-block">
-                            <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">{{ directionSelected.label }} &#9662;</button>
+                            <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()" v-html="directionSelected.label">{{ directionSelected.label }} &#9662;</button>
                             <ul class="my-dropdown-menu shadow-1">
-                                <li class="my-dropdown-item" v-for="direction in directions" :key="direction.label" @click="selectItem('directionSelected', direction)">{{ direction.label }}</li>
+                                <li class="my-dropdown-item" v-for="direction in directions" :key="direction.label" @click="selectItem('directionSelected', direction)" v-html="direction.label">{{ direction.label }}</li>
                             </ul>
                         </div>
                         results by
@@ -84,6 +84,8 @@
 
 <script>
 import { EventBus } from "../main.js"
+import Velocity from "velocity-animate";
+
 
 export default {
     name: "search-form",
@@ -109,16 +111,16 @@ export default {
             banalitySelected: "Don't filter banalities",
             directions: [
                 {
-                    label: "Source",
+                    label: this.$globalConfig.sourceLabel,
                     value: "source"
                 },
                 {
-                    label: "Target",
+                    label: this.$globalConfig.targetLabel,
                     value: "target"
                 }
             ],
             directionSelected: {
-                    label: "Source",
+                    label: this.$globalConfig.sourceLabel,
                     value: "source"
                 },
             searchSelected: this.search,
@@ -158,17 +160,17 @@ export default {
         }
         if (this.$route.query.directionSelected == "source") {
             vm.directionSelected = {
-                    label: "Source",
+                    label: this.$globalConfig.sourceLabel,
                     value: "source"
                 }
         } else if (this.$route.query.directionSelected == "target") {
             vm.directionSelected = {
-                    label: "Target",
+                    label: this.$globalConfig.targetLabel,
                     value: "target"
                 }
         } else {
             vm.directionSelected = {
-                    label: "Source",
+                    label: this.$globalConfig.sourceLabel,
                     value: "source"
                 }
         }

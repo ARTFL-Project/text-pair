@@ -28,7 +28,7 @@ setup(name="textalign",
           "multiprocess", "mmh3", "unidecode", "tqdm",
           "pystemmer", "argcomplete", "lxml"
           ],
-     extras_require={
-         "web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]
-     }
+      extras_require={
+          "web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]
+      }
      )

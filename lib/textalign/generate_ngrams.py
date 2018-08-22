@@ -139,9 +139,9 @@ class Ngrams:
         if mem_usage >= 50:
             mem_usage = 45
         print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
-        os.system(r'''for i in {}/temp/*; do cat $i; done | sort -S {}% | uniq -c | sort -rn -S {}% | awk '{{print $2"\t"$3}}' |
+        os.system(r'''for i in {}/temp/*; do cat $i; done | sort -T {} -S {}% | uniq -c | sort -rn -T {} -S {}% | awk '{{print $2"\t"$3}}' |
                 tee {}/index/index.tab | awk '{{print $2}}' > {}/index/most_common_ngrams.txt'''
-                .format(output_path, mem_usage, mem_usage, output_path, output_path))
+                .format(output_path, output_path, mem_usage, output_path, mem_usage, output_path, output_path))
 
         print("Saving metadata...")
 

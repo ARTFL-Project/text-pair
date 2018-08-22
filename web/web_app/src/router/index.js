@@ -1,13 +1,13 @@
-import Vue from "vue";
-import Router from "vue-router";
+import Vue from 'vue';
+import VueRouter from "vue-router";
 import searchResults from "../components/searchResults";
 import timeSeries from "../components/timeSeries";
 
 import globalConfig from "../../appConfig.json";
 
-Vue.use(Router);
+Vue.use(VueRouter);
 
-export default new Router({
+export default new VueRouter({
     mode: "history",
     base: globalConfig.appPath,
     routes: [
