@@ -50,8 +50,7 @@ run the following:
 textalign --is_philo_db --source_files=/var/www/html/philologic/source_db/data/words_and_philo_ids/ --target_files=/var/www/html/philologic/target_db/data/words_and_philo_ids/ --workers=8 --config=config.ini
 ```
 
-#### NOTE ####
-The `--is_philo_db` flag assumes both source and target DBs are PhiloLogic databases.
+Note that the `--is_philo_db` flag assumes both source and target DBs are PhiloLogic databases.
 
 
 ## Run comparison between preprocessed files manually ##
