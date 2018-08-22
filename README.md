@@ -47,8 +47,8 @@ directory found in the parent directory of your ngrams.
 * `--source_metadata`: path to source metadata, a required parameter
 * `--target_metadata`: path to target metadata, a required parameter if target files are defined.
 
-Example: assuming source files are in `./montesquieu` and target files in `./encyclopedie`:
+Example: assuming source files are in `./source` and target files in `./target`:
 
-`textalign --only_align --source_files=montesquieu/ngrams/* --source_metadata=montesquieu/metadata/metadata.json --target_files=encyclopedie/ngrams/* --target_metadata=encyclopedie/metadata/metadata.json --workers=10 --output_path=results/`
+`textalign --only_align --source_files=source/ngrams/* --source_metadata=source/metadata/metadata.json --target_files=target/ngrams/* --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/`
 
 
