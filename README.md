@@ -49,6 +49,6 @@ directory found in the parent directory of your ngrams.
 
 Example: assuming source files are in `./source` and target files in `./target`:
 
-`textalign --only_align --source_files=source/ngrams/* --source_metadata=source/metadata/metadata.json --target_files=target/ngrams/* --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/`
+`textalign --only_align --source_files=source/ngrams --source_metadata=source/metadata/metadata.json --target_files=target/ngrams --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/`
 
 
