@@ -34,8 +34,24 @@ The sequence aligner is executed via the `textalign` command.
 Example:
 
 ```console
-textalign --source_files=/path/to/source/files --target_files=/path/to/target/files --source_metadata=/path/to/source/metadata.json --target_metadata=/path/to/target/metadata.json --config=config.ini --workers=6 --output_path=/path/to/output
+textalign --source_files=/path/to/source/files --target_files=/path/to/target/files --config=config.ini --workers=6 --output_path=/path/to/output
 ```
+
+## Alignments using PhiloLogic databases ##
+
+This currently uses the dev version of PhiloLogic5 to read PhiloLogic4 databases. So you'll need a version of PhiloLogic5 installed.
+A future version will have that functionnality baked in.
+
+To leverage a PhiloLogic database, use the `--is_philo_db` flag, and point to the `data/words_and_philo_ids` directory of the PhiloLogic DB used.
+For instance, if the source DB is in `/var/www/html/philologic/source_db` and the target DB is in `/var/www/html/philologic/target_db`,
+run the following:
+
+```console
+textalign --is_philo_db --source_files=/var/www/html/philologic/source_db/data/words_and_philo_ids/ --target_files=/var/www/html/philologic/target_db/data/words_and_philo_ids/ --workers=8 --config=config.ini
+```
+
+Note that the `--is_philo_db` flag assumes both source and target DBs are PhiloLogic databases.
+
 
 ## Run comparison between preprocessed files manually ##
 
