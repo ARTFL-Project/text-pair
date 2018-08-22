@@ -145,7 +145,7 @@ var cleanEnd = regexp.MustCompile(` \S+$`)
 func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
 	counts := alignPassages(sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex)
-	mergeAlignments(config.outputPath, config.numThreads, counts)
+	mergeAlignments(config, counts)
 }
 
 func parseFlags() ([]string, []string, map[string]map[string]string, map[string]map[string]string, map[int32]bool, *matchingParams, map[int32]string) {

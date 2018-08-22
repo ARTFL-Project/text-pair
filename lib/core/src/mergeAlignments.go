@@ -36,6 +36,7 @@ type passageGroup struct {
 	sourcePassage string
 	groupID       int
 	matches       int
+	fields        map[string]string
 }
 
 func passageGroupInit(passage map[string]string, groupID *int, mergedTargetPassages map[string][]*passagePosition) *passageGroup {
@@ -47,7 +48,7 @@ func passageGroupInit(passage map[string]string, groupID *int, mergedTargetPassa
 	currentTarget := &passagePosition{targetStartByte, targetEndByte, *groupID}
 	mergedTargetPassages[passage["target_doc_id"]] = append(mergedTargetPassages[passage["target_doc_id"]], currentTarget)
 	passageGroupMap[passage["passage_id"]] = *groupID
-	return &passageGroup{passage["source_filename"], startByte, endByte, passage["source_passage"], *groupID, 2}
+	return &passageGroup{passage["source_filename"], startByte, endByte, passage["source_passage"], *groupID, 2, passage}
 }
 
 func passageGroupUpdate(currentGroup *passageGroup, passage map[string]string, groupID *int, mergedTargetPassages map[string][]*passagePosition) {
@@ -127,15 +128,16 @@ func extractFields(fields map[string]string, prefix string) map[string]string {
 
 func mergeSourcePassages(passages []map[string]string, mergedSourcePassages []*passageGroup, groupID *int, mergedTargetPassages map[string][]*passagePosition) {
 	sort.Slice(passages, func(i, j int) bool {
-		if passages[i]["start_byte"] < passages[j]["start_byte"] {
+		if passages[i]["source_start_byte"] < passages[j]["source_start_byte"] {
 			return true
-		} else if passages[i]["start_byte"] == passages[j]["start_byte"] {
-			if passages[i]["end_byte"] > passages[j]["end_byte"] {
+		} else if passages[i]["source_start_byte"] == passages[j]["source_start_byte"] {
+			if passages[i]["source_end_byte"] > passages[j]["source_end_byte"] {
 				return true
 			}
 		}
 		return false
 	})
+
 	currentGroup := &passageGroup{}
 	for _, passage := range passages {
 		if currentGroup.matches == 0 {
@@ -156,10 +158,10 @@ func mergeSourcePassages(passages []map[string]string, mergedSourcePassages []*p
 	}
 }
 
-func mergeAlignments(outputPath string, numThreads int, alignmentCount int) {
+func mergeAlignments(config *matchingParams, alignmentCount int) {
 	fmt.Printf("\nMerging all %d alignments\n", alignmentCount)
 
-	file, err := os.Open(outputPath + "/" + "alignment.results")
+	file, err := os.Open(config.outputPath + "/" + "alignment.results")
 	if err != nil {
 		panic(err)
 	}
@@ -191,7 +193,7 @@ func mergeAlignments(outputPath string, numThreads int, alignmentCount int) {
 		// passage group
 		sourceDocID := fields["source_doc_id"]
 		match := false
-		if _, ok := mergedTargetPassages[sourceDocID]; ok {
+		if _, ok := mergedTargetPassages[sourceDocID]; ok { // TODO: allow passages to be in multiple group IDS?
 			startByte, _ := strconv.Atoi(fields["source_start_byte"])
 			endByte, _ := strconv.Atoi(fields["source_end_byte"])
 			for _, localTarget := range mergedTargetPassages[sourceDocID] {
@@ -236,14 +238,14 @@ func mergeAlignments(outputPath string, numThreads int, alignmentCount int) {
 	fmt.Printf("\rGrouping passages... %d groups found.\n", groupID)
 
 	// Second pass over results to store groupIDs
-	file, err = os.Open(outputPath + "/" + "alignment.results")
+	file, err = os.Open(config.outputPath + "/" + "alignment.results")
 	if err != nil {
 		panic(err)
 	}
 	defer file.Close()
 	reader = bufio.NewReader(file)
 
-	outputFile, _ := os.Create(outputPath + "/" + "merge_alignment_results.txt")
+	outputFile, _ := os.Create(config.outputPath + "/" + "merge_alignment_results.txt")
 
 	fmt.Print("Saving results...")
 	for {
@@ -260,7 +262,27 @@ func mergeAlignments(outputPath string, numThreads int, alignmentCount int) {
 	}
 	outputFile.Sync()
 	outputFile.Close()
-	os.Remove(outputPath + "/" + "alignment.results")
-	os.Rename(outputPath+"/"+"merge_alignment_results.txt", outputPath+"/"+"alignment.results")
+	os.Remove(config.outputPath + "/" + "alignment.results")
+	os.Rename(config.outputPath+"/"+"merge_alignment_results.txt", config.outputPath+"/"+"alignment.results")
 	fmt.Println(" done.")
+
+	passageSources, _ := os.Create(config.outputPath + "/" + "passage_sources.results")
+	for _, currentPassageGroup := range mergedSourcePassages {
+		fields := make(map[string]string)
+		for field, value := range currentPassageGroup.fields {
+			if strings.HasPrefix(field, "source_") {
+				fields[field] = value
+			}
+		}
+		textPosition := position{int32(currentPassageGroup.startByte), int32(currentPassageGroup.endByte), 0, 0}
+		textPassages := alignmentToText(&textPosition, currentPassageGroup.filename, config)
+		fields["source_context_before"] = textPassages[0]
+		fields["source_passage"] = textPassages[1]
+		fields["source_context_after"] = textPassages[2]
+		jsonString, _ := json.Marshal(fields)
+		jsonString = append(jsonString, "\n"...)
+		passageSources.Write(jsonString)
+	}
+	passageSources.Sync()
+	passageSources.Close()
 }
