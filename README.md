@@ -33,7 +33,9 @@ The sequence aligner is executed via the `textalign` command.
 
 Example:
 
-`textalign --source_files=/path/to/source/files --target_files=/path/to/target/files --source_metadata=/path/to/source/metadata.json --target_metadata=/path/to/target/metadata.json --config=config.ini --workers=6 --output_path=/path/to/output`
+```console
+textalign --source_files=/path/to/source/files --target_files=/path/to/target/files --source_metadata=/path/to/source/metadata.json --target_metadata=/path/to/target/metadata.json --config=config.ini --workers=6 --output_path=/path/to/output
+```
 
 ## Run comparison between preprocessed files manually ##
 
@@ -47,8 +49,10 @@ directory found in the parent directory of your ngrams.
 * `--source_metadata`: path to source metadata, a required parameter
 * `--target_metadata`: path to target metadata, a required parameter if target files are defined.
 
-Example: assuming source files are in `./montesquieu` and target files in `./encyclopedie`:
+Example: assuming source files are in `./source` and target files in `./target`:
 
-`textalign --only_align --source_files=montesquieu/ngrams/* --source_metadata=montesquieu/metadata/metadata.json --target_files=encyclopedie/ngrams/* --target_metadata=encyclopedie/metadata/metadata.json --workers=10 --output_path=results/`
+```console
+textalign --only_align --source_files=source/ngrams --source_metadata=source/metadata/metadata.json --target_files=target/ngrams --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/
+```
 
 
