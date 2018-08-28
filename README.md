@@ -92,3 +92,5 @@ In this file, there are a number of fields that can be configured:
 * `metadataFields` defines the fields available for searching in the search form for `source` and `target`. `label` is the name used in the form and `value` is the actual name of the metadata field as stored in the SQL database.
 * `facetFields` works the same way as `metadataFields` but for defining which fields are available in the faceted browser section.
 * `timeSeriesIntervals` defines the time intervals available for the time series functionnality.
+
+Once you've edited these fields to your liking, you can regenerate your database by running the `npm run build` command from the directory where the `appConfig.json` file is located.
