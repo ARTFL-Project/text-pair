@@ -103,6 +103,10 @@
     "facetsFields": {
         "source": [
             {
+                "label": "Passage",
+                "value": "source_passage"
+            },
+            {
                 "label": "Author",
                 "value": "source_author"
             },
@@ -120,6 +124,10 @@
             }
         ],
         "target": [
+            {
+                "label": "Passage",
+                "value": "target_passage"
+            },
             {
                 "label": "Author",
                 "value": "target_author"
