@@ -17,7 +17,7 @@ CORS(application)
 GLOBAL_CONFIG = configparser.ConfigParser()
 GLOBAL_CONFIG.read("/etc/text-align/global_settings.ini")
 
-BOOLEAN_ARGS = re.compile(r"(NOT \w+)|(OR \w+)|(\w+)")
+BOOLEAN_ARGS = re.compile(r'''(NOT \w+)|(OR \w+)|(\w+)|("")''')
 
 
 class formArguments():
@@ -100,7 +100,6 @@ def parse_args(request):
         else:
             if value:
                 query_args[key] = value
-    import sys
     metadata_field_types = request.get_json()["metadata"]
     metadata_field_types["rowid"] = "INTEGER"
     sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
@@ -115,11 +114,13 @@ def query_builder(query_args, other_args, field_types):
         field_type = field_types.get(field, "TEXT").upper()
         query = ""
         if field_type == "TEXT":
-            for not_query, or_query, regular_query in BOOLEAN_ARGS.findall(value):
+            for not_query, or_query, regular_query, empty_query in BOOLEAN_ARGS.findall(value):
                 if not_query != "":
                     value = not_query
                 elif or_query != "":
                     value = or_query
+                elif empty_query != "":
+                    value = empty_query
                 else:
                     value = regular_query
                 if value.startswith('"'):

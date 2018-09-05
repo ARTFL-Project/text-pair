@@ -93,7 +93,7 @@
                     <div class="mt-3 mb-3 pr-3 pl-3 facet-list">
                         <h6 class="text-center" v-html="globalConfig.sourceLabel"></h6>
                         <div class="list-group">
-                            <button type="button" class="list-group-item list-group-item-action" v-for="(field, index) in globalConfig.metadataFields.source" :key="index" v-on:click="facetSearch(field.value)">
+                            <button type="button" class="list-group-item list-group-item-action" v-for="(field, index) in globalConfig.facetsFields.source" :key="index" v-on:click="facetSearch(field.value)">
                                 {{ field.label }}
                             </button>
                         </div>
@@ -101,7 +101,7 @@
                     <div class="mb-3 pr-3 pl-3 facet-list">
                         <h6 class="text-center" v-html="globalConfig.targetLabel"></h6>
                         <div class="list-group">
-                            <button type="button" class="list-group-item list-group-item-action" v-for="(field, index) in globalConfig.metadataFields.target" :key="index" v-on:click="facetSearch(field.value)">
+                            <button type="button" class="list-group-item list-group-item-action" v-for="(field, index) in globalConfig.facetsFields.target" :key="index" v-on:click="facetSearch(field.value)">
                                 {{ field.label }}
                             </button>
                         </div>
@@ -114,7 +114,7 @@
                     <div class="corner-btn destroy right" @click="closeFacetResults()">
                         X
                     </div>
-                    <h6 class="card-header text-center">Frequency by <span v-html="facetDirectionLabel"></span> <span class="text-capitalize">{{ facetResults.facet.split("_")[1] }}</span></h6>
+                    <h6 class="card-header text-center">Frequency by <span v-html="facetDirectionLabel"></span>&nbsp;<span class="text-capitalize">{{ facetResults.facet.split("_")[1] }}</span></h6>
                     <div class="mt-1 p-2">
                         <div class="pb-2 text-center" style="opacity: .5" >Showing top 100 results</div>
                         <div class="list-group">
