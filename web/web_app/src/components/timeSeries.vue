@@ -19,7 +19,7 @@
 
 <script>
 import { EventBus } from "../main.js"
-import Chart from "chart.js"
+import Chart from "chart.js/dist/Chart.js"
 import searchArguments from "./searchArguments";
 import { AtomSpinner } from 'epic-spinners';
 
