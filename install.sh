@@ -1,7 +1,7 @@
 #!/bin/sh
 
 sudo pip3 install lib/.[web] --upgrade
-git clone git@github.com:ARTFL-Project/text-preprocessing.git
+git clone https://github.com/ARTFL-Project/text-preprocessing.git
 sudo pip3 install text-preprocessing/. --upgrade
 rm -rf text-preprocessing
 
