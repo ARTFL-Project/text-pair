@@ -10,8 +10,10 @@ Note that Text-Align will only run on 64 bit Linux and MacOS. Windows will NOT b
 
 ### Dependencies
 
+-   Python 3.6 and up
 -   Node and NPM
--   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database.
+-   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database using the `CREATE EXTENSION pg_trgm;` run as a superuser in the PostgreSQL shell.
+-   A running instance of Apache
 
 ### Install script
 
