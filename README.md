@@ -11,7 +11,7 @@ Note that Text-Align will only run on 64 bit Linux and MacOS. Windows will NOT b
 ### Dependencies
 
 -   Node and NPM
--   PostgreSQL: you will need to create a dedicate database and create a user with read/write permissions on that database
+-   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database.
 
 ### Install script
 
