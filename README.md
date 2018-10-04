@@ -23,7 +23,7 @@ Note that Text-Align will only run on 64 bit Linux and MacOS. Windows will NOT b
 
 ## Quick start
 
-Before running any alignment, make sure you make a copy of `/var/lib/text-align/config/config.ini` to your working directory, and edit the various fields. In particular, make sure you provide a table name to store your results in PostgreSQL.
+Before running any alignment, make sure you edit your copy of `config.ini`. See below for details
 
 The sequence aligner is executed via the `textalign` command.
 
@@ -45,6 +45,10 @@ Example:
 ```console
 textalign --source_files=/path/to/source/files --target_files=/path/to/target/files --config=config.ini --workers=6 --output_path=/path/to/output
 ```
+
+## Configuring the alignment
+
+When running an alignment, you need to provide a configuration file to the `textalign` command. You can find a generic copy of the file in `/var/lib/text-align/config/config.ini`. You should copy this file to the directory from which you are starting the alignment. Then you can start editing this file. Note that all parameters have comments explaining their role. While most values are reasonable defaults and don't require any edits, you do have to provide a value for `table_name` in the Web Application section at the bottom of the file.
 
 ## Alignments using PhiloLogic databases
 
@@ -79,6 +83,22 @@ Example: assuming source files are in `./source` and target files in `./target`:
 textalign --only_align --source_files=source/ngrams --source_metadata=source/metadata/metadata.json --target_files=target/ngrams --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/
 ```
 
-## Configuring your web application
+## Configuring the Web Application
 
-Your web application can be configured from the `appConfig.json` file located in the directory of your web application. By default, this is in `/var/www/html/text-align/YOUR_DB_NAME`. Once you have configured the file, you will need to run `npm run build` to regenerate the web application.
+The `textalign` script automatically generates a Web Application, and does so by relying on the defaults configured in the `appConfig.json` file which is copied to the directory where the Web Application lives, typically `/var/www/html/text-align/database_name`.
+
+In this file, there are a number of fields that can be configured:
+
+-   `webServer`: should not be changed as only Apache is supported for the foreseeable future.
+-   `appPath`: this should match the WSGI configuration in `/etc/text-align/apache_wsgi.conf`. Should not be changed without knowing how to work with `mod_wsgi`.
+-   `databaseName`: Defines the name of the PostgreSQL database where the data lives.
+-   `databaseLabel`: Name of the Web Application
+-   `sourceDB` and `targetDB` both define contextual links using PhiloLogic. `philoDB` defines whether the contextual link should appear in results and `link` defines the URL of the PhiloLogic database.
+-   `sourceLabel` and `targetLabel` are the names of source DB and target DB. This field supports HTML tags.
+-   `metadataTypes`: defines the value type of field. Either `TEXT` or `INTEGER`.
+-   `sourceCitation` and `targetCitation` define the bibliography citation in results. `field` defines the metadata field to use, and `style` is for CSS styling (using key/value for CSS rules)
+-   `metadataFields` defines the fields available for searching in the search form for `source` and `target`. `label` is the name used in the form and `value` is the actual name of the metadata field as stored in the SQL database.
+-   `facetFields` works the same way as `metadataFields` but for defining which fields are available in the faceted browser section.
+-   `timeSeriesIntervals` defines the time intervals available for the time series functionnality.
+
+Once you've edited these fields to your liking, you can regenerate your database by running the `npm run build` command from the directory where the `appConfig.json` file is located.
