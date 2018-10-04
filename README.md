@@ -2,7 +2,7 @@
 
 A scalable and high-performance sequence aligner for large collections of texts
 
-Built in collaboration with <a href="https://www.lip6.fr/?LANG=en">LIP6</a>
+Built with support from the <a href="https://arfl-project.uchicago.edu">ARTFL Project</a> and <a href="http://obvil.sorbonne-universite.site/">OBVIL</a>
 
 ## Installation
 
