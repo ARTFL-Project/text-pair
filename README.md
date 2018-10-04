@@ -23,7 +23,7 @@ Note that Text-Align will only run on 64 bit Linux and MacOS. Windows will NOT b
 
 ## Quick start
 
-Before running any alignment, make sure you edit your copy of `config.ini`. See below for details
+Before running any alignment, make sure you edit your copy of `config.ini`. See [below](#configuring-the-alignment) for details
 
 The sequence aligner is executed via the `textalign` command.
 
