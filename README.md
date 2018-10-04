@@ -1,34 +1,44 @@
-# Text-Align #
+# Text-Align
+
 A scalable and high-performance sequence aligner for large collections of texts
 
 Built with support from the <a href="https://arfl-project.uchicago.edu">ARTFL Project</a> and <a href="http://obvil.sorbonne-universite.site/">OBVIL</a>
 
-
-## Installation ##
+## Installation
 
 Note that Text-Align will only run on 64 bit Linux and MacOS. Windows will NOT be supported.
 
-- Run `install.sh` script. This should install all needed components
-- Make sure you include `/etc/text-align/apache_wsgi.conf` in your main Apache configuration file to enable searching
-- Install `node` and `npm` for the web application build system
+### Dependencies
 
-## Quick start ##
+-   Python 3.6 and up
+-   Node and NPM
+-   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database using the `CREATE EXTENSION pg_trgm;` run as a superuser in the PostgreSQL shell.
+-   A running instance of Apache
+
+### Install script
+
+-   Run `install.sh` script. This should install all needed components
+-   Make sure you include `/etc/text-align/apache_wsgi.conf` in your main Apache configuration file to enable searching
+-   Edit `/etc/text-align/global_settings.ini` to provide your PostgreSQL user, database, and password.
+
+## Quick start
+
+Before running any alignment, make sure you edit your copy of `config.ini`. See [below](#configuring-the-alignment) for details
 
 The sequence aligner is executed via the `textalign` command.
 
 `textalign` takes the following command-line arguments:
 
-* `--config`: path to the configuration file where preprocessing, matching, and web application settings are set
-* `--source_files`: path to source files
-* `--source_metadata`: path to source metadata. Only define if not using a PhiloLogic database.
-* `--target_files`: path to target files. Only define if not using a PhiloLogic database.
-* `--target_metadata`: path to target metadata
-* `--is_philo_db`: Define if files are from a PhiloLogic database. If set to `True` metadata will be fetched using the PhiloLogic metadata index. Set to False by default.
-* `--output_path`: path to results
-* `--debug`: turn on debugging
-* `--workers`: Set number of workers/threads to use for parsing, ngram generation, and alignment.
-* `--load_web_app`: Define whether to load results into a database viewable via a web application. Set to True by default.
-
+-   `--config`: path to the configuration file where preprocessing, matching, and web application settings are set
+-   `--source_files`: path to source files
+-   `--source_metadata`: path to source metadata. Only define if not using a PhiloLogic database.
+-   `--target_files`: path to target files. Only define if not using a PhiloLogic database.
+-   `--target_metadata`: path to target metadata
+-   `--is_philo_db`: Define if files are from a PhiloLogic database. If set to `True` metadata will be fetched using the PhiloLogic metadata index. Set to False by default.
+-   `--output_path`: path to results
+-   `--debug`: turn on debugging
+-   `--workers`: Set number of workers/threads to use for parsing, ngram generation, and alignment.
+-   `--load_web_app`: Define whether to load results into a database viewable via a web application. Set to True by default.
 
 Example:
 
@@ -36,11 +46,11 @@ Example:
 textalign --source_files=/path/to/source/files --target_files=/path/to/target/files --config=config.ini --workers=6 --output_path=/path/to/output
 ```
 
-## Configuring the alignment ##
+## Configuring the alignment
+
 When running an alignment, you need to provide a configuration file to the `textalign` command. You can find a generic copy of the file in `/var/lib/text-align/config/config.ini`. You should copy this file to the directory from which you are starting the alignment. Then you can start editing this file. Note that all parameters have comments explaining their role. While most values are reasonable defaults and don't require any edits, you do have to provide a value for `table_name` in the Web Application section at the bottom of the file.
 
-
-## Alignments using PhiloLogic databases ##
+## Alignments using PhiloLogic databases
 
 This currently uses the dev version of PhiloLogic5 to read PhiloLogic4 databases. So you'll need a version of PhiloLogic5 installed.
 A future version will have that functionnality baked in.
@@ -55,18 +65,17 @@ textalign --is_philo_db --source_files=/var/www/html/philologic/source_db/data/w
 
 Note that the `--is_philo_db` flag assumes both source and target DBs are PhiloLogic databases.
 
-
-## Run comparison between preprocessed files manually ##
+## Run comparison between preprocessed files manually
 
 It's possible run a comparison between documents without having to regenerate ngrams. In this case you need to use the
 `--only_align` argument with the `textalign` command. Source files (and target files if doing a cross DB alignment) need to point
 to the location of generated ngrams. You will also need to point to the `metadata.json` file which should be found in the `metadata`
 directory found in the parent directory of your ngrams.
 
-* `--source_files`: path to source ngrams generated by `textalign`
-* `--target_files`: path to target ngrams generated by `textalign`. If this option is not defined, the comparison will be done between source files.
-* `--source_metadata`: path to source metadata, a required parameter
-* `--target_metadata`: path to target metadata, a required parameter if target files are defined.
+-   `--source_files`: path to source ngrams generated by `textalign`
+-   `--target_files`: path to target ngrams generated by `textalign`. If this option is not defined, the comparison will be done between source files.
+-   `--source_metadata`: path to source metadata, a required parameter
+-   `--target_metadata`: path to target metadata, a required parameter if target files are defined.
 
 Example: assuming source files are in `./source` and target files in `./target`:
 
@@ -74,22 +83,22 @@ Example: assuming source files are in `./source` and target files in `./target`:
 textalign --only_align --source_files=source/ngrams --source_metadata=source/metadata/metadata.json --target_files=target/ngrams --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/
 ```
 
-
-## Configuring the Web Application ##
+## Configuring the Web Application
 
 The `textalign` script automatically generates a Web Application, and does so by relying on the defaults configured in the `appConfig.json` file which is copied to the directory where the Web Application lives, typically `/var/www/html/text-align/database_name`.
 
 In this file, there are a number of fields that can be configured:
-* `webServer`: should not be changed as only Apache is supported for the foreseeable future.
-* `appPath`: this should match the WSGI configuration in `/etc/text-align/apache_wsgi.conf`. Should not be changed without knowing how to work with `mod_wsgi`.
-* `databaseName`: Defines the name of the PostgreSQL database where the data lives.
-* `databaseLabel`: Name of the Web Application
-* `sourceDB` and `targetDB` both define contextual links using PhiloLogic. `philoDB` defines whether the contextual link should appear in results and `link` defines the URL of the PhiloLogic database.
-* `sourceLabel` and `targetLabel` are the names of source DB and target DB. This field supports HTML tags.
-* `metadataTypes`: defines the value type of field. Either `TEXT` or `INTEGER`.
-* `sourceCitation` and `targetCitation` define the bibliography citation in results. `field` defines the metadata field to use, and `style` is for CSS styling (using key/value for CSS rules)
-* `metadataFields` defines the fields available for searching in the search form for `source` and `target`. `label` is the name used in the form and `value` is the actual name of the metadata field as stored in the SQL database.
-* `facetFields` works the same way as `metadataFields` but for defining which fields are available in the faceted browser section.
-* `timeSeriesIntervals` defines the time intervals available for the time series functionnality.
+
+-   `webServer`: should not be changed as only Apache is supported for the foreseeable future.
+-   `appPath`: this should match the WSGI configuration in `/etc/text-align/apache_wsgi.conf`. Should not be changed without knowing how to work with `mod_wsgi`.
+-   `databaseName`: Defines the name of the PostgreSQL database where the data lives.
+-   `databaseLabel`: Name of the Web Application
+-   `sourceDB` and `targetDB` both define contextual links using PhiloLogic. `philoDB` defines whether the contextual link should appear in results and `link` defines the URL of the PhiloLogic database.
+-   `sourceLabel` and `targetLabel` are the names of source DB and target DB. This field supports HTML tags.
+-   `metadataTypes`: defines the value type of field. Either `TEXT` or `INTEGER`.
+-   `sourceCitation` and `targetCitation` define the bibliography citation in results. `field` defines the metadata field to use, and `style` is for CSS styling (using key/value for CSS rules)
+-   `metadataFields` defines the fields available for searching in the search form for `source` and `target`. `label` is the name used in the form and `value` is the actual name of the metadata field as stored in the SQL database.
+-   `facetFields` works the same way as `metadataFields` but for defining which fields are available in the faceted browser section.
+-   `timeSeriesIntervals` defines the time intervals available for the time series functionnality.
 
 Once you've edited these fields to your liking, you can regenerate your database by running the `npm run build` command from the directory where the `appConfig.json` file is located.
