@@ -78,3 +78,7 @@ Example: assuming source files are in `./source` and target files in `./target`:
 ```console
 textalign --only_align --source_files=source/ngrams --source_metadata=source/metadata/metadata.json --target_files=target/ngrams --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/
 ```
+
+## Configuring your web application
+
+Your web application can be configured from the `appConfig.json` file located in the directory of your web application. By default, this is in `/var/www/html/text-align/YOUR_DB_NAME`. Once you have configured the file, you will need to run `npm run build` to regenerate the web application.
