@@ -795,6 +795,7 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 		} else if currentAlignment.source.startNgramIndex <= sourceNgramDistance &&
 			currentAlignment.target.startNgramIndex <= targetNgramDistance &&
 			currentAlignment.target.startNgramIndex > previousAlignment.target.endNgramIndex {
+			currentAlignmentMerged = true
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
 			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, false} // we consider merged passages as non-banality
