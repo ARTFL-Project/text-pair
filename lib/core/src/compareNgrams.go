@@ -21,10 +21,16 @@ import (
 	"sync"
 )
 
+type sortedFile struct {
+	docID  string
+	sortID int
+}
+
 type docIndex struct {
 	DocID       string
 	Ngrams      map[int32][]indexedNgram
 	NgramLength int
+	SortID      int
 }
 
 type indexedNgram struct {
@@ -148,7 +154,7 @@ func main() {
 	mergeAlignments(config, counts)
 }
 
-func parseFlags() ([]string, []string, map[string]map[string]string, map[string]map[string]string, map[int32]bool, *matchingParams, map[int32]string) {
+func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map[string]map[string]string, map[int32]bool, *matchingParams, map[int32]string) {
 	outputPath := flag.String("output_path", "./output", "output path for results")
 	ngramIndexLocation := flag.String("ngram_index", "", "location of ngram index used for debugging. Should be the source or target index, not matter which since it'll be used for common ngrams")
 	sourceFilesArg := flag.String("source_files", "", "source files location")
@@ -233,9 +239,9 @@ func openJSONMetadata(fileLocation *string) map[string]map[string]string {
 	return metadata
 }
 
-func getFiles(filePath string, metadata map[string]map[string]string, sortField string) []string {
+func getFiles(filePath string, metadata map[string]map[string]string, sortField string) []sortedFile {
 	if filePath == "" {
-		return []string{}
+		return []sortedFile{}
 	}
 	if !strings.HasPrefix(filePath, "/") {
 		filePath = "./" + filePath
@@ -269,18 +275,20 @@ func getFiles(filePath string, metadata map[string]map[string]string, sortField 
 			if sortFieldIsNumeric {
 				firstInt, err := strconv.Atoi(metadata[first][sortField])
 				if err != nil {
-					return false
+					return first < second
 				}
 				secondInt, err := strconv.Atoi(metadata[second][sortField])
 				if err != nil {
-					return true
+					return first < second
 				}
 				if firstInt < secondInt {
 					return true
 				} else if firstInt > secondInt {
 					return false
 				}
-				return first < second
+				firstNameInt, _ := strconv.Atoi(first)
+				secondNameInt, _ := strconv.Atoi(second)
+				return firstNameInt < secondNameInt
 			}
 			return metadata[first][sortField] < metadata[second][sortField]
 		})
@@ -291,10 +299,14 @@ func getFiles(filePath string, metadata map[string]map[string]string, sortField 
 			return first < second
 		})
 	}
-	return filesToLoad
+	sortedFilesToLoad := []sortedFile{}
+	for pos, file := range filesToLoad {
+		sortedFilesToLoad = append(sortedFilesToLoad, sortedFile{file, pos})
+	}
+	return sortedFilesToLoad
 }
 
-func getJSONDocs(fileLocations []string, prefixString string, threads int) []docIndex {
+func getJSONDocs(fileLocations []sortedFile, prefixString string, threads int) []docIndex {
 	var jsonFiles []docIndex
 	totalFiles := len(fileLocations)
 	runningTotal := 0
@@ -308,9 +320,9 @@ func getJSONDocs(fileLocations []string, prefixString string, threads int) []doc
 		var wait sync.WaitGroup
 		wait.Add(filesInGroup)
 		for _, fileLocation := range fileGroup {
-			go func(fileLocation string) {
+			go func(fileLocation sortedFile) {
 				defer wait.Done()
-				jsonFile, err := ioutil.ReadFile(fileLocation)
+				jsonFile, err := ioutil.ReadFile(fileLocation.docID)
 				checkErr(err, "getJSONDocs")
 				tempDoc := make(map[int32][][]int32)
 				json.Unmarshal(jsonFile, &tempDoc)
@@ -321,8 +333,8 @@ func getJSONDocs(fileLocations []string, prefixString string, threads int) []doc
 						doc[key] = append(doc[key], indexedNgram{ngram[0], ngram[1], ngram[2]})
 					}
 				}
-				docID := path.Base(strings.Replace(fileLocation, ".json", "", 1))
-				docObject := docIndex{docID, doc, len(doc)}
+				docID := path.Base(strings.Replace(fileLocation.docID, ".json", "", 1))
+				docObject := docIndex{docID, doc, len(doc), fileLocation.sortID}
 				c <- docObject
 			}(fileLocation)
 		}
@@ -338,6 +350,9 @@ func getJSONDocs(fileLocations []string, prefixString string, threads int) []doc
 	}
 	os.Stdout.Write([]byte("\r\033[K" + prefixString + "... done.\n"))
 	os.Stdout.Sync()
+	sort.Slice(jsonFiles, func(i, j int) bool {
+		return jsonFiles[i].SortID < jsonFiles[j].SortID
+	})
 	return jsonFiles
 }
 
@@ -388,7 +403,7 @@ func loadNgramIndex(fileLocation string) map[int32]string {
 	return ngramIndex
 }
 
-func alignPassages(sourceFiles []string, targetFiles []string, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, commonNgrams map[int32]bool, config *matchingParams, ngramIndex map[int32]string) int {
+func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, commonNgrams map[int32]bool, config *matchingParams, ngramIndex map[int32]string) int {
 	sourceAgainstSource := false
 
 	// Split source and target files into config.batchSize batches
@@ -396,7 +411,7 @@ func alignPassages(sourceFiles []string, targetFiles []string, sourceMetadata ma
 		config.sourceBatch = len(sourceFiles)
 	}
 	sourceFileBatches := makeSliceOfSlices(sourceFiles, config.sourceBatch)
-	var targetFileBatches [][]string
+	var targetFileBatches [][]sortedFile
 	if len(targetFiles) == 0 {
 		targetMetadata = sourceMetadata
 		sourceAgainstSource = true
@@ -455,19 +470,42 @@ func alignPassages(sourceFiles []string, targetFiles []string, sourceMetadata ma
 				targetLength := len(targetFileIndexes)
 				combinedAlignments := &CombinedAlignments{sourceFile.DocID, []alignmentsPerDoc{}}
 				c := make(chan []alignmentsPerDoc, config.numThreads)
-				wait.Add(config.numThreads)
-				start := 0
-				increment := targetLength/config.numThreads + 1
-				for i := 0; i < config.numThreads; i++ {
-					end := increment * (i + 1)
+				var start int
+				if sourceAgainstSource {
+					start = pos + 1
+				} else {
+					start = 0
+				}
+				var increment int
+				threadsNeeded := config.numThreads
+				if config.numThreads > 1 {
+					localTargeLength := len(targetFileIndexes[start:])
+					filesPerThread := localTargeLength / threadsNeeded
+					for filesPerThread < 10 {
+						threadsNeeded = threadsNeeded / 2
+						if threadsNeeded < 2 {
+							threadsNeeded = 1
+							break
+						}
+						filesPerThread = localTargeLength / threadsNeeded
+					}
+					increment = (targetLength-start)/threadsNeeded + 1
+				} else {
+					increment = targetLength - start
+				}
+				wait.Add(threadsNeeded)
+				end := start + increment
+				// fmt.Println("INCREMENT", increment, "THREADS", threadsNeeded)
+				totalTexts := 0
+				for i := 0; i < threadsNeeded; i++ {
 					if end > targetLength {
-						end = targetLength - 1
+						end = targetLength
 					}
+					// fmt.Println("THREAD", i+1, "POS", pos, "RANGE", start, end)
 					splitTargets := targetFileIndexes[start:end]
-					start += increment
-					if start > targetLength-1 {
-						start = targetLength - 1
-					}
+					totalTexts += len(splitTargets)
+					start = end
+					end += increment
 					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config *matchingParams, commonNgrams map[int32]bool) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
@@ -479,6 +517,9 @@ func alignPassages(sourceFiles []string, targetFiles []string, sourceMetadata ma
 								} else if _, ok := localSourceFilesDone[targetFile.DocID]; ok {
 									continue innerTargetMatching
 								}
+							}
+							if sourceFile.DocID == "106" && targetFile.DocID == "105" {
+								fmt.Println("HAHA")
 							}
 							var debugOutput *os.File
 							if config.debug {
@@ -511,6 +552,7 @@ func alignPassages(sourceFiles []string, targetFiles []string, sourceMetadata ma
 								return matches[i].target.index < matches[j].target.index
 							})
 							alignments := matchPassage(&sourceFile, &targetFile, matches, config, mostCommonNgrams, ngramIndex, debugOutput)
+							// fmt.Println(sourceFile.DocID, targetFile.DocID, len(alignments))
 							if config.mergeOnByteDistance || config.mergeOnNgramDistance {
 								alignments = mergeWithPrevious(alignments, config, debugOutput)
 							}
@@ -524,12 +566,15 @@ func alignPassages(sourceFiles []string, targetFiles []string, sourceMetadata ma
 					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, localSourceFilesDone, config, commonNgrams)
 				}
 				wait.Wait()
-				for i := 0; i < config.numThreads; i++ {
+				for i := 0; i < threadsNeeded; i++ {
 					localCombinedAlignments := <-c
 					if len(localCombinedAlignments) > 0 {
 						combinedAlignments.alignments = append(combinedAlignments.alignments, localCombinedAlignments...)
 					}
 				}
+				// if totalTexts != len(targetFileIndexes[pos+1:]) {
+				// 	fmt.Println("Mismatch", totalTexts, "smaller than", len(targetFileIndexes[pos+1:]))
+				// }
 				if len(combinedAlignments.alignments) > 0 {
 					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, &counts)
 				}
@@ -795,6 +840,7 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 		} else if currentAlignment.source.startNgramIndex <= sourceNgramDistance &&
 			currentAlignment.target.startNgramIndex <= targetNgramDistance &&
 			currentAlignment.target.startNgramIndex > previousAlignment.target.endNgramIndex {
+			currentAlignmentMerged = true
 			sourcePosition := position{previousAlignment.source.startByte, currentAlignment.source.endByte, previousAlignment.source.startNgramIndex, currentAlignment.source.endNgramIndex}
 			targetPosition := position{previousAlignment.target.startByte, currentAlignment.target.endByte, previousAlignment.target.startNgramIndex, currentAlignment.target.endNgramIndex}
 			previousAlignment = Alignment{sourcePosition, targetPosition, previousAlignment.totalMatchingNgrams + currentAlignment.totalMatchingNgrams, false} // we consider merged passages as non-banality
@@ -956,8 +1002,8 @@ func checkErr(err error, errorMessage string) {
 	}
 }
 
-func makeSliceOfSlices(sliceToSlice []string, batch int) [][]string {
-	var sliceOfSlices [][]string
+func makeSliceOfSlices(sliceToSlice []sortedFile, batch int) [][]sortedFile {
+	var sliceOfSlices [][]sortedFile
 	sliceLength := len(sliceToSlice)
 	chunkSize := (sliceLength + batch - 1) / batch
 	for i := 0; i < sliceLength; i += chunkSize {
