@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """N-gram generator"""
 
+import configparser
 import json
 import os
 import sys
+from collections import defaultdict
 from glob import glob
 from math import floor
-from collections import defaultdict
 
 from multiprocess import Pool
 from text_preprocessing import PreProcessor
