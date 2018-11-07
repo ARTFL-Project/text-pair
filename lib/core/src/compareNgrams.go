@@ -150,8 +150,8 @@ var cleanEnd = regexp.MustCompile(` \S+$`)
 
 func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex := parseFlags()
-	counts := alignPassages(sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex)
-	mergeAlignments(config, counts)
+	_ = alignPassages(sourceFiles, targetFiles, sourceMetadata, targetMetadata, commonNgrams, config, ngramIndex)
+	// mergeAlignments(config, counts)
 }
 
 func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map[string]map[string]string, map[int32]bool, *matchingParams, map[int32]string) {
@@ -447,10 +447,6 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 				}
 				targetFileIndexes = getJSONDocs(targetFileBatches[targetBatchNumber], targetPrefix, config.numThreads)
 			}
-			var localSourceFilesDone map[string]bool
-			if sourceAgainstSource {
-				localSourceFilesDone = make(map[string]bool)
-			}
 			percentSteps := buildPercentMap(len(sourceFileIndexes))
 			fmt.Printf("Comparing files... 0%%")
 			for pos, sourceFile := range sourceFileIndexes {
@@ -471,7 +467,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 				combinedAlignments := &CombinedAlignments{sourceFile.DocID, []alignmentsPerDoc{}}
 				c := make(chan []alignmentsPerDoc, config.numThreads)
 				var start int
-				if sourceAgainstSource {
+				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
 					start = pos + 1
 				} else {
 					start = 0
@@ -482,7 +478,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					localTargeLength := len(targetFileIndexes[start:])
 					filesPerThread := localTargeLength / threadsNeeded
 					for filesPerThread < 10 {
-						threadsNeeded = threadsNeeded / 2
+						threadsNeeded = threadsNeeded / 2 // We reduce the number of Go routines to avoid starvation.
 						if threadsNeeded < 2 {
 							threadsNeeded = 1
 							break
@@ -495,31 +491,21 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 				}
 				wait.Add(threadsNeeded)
 				end := start + increment
-				// fmt.Println("INCREMENT", increment, "THREADS", threadsNeeded)
 				totalTexts := 0
 				for i := 0; i < threadsNeeded; i++ {
 					if end > targetLength {
 						end = targetLength
 					}
-					// fmt.Println("THREAD", i+1, "POS", pos, "RANGE", start, end)
 					splitTargets := targetFileIndexes[start:end]
 					totalTexts += len(splitTargets)
 					start = end
 					end += increment
-					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, localSourceFilesDone map[string]bool, config *matchingParams, commonNgrams map[int32]bool) {
+					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, commonNgrams map[int32]bool) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
-					innerTargetMatching:
 						for _, targetFile := range splitTargets {
-							if sourceAgainstSource {
-								if sourceFile.DocID == targetFile.DocID {
-									continue innerTargetMatching
-								} else if _, ok := localSourceFilesDone[targetFile.DocID]; ok {
-									continue innerTargetMatching
-								}
-							}
-							if sourceFile.DocID == "106" && targetFile.DocID == "105" {
-								fmt.Println("HAHA")
+							if sourceAgainstSource && sourceFile.SortID >= targetFile.SortID {
+								continue
 							}
 							var debugOutput *os.File
 							if config.debug {
@@ -527,12 +513,12 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							}
 							sourceTargetIntersection, totalCommonNgrams := getIntersection(&sourceFile, &targetFile)
 							if len(sourceTargetIntersection) < config.minimumMatchingNgramsInDocs {
-								continue innerTargetMatching
+								continue
 							} else if float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100 > config.duplicateThreshold {
 								sourceInfo := fmt.Sprintf("%s (%s) [%s]", sourceMetadata[sourceFile.DocID]["title"], sourceMetadata[sourceFile.DocID]["author"], sourceMetadata[sourceFile.DocID]["filename"])
 								targetInfo := fmt.Sprintf("%s (%s) [%s]", targetMetadata[targetFile.DocID]["title"], targetMetadata[targetFile.DocID]["author"], targetMetadata[targetFile.DocID]["filename"])
 								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, []Alignment{}, []string{sourceInfo, targetInfo}})
-								continue innerTargetMatching
+								continue
 							}
 							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams, commonNgrams)
 							var matches = []ngramMatch{}
@@ -552,7 +538,6 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 								return matches[i].target.index < matches[j].target.index
 							})
 							alignments := matchPassage(&sourceFile, &targetFile, matches, config, mostCommonNgrams, ngramIndex, debugOutput)
-							// fmt.Println(sourceFile.DocID, targetFile.DocID, len(alignments))
 							if config.mergeOnByteDistance || config.mergeOnNgramDistance {
 								alignments = mergeWithPrevious(alignments, config, debugOutput)
 							}
@@ -563,7 +548,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							debugOutput.Close()
 						}
 						c <- localAlignments
-					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, localSourceFilesDone, config, commonNgrams)
+					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, config, commonNgrams)
 				}
 				wait.Wait()
 				for i := 0; i < threadsNeeded; i++ {
@@ -572,14 +557,8 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 						combinedAlignments.alignments = append(combinedAlignments.alignments, localCombinedAlignments...)
 					}
 				}
-				// if totalTexts != len(targetFileIndexes[pos+1:]) {
-				// 	fmt.Println("Mismatch", totalTexts, "smaller than", len(targetFileIndexes[pos+1:]))
-				// }
 				if len(combinedAlignments.alignments) > 0 {
 					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, &counts)
-				}
-				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
-					localSourceFilesDone[sourceFile.DocID] = true
 				}
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
