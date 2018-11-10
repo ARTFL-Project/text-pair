@@ -18,12 +18,12 @@ else:
     print("Only 64 bit linux and MacOS are supported at this time.")
     exit()
 
-setup(name="textalign",
+setup(name="textpair",
       version="1.0alpha",
       author="The ARTFL Project and OBVIL",
       author_email="clovisgladstone@gmail.com",
-      packages=["textalign"],
-      scripts=["scripts/textalign"],
+      packages=["textpair"],
+      scripts=["scripts/textpair"],
       install_requires=[
           "multiprocess", "mmh3", "unidecode", "tqdm",
           "pystemmer", "argcomplete", "lxml"

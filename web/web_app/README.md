@@ -1,4 +1,4 @@
-# text-align
+# text-pair
 
 > A Vue.js project
 

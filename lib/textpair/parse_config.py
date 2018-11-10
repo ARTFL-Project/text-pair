@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Parse textalign config file"""
+"""Parse textpair config file"""
 
 import configparser
 import os
 
 
-def parse_config(textalign_config, output_path="./output", skip_web_app=False):
+def parse_config(textpair_config, output_path="./output", skip_web_app=False):
     """Read config file and store into 4 dicts for each phase of the alignment"""
     tei_parsing = {}
     preprocessing_params = {"source": {}, "target": {}}
     matching_params = {}
     web_app_config = {"skip_web_app": skip_web_app}
     config = configparser.ConfigParser()
-    config.read(textalign_config)
+    config.read(textpair_config)
     for key, value in dict(config["TEI_PARSING"]).items():
         if key.startswith("parse"):
             if value.lower() == "yes" or value.lower() == "true":
