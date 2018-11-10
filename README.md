@@ -1,4 +1,4 @@
-# Text-Align
+# TextPAIR
 
 A scalable and high-performance sequence aligner for large collections of texts
 
