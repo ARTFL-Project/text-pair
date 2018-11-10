@@ -2,6 +2,8 @@
 
 TextPAIR is a scalable and high-performance sequence aligner for humanities text analysis designed to identify "similar passages" in large collections of texts. These may include direct quotations, plagiarism and other forms of borrowings, commonplace expressions and the like.
 
+The original text-pair package was written in Perl and had two versions: PhiloLine and Pair. The new TextPAIR is meant to replace both. You can find the old package here: https://code.google.com/archive/p/text-pair/
+
 Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
 
 ## Installation
