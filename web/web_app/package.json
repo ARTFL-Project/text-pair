@@ -1,5 +1,5 @@
 {
-  "name": "text-align",
+  "name": "text-pair",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -79,5 +79,5 @@
     "IE 10"
   ],
   "author": "Clovis <clovisgladstone@gmail.com>",
-  "description": "Text-align web app build with Vue.js"
+  "description": "text-pair web app build with Vue.js"
 }

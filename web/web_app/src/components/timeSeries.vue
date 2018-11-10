@@ -207,7 +207,7 @@ export default {
 }
 
 .facet-count {
-    text-align: right;
+    text-pair: right;
 }
 
 .list-group-item:focus,

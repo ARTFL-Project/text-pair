@@ -116,7 +116,7 @@ export default {
     display: inline-block !important;
     margin-top: 20px;
     border: 1px solid #ddd;
-    text-align: justify;
+    text-pair: justify;
 }
 
 .metadata-args.none {

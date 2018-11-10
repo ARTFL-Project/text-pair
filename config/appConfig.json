@@ -1,7 +1,7 @@
 {
     "webServer": "Apache",
-    "appPath": "text-align/",
-    "apiServer": "http://localhost/text-align-api",
+    "appPath": "text-pair/",
+    "apiServer": "http://localhost/text-pair-api",
     "databaseName": "alignment_db",
     "databaseLabel": "Text Alignments",
     "sourceDB": {

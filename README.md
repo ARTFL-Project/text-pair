@@ -1,33 +1,33 @@
-# TextPAIR
+# TextPAIR (Pairwise Alignment for Intertextual Relations)
 
-A scalable and high-performance sequence aligner for large collections of texts
+TextPAIR is a scalable and high-performance sequence aligner for humanities text analysis designed to identify "similar passages" in large collections of texts. These may include direct quotations, plagiarism and other forms of borrowings, commonplace expressions and the like.
 
-Built with support from the <a href="https://arfl-project.uchicago.edu">ARTFL Project</a> and <a href="http://obvil.sorbonne-universite.site/">OBVIL</a>
+Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
 
 ## Installation
 
-Note that Text-Align will only run on 64 bit Linux and MacOS. Windows will NOT be supported.
+Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be supported.
 
 ### Dependencies
 
 -   Python 3.6 and up
 -   Node and NPM
--   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database using the `CREATE EXTENSION pg_trgm;` run as a superuser in the PostgreSQL shell.
+-   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database by running the following command in the PostgreSQL shell: `CREATE EXTENSION pg_trgm;` run as a superuser.
 -   A running instance of Apache
 
 ### Install script
 
 -   Run `install.sh` script. This should install all needed components
--   Make sure you include `/etc/text-align/apache_wsgi.conf` in your main Apache configuration file to enable searching
--   Edit `/etc/text-align/global_settings.ini` to provide your PostgreSQL user, database, and password.
+-   Make sure you include `/etc/text-pair/apache_wsgi.conf` in your main Apache configuration file to enable searching
+-   Edit `/etc/text-pair/global_settings.ini` to provide your PostgreSQL user, database, and password.
 
 ## Quick start
 
 Before running any alignment, make sure you edit your copy of `config.ini`. See [below](#configuring-the-alignment) for details
 
-The sequence aligner is executed via the `textalign` command.
+The sequence aligner is executed via the `textpair` command.
 
-`textalign` takes the following command-line arguments:
+`textpair` takes the following command-line arguments:
 
 -   `--config`: path to the configuration file where preprocessing, matching, and web application settings are set
 -   `--source_files`: path to source files
@@ -43,12 +43,12 @@ The sequence aligner is executed via the `textalign` command.
 Example:
 
 ```console
-textalign --source_files=/path/to/source/files --target_files=/path/to/target/files --config=config.ini --workers=6 --output_path=/path/to/output
+textpair --source_files=/path/to/source/files --target_files=/path/to/target/files --config=config.ini --workers=6 --output_path=/path/to/output
 ```
 
 ## Configuring the alignment
 
-When running an alignment, you need to provide a configuration file to the `textalign` command. You can find a generic copy of the file in `/var/lib/text-align/config/config.ini`. You should copy this file to the directory from which you are starting the alignment. Then you can start editing this file. Note that all parameters have comments explaining their role. While most values are reasonable defaults and don't require any edits, you do have to provide a value for `table_name` in the Web Application section at the bottom of the file.
+When running an alignment, you need to provide a configuration file to the `textpair` command. You can find a generic copy of the file in `/var/lib/text-pair/config/config.ini`. You should copy this file to the directory from which you are starting the alignment. Then you can start editing this file. Note that all parameters have comments explaining their role. While most values are reasonable defaults and don't require any edits, you do have to provide a value for `table_name` in the Web Application section at the bottom of the file.
 
 ## Alignments using PhiloLogic databases
 
@@ -60,7 +60,7 @@ For instance, if the source DB is in `/var/www/html/philologic/source_db` and th
 run the following:
 
 ```console
-textalign --is_philo_db --source_files=/var/www/html/philologic/source_db/data/words_and_philo_ids/ --target_files=/var/www/html/philologic/target_db/data/words_and_philo_ids/ --workers=8 --config=config.ini
+textpair --is_philo_db --source_files=/var/www/html/philologic/source_db/data/words_and_philo_ids/ --target_files=/var/www/html/philologic/target_db/data/words_and_philo_ids/ --workers=8 --config=config.ini
 ```
 
 Note that the `--is_philo_db` flag assumes both source and target DBs are PhiloLogic databases.
@@ -68,29 +68,29 @@ Note that the `--is_philo_db` flag assumes both source and target DBs are PhiloL
 ## Run comparison between preprocessed files manually
 
 It's possible run a comparison between documents without having to regenerate ngrams. In this case you need to use the
-`--only_align` argument with the `textalign` command. Source files (and target files if doing a cross DB alignment) need to point
+`--only_align` argument with the `textpair` command. Source files (and target files if doing a cross DB alignment) need to point
 to the location of generated ngrams. You will also need to point to the `metadata.json` file which should be found in the `metadata`
 directory found in the parent directory of your ngrams.
 
--   `--source_files`: path to source ngrams generated by `textalign`
--   `--target_files`: path to target ngrams generated by `textalign`. If this option is not defined, the comparison will be done between source files.
+-   `--source_files`: path to source ngrams generated by `textpair`
+-   `--target_files`: path to target ngrams generated by `textpair`. If this option is not defined, the comparison will be done between source files.
 -   `--source_metadata`: path to source metadata, a required parameter
 -   `--target_metadata`: path to target metadata, a required parameter if target files are defined.
 
 Example: assuming source files are in `./source` and target files in `./target`:
 
 ```console
-textalign --only_align --source_files=source/ngrams --source_metadata=source/metadata/metadata.json --target_files=target/ngrams --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/
+textpair --only_align --source_files=source/ngrams --source_metadata=source/metadata/metadata.json --target_files=target/ngrams --target_metadata=target/metadata/metadata.json --workers=10 --output_path=results/
 ```
 
 ## Configuring the Web Application
 
-The `textalign` script automatically generates a Web Application, and does so by relying on the defaults configured in the `appConfig.json` file which is copied to the directory where the Web Application lives, typically `/var/www/html/text-align/database_name`.
+The `textpair` script automatically generates a Web Application, and does so by relying on the defaults configured in the `appConfig.json` file which is copied to the directory where the Web Application lives, typically `/var/www/html/text-pair/database_name`.
 
 In this file, there are a number of fields that can be configured:
 
 -   `webServer`: should not be changed as only Apache is supported for the foreseeable future.
--   `appPath`: this should match the WSGI configuration in `/etc/text-align/apache_wsgi.conf`. Should not be changed without knowing how to work with `mod_wsgi`.
+-   `appPath`: this should match the WSGI configuration in `/etc/text-pair/apache_wsgi.conf`. Should not be changed without knowing how to work with `mod_wsgi`.
 -   `databaseName`: Defines the name of the PostgreSQL database where the data lives.
 -   `databaseLabel`: Name of the Web Application
 -   `sourceDB` and `targetDB` both define contextual links using PhiloLogic. `philoDB` defines whether the contextual link should appear in results and `link` defines the URL of the PhiloLogic database.

@@ -10,15 +10,15 @@ import sys
 from collections import OrderedDict
 
 from psycopg2.extras import execute_values
-from textalign import parse_config
+from textpair import parse_config
 from tqdm import tqdm
 
 try:
     import psycopg2
 except ImportError:
-    print("The textalign lib was not installed with the web components. Please \
+    print("The textpair lib was not installed with the web components. Please \
     run pip3 install .[web] from the lib/ directory to install missing dependencies \
-    or run the texalign command with --disable_web_app")
+    or run the textpair command with --disable_web_app")
 
 DEFAULT_FIELD_TYPES = {
     "source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER",
@@ -35,12 +35,12 @@ class WebAppConfig:
 
     def __init__(self, field_types, db_name, api_server, source_database,
                  source_database_link, target_database, target_database_link):
-        with open("/var/lib/text-align/config/appConfig.json") as app_config:
+        with open("/var/lib/text-pair/config/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         for field, field_type in field_types.items():
             self.options["metadataTypes"][field] = field_type
         self.options["apiServer"] = api_server
-        self.options["appPath"] = os.path.join("text-align", db_name)
+        self.options["appPath"] = os.path.join("text-pair", db_name)
         self.options["databaseName"] = db_name
         self.options["sourceDB"] = OrderedDict([("philoDB", source_database), ("link", source_database_link)])
         self.options["targetDB"] = OrderedDict([("philoDB", target_database), ("link", target_database_link)])
@@ -152,7 +152,7 @@ def validate_field_type(fields, field_types, field_names):
 def load_db(file, table_name, field_types, searchable_fields):
     """Load SQL table"""
     config = configparser.ConfigParser()
-    config.read("/etc/text-align/global_settings.ini")
+    config.read("/etc/text-pair/global_settings.ini")
     database = psycopg2.connect(user=config["DATABASE"]["database_user"],
                                 password=config["DATABASE"]["database_password"],
                                 database=config["DATABASE"]["database_name"])
@@ -250,12 +250,12 @@ def set_up_app(web_config, db_path):
     print("Copying and building web application...")
     os.system("rm -rf {}".format(db_path))
     os.mkdir(db_path)
-    os.system("cp -R /var/lib/text-align/web/web_app/. {}".format(db_path))
+    os.system("cp -R /var/lib/text-pair/web/web_app/. {}".format(db_path))
     with open(os.path.join(db_path, "appConfig.json"), "w") as config_file:
         json.dump(web_config(), config_file, indent=4)
     os.system("cd {}; npm install --silent; npm run build;".format(db_path))
     if web_config.webServer == "Apache":
-        os.system("cp /var/lib/text-align/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
+        os.system("cp /var/lib/text-pair/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
 
 def create_web_app(file, table, field_types, web_app_dir, api_server, source_database,
                    source_database_link, target_database, target_database_link):
@@ -269,7 +269,7 @@ def create_web_app(file, table, field_types, web_app_dir, api_server, source_dat
     print("DB viewable at {}".format(os.path.join(web_config.apiServer.replace("-api", ""), table)))
 
 def load_from_cli():
-    """Called from textalign script"""
+    """Called from textpair script"""
     main(sys.argv[2:])
 
 def main(args):
