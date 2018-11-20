@@ -3,7 +3,6 @@
 
 import configparser
 import re
-from ast import literal_eval as eval
 from collections import OrderedDict, Counter
 
 import psycopg2
@@ -15,9 +14,9 @@ application = Flask(__name__)
 CORS(application)
 
 GLOBAL_CONFIG = configparser.ConfigParser()
-GLOBAL_CONFIG.read("/etc/text-align/global_settings.ini")
+GLOBAL_CONFIG.read("/etc/text-pair/global_settings.ini")
 
-BOOLEAN_ARGS = re.compile(r'''(NOT \w+)|(OR \w+)|(\w+)|("")''')
+BOOLEAN_ARGS = re.compile(r"""(NOT \w+)|(OR \w+)|(\w+)|("")""")
 
 
 class formArguments():
@@ -83,9 +82,20 @@ def parse_args(request):
     """Parse URL args"""
     query_args = formArguments()
     other_args = formArguments()
-    other_args_keys = ["facet", "direction", "source", "target", "stats_field", "db_table",
-                       "filter_field", "filter_value", "page", "id_anchor", "directionSelected",
-                       "timeSeriesInterval"]
+    other_args_keys = [
+        "facet",
+        "direction",
+        "source",
+        "target",
+        "stats_field",
+        "db_table",
+        "filter_field",
+        "filter_value",
+        "page",
+        "id_anchor",
+        "directionSelected",
+        "timeSeriesInterval",
+    ]
     for key, value in request.args.items():
         if key in other_args_keys:
             if key == "page" or key == "id_anchor" or key == "timeSeriesInterval":
@@ -104,6 +114,7 @@ def parse_args(request):
     metadata_field_types["rowid"] = "INTEGER"
     sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
     return sql_fields, sql_values, other_args
+
 
 def query_builder(query_args, other_args, field_types):
     """Takes query arguments and returns an SQL WHERE clause"""
@@ -125,7 +136,7 @@ def query_builder(query_args, other_args, field_types):
                     value = regular_query
                 if value.startswith('"'):
                     if value == '""':
-                        query = '{} = %s'.format(field)
+                        query = "{} = %s".format(field)
                         sql_values.append("")
                     else:
                         query = "{}=%s".format(field)
@@ -133,14 +144,14 @@ def query_builder(query_args, other_args, field_types):
                 elif value.startswith("NOT "):
                     split_value = " ".join(value.split()[1:]).strip()
                     query = "{} !~* %s".format(field)
-                    sql_values.append('\m{}\M'.format(split_value))
+                    sql_values.append("\m{}\M".format(split_value))
                 # elif value.startswith("OR "):  ## TODO: add support to OR queries by changing the join logic at the end of the function
                 #     split_value = " ".join(value.split()[1:]).strip()
                 #     query = "{} !~* %s".format(field)
                 #     sql_values.append('\m{}\M'.format(split_value))
                 else:
                     query = "{} ~* %s".format(field)
-                    sql_values.append('\m{}\M'.format(value))
+                    sql_values.append("\m{}\M".format(value))
                 sql_fields.append(query)
         elif field_type == "INTEGER":
             if "-" in value:
@@ -155,7 +166,7 @@ def query_builder(query_args, other_args, field_types):
                     query = "{} BETWEEN %s AND %s".format(field)
                     sql_values.extend([values[0], values[2]])
             else:
-                query = '{} = %s'.format(field)
+                query = "{} = %s".format(field)
                 sql_values.append(value)
             sql_fields.append(query)
         else:
@@ -171,6 +182,7 @@ def index():
     """Return index.html which lists available databases"""
     return render_template("index.html")
 
+
 @application.route("/search_alignments/", methods=["GET", "POST"])
 def search_alignments():
     """Search alignments according to URL params"""
@@ -178,24 +190,30 @@ def search_alignments():
     if other_args.direction == "next":
         if sql_fields:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-                    o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
-                    sql_fields, other_args.id_anchor)
+                    o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(
+                other_args.db_table, other_args.db_table, sql_fields, other_args.id_anchor
+            )
         else:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
-                    o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(other_args.db_table, other_args.db_table,
-                    other_args.id_anchor)
+                    o.rowid_ordered > {} ORDER BY o.rowid_ordered LIMIT 50".format(
+                other_args.db_table, other_args.db_table, other_args.id_anchor
+            )
     else:
         if sql_fields:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
-                    o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
-                    sql_fields, other_args.id_anchor)
+                    o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(
+                other_args.db_table, other_args.db_table, sql_fields, other_args.id_anchor
+            )
         else:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE o.source_year_target_year=m.rowid and \
-                    o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(other_args.db_table, other_args.db_table,
-                    other_args.id_anchor)
-    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
+                    o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(
+                other_args.db_table, other_args.db_table, other_args.id_anchor
+            )
+    database = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     column_names = [desc[0] for desc in cursor.description]
@@ -206,20 +224,31 @@ def search_alignments():
     if other_args.direction == "previous":
         alignments.reverse()
     previous_url = ""
-    current_path = re.sub(r'&(page|id_anchor|direction)=(previous|next|\d*)', '', request.path)
+    current_path = re.sub(r"&(page|id_anchor|direction)=(previous|next|\d*)", "", request.path)
     if other_args.page > 1:
-        previous_url = "{}&page={}&id_anchor={}&direction=previous".format(current_path, other_args.page-1, alignments[0]["rowid_ordered"])
+        previous_url = "{}&page={}&id_anchor={}&direction=previous".format(
+            current_path, other_args.page - 1, alignments[0]["rowid_ordered"]
+        )
     try:
-        next_url = "{}&page={}&id_anchor={}&direction=next".format(current_path, other_args.page+1, alignments[-1]["rowid_ordered"])
+        next_url = "{}&page={}&id_anchor={}&direction=next".format(
+            current_path, other_args.page + 1, alignments[-1]["rowid_ordered"]
+        )
     except IndexError:
         next_url = ""
     start_position = 0
     if other_args.page > 1:
         start_position = 50 * (other_args.page - 1)
-    result_object = {"alignments": alignments, "page": other_args.page, "next_url": next_url, "previous_url": previous_url, "start_position": start_position}
+    result_object = {
+        "alignments": alignments,
+        "page": other_args.page,
+        "next_url": next_url,
+        "previous_url": previous_url,
+        "start_position": start_position,
+    }
     response = jsonify(result_object)
-    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add("Access-Control-Allow-Origin", "*")
     return response
+
 
 @application.route("/count_results/", methods=["GET", "POST"])
 def count_results():
@@ -229,32 +258,48 @@ def count_results():
         query = "SELECT COUNT(*) FROM {} WHERE {}".format(other_args.db_table, sql_fields)
     else:
         query = "SELECT COUNT(*) FROM {}".format(other_args.db_table)
-    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
+    database = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     result_object = {"counts": cursor.fetchone()[0]}
     response = jsonify(result_object)
-    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add("Access-Control-Allow-Origin", "*")
     return response
+
 
 @application.route("/generate_time_series/", methods=["GET", "POST"])
 def generate_time_series():
     """Generate a time series from search results"""
-    #TODO: don't assume year is the field to use
+    # TODO: don't assume year is the field to use
     sql_fields, sql_values, other_args = parse_args(request)
     if sql_fields:
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {} WHERE {}) t \
-                GROUP BY interval ORDER BY interval".format(other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table, sql_fields)
+                GROUP BY interval ORDER BY interval".format(
+            other_args.directionSelected,
+            other_args.timeSeriesInterval,
+            other_args.timeSeriesInterval,
+            other_args.db_table,
+            sql_fields,
+        )
     else:
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {}) t \
-                GROUP BY interval ORDER BY interval".format(other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table)
-    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
+                GROUP BY interval ORDER BY interval".format(
+            other_args.directionSelected,
+            other_args.timeSeriesInterval,
+            other_args.timeSeriesInterval,
+            other_args.db_table,
+        )
+    database = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     results = []
@@ -271,32 +316,34 @@ def generate_time_series():
         next_year = year + other_args.timeSeriesInterval
         total_results += count
     response = jsonify({"counts": total_results, "results": results})
-    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add("Access-Control-Allow-Origin", "*")
     return response
+
 
 @application.route("/facets/", methods=["POST"])
 def facets():
     """Retrieve facet result"""
     sql_fields, sql_values, other_args = parse_args(request)
-    database = psycopg2.connect(user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-                                password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-                                database=GLOBAL_CONFIG["DATABASE"]["database_name"])
+    database = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if sql_fields:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
-            other_args.facet, other_args.db_table, sql_fields, other_args.facet)
+            other_args.facet, other_args.db_table, sql_fields, other_args.facet
+        )
     else:
         query = "SELECT {}, COUNT(*) FROM {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
-            other_args.facet, other_args.db_table, other_args.facet)
-    cursor.execute(query,sql_values)
+            other_args.facet, other_args.db_table, other_args.facet
+        )
+    cursor.execute(query, sql_values)
     results = []
     if not other_args.facet.endswith("passage_length"):
         for result in cursor:
             field_name, count = result
-            results.append({
-                "field": field_name,
-                "count": count
-            })
+            results.append({"field": field_name, "count": count})
     else:
         counts = Counter()
         for length, count in cursor:
@@ -314,7 +361,10 @@ def facets():
                 counts["1001-3000"] += count
             elif length > 3000:
                 counts["3001-"] += count
-        results = [{"field": interval, "count": count} for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)]
+        results = [
+            {"field": interval, "count": count}
+            for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
+        ]
     response = jsonify({"facet": other_args.facet, "results": results})
-    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add("Access-Control-Allow-Origin", "*")
     return response

@@ -152,7 +152,7 @@ class Ngrams:
             ngrams=self.config["ngram"],
             ngram_gap=self.config["gap"],
             text_object_type=self.config["text_object_level"],
-            ascii=True
+            ascii=True,
         )
         doc_ngrams = []
         metadata = {}
