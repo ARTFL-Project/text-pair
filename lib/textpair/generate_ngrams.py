@@ -10,7 +10,7 @@ from glob import glob
 from math import floor
 
 from multiprocess import Pool
-from text_preprocessing import PreProcessor
+from text_preprocessing import PreProcessor, Lemmatizer
 from tqdm import tqdm
 
 from mmh3 import hash as hash32
@@ -168,7 +168,7 @@ class Ngrams:
                     text_metadata[k] = str(v)
             if self.metadata_done is False:
                 text_object_id = "_".join(
-                    text_metadata["philo_id"].split()[:PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]]
+                    text_metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]]
                 )
                 metadata[text_object_id] = text_metadata
             else:
@@ -180,6 +180,8 @@ class Ngrams:
                 doc_ngrams.append("\t".join((ngram, str(hashed_ngram))))
             with open(f"{self.output_path}/ngrams/{text_object_id}.json", "w") as json_file:
                 json.dump(dict(text_index), json_file)
+        if isinstance(preprocessor.lemmatizer, Lemmatizer):  # delete cached lemmatizer file
+            preprocessor.lemmatizer.delete()
         with open(f"{self.output_path}/temp/{os.path.basename(input_file)}", "w") as output:
             output.write("\n".join(sorted(doc_ngrams)))
         return metadata
