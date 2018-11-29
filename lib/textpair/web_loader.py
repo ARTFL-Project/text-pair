@@ -16,25 +16,33 @@ from tqdm import tqdm
 try:
     import psycopg2
 except ImportError:
-    print("The textpair lib was not installed with the web components. Please \
+    print(
+        "The textpair lib was not installed with the web components. Please \
     run pip3 install .[web] from the lib/ directory to install missing dependencies \
-    or run the textpair command with --disable_web_app")
+    or run the textpair command with --disable_web_app"
+    )
 
 DEFAULT_FIELD_TYPES = {
-    "source_year": "INTEGER", "source_pub_date": "INTEGER", "target_year": "INTEGER", "target_pub_date": "INTEGER",
-    "source_start_byte": "INTEGER", "target_start_byte": "INTEGER", "source_end_byte": "INTEGER", "target_end_byte": "INTEGER",
-    "source_passage_length": "INTEGER", "target_passage_length": "INTEGER"
+    "source_year": "INTEGER",
+    "source_pub_date": "INTEGER",
+    "target_year": "INTEGER",
+    "target_pub_date": "INTEGER",
+    "source_start_byte": "INTEGER",
+    "target_start_byte": "INTEGER",
+    "source_end_byte": "INTEGER",
+    "target_end_byte": "INTEGER",
+    "source_passage_length": "INTEGER",
+    "target_passage_length": "INTEGER",
 }
 
-YEAR_FINDER = re.compile(r'^.*?(\d{1,}).*')
+YEAR_FINDER = re.compile(r"^.*?(\d{1,}).*")
 TOKENIZER = re.compile(r"\w+")
 
 
 class WebAppConfig:
     """ Web app config class"""
 
-    def __init__(self, field_types, db_name, api_server, source_database,
-                 source_database_link, target_database, target_database_link):
+    def __init__(self, field_types, db_name, api_server, source_database_link, target_database_link):
         with open("/var/lib/text-pair/config/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         for field, field_type in field_types.items():
@@ -42,8 +50,8 @@ class WebAppConfig:
         self.options["apiServer"] = api_server
         self.options["appPath"] = os.path.join("text-pair", db_name)
         self.options["databaseName"] = db_name
-        self.options["sourceDB"] = OrderedDict([("philoDB", source_database), ("link", source_database_link)])
-        self.options["targetDB"] = OrderedDict([("philoDB", target_database), ("link", target_database_link)])
+        self.options["sourcePhiloDBLink"] = source_database_link
+        self.options["targetPhiloDBLink"] = target_database_link
 
     def __call__(self):
         return self.options
@@ -99,8 +107,7 @@ class WebAppConfig:
 def parse_command_line(args):
     """Command line parsing function"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", help="configuration file used to override defaults",
-                        type=str, default="")
+    parser.add_argument("--config", help="configuration file used to override defaults", type=str, default="")
     parser.add_argument("--file", help="alignment file to load", type=str, default=None)
     args = vars(parser.parse_args(args=args))
     if args["file"] is None:
@@ -111,13 +118,23 @@ def parse_command_line(args):
         if os.path.exists(args["config"]):
             _, _, _, web_app_config = parse_config(args["config"])
             field_types.update(web_app_config["field_types"])
-    return args["file"], web_app_config["table_name"], field_types, web_app_config["web_application_directory"], \
-           web_app_config["api_server"], web_app_config["source_database"], web_app_config["source_database_link"], \
-           web_app_config["target_database"], web_app_config["target_database_link"]
+    return (
+        args["file"],
+        web_app_config["table_name"],
+        field_types,
+        web_app_config["web_application_directory"],
+        web_app_config["api_server"],
+        web_app_config["source_database"],
+        web_app_config["source_database_link"],
+        web_app_config["target_database"],
+        web_app_config["target_database_link"],
+    )
+
 
 def count_lines(filename):
     """Count lines in file"""
-    return sum(1 for _ in open(filename, 'rbU'))
+    return sum(1 for _ in open(filename, "rbU"))
+
 
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
@@ -126,11 +143,13 @@ def parse_file(file):
             fields = json.loads(line.rstrip("\n"))
             yield fields
 
+
 def clean_text(text):
     """Clean passages for HTML viewing before storing"""
     text = text.replace("<", "&lt;")
     text = text.replace(">", "gt;")
     return text
+
 
 def validate_field_type(fields, field_types, field_names):
     """Check field type and modify value type if needed"""
@@ -149,21 +168,26 @@ def validate_field_type(fields, field_types, field_names):
         values.append(value)
     return values
 
+
 def load_db(file, table_name, field_types, searchable_fields):
     """Load SQL table"""
     config = configparser.ConfigParser()
     config.read("/etc/text-pair/global_settings.ini")
-    database = psycopg2.connect(user=config["DATABASE"]["database_user"],
-                                password=config["DATABASE"]["database_password"],
-                                database=config["DATABASE"]["database_name"])
+    database = psycopg2.connect(
+        user=config["DATABASE"]["database_user"],
+        password=config["DATABASE"]["database_password"],
+        database=config["DATABASE"]["database_name"],
+    )
     cursor = database.cursor()
     cursor2 = database.cursor()
-    line_count = count_lines(file) - 1 # skip first line with field names
+    line_count = count_lines(file) - 1  # skip first line with field names
     alignments = parse_file(file)
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
     with open(file, errors="ignore") as input_file:
-        extra_fields = json.loads(input_file.readline().rstrip("\n")).keys() # TODO: we need to add fields on the fly as they occur, since not all are in the first line
+        extra_fields = json.loads(
+            input_file.readline().rstrip("\n")
+        ).keys()  # TODO: we need to add fields on the fly as they occur, since not all are in the first line
         field_names.extend(extra_fields)
         field_names.extend(["source_passage_length", "target_passage_length"])
         if "source_year" not in field_names:
@@ -212,7 +236,7 @@ def load_db(file, table_name, field_types, searchable_fields):
             cursor.execute("CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
             if not field.endswith("passage"):
                 cursor.execute("CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field))
-        elif not field.endswith("year") and field_type == "INTEGER": # year is a special case used for results ordering
+        elif not field.endswith("year") and field_type == "INTEGER":  # year is a special case used for results ordering
             cursor.execute("CREATE INDEX {}_{}_idx ON {} USING BTREE({})".format(field, table_name, table_name, field))
     cursor.execute("CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(table_name, table_name))
     database.commit()
@@ -228,7 +252,7 @@ def load_db(file, table_name, field_types, searchable_fields):
     for row in tqdm(cursor, total=line_count, leave=False):
         lines += 1
         rowid += 1
-        rows.append((rowid, row[0],))
+        rows.append((rowid, row[0]))
         if lines == 100:
             insert = "INSERT INTO {} ({}) VALUES %s".format(ordered_table, "rowid_ordered, source_year_target_year")
             execute_values(cursor2, insert, rows)
@@ -240,10 +264,13 @@ def load_db(file, table_name, field_types, searchable_fields):
         rows = []
         lines = 0
     print("Creating indexes...")
-    cursor2.execute("CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table))
+    cursor2.execute(
+        "CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table)
+    )
     database.commit()
     database.close()
     return field_names
+
 
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
@@ -257,28 +284,31 @@ def set_up_app(web_config, db_path):
     if web_config.webServer == "Apache":
         os.system("cp /var/lib/text-pair/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
 
-def create_web_app(file, table, field_types, web_app_dir, api_server, source_database,
-                   source_database_link, target_database, target_database_link):
+
+def create_web_app(file, table, field_types, web_app_dir, api_server, source_database_link, target_database_link):
     """Main routine"""
     print("\n### Building Web Application ###", flush=True)
-    web_config = WebAppConfig(field_types, table, api_server, source_database,
-                              source_database_link, target_database, target_database_link)
+    web_config = WebAppConfig(field_types, table, api_server, source_database_link, target_database_link)
     fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
     web_config.update(fields_in_table)
     set_up_app(web_config, os.path.join("{}/{}/".format(web_app_dir, table)))
     print("DB viewable at {}".format(os.path.join(web_config.apiServer.replace("-api", ""), table)))
 
+
 def load_from_cli():
     """Called from textpair script"""
     main(sys.argv[2:])
 
+
 def main(args):
     """Main function"""
-    file, table, field_types, web_app_dir, api_server, source_database, \
-    source_database_link, target_database, target_database_link = parse_command_line(args)
-    create_web_app(file, table, field_types, web_app_dir, api_server,
-                   source_database, source_database_link, target_database,
-                   target_database_link)
+    file, table, field_types, web_app_dir, api_server, source_database, source_database_link, target_database, target_database_link = parse_command_line(
+        args
+    )
+    create_web_app(
+        file, table, field_types, web_app_dir, api_server, source_database, source_database_link, target_database, target_database_link
+    )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main(sys.argv[1:])

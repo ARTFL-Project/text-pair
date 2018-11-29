@@ -58,8 +58,13 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
     if skip_web_app is False:
         web_app_config["field_types"] = {}
         for key, value in dict(config["WEB_APPLICATION"]).items():
-            if key == "api_server" or key == "table_name" or key == "web_application_directory" \
-                or key == "source_database" or key == "source_database_link" or key == "target_database" or key == "target_database_link":
+            if (
+                key == "api_server"
+                or key == "table_name"
+                or key == "web_application_directory"
+                or key == "source_philo_db_link"
+                or key == "target_philo_db_link"
+            ):
                 web_app_config[key] = value
             else:
                 web_app_config["field_types"][key] = value
