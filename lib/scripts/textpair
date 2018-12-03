@@ -25,15 +25,30 @@ def parse_command_line():
     parser.add_argument("--config", help="configuration file used to override defaults", type=str, default="")
     parser.add_argument("--source_files", help="path to source files from which to compare", type=str)
     parser.add_argument("--target_files", help="path to target files to compared to source files", type=str, default="")
-    parser.add_argument("--is_philo_db", help="define if files are from a PhiloLogic instance", action="store_true", default=False)
-    parser.add_argument("--source_metadata", help="path to source metadata if not from PhiloLogic instance", type=str, default="")
-    parser.add_argument("--target_metadata", help="path to target metadata if not from PhiloLogic instance", type=str, default="")
     parser.add_argument(
-        "--only_align", help="skip parsing or ngram generation phase to go straight to the aligner", action="store_true", default=False
+        "--is_philo_db", help="define if files are from a PhiloLogic instance", action="store_true", default=False
     )
-    parser.add_argument("--source_common_ngrams", help="path to source common ngrams when using --only_align", type=str, default="")
-    parser.add_argument("--target_common_ngrams", help="path to target common ngrams when using --only_align", type=str, default="")
-    parser.add_argument("--ngram_index", help="path to ngram index when using --only_align with debug", type=str, default="")
+    parser.add_argument(
+        "--source_metadata", help="path to source metadata if not from PhiloLogic instance", type=str, default=""
+    )
+    parser.add_argument(
+        "--target_metadata", help="path to target metadata if not from PhiloLogic instance", type=str, default=""
+    )
+    parser.add_argument(
+        "--only_align",
+        help="skip parsing or ngram generation phase to go straight to the aligner",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--source_common_ngrams", help="path to source common ngrams when using --only_align", type=str, default=""
+    )
+    parser.add_argument(
+        "--target_common_ngrams", help="path to target common ngrams when using --only_align", type=str, default=""
+    )
+    parser.add_argument(
+        "--ngram_index", help="path to ngram index when using --only_align with debug", type=str, default=""
+    )
     parser.add_argument(
         "--skip_web_app",
         help="define whether to load results into a database and build a corresponding web app",
@@ -47,8 +62,12 @@ def parse_command_line():
         default=False,
     )
     parser.add_argument("--file", help="alignment file to load", type=str, default=None)
-    parser.add_argument("--output_path", help="output path for ngrams and sequence alignment", type=str, default="./output")
-    parser.add_argument("--workers", help="How many threads or cores to use for preprocessing and matching", type=int, default=4)
+    parser.add_argument(
+        "--output_path", help="output path for ngrams and sequence alignment", type=str, default="./output"
+    )
+    parser.add_argument(
+        "--workers", help="How many threads or cores to use for preprocessing and matching", type=int, default=4
+    )
     parser.add_argument("--debug", help="add debugging", action="store_true", default=False)
     argcomplete.autocomplete(parser)
     args = vars(parser.parse_args())
@@ -78,7 +97,9 @@ def parse_command_line():
         else:
             paths["source"]["input_files_for_ngrams"] = args["source_files"]
             paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
-            paths["source"]["metadata_path"] = args["source_metadata"] or os.path.join(args["output_path"], "source/metadata/metadata.json")
+            paths["source"]["metadata_path"] = args["source_metadata"] or os.path.join(
+                args["output_path"], "source/metadata/metadata.json"
+            )
             paths["source"]["is_philo_db"] = args["is_philo_db"]
         paths["source"]["common_ngrams"] = os.path.join(args["output_path"], "source/index/most_common_ngrams.txt")
         matching_params["ngram_index"] = os.path.join(args["output_path"], "source/index/index.tab")
@@ -135,10 +156,8 @@ def run_alignment():
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],
             pair_params.web_app_config["api_server"],
-            pair_params.web_app_config["source_database"],
-            pair_params.web_app_config["source_database_link"],
-            pair_params.web_app_config["target_database"],
-            pair_params.web_app_config["target_database_link"],
+            pair_params.web_app_config["source_philo_db_link"],
+            pair_params.web_app_config["target_philo_db_link"],
         )
         return
     if pair_params.only_align is False:
