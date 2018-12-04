@@ -4,6 +4,12 @@
 	"apiServer": "http://localhost/text-pair-api",
 	"databaseName": "alignment_db",
 	"databaseLabel": "Text Alignments",
+	"branding": [
+		{
+			"label": "ARTFL-Project",
+			"link": "https://artfl-project.uchicago.edu"
+		}
+	],
 	"sourcePhiloDBLink": "",
 	"targetPhiloDBLink": "",
 	"sourceLabel": "Source",
