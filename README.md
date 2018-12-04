@@ -6,6 +6,8 @@ The original text-pair package was written in Perl and had two versions: PhiloLi
 
 Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
 
+![alt text](example.png)
+
 ## Installation
 
 Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be supported.
