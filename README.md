@@ -10,7 +10,7 @@ would be rendered in trigram shingles (with lemmatization, accents flattened and
 
 `homme_libre_partout, libre_partout_fer, partout_fer_croire, fer_croire_maitre, croire_maitre_laisser, maitre_laisser_esclave`
 
-Common shingles across texts indicate many different types of textual borrowings, from direct citations to more ambiguous and unattributed usages of a passage. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases.
+Common shingles across texts indicate many different types of textual borrowings, from direct citations to more ambiguous and unattributed usages of a passage. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases, such as in the example below.
 
 ![alt text](example.png)
 
@@ -35,6 +35,8 @@ Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be 
 
 Before running any alignment, make sure you edit your copy of `config.ini`. See [below](#configuring-the-alignment) for details
 
+### NOTE: source designates the source database from which reuses are deemed to originate, and target is the collection borrowing from source. In practice, the number of alignments won't vary significantly if you swap source and target
+
 The sequence aligner is executed via the `textpair` command.
 
 `textpair` takes the following command-line arguments:
@@ -58,16 +60,47 @@ textpair --source_files=/path/to/source/files --target_files=/path/to/target/fil
 
 ## Configuring the alignment
 
-When running an alignment, you need to provide a configuration file to the `textpair` command. You can find a generic copy of the file in `/var/lib/text-pair/config/config.ini`. You should copy this file to the directory from which you are starting the alignment. Then you can start editing this file. Note that all parameters have comments explaining their role. While most values are reasonable defaults and don't require any edits, you do have to provide a value for `table_name` in the Web Application section at the bottom of the file.
+When running an alignment, you need to provide a configuration file to the `textpair` command.
+You can find a generic copy of the file in `/var/lib/text-pair/config/config.ini`.
+You should copy this file to the directory from which you are starting the alignment.
+Then you can start editing this file. Note that all parameters have comments explaining their role.
+
+While most values are reasonable defaults and don't require any edits, here are the most important settings you will want to checkout:
+
+### In the TEI Parsing section
+
+-   `parse_source_files`, and `parse_target_files`: both of these setting determine whether you want textPAIR to parse your TEI files or not.
+    Set to `yes` by default. If you are relying on parsed output from PhiloLogic, you will want to set this to `no` or `false`.
+-   `source_words_to_keep` and `target_words_to_keep`: defines files containing lists of words (separated by a newline) which the parser should keep.
+    Other words are discarded.
+
+### In the Preprocessing section
+
+-   `source_text_object_level` and `target_text_object_level`: Define the individual text object from which to compare other texts with.
+    Possible values are `doc`, `div1`, `div2`, `div3`, `para`, `sent`. This is only used when relying on a PhiloLogic database.
+-   `ngram`: Size of your ngram. The default is 3, which seems to work well in most cases. A lower number tends to produce more uninteresting short matches.
+-   `language`: This determines the language used by the Porter Stemmer as well as by Spacy (if using more advanced POS filtering features and lemmatization).
+    Note that you should use language codes from the <a href="https://spacy.io/models/">Spacy
+    documentation</a>.
+
+### In the Matching section
+
+-   `source_batch` and `target_batch`: You can batch your alignments if your system is limited in RAM or if you are dealing with a very large corpus.
+-   `minimum_matching_ngrams`: this setting determines how many matching ngrams are needed for TextPAIR to consider the target passage a match. Lower the number if you
+    are looking for short matches (at the risk of finding more uninteresting matches) or increase the number to only find longer matches.
+
+### In the Web Application section
+
+-   `table_name`: **Make sure you provide a value** or the alignment will not run
+    in the Web Application section at the bottom of the file.
+-   `source_philo_db_link` and `target_philo_db_link`: Provide a URL for the source and target PhiloLogic databases if you want to
+    link back to the original PhiloLogic instance to contextualize your results.
 
 ## Alignments using PhiloLogic databases
 
-This currently uses the dev version of PhiloLogic5 to read PhiloLogic4 databases. So you'll need a version of PhiloLogic5 installed.
-A future version will have that functionnality baked in.
-
-To leverage a PhiloLogic database, use the `--is_philo_db` flag, and point to the `data/words_and_philo_ids` directory of the PhiloLogic DB used.
-For instance, if the source DB is in `/var/www/html/philologic/source_db` and the target DB is in `/var/www/html/philologic/target_db`,
-run the following:
+To leverage a PhiloLogic database to extract text and relevant metadata, use the `--is_philo_db` flag, and point to the `data/words_and_philo_ids` directory of the PhiloLogic DB used.
+For instance, if the source DB is in `/var/www/html/philologic/source_db` and the target DB is in `/var/www/html/philologic/target_db`, make sure you actually point to the `data/words_and_philo_ids`
+folder inside these databases, such as:
 
 ```console
 textpair --is_philo_db --source_files=/var/www/html/philologic/source_db/data/words_and_philo_ids/ --target_files=/var/www/html/philologic/target_db/data/words_and_philo_ids/ --workers=8 --config=config.ini
@@ -77,15 +110,15 @@ Note that the `--is_philo_db` flag assumes both source and target DBs are PhiloL
 
 ## Run comparison between preprocessed files manually
 
-It's possible run a comparison between documents without having to regenerate ngrams. In this case you need to use the
-`--only_align` argument with the `textpair` command. Source files (and target files if doing a cross DB alignment) need to point
+It is possible to run a comparison between documents without having to regenerate ngrams. In this case you need to use the
+`--only_align` argument with the `textpair` command. Source files (and target files if doing a cross-database alignment) need to point
 to the location of generated ngrams. You will also need to point to the `metadata.json` file which should be found in the `metadata`
 directory found in the parent directory of your ngrams.
 
 -   `--source_files`: path to source ngrams generated by `textpair`
 -   `--target_files`: path to target ngrams generated by `textpair`. If this option is not defined, the comparison will be done between source files.
--   `--source_metadata`: path to source metadata, a required parameter
--   `--target_metadata`: path to target metadata, a required parameter if target files are defined.
+-   `--source_metadata`: path to source metadata
+-   `--target_metadata`: path to target metadata
 
 Example: assuming source files are in `./source` and target files in `./target`:
 
@@ -96,6 +129,8 @@ textpair --only_align --source_files=source/ngrams --source_metadata=source/meta
 ## Configuring the Web Application
 
 The `textpair` script automatically generates a Web Application, and does so by relying on the defaults configured in the `appConfig.json` file which is copied to the directory where the Web Application lives, typically `/var/www/html/text-pair/database_name`.
+
+### Note on metadata naming: metadata fields extracted for the text files are prepended by `source_` for source texts and `target_` for target texts.
 
 In this file, there are a number of fields that can be configured:
 
