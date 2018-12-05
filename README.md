@@ -137,12 +137,14 @@ In this file, there are a number of fields that can be configured:
 -   `webServer`: should not be changed as only Apache is supported for the foreseeable future.
 -   `appPath`: this should match the WSGI configuration in `/etc/text-pair/apache_wsgi.conf`. Should not be changed without knowing how to work with `mod_wsgi`.
 -   `databaseName`: Defines the name of the PostgreSQL database where the data lives.
--   `databaseLabel`: Name of the Web Application
--   `sourceDB` and `targetDB` both define contextual links using PhiloLogic. `philoDB` defines whether the contextual link should appear in results and `link` defines the URL of the PhiloLogic database.
+-   `databaseLabel`: Title of the database used in the Web Application
+-   `branding`: Defines links in the header
+-   `sourcePhiloDBLink` and `targetPhiloDBLink`: Provide URL to PhiloLogic database to contextualize shared passages.
 -   `sourceLabel` and `targetLabel` are the names of source DB and target DB. This field supports HTML tags.
 -   `metadataTypes`: defines the value type of field. Either `TEXT` or `INTEGER`.
 -   `sourceCitation` and `targetCitation` define the bibliography citation in results. `field` defines the metadata field to use, and `style` is for CSS styling (using key/value for CSS rules)
--   `metadataFields` defines the fields available for searching in the search form for `source` and `target`. `label` is the name used in the form and `value` is the actual name of the metadata field as stored in the SQL database.
+-   `metadataFields` defines the fields available for searching in the search form for `source` and `target`.
+    `label` is the name used in the form and `value` is the actual name of the metadata field as stored in the SQL database.
 -   `facetFields` works the same way as `metadataFields` but for defining which fields are available in the faceted browser section.
 -   `timeSeriesIntervals` defines the time intervals available for the time series functionnality.
 
