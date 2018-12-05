@@ -18,14 +18,14 @@ Common shingles across texts indicate many different types of textual borrowings
 
 Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be supported.
 
-### Dependencies
+#### Dependencies
 
 -   Python 3.6 and up
 -   Node and NPM
 -   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database by running the following command in the PostgreSQL shell: `CREATE EXTENSION pg_trgm;` run as a superuser.
 -   A running instance of Apache
 
-### Install script
+#### Install script
 
 -   Run `install.sh` script. This should install all needed components
 -   Make sure you include `/etc/text-pair/apache_wsgi.conf` in your main Apache configuration file to enable searching
@@ -35,7 +35,7 @@ Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be 
 
 Before running any alignment, make sure you edit your copy of `config.ini`. See [below](#configuring-the-alignment) for details
 
-### NOTE: source designates the source database from which reuses are deemed to originate, and target is the collection borrowing from source. In practice, the number of alignments won't vary significantly if you swap source and target
+#### NOTE: source designates the source database from which reuses are deemed to originate, and target is the collection borrowing from source. In practice, the number of alignments won't vary significantly if you swap source and target
 
 The sequence aligner is executed via the `textpair` command.
 
@@ -67,14 +67,14 @@ Then you can start editing this file. Note that all parameters have comments exp
 
 While most values are reasonable defaults and don't require any edits, here are the most important settings you will want to checkout:
 
-### In the TEI Parsing section
+#### In the TEI Parsing section
 
 -   `parse_source_files`, and `parse_target_files`: both of these setting determine whether you want textPAIR to parse your TEI files or not.
     Set to `yes` by default. If you are relying on parsed output from PhiloLogic, you will want to set this to `no` or `false`.
 -   `source_words_to_keep` and `target_words_to_keep`: defines files containing lists of words (separated by a newline) which the parser should keep.
     Other words are discarded.
 
-### In the Preprocessing section
+#### In the Preprocessing section
 
 -   `source_text_object_level` and `target_text_object_level`: Define the individual text object from which to compare other texts with.
     Possible values are `doc`, `div1`, `div2`, `div3`, `para`, `sent`. This is only used when relying on a PhiloLogic database.
@@ -83,13 +83,13 @@ While most values are reasonable defaults and don't require any edits, here are 
     Note that you should use language codes from the <a href="https://spacy.io/models/">Spacy
     documentation</a>.
 
-### In the Matching section
+#### In the Matching section
 
 -   `source_batch` and `target_batch`: You can batch your alignments if your system is limited in RAM or if you are dealing with a very large corpus.
 -   `minimum_matching_ngrams`: this setting determines how many matching ngrams are needed for TextPAIR to consider the target passage a match. Lower the number if you
     are looking for short matches (at the risk of finding more uninteresting matches) or increase the number to only find longer matches.
 
-### In the Web Application section
+#### In the Web Application section
 
 -   `table_name`: **Make sure you provide a value** or the alignment will not run
     in the Web Application section at the bottom of the file.
@@ -130,7 +130,7 @@ textpair --only_align --source_files=source/ngrams --source_metadata=source/meta
 
 The `textpair` script automatically generates a Web Application, and does so by relying on the defaults configured in the `appConfig.json` file which is copied to the directory where the Web Application lives, typically `/var/www/html/text-pair/database_name`.
 
-### Note on metadata naming: metadata fields extracted for the text files are prepended by `source_` for source texts and `target_` for target texts.
+#### Note on metadata naming: metadata fields extracted for the text files are prepended by `source_` for source texts and `target_` for target texts.
 
 In this file, there are a number of fields that can be configured:
 
