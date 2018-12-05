@@ -1,10 +1,23 @@
 # TextPAIR (Pairwise Alignment for Intertextual Relations)
 
-TextPAIR is a scalable and high-performance sequence aligner for humanities text analysis designed to identify "similar passages" in large collections of texts. These may include direct quotations, plagiarism and other forms of borrowings, commonplace expressions and the like.
+TextPAIR is a scalable and high-performance sequence aligner for humanities text analysis designed to identify "similar passages" in large collections of texts. These may include direct quotations, plagiarism and other forms of borrowings, commonplace expressions and the like. It is a complete rewrite and rethink of the <a href="https://code.google.com/archive/p/text-pair/">original implementation</a> released in 2009.
 
-The original text-pair package was written in Perl and had two versions: PhiloLine and Pair. The new TextPAIR is meant to replace both. You can find the old package here: https://code.google.com/archive/p/text-pair/
+While TextPAIR was developed in response to the fairly specific phenomenon of similar passages across literary works, the sequence analysis techniques employed in TextPAIR were developed in widely disparate fields, such as bioinformatics and computer science, with applications ranging from genome sequencing to plagiarism detection. TextPAIR generates a set of overlapping word sequence shingles for every text in a corpus, then stores and indexes that information to be analyzed against shingles from other texts. For example, the opening declaration from Rousseau's Du Contrat Social,
 
-Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
+`"L'homme est né libre, est partout il est dans les fers. Tel se croit le maître des autres, qui ne laisse pas d'être plus esclave qu'eux,"`
+
+would be rendered in trigram shingles (with lemmatization, accents flattened and function words removed) as:
+
+```
+homme_libre_partout
+libre_partout_fer
+partout_fer_croire
+fer_croire_maitre
+croire_maitre_laisser
+maitre_laisser_esclave.
+```
+
+Common shingles across texts indicate many different types of textual borrowings, from direct citations to more ambiguous and unattributed usages of a passage. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases.
 
 ![alt text](example.png)
 
@@ -106,3 +119,5 @@ In this file, there are a number of fields that can be configured:
 -   `timeSeriesIntervals` defines the time intervals available for the time series functionnality.
 
 Once you've edited these fields to your liking, you can regenerate your database by running the `npm run build` command from the directory where the `appConfig.json` file is located.
+
+Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
