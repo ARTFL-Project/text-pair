@@ -28,7 +28,7 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
             tei_parsing[key] = value
     for key, value in dict(config["PREPROCESSING"]).items():
         if value:
-            if key == "skipgram" or key == "numbers" or key == "word_order" or key == "modernize":
+            if key in ["skipgram", "numbers", "word_order", "modernize", "ascii"]:
                 if value.lower() == "yes" or value.lower() == "true":
                     value = True
                 else:

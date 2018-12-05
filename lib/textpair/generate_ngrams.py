@@ -37,6 +37,7 @@ class Ngrams:
         minimum_word_length=2,
         word_order=True,
         modernize=True,
+        ascii=False,
         pos_to_keep=[],
         debug=False,
     ):
@@ -55,6 +56,7 @@ class Ngrams:
             "stopwords": stopwords,  # TODO: generate error if file not found
             "text_object_level": text_object_level,
             "pos_to_keep": set(pos_to_keep),
+            "ascii": ascii,
         }
         self.debug = debug
         self.input_path = ""
@@ -153,7 +155,7 @@ class Ngrams:
             ngram_gap=self.config["gap"],
             text_object_type=self.config["text_object_level"],
             min_word_length=self.config["minimum_word_length"],
-            ascii=True,
+            ascii=self.config["ascii"],
         )
         doc_ngrams = []
         metadata = {}
