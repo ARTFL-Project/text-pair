@@ -1,10 +1,7 @@
 #!/bin/sh
 
 sudo pip3 install lib/.[web] --upgrade
-git clone https://github.com/ARTFL-Project/text-preprocessing.git
-sudo pip3 install text-preprocessing/. --upgrade
-rm -rf text-preprocessing
-
+sudo pip3 install https://github.com/ARTFL-Project/text-preprocessing/archive/v0.1.tar.gz
 
 echo "\nMoving web application components into place..."
 sudo rm -rf /var/lib/text-pair
