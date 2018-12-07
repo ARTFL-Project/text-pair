@@ -9,8 +9,7 @@ from collections import defaultdict
 from glob import glob
 from math import floor
 
-from multiprocess import Pool
-from text_preprocessing import PreProcessor, Lemmatizer
+from text_preprocessing import PreProcessor
 from tqdm import tqdm
 
 from mmh3 import hash as hash32
@@ -108,14 +107,30 @@ class Ngrams:
             exit()
 
         print("Generating ngrams...", flush=True)
-        pool = Pool(workers)
+        preprocessor = PreProcessor(
+            language=self.config["language"],
+            stemmer=self.config["stemmer"],
+            lemmatizer=self.config["lemmatizer"],
+            modernize=self.config["modernize"],
+            lowercase=self.config["lowercase"],
+            strip_numbers=self.config["numbers"],
+            stopwords=self.config["stopwords"],
+            pos_to_keep=self.config["pos_to_keep"],
+            ngrams=self.config["ngram"],
+            ngram_gap=self.config["gap"],
+            text_object_type=self.config["text_object_level"],
+            min_word_length=self.config["minimum_word_length"],
+            ascii=self.config["ascii"],
+            post_processing_function=self.text_to_ngram,
+            is_philo_db=True,
+            workers=workers,
+            progress=False,
+        )
         with tqdm(total=len(files), leave=self.debug) as pbar:
-            for local_metadata in pool.imap_unordered(self.process_file, files):
+            for local_metadata in preprocessor.process_texts(files):
                 if self.metadata_done is False:
                     combined_metadata.update(local_metadata)
                 pbar.update()
-        pool.close()
-        pool.join()
 
         mem_usage = floor(int(ram.replace("%", "")) / 2)
         if mem_usage >= 50:
@@ -140,51 +155,27 @@ class Ngrams:
         print("Cleaning up...")
         os.system("rm -r {}/temp".format(self.output_path))
 
-    def process_file(self, input_file):
-        """Convert each file into an inverted index of ngrams"""
-        preprocessor = PreProcessor(
-            language=self.config["language"],
-            stemmer=self.config["stemmer"],
-            lemmatizer=self.config["lemmatizer"],
-            modernize=self.config["modernize"],
-            lowercase=self.config["lowercase"],
-            strip_numbers=self.config["numbers"],
-            stopwords=self.config["stopwords"],
-            pos_to_keep=self.config["pos_to_keep"],
-            ngrams=self.config["ngram"],
-            ngram_gap=self.config["gap"],
-            text_object_type=self.config["text_object_level"],
-            min_word_length=self.config["minimum_word_length"],
-            ascii=self.config["ascii"],
-        )
+    def text_to_ngram(self, text_object):
         doc_ngrams = []
         metadata = {}
-        if self.metadata_done is True:
-            text_objects, all_metadata = preprocessor.process_philo_texts(input_file, fetch_metadata=False)
+        # Make sure we only have strings in our metadata:
+        for k, v in text_object.metadata.items():
+            if not isinstance(v, str):
+                text_object.metadata[k] = str(v)
+        if self.metadata_done is False:
+            text_object_id = "_".join(
+                text_object.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]]
+            )
+            metadata[text_object_id] = text_object.metadata
         else:
-            text_objects, all_metadata = preprocessor.process_philo_texts(input_file, fetch_metadata=True)
-        for text_object, text_metadata in zip(text_objects, all_metadata):
-            text_object = preprocessor.format(text_object, text_metadata)
-            # Make sure we only have strings in our metadata:
-            for k, v in text_metadata.items():
-                if not isinstance(v, str):
-                    text_metadata[k] = str(v)
-            if self.metadata_done is False:
-                text_object_id = "_".join(
-                    text_metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]]
-                )
-                metadata[text_object_id] = text_metadata
-            else:
-                text_object_id = os.path.basename(input_file)
-            text_index = defaultdict(list)
-            for index_pos, ngram in enumerate(text_object):
-                hashed_ngram = hash32(ngram)
-                text_index[hashed_ngram].append((index_pos, ngram.ext["start_byte"], ngram.ext["end_byte"]))
-                doc_ngrams.append("\t".join((ngram, str(hashed_ngram))))
-            with open(f"{self.output_path}/ngrams/{text_object_id}.json", "w") as json_file:
-                json.dump(dict(text_index), json_file)
-        if isinstance(preprocessor.lemmatizer, Lemmatizer):  # delete cached lemmatizer file
-            preprocessor.lemmatizer.delete()
-        with open(f"{self.output_path}/temp/{os.path.basename(input_file)}", "w") as output:
+            text_object_id = text_object.metadata["filename"]
+        text_index = defaultdict(list)
+        for index_pos, ngram in enumerate(text_object):
+            hashed_ngram = hash32(ngram)
+            text_index[hashed_ngram].append((index_pos, ngram.ext["start_byte"], ngram.ext["end_byte"]))
+            doc_ngrams.append("\t".join((ngram, str(hashed_ngram))))
+        with open(f"{self.output_path}/ngrams/{text_object_id}.json", "w") as json_file:
+            json.dump(dict(text_index), json_file)
+        with open(f"{self.output_path}/temp/{text_object_id}", "w") as output:
             output.write("\n".join(sorted(doc_ngrams)))
         return metadata
