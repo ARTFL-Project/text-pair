@@ -10,7 +10,7 @@ would be rendered in trigram shingles (with lemmatization, accents flattened and
 
 `homme_libre_partout, libre_partout_fer, partout_fer_croire, fer_croire_maitre, croire_maitre_laisser, maitre_laisser_esclave`
 
-Common shingles across texts indicate many different types of textual borrowings, from direct citations to more ambiguous and unattributed usages of a passage. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases, such as in the example below.
+Common shingles across texts indicate many different types of textual borrowings, from direct citations to more ambiguous and unattributed usages of a passage. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases, such as in the example below.
 
 ![alt text](example.png)
 
