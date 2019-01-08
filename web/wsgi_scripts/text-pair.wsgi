@@ -19,7 +19,7 @@ GLOBAL_CONFIG.read("/etc/text-pair/global_settings.ini")
 BOOLEAN_ARGS = re.compile(r"""(NOT \w+)|(OR \w+)|(\w+)|("")""")
 
 
-class formArguments():
+class formArguments:
     """Special dict to handle form arguments"""
 
     def __init__(self):
@@ -78,6 +78,19 @@ class formArguments():
         return repr(self.dict)
 
 
+def get_pg_type(table_name):
+    database = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
+    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute(f"select * from {table_name}")
+    type_mapping = {23: "INTEGER", 25: "TEXT"}
+    field_types = {column.name: type_mapping[column.type_code] for column in cursor.description}
+    return field_types
+
+
 def parse_args(request):
     """Parse URL args"""
     query_args = formArguments()
@@ -110,10 +123,10 @@ def parse_args(request):
         else:
             if value:
                 query_args[key] = value
-    metadata_field_types = request.get_json()["metadata"]
+    metadata_field_types = get_pg_type(other_args["db_table"])
     metadata_field_types["rowid"] = "INTEGER"
     sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
-    return sql_fields, sql_values, other_args
+    return sql_fields, sql_values, other_args, list(metadata_field_types.keys())
 
 
 def query_builder(query_args, other_args, field_types):
@@ -186,7 +199,7 @@ def index():
 @application.route("/search_alignments/", methods=["GET", "POST"])
 def search_alignments():
     """Search alignments according to URL params"""
-    sql_fields, sql_values, other_args = parse_args(request)
+    sql_fields, sql_values, other_args, column_names = parse_args(request)
     if other_args.direction == "next":
         if sql_fields:
             query = "SELECT o.rowid_ordered, m.* FROM {} m, {}_ordered o WHERE {} AND o.source_year_target_year=m.rowid and \
@@ -216,10 +229,10 @@ def search_alignments():
     )
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
-    column_names = [desc[0] for desc in cursor.description]
     alignments = []
     for row in cursor:
         metadata = {key: row[key] for key in column_names}
+        metadata["rowid_ordered"] = row["rowid_ordered"]
         alignments.append(metadata)
     if other_args.direction == "previous":
         alignments.reverse()
@@ -253,7 +266,7 @@ def search_alignments():
 @application.route("/count_results/", methods=["GET", "POST"])
 def count_results():
     """Search alignments according to URL params"""
-    sql_fields, sql_values, other_args = parse_args(request)
+    sql_fields, sql_values, other_args, _ = parse_args(request)
     if sql_fields:
         query = "SELECT COUNT(*) FROM {} WHERE {}".format(other_args.db_table, sql_fields)
     else:
@@ -275,7 +288,7 @@ def count_results():
 def generate_time_series():
     """Generate a time series from search results"""
     # TODO: don't assume year is the field to use
-    sql_fields, sql_values, other_args = parse_args(request)
+    sql_fields, sql_values, other_args, _ = parse_args(request)
     if sql_fields:
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {} WHERE {}) t \
@@ -320,10 +333,10 @@ def generate_time_series():
     return response
 
 
-@application.route("/facets/", methods=["POST"])
+@application.route("/facets/", methods=["GET", "POST"])
 def facets():
     """Retrieve facet result"""
-    sql_fields, sql_values, other_args = parse_args(request)
+    sql_fields, sql_values, other_args, _ = parse_args(request)
     database = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
@@ -340,10 +353,12 @@ def facets():
         )
     cursor.execute(query, sql_values)
     results = []
+    total_count = 0
     if not other_args.facet.endswith("passage_length"):
         for result in cursor:
             field_name, count = result
             results.append({"field": field_name, "count": count})
+            total_count += count
     else:
         counts = Counter()
         for length, count in cursor:
@@ -361,10 +376,20 @@ def facets():
                 counts["1001-3000"] += count
             elif length > 3000:
                 counts["3001-"] += count
+            total_count += count
         results = [
             {"field": interval, "count": count}
             for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
         ]
-    response = jsonify({"facet": other_args.facet, "results": results})
+    response = jsonify({"facet": other_args.facet, "results": results, "total_count": total_count})
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+
+
+@application.route("/metadata/", methods=["GET"])
+def metadata():
+    """Retrieve all searchable metadata fields"""
+    _, _, _, metadata_fields = parse_args(request)
+    response = jsonify(metadata_fields)
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response

@@ -104,33 +104,6 @@ class WebAppConfig:
         self.options["targetCitation"] = target_fields
 
 
-def parse_command_line(args):
-    """Command line parsing function"""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", help="configuration file used to override defaults", type=str, default="")
-    parser.add_argument("--file", help="alignment file to load", type=str, default=None)
-    args = vars(parser.parse_args(args=args))
-    if args["file"] is None:
-        print("Please supply a file argument\nExiting....")
-        exit()
-    field_types = DEFAULT_FIELD_TYPES
-    if args["config"]:
-        if os.path.exists(args["config"]):
-            _, _, _, web_app_config = parse_config(args["config"])
-            field_types.update(web_app_config["field_types"])
-    return (
-        args["file"],
-        web_app_config["table_name"],
-        field_types,
-        web_app_config["web_application_directory"],
-        web_app_config["api_server"],
-        web_app_config["source_database"],
-        web_app_config["source_database_link"],
-        web_app_config["target_database"],
-        web_app_config["target_database_link"],
-    )
-
-
 def count_lines(filename):
     """Count lines in file"""
     return sum(1 for _ in open(filename, "rbU"))
@@ -233,19 +206,37 @@ def load_db(file, table_name, field_types, searchable_fields):
             else:
                 field_type = "TEXT"
         if field_type == "TEXT":
-            cursor.execute("CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
+            cursor.execute(
+                "CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(
+                    field, table_name, table_name, field
+                )
+            )
             if not field.endswith("passage"):
-                cursor.execute("CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field))
+                cursor.execute(
+                    "CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field)
+                )
         elif not field.endswith("year") and field_type == "INTEGER":  # year is a special case used for results ordering
             cursor.execute("CREATE INDEX {}_{}_idx ON {} USING BTREE({})".format(field, table_name, table_name, field))
-    cursor.execute("CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(table_name, table_name))
+    cursor.execute(
+        "CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(
+            table_name, table_name
+        )
+    )
     database.commit()
 
     print("Populating index table...")
     ordered_table = table_name + "_ordered"
     cursor2.execute("DROP TABLE if exists {}".format(ordered_table))
-    cursor2.execute("CREATE TABLE {} ({})".format(ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"))
-    cursor.execute("SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC".format(table_name))
+    cursor2.execute(
+        "CREATE TABLE {} ({})".format(
+            ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"
+        )
+    )
+    cursor.execute(
+        "SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC".format(
+            table_name
+        )
+    )
     lines = 0
     rows = []
     rowid = 0
@@ -265,7 +256,9 @@ def load_db(file, table_name, field_types, searchable_fields):
         lines = 0
     print("Creating indexes...")
     cursor2.execute(
-        "CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table)
+        "CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(
+            ordered_table, ordered_table
+        )
     )
     database.commit()
     database.close()
@@ -274,41 +267,29 @@ def load_db(file, table_name, field_types, searchable_fields):
 
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
-    print("Copying and building web application...")
     os.system("rm -rf {}".format(db_path))
     os.mkdir(db_path)
     os.system("cp -R /var/lib/text-pair/web/web_app/. {}".format(db_path))
     with open(os.path.join(db_path, "appConfig.json"), "w") as config_file:
         json.dump(web_config(), config_file, indent=4)
-    os.system("cd {}; npm install --silent; npm run build;".format(db_path))
-    if web_config.webServer == "Apache":
-        os.system("cp /var/lib/text-pair/web/apache_htaccess.conf {}".format(os.path.join(db_path, ".htaccess")))
+    os.system(f"""cd {db_path}; npm install --silent > "/dev/null" 2>&1; npm run build > "/dev/null" 2>&1;""")
+    if web_config.webServer.lower() == "apache":
+        os.system(f"""cp /var/lib/text-pair/web/apache_htaccess.conf {os.path.join(db_path, ".htaccess")}""")
 
 
 def create_web_app(file, table, field_types, web_app_dir, api_server, source_database_link, target_database_link):
     """Main routine"""
-    print("\n### Building Web Application ###", flush=True)
     web_config = WebAppConfig(field_types, table, api_server, source_database_link, target_database_link)
+    print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
+    print("\n### Setting up Web Application ###", flush=True)
     web_config.update(fields_in_table)
-    set_up_app(web_config, os.path.join("{}/{}/".format(web_app_dir, table)))
-    print("DB viewable at {}".format(os.path.join(web_config.apiServer.replace("-api", ""), table)))
-
-
-def load_from_cli():
-    """Called from textpair script"""
-    main(sys.argv[2:])
-
-
-def main(args):
-    """Main function"""
-    file, table, field_types, web_app_dir, api_server, source_database, source_database_link, target_database, target_database_link = parse_command_line(
-        args
+    db_dir = os.path.join(web_app_dir, table)
+    print("Building web application...", flush=True)
+    set_up_app(web_config, db_dir)
+    db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
+    print("\n### Finished ###", flush=True)
+    print(f"The database is viewable at this URL: {db_url}")
+    print(
+        f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
     )
-    create_web_app(
-        file, table, field_types, web_app_dir, api_server, source_database, source_database_link, target_database, target_database_link
-    )
-
-
-if __name__ == "__main__":
-    main(sys.argv[1:])

@@ -126,7 +126,7 @@ class Ngrams:
             workers=workers,
             progress=False,
         )
-        with tqdm(total=len(files), leave=self.debug) as pbar:
+        with tqdm(total=len(files), leave=False) as pbar:
             for local_metadata in preprocessor.process_texts(files):
                 if self.metadata_done is False:
                     combined_metadata.update(local_metadata)

@@ -6,7 +6,6 @@ import os
 import re
 from collections import defaultdict, namedtuple
 
-import argcomplete
 from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config
 
 TextPAIRParams = namedtuple(
@@ -69,7 +68,6 @@ def parse_command_line():
         "--workers", help="How many threads or cores to use for preprocessing and matching", type=int, default=4
     )
     parser.add_argument("--debug", help="add debugging", action="store_true", default=False)
-    argcomplete.autocomplete(parser)
     args = vars(parser.parse_args())
     if args["config"]:
         if os.path.exists(args["config"]):
@@ -234,10 +232,10 @@ def run_alignment():
                 --debug={str(pair_params.debug).lower()} \
                 --ngram_index={pair_params.matching_params["ngram_index"]}"""
     if pair_params.debug:
-        print("Running alignment with following arguments:\n{}".format(" ".join(command.split())))
+        print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
     os.system(command)
     if pair_params.web_app_config["skip_web_app"] is False:
-        output_file = os.path.join(pair_params.output_path, "results/alignment.results")
+        output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl")
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
             output_file,

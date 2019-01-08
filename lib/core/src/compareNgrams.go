@@ -646,7 +646,7 @@ func createOutputFile(config *matchingParams) *os.File {
 	configOutput.Sync()
 	configOutput.Close()
 
-	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignment.results"))
+	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignments.jsonl"))
 	checkErr(err, "createOutputFile")
 	return mergedOutput
 }

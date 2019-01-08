@@ -71,14 +71,22 @@ DEFAULT_DOC_XPATHS = {
         ".//text/front/docImprint/acheveImprime",
     ],
     "extent": [".//sourceDesc/bibl/extent", ".//sourceDesc/biblStruct/monog//extent", ".//sourceDesc/biblFull/extent"],
-    "editor": [".//sourceDesc/bibl/editor", ".//sourceDesc/biblFull/titleStmt/editor", ".//sourceDesc/bibl/title/Stmt/editor"],
+    "editor": [
+        ".//sourceDesc/bibl/editor",
+        ".//sourceDesc/biblFull/titleStmt/editor",
+        ".//sourceDesc/bibl/title/Stmt/editor",
+    ],
     "text_genre": [".//profileDesc/textClass/keywords[@scheme='genre']/term", ".//SourceDesc/genre"],
     "keywords": [".//profileDesc/textClass/keywords/list/item"],
     "language": [".//profileDesc/language/language"],
     "notes": [".//fileDesc/notesStmt/note", ".//publicationStmt/notesStmt/note"],
     "auth_gender": [".//publicationStmt/notesStmt/note"],
     "collection": [".//seriesStmt/title"],
-    "period": [".//profileDesc/textClass/keywords[@scheme='period']/list/item", ".//SourceDesc/period", ".//sourceDesc/period"],
+    "period": [
+        ".//profileDesc/textClass/keywords[@scheme='period']/list/item",
+        ".//SourceDesc/period",
+        ".//sourceDesc/period",
+    ],
     "text_form": [".//profileDesc/textClass/keywords[@scheme='form']/term"],
     "structure": [".//SourceDesc/structure", ".//sourceDesc/structure"],
     "idno": [".//publicationStmt/idno/", ".//seriesStmt/idno/"],
@@ -95,7 +103,9 @@ semi_colon_strip = re.compile(r"\A;?(\w+);?\Z")
 ## Build a list of control characters to remove
 ## http://stackoverflow.com/questions/92438/stripping-non-printable-characters-from-a-string-in-python/93029#93029
 tab_newline = re.compile(r"[\n|\t]")
-control_chars = "".join([i for i in [chr(x) for x in list(range(0, 32)) + list(range(127, 160))] if not tab_newline.search(i)])
+control_chars = "".join(
+    [i for i in [chr(x) for x in list(range(0, 32)) + list(range(127, 160))] if not tab_newline.search(i)]
+)
 control_char_re = re.compile(r"[%s]" % re.escape(control_chars))
 
 ENTITIES_MATCH = re.compile(r"&#?\w+;")
@@ -124,17 +134,6 @@ def convert_entities(text):
     return ENTITIES_MATCH.sub(fixup, text)
 
 
-def parse_command_line():
-    """Command line parsing function"""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--file_path", help="path to source files from which to compare", type=str, default="")
-    parser.add_argument("--output_path", help="output path for ngrams and sequence alignment", type=str, default="./output")
-    parser.add_argument("--cores", help="How many threads or cores to use for parsing", type=int, default=4)
-    parser.add_argument("--debug", help="add debugging", action="store_true", default=False)
-    args = parser.parse_args()
-    return args
-
-
 class TEIParser:
     def __init__(self, file_path, output_path="./", cores=4, words_to_keep="all", debug=False):
         if os.path.exists(str(output_path)):  # we convert to string in case it's a PosixPath type
@@ -161,7 +160,9 @@ class TEIParser:
         pool = Pool(self.workers)
         chunksize = len(self.files) // self.workers
         with tqdm(total=len(self.files), leave=self.debug) as pbar:
-            for file_id, local_metadata, invalid_file in pool.imap_unordered(self.parse_header, self.files, chunksize=chunksize or 1):
+            for file_id, local_metadata, invalid_file in pool.imap_unordered(
+                self.parse_header, self.files, chunksize=chunksize or 1
+            ):
                 if invalid_file:
                     invalid_files.append((file_id, invalid_file))
                 else:
@@ -300,7 +301,9 @@ class TEIParser:
         content = content.replace("<", "\n<").replace(">", ">\n")
         return content
 
-    def word_handler(self, line, bytes_read_in, output_file, file_id, word_count, defined_words_to_index=False, words_to_index=[]):
+    def word_handler(
+        self, line, bytes_read_in, output_file, file_id, word_count, defined_words_to_index=False, words_to_index=[]
+    ):
         """ Word handler. It takes an artbitrary string or words between two tags and
         splits them into words."""
         # We're splitting the line of words into distinct words separated by "\n"
@@ -361,14 +364,3 @@ class TEIParser:
                     )
                     print(word_obj, file=output_file)
         return word_count
-
-
-def main():
-    args = parse_command_line()
-    parser = TEIParser(args.file_path, output_path=args.output_path, cores=args.cores, debug=args.debug)
-    parser.get_metadata()
-    parser.get_text()
-
-
-if __name__ == "__main__":
-    main()
