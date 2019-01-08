@@ -18,17 +18,13 @@ else:
     print("Only 64 bit linux and MacOS are supported at this time.")
     exit()
 
-setup(name="textpair",
-      version="1.0alpha",
-      author="The ARTFL Project and OBVIL",
-      author_email="clovisgladstone@gmail.com",
-      packages=["textpair"],
-      scripts=["scripts/textpair"],
-      install_requires=[
-          "multiprocess", "mmh3", "unidecode", "tqdm",
-          "pystemmer", "argcomplete", "lxml"
-          ],
-      extras_require={
-          "web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]
-      }
-     )
+setup(
+    name="textpair",
+    version="1.04",
+    author="The ARTFL Project",
+    author_email="clovisgladstone@gmail.com",
+    packages=["textpair"],
+    scripts=["scripts/textpair"],
+    install_requires=["multiprocess", "mmh3", "unidecode", "tqdm", "pystemmer", "lxml"],
+    extras_require={"web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]},
+)
