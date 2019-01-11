@@ -10,7 +10,7 @@ from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config
 
 TextPAIRParams = namedtuple(
     "AlignedParams",
-    "paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, file",
+    "algo, paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, file",
 )
 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
@@ -21,6 +21,9 @@ TRIM_LAST_SLASH = re.compile(r"/\Z")
 def parse_command_line():
     """Command line parsing function"""
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--algo", help="similarity algorithm to choose. Defaults to sa (for sequence alignment)", type=str, default="sa"
+    )
     parser.add_argument("--config", help="configuration file used to override defaults", type=str, default="")
     parser.add_argument("--source_files", help="path to source files from which to compare", type=str)
     parser.add_argument("--target_files", help="path to target files to compared to source files", type=str, default="")
@@ -129,6 +132,7 @@ def parse_command_line():
         paths["target"]["common_ngrams"] = args["target_common_ngrams"]
 
     return TextPAIRParams(
+        args["algo"],
         paths,
         tei_parsing,
         preprocessing_params,
@@ -143,21 +147,8 @@ def parse_command_line():
     )
 
 
-def run_alignment():
+def run_alignment(pair_params):
     """Main function to start sequence alignment"""
-    pair_params = parse_command_line()
-    if pair_params.only_web_app is True:
-        FIELD_TYPES.update(pair_params.web_app_config["field_types"])
-        create_web_app(
-            pair_params.file,
-            pair_params.web_app_config["table_name"],
-            FIELD_TYPES,
-            pair_params.web_app_config["web_application_directory"],
-            pair_params.web_app_config["api_server"],
-            pair_params.web_app_config["source_philo_db_link"],
-            pair_params.web_app_config["target_philo_db_link"],
-        )
-        return
     if pair_params.only_align is False:
         if pair_params.tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")
@@ -248,5 +239,111 @@ def run_alignment():
         )
 
 
+def run_vsm_similarity(pair_params):
+    if pair_params.only_align is False:
+        if pair_params.tei_parsing["parse_source_files"] is True:
+            print("\n### Parsing source TEI files ###")
+            parser = TEIParser(
+                pair_params.paths["source"]["tei_input_files"],
+                output_path=pair_params.paths["source"]["parse_output"],
+                words_to_keep=pair_params.tei_parsing["source_words_to_keep"],
+                cores=pair_params.workers,
+                debug=pair_params.debug,
+            )
+            parser.get_metadata()
+            parser.get_text()
+        print("\n### Generating document vectors ###")
+        ngrams = Ngrams(debug=pair_params.debug, **pair_params.preprocessing_params["source"])
+        ngrams.generate(
+            pair_params.paths["source"]["input_files_for_ngrams"],
+            pair_params.paths["source"]["ngram_output_path"],
+            metadata=pair_params.paths["source"]["metadata_path"],
+            is_philo_db=pair_params.paths["source"]["is_philo_db"],
+            workers=pair_params.workers,
+        )
+        if pair_params.paths["target"]:
+            if pair_params.tei_parsing["parse_target_files"] is True:
+                print("\n### Parsing target TEI files ###")
+                parser = TEIParser(
+                    pair_params.paths["target"]["tei_input_files"],
+                    output_path=pair_params.paths["target"]["parse_output"],
+                    cores=pair_params.workers,
+                    words_to_keep=pair_params.tei_parsing["target_words_to_keep"],
+                    debug=pair_params.debug,
+                )
+                parser.get_metadata()
+                parser.get_text()
+            print("\n### Generating target ngrams ###")
+            ngrams = Ngrams(debug=pair_params.debug, **pair_params.preprocessing_params["target"])
+            ngrams.generate(
+                pair_params.paths["target"]["input_files_for_ngrams"],
+                pair_params.paths["target"]["ngram_output_path"],
+                metadata=pair_params.paths["target"]["metadata_path"],
+                is_philo_db=pair_params.paths["target"]["is_philo_db"],
+                workers=pair_params.workers,
+            )
+    print("\n### Starting sequence alignment ###")
+    if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
+        pair_params.paths["target"]["ngram_output_path"] = pair_params.paths["source"]["ngram_output_path"]
+    command = f"""compareNgrams \
+                --output_path={pair_params.output_path}/results \
+                --threads={pair_params.workers} \
+                --source_files={pair_params.paths["source"]["ngram_output_path"]}/ngrams \
+                --target_files={pair_params.paths["target"]["ngram_output_path"]}/ngrams \
+                --source_metadata={pair_params.paths["source"]["metadata_path"]} \
+                --target_metadata={pair_params.paths["target"]["metadata_path"]} \
+                --source_common_ngrams={pair_params.paths["source"]["common_ngrams"]} \
+                --target_common_ngrams={pair_params.paths["target"]["common_ngrams"]} \
+                --sort_by={pair_params.matching_params["sort_by"]} \
+                --source_batch={pair_params.matching_params["source_batch"]} \
+                --target_batch={pair_params.matching_params["target_batch"]} \
+                --most_common_ngram_threshold={pair_params.matching_params["most_common_ngram_threshold"]} \
+                --common_ngrams_limit={pair_params.matching_params["common_ngrams_limit"]} \
+                --matching_window_size={pair_params.matching_params["matching_window_size"]} \
+                --max_gap={pair_params.matching_params["max_gap"]} \
+                --flex_gap={pair_params.matching_params["flex_gap"]} \
+                --minimum_matching_ngrams={pair_params.matching_params["minimum_matching_ngrams"]} \
+                --minimum_matching_ngrams_in_window={pair_params.matching_params["minimum_matching_ngrams_in_window"]} \
+                --minimum_matching_ngrams_in_docs={pair_params.matching_params["minimum_matching_ngrams_in_docs"]} \
+                --context_size={pair_params.matching_params["context_size"]} \
+                --banal_ngrams={pair_params.matching_params["banal_ngrams"]} \
+                --duplicate_threshold={pair_params.matching_params["duplicate_threshold"]} \
+                --merge_passages_on_byte_distance={pair_params.matching_params["merge_passages_on_byte_distance"]} \
+                --merge_passages_on_ngram_distance={pair_params.matching_params["merge_passages_on_ngram_distance"]} \
+                --passage_distance_multiplier={pair_params.matching_params["passage_distance_multiplier"]} \
+                --debug={str(pair_params.debug).lower()} \
+                --ngram_index={pair_params.matching_params["ngram_index"]}"""
+    if pair_params.debug:
+        print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
+    os.system(command)
+    if pair_params.web_app_config["skip_web_app"] is False:
+        output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl")
+        FIELD_TYPES.update(pair_params.web_app_config["field_types"])
+        create_web_app(
+            output_file,
+            pair_params.web_app_config["table_name"],
+            FIELD_TYPES,
+            pair_params.web_app_config["web_application_directory"],
+            pair_params.web_app_config["api_server"],
+            pair_params.web_app_config["source_philo_db_link"],
+            pair_params.web_app_config["target_philo_db_link"],
+        )
+
+
 if __name__ == "__main__":
-    run_alignment()
+    pair_params = parse_command_line()
+    if pair_params.only_web_app is True:
+        FIELD_TYPES.update(pair_params.web_app_config["field_types"])
+        create_web_app(
+            pair_params.file,
+            pair_params.web_app_config["table_name"],
+            FIELD_TYPES,
+            pair_params.web_app_config["web_application_directory"],
+            pair_params.web_app_config["api_server"],
+            pair_params.web_app_config["source_philo_db_link"],
+            pair_params.web_app_config["target_philo_db_link"],
+        )
+    elif pair_params.algo == "sa":
+        run_alignment(pair_params)
+    elif pair_params.algo == "vsm":
+        run_vsm_similarity(pair_params)

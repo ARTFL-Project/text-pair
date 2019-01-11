@@ -20,11 +20,11 @@ else:
 
 setup(
     name="textpair",
-    version="1.04",
+    version="1.0.6",
     author="The ARTFL Project",
     author_email="clovisgladstone@gmail.com",
     packages=["textpair"],
     scripts=["scripts/textpair"],
-    install_requires=["multiprocess", "mmh3", "unidecode", "tqdm", "pystemmer", "lxml"],
+    install_requires=["multiprocess", "mmh3", "unidecode", "tqdm", "cython", "pystemmer", "lxml"],
     extras_require={"web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]},
 )

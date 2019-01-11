@@ -13,7 +13,8 @@
     "epic-spinners": "^1.0.3",
     "velocity-animate": "^1.5.2",
     "vue": "^2.5.17",
-    "vue-router": "^3.0.1"
+    "vue-router": "^3.0.1",
+    "xregexp": "^4.2.4"
   },
   "devDependencies": {
     "@vue/cli-plugin-babel": "^3.0.1",

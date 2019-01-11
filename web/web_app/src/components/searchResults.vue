@@ -1,197 +1,271 @@
 <template>
-  <div class="mt-3">
-    <div class="row">
-      <div class="m-4" style="font-size: 120%" v-if="error">No results for your query</div>
-      <search-arguments></search-arguments>
-    </div>
-    <div class="row">
-      <div class="col position-relative">
-        <div
-          class="loading position-absolute"
-          style="left: 50%; transform: translateX(-50%);"
-          v-if="loading"
-        >
-          <atom-spinner :animation-duration="800" :size="65" color="#000"/>
+    <div class="mt-3">
+        <div class="row">
+            <div
+                class="m-4"
+                style="font-size: 120%"
+                v-if="error"
+            >No results for your query</div>
+            <search-arguments></search-arguments>
         </div>
-        <transition-group
-          name="staggered-fade"
-          tag="div"
-          v-bind:css="false"
-          v-on:before-enter="beforeEnter"
-          v-on:enter="enter"
-        >
-          <div
-            class="card mb-3 rounded-0 shadow-1"
-            style="position: relative"
-            v-for="(alignment, index) in results.alignments"
-            :key="results.start_position + index + 1"
-            v-bind:data-index="index"
-          >
-            <div class="corner-btn left">{{ results.start_position + index + 1 }}</div>
-            <div class="row">
-              <div class="col mt-4">
-                <h6 class="text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
-                <p class="pt-3 px-3">
-                  <span
-                    v-for="(citation, citationIndex) in globalConfig.sourceCitation"
-                    :key="citation.field"
-                    v-if="alignment[citation.field]"
-                  >
-                    <span :style="citation.style">{{ alignment[citation.field] }}</span>
-                    <span
-                      class="separator"
-                      v-if="citationIndex != globalConfig.sourceCitation.length - 1"
-                    >&#9679;&nbsp;</span>
-                  </span>
-                </p>
-              </div>
-              <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0">
-                <h6 class="text-center pb-2" v-html="globalConfig.targetLabel"></h6>
-                <p class="pt-3 px-3">
-                  <span
-                    v-for="(citation, citationIndex) in globalConfig.targetCitation"
-                    :key="citation.field"
-                    v-if="alignment[citation.field]"
-                  >
-                    <span :style="citation.style">{{ alignment[citation.field] }}</span>
-                    <span
-                      class="separator"
-                      v-if="citationIndex != globalConfig.targetCitation.length - 1"
-                    >&#9679;&nbsp;</span>
-                  </span>
-                </p>
-              </div>
-            </div>
-            <div class="row passages">
-              <div class="col mb-2">
-                <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
-                  {{ alignment.source_context_before }}
-                  <span
-                    class="source-passage"
-                  >{{ alignment.source_passage }}</span>
-                  {{ alignment.source_context_after }}
-                </p>
-                <a
-                  class="card-link px-3 pt-2"
-                  style="position: absolute; bottom: 0"
-                  v-if="globalConfig.sourcePhiloDBLink"
-                  @click="goToContext(alignment, 'source')"
-                >View passage in context</a>
-              </div>
-              <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
-                <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
-                  {{ alignment.target_context_before }}
-                  <span
-                    class="target-passage"
-                  >{{ alignment.target_passage }}</span>
-                  {{ alignment.target_context_after }}
-                </p>
-                <a
-                  class="card-link px-3 pt-2"
-                  style="position: absolute; bottom: 0"
-                  v-if="globalConfig.targetPhiloDBLink"
-                  @click="goToContext(alignment, 'target')"
-                >View passage in context</a>
-              </div>
-            </div>
-            <div class="text-muted text-center mb-2">
-              <a
-                class="diff-btn"
-                diffed="false"
-                @click="showDifferences(alignment.source_passage, alignment.target_passage, alignment.source_passage_length, alignment.target_passage.length)"
-              >Show differences</a>
-              <div
-                class="loading position-absolute"
-                style="display:none; left: 50%; transform: translateX(-50%);"
-              >
-                <atom-spinner :animation-duration="800" :size="25" color="#000"/>
-              </div>
-            </div>
-          </div>
-        </transition-group>
-        <nav aria-label="Page navigation" v-if="done">
-          <ul class="pagination justify-content-center mb-4">
-            <li class="page-item" v-if="results.page > 1">
-              <a class="page-link" v-on:click="previousPage()" aria-label="Previous">
-                <span aria-hidden="true">&laquo;</span>
-                <span class="sr-only">Previous</span>
-              </a>
-            </li>
-            <li class="page-item">
-              <a class="page-link">Page {{ results.page }}</a>
-            </li>
-            <li class="page-item" v-if="this.resultsLeft > 0">
-              <a class="page-link" v-on:click="nextPage()" aria-label="Next">
-                <span aria-hidden="true">&raquo;</span>
-                <span class="sr-only">Next</span>
-              </a>
-            </li>
-          </ul>
-        </nav>
-      </div>
-      <div class="col-3 pl-0 position-relative">
-        <div class="card rounded-0 shadow-1">
-          <h6 class="card-header text-center">Browse by Metadata Counts</h6>
-          <div id="metadata-list" class="mx-auto p-2" @click="toggleFacetList()">Show options</div>
-          <div class="mt-3 mb-3 pr-3 pl-3 facet-list">
-            <h6 class="text-center" v-html="globalConfig.sourceLabel"></h6>
-            <div class="list-group">
-              <button
-                type="button"
-                class="list-group-item list-group-item-action"
-                v-for="(field, index) in globalConfig.facetsFields.source"
-                :key="index"
-                v-on:click="facetSearch(field.value)"
-              >{{ field.label }}</button>
-            </div>
-          </div>
-          <div class="mb-3 pr-3 pl-3 facet-list">
-            <h6 class="text-center" v-html="globalConfig.targetLabel"></h6>
-            <div class="list-group">
-              <button
-                type="button"
-                class="list-group-item list-group-item-action"
-                v-for="(field, index) in globalConfig.facetsFields.target"
-                :key="index"
-                v-on:click="facetSearch(field.value)"
-              >{{ field.label }}</button>
-            </div>
-          </div>
-        </div>
-        <div
-          class="loading position-absolute"
-          style="left: 50%; transform: translateX(-50%);"
-          v-if="facetLoading"
-        >
-          <atom-spinner :animation-duration="800" :size="65" color="#000"/>
-        </div>
-        <div class="card rounded-0 shadow-1 mt-3" v-if="facetResults">
-          <div class="corner-btn destroy right" @click="closeFacetResults()">X</div>
-          <h6 class="card-header text-center">
-            Frequency by
-            <span v-html="facetDirectionLabel"></span>&nbsp;
-            <span class="text-capitalize">{{ facetResults.facet.split("_")[1] }}</span>
-          </h6>
-          <div class="mt-1 p-2">
-            <div class="pb-2 text-center" style="opacity: .5">Showing top 100 results</div>
-            <div class="list-group">
-              <div
-                class="list-group-item list-group-item-action facet-result"
-                v-for="(field, index) in facetResults.results.slice(0, 100)"
-                :key="index"
-                v-on:click="filteredSearch(facetResults.facet, field.field)"
-              >
-                <div class="row">
-                  <div class="col pr-1 pl-1">{{ field.field || "N/A"}}</div>
-                  <div class="col-4 pr-1 pl-1 facet-count">{{ field.count.toLocaleString() }}</div>
+        <div class="row">
+            <div class="col position-relative">
+                <div
+                    class="loading position-absolute"
+                    style="left: 50%; transform: translateX(-50%);"
+                    v-if="loading"
+                >
+                    <atom-spinner
+                        :animation-duration="800"
+                        :size="65"
+                        color="#000"
+                    />
                 </div>
-              </div>
+                <transition-group
+                    name="staggered-fade"
+                    tag="div"
+                    v-bind:css="false"
+                    v-on:before-enter="beforeEnter"
+                    v-on:enter="enter"
+                >
+                    <div
+                        class="card mb-3 rounded-0 shadow-1"
+                        style="position: relative"
+                        v-for="(alignment, index) in results.alignments"
+                        :key="results.start_position + index + 1"
+                        v-bind:data-index="index"
+                    >
+                        <div class="corner-btn left">{{ results.start_position + index + 1 }}</div>
+                        <div class="row">
+                            <div class="col mt-4">
+                                <h6
+                                    class="text-center pb-2"
+                                    v-html="globalConfig.sourceLabel"
+                                ></h6>
+                                <p class="pt-3 px-3">
+                                    <span
+                                        v-for="(citation, citationIndex) in globalConfig.sourceCitation"
+                                        :key="citation.field"
+                                        v-if="alignment[citation.field]"
+                                    >
+                                        <span :style="citation.style">{{ alignment[citation.field] }}</span>
+                                        <span
+                                            class="separator"
+                                            v-if="citationIndex != globalConfig.sourceCitation.length - 1"
+                                        >&#9679;&nbsp;</span>
+                                    </span>
+                                </p>
+                            </div>
+                            <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0">
+                                <h6
+                                    class="text-center pb-2"
+                                    v-html="globalConfig.targetLabel"
+                                ></h6>
+                                <p class="pt-3 px-3">
+                                    <span
+                                        v-for="(citation, citationIndex) in globalConfig.targetCitation"
+                                        :key="citation.field"
+                                        v-if="alignment[citation.field]"
+                                    >
+                                        <span :style="citation.style">{{ alignment[citation.field] }}</span>
+                                        <span
+                                            class="separator"
+                                            v-if="citationIndex != globalConfig.targetCitation.length - 1"
+                                        >&#9679;&nbsp;</span>
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+                        <div class="row passages">
+                            <div class="col mb-2">
+                                <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
+                                    {{ alignment.source_context_before }}
+                                    <span class="source-passage">{{ alignment.source_passage }}</span>
+                                    {{ alignment.source_context_after }}
+                                </p>
+                                <a
+                                    class="card-link px-3 pt-2"
+                                    style="position: absolute; bottom: 0"
+                                    v-if="globalConfig.sourcePhiloDBLink"
+                                    @click="goToContext(alignment, 'source')"
+                                >View passage in context</a>
+                            </div>
+                            <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
+                                <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
+                                    {{ alignment.target_context_before }}
+                                    <span class="target-passage">{{ alignment.target_passage }}</span>
+                                    {{ alignment.target_context_after }}
+                                </p>
+                                <a
+                                    class="card-link px-3 pt-2"
+                                    style="position: absolute; bottom: 0"
+                                    v-if="globalConfig.targetPhiloDBLink"
+                                    @click="goToContext(alignment, 'target')"
+                                >View passage in context</a>
+                            </div>
+                        </div>
+                        <div class="text-muted text-center mb-2">
+                            <div v-if="globalConfig.matchingAlgorithm == 'vsm'">
+                                <div>{{ alignment.similarity.toFixed(2) *100 }} % similar</div>
+                                <a
+                                    class="diff-btn"
+                                    diffed="false"
+                                    @click="showMatches(alignment.source_passage, alignment.target_passage, alignment.source_passage_length, alignment.target_passage.length)"
+                                >Show matching words</a>
+                                <div
+                                    class="loading position-absolute"
+                                    style="display:none; left: 50%; transform: translateX(-50%);"
+                                >
+                                    <atom-spinner
+                                        :animation-duration="800"
+                                        :size="25"
+                                        color="#000"
+                                    />
+                                </div>
+                            </div>
+                            <div v-if="globalConfig.matchingAlgorithm == 'sa'">
+                                <a
+                                    class="diff-btn"
+                                    diffed="false"
+                                    @click="showDifferences(alignment.source_passage, alignment.target_passage, alignment.source_passage_length, alignment.target_passage.length)"
+                                >Show differences</a>
+                                <div
+                                    class="loading position-absolute"
+                                    style="display:none; left: 50%; transform: translateX(-50%);"
+                                >
+                                    <atom-spinner
+                                        :animation-duration="800"
+                                        :size="25"
+                                        color="#000"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </transition-group>
+                <nav
+                    aria-label="Page navigation"
+                    v-if="done"
+                >
+                    <ul class="pagination justify-content-center mb-4">
+                        <li
+                            class="page-item"
+                            v-if="results.page > 1"
+                        >
+                            <a
+                                class="page-link"
+                                v-on:click="previousPage()"
+                                aria-label="Previous"
+                            >
+                                <span aria-hidden="true">&laquo;</span>
+                                <span class="sr-only">Previous</span>
+                            </a>
+                        </li>
+                        <li class="page-item">
+                            <a class="page-link">Page {{ results.page }}</a>
+                        </li>
+                        <li
+                            class="page-item"
+                            v-if="this.resultsLeft > 0"
+                        >
+                            <a
+                                class="page-link"
+                                v-on:click="nextPage()"
+                                aria-label="Next"
+                            >
+                                <span aria-hidden="true">&raquo;</span>
+                                <span class="sr-only">Next</span>
+                            </a>
+                        </li>
+                    </ul>
+                </nav>
             </div>
-          </div>
+            <div class="col-3 pl-0 position-relative">
+                <div class="card rounded-0 shadow-1">
+                    <h6 class="card-header text-center">Browse by Metadata Counts</h6>
+                    <div
+                        id="metadata-list"
+                        class="mx-auto p-2"
+                        @click="toggleFacetList()"
+                    >Show options</div>
+                    <div class="mt-3 mb-3 pr-3 pl-3 facet-list">
+                        <h6
+                            class="text-center"
+                            v-html="globalConfig.sourceLabel"
+                        ></h6>
+                        <div class="list-group">
+                            <button
+                                type="button"
+                                class="list-group-item list-group-item-action"
+                                v-for="(field, index) in globalConfig.facetsFields.source"
+                                :key="index"
+                                v-on:click="facetSearch(field.value)"
+                            >{{ field.label }}</button>
+                        </div>
+                    </div>
+                    <div class="mb-3 pr-3 pl-3 facet-list">
+                        <h6
+                            class="text-center"
+                            v-html="globalConfig.targetLabel"
+                        ></h6>
+                        <div class="list-group">
+                            <button
+                                type="button"
+                                class="list-group-item list-group-item-action"
+                                v-for="(field, index) in globalConfig.facetsFields.target"
+                                :key="index"
+                                v-on:click="facetSearch(field.value)"
+                            >{{ field.label }}</button>
+                        </div>
+                    </div>
+                </div>
+                <div
+                    class="loading position-absolute"
+                    style="left: 50%; transform: translateX(-50%);"
+                    v-if="facetLoading"
+                >
+                    <atom-spinner
+                        :animation-duration="800"
+                        :size="65"
+                        color="#000"
+                    />
+                </div>
+                <div
+                    class="card rounded-0 shadow-1 mt-3"
+                    v-if="facetResults"
+                >
+                    <div
+                        class="corner-btn destroy right"
+                        @click="closeFacetResults()"
+                    >X</div>
+                    <h6 class="card-header text-center">
+                        Frequency by
+                        <span v-html="facetDirectionLabel"></span>&nbsp;
+                        <span class="text-capitalize">{{ facetResults.facet.split("_")[1] }}</span>
+                    </h6>
+                    <div class="mt-1 p-2">
+                        <div
+                            class="pb-2 text-center"
+                            style="opacity: .5"
+                        >Showing top 100 results</div>
+                        <div class="list-group">
+                            <div
+                                class="list-group-item list-group-item-action facet-result"
+                                v-for="(field, index) in facetResults.results.slice(0, 100)"
+                                :key="index"
+                                v-on:click="filteredSearch(facetResults.facet, field.field)"
+                            >
+                                <div class="row">
+                                    <div class="col pr-1 pl-1">{{ field.field || "N/A"}}</div>
+                                    <div class="col-4 pr-1 pl-1 facet-count">{{ field.count.toLocaleString() }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-      </div>
     </div>
-  </div>
 </template>
 
 <script>
@@ -200,6 +274,7 @@ import searchArguments from "./searchArguments";
 import { AtomSpinner } from "epic-spinners";
 import Worker from "worker-loader!./diffStrings";
 import Velocity from "velocity-animate";
+import XregExp from "xregexp";
 
 export default {
   name: "searchResults",
@@ -444,6 +519,12 @@ export default {
         event.srcElement.textContent = "Show differences";
       }
     },
+    showMatches: function(
+      sourceText,
+      targetText,
+      sourcePassageLength,
+      targetPassageLength
+    ) {},
     beforeEnter: function(el) {
       el.style.opacity = 0;
       el.style.height = 0;

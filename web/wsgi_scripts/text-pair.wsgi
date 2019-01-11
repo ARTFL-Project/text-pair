@@ -86,8 +86,11 @@ def get_pg_type(table_name):
     )
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(f"select * from {table_name}")
-    type_mapping = {23: "INTEGER", 25: "TEXT"}
+    type_mapping = {23: "INTEGER", 25: "TEXT", 701: "FLOAT"}
     field_types = {column.name: type_mapping[column.type_code] for column in cursor.description}
+    import sys
+
+    print("COLUMNS:", field_types, file=sys.stderr)
     return field_types
 
 
@@ -166,7 +169,7 @@ def query_builder(query_args, other_args, field_types):
                     query = "{} ~* %s".format(field)
                     sql_values.append("\m{}\M".format(value))
                 sql_fields.append(query)
-        elif field_type == "INTEGER":
+        elif field_type == "INTEGER" or field_type == "FLOAT":
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
                 if values[0] == "-":

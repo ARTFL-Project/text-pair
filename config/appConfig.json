@@ -1,167 +1,161 @@
 {
-	"webServer": "Apache",
-	"appPath": "text-pair/",
-	"apiServer": "http://localhost/text-pair-api",
-	"databaseName": "alignment_db",
-	"databaseLabel": "Text Alignments",
-	"branding": [
-		{
-			"label": "ARTFL-Project",
-			"link": "https://artfl-project.uchicago.edu"
-		}
-	],
-	"sourcePhiloDBLink": "",
-	"targetPhiloDBLink": "",
-	"sourceLabel": "Source",
-	"targetLabel": "Target",
-	"metadataTypes": {
-		"source_passage": "TEXT",
-		"source_author": "TEXT",
-		"source_title": "TEXT",
-		"source_year": "INTEGER",
-		"source_passage_length": "INTEGER",
-		"target_passage": "TEXT",
-		"target_author": "TEXT",
-		"target_title": "TEXT",
-		"target_year": "INTEGER",
-		"target_passage_length": "INTEGER"
-	},
-	"sourceCitation": [
-		{
-			"field": "source_author",
-			"style": {}
-		},
-		{
-			"field": "source_title",
-			"style": {}
-		},
-		{
-			"field": "source_year",
-			"style": {}
-		}
-	],
-	"targetCitation": [
-		{
-			"field": "target_author",
-			"style": {}
-		},
-		{
-			"field": "target_title",
-			"style": { "font-style": "italic" }
-		},
-		{
-			"field": "target_year",
-			"style": {}
-		}
-	],
-	"metadataFields": {
-		"source": [
-			{
-				"label": "Passage",
-				"value": "source_passage"
-			},
-			{
-				"label": "Author",
-				"value": "source_author"
-			},
-			{
-				"label": "Title",
-				"value": "source_title"
-			},
-			{
-				"label": "Year",
-				"value": "source_year"
-			},
-			{
-				"label": "Passage Length",
-				"value": "source_passage_length"
-			}
-		],
-		"target": [
-			{
-				"label": "Passage",
-				"value": "target_passage"
-			},
-			{
-				"label": "Author",
-				"value": "target_author"
-			},
-			{
-				"label": "Title",
-				"value": "target_title"
-			},
-			{
-				"label": "Year",
-				"value": "target_year"
-			},
-			{
-				"label": "Passage Length",
-				"value": "target_passage_length"
-			}
-		]
-	},
-	"facetsFields": {
-		"source": [
-			{
-				"label": "Passage",
-				"value": "source_passage"
-			},
-			{
-				"label": "Author",
-				"value": "source_author"
-			},
-			{
-				"label": "Title",
-				"value": "source_title"
-			},
-			{
-				"label": "Year",
-				"value": "source_year"
-			},
-			{
-				"label": "Passage Length",
-				"value": "source_passage_length"
-			}
-		],
-		"target": [
-			{
-				"label": "Passage",
-				"value": "target_passage"
-			},
-			{
-				"label": "Author",
-				"value": "target_author"
-			},
-			{
-				"label": "Title",
-				"value": "target_title"
-			},
-			{
-				"label": "Year",
-				"value": "target_year"
-			},
-			{
-				"label": "Passage Length",
-				"value": "source_passage_length"
-			}
-		]
-	},
-	"timeSeriesIntervals": [
-		{
-			"label": "Year",
-			"value": 1
-		},
-		{
-			"label": "Decade",
-			"value": 10
-		},
-		{
-			"label": "Half Century",
-			"value": 50
-		},
-		{
-			"label": "Century",
-			"value": 100
-		}
-	]
+    "webServer": "Apache",
+    "appPath": "text-pair/",
+    "apiServer": "http://localhost/text-pair-api",
+    "databaseName": "alignment_db",
+    "databaseLabel": "Text Alignments",
+    "matchingAlgorithm": "sa",
+    "branding": [{
+        "label": "ARTFL-Project",
+        "link": "https://artfl-project.uchicago.edu"
+    }],
+    "sourcePhiloDBLink": "",
+    "targetPhiloDBLink": "",
+    "sourceLabel": "Source",
+    "targetLabel": "Target",
+    "metadataTypes": {
+        "source_passage": "TEXT",
+        "source_author": "TEXT",
+        "source_title": "TEXT",
+        "source_year": "INTEGER",
+        "source_passage_length": "INTEGER",
+        "target_passage": "TEXT",
+        "target_author": "TEXT",
+        "target_title": "TEXT",
+        "target_year": "INTEGER",
+        "target_passage_length": "INTEGER"
+    },
+    "sourceCitation": [{
+            "field": "source_author",
+            "style": {}
+        },
+        {
+            "field": "source_title",
+            "style": {}
+        },
+        {
+            "field": "source_year",
+            "style": {}
+        }
+    ],
+    "targetCitation": [{
+            "field": "target_author",
+            "style": {}
+        },
+        {
+            "field": "target_title",
+            "style": {
+                "font-style": "italic"
+            }
+        },
+        {
+            "field": "target_year",
+            "style": {}
+        }
+    ],
+    "metadataFields": {
+        "source": [{
+                "label": "Passage",
+                "value": "source_passage"
+            },
+            {
+                "label": "Author",
+                "value": "source_author"
+            },
+            {
+                "label": "Title",
+                "value": "source_title"
+            },
+            {
+                "label": "Year",
+                "value": "source_year"
+            },
+            {
+                "label": "Passage Length",
+                "value": "source_passage_length"
+            }
+        ],
+        "target": [{
+                "label": "Passage",
+                "value": "target_passage"
+            },
+            {
+                "label": "Author",
+                "value": "target_author"
+            },
+            {
+                "label": "Title",
+                "value": "target_title"
+            },
+            {
+                "label": "Year",
+                "value": "target_year"
+            },
+            {
+                "label": "Passage Length",
+                "value": "target_passage_length"
+            }
+        ]
+    },
+    "facetsFields": {
+        "source": [{
+                "label": "Passage",
+                "value": "source_passage"
+            },
+            {
+                "label": "Author",
+                "value": "source_author"
+            },
+            {
+                "label": "Title",
+                "value": "source_title"
+            },
+            {
+                "label": "Year",
+                "value": "source_year"
+            },
+            {
+                "label": "Passage Length",
+                "value": "source_passage_length"
+            }
+        ],
+        "target": [{
+                "label": "Passage",
+                "value": "target_passage"
+            },
+            {
+                "label": "Author",
+                "value": "target_author"
+            },
+            {
+                "label": "Title",
+                "value": "target_title"
+            },
+            {
+                "label": "Year",
+                "value": "target_year"
+            },
+            {
+                "label": "Passage Length",
+                "value": "source_passage_length"
+            }
+        ]
+    },
+    "timeSeriesIntervals": [{
+            "label": "Year",
+            "value": 1
+        },
+        {
+            "label": "Decade",
+            "value": 10
+        },
+        {
+            "label": "Half Century",
+            "value": 50
+        },
+        {
+            "label": "Century",
+            "value": 100
+        }
+    ]
 }

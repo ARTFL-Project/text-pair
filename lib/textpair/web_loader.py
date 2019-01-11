@@ -33,6 +33,7 @@ DEFAULT_FIELD_TYPES = {
     "target_end_byte": "INTEGER",
     "source_passage_length": "INTEGER",
     "target_passage_length": "INTEGER",
+    "similarity": "FLOAT",
 }
 
 YEAR_FINDER = re.compile(r"^.*?(\d{1,}).*")
@@ -131,6 +132,8 @@ def validate_field_type(fields, field_types, field_names):
         value = fields.get(field, "")
         field_type = field_types.get(field, "TEXT")
         if field_type.upper() == "INTEGER" and not field.endswith("passage_length") and field != "rowid":
+            if isinstance(value, int):
+                value = str(value)
             year_match = YEAR_FINDER.search(value)
             if year_match:
                 value = int(year_match.groups()[0])
