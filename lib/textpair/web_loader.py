@@ -36,6 +36,26 @@ DEFAULT_FIELD_TYPES = {
     "similarity": "FLOAT",
 }
 
+FILTERED_FIELDS = {
+    "source_doc_id",
+    "source_philo_seq",
+    "source_parent",
+    "source_prev",
+    "source_next",
+    "source_parent",
+    "source_philo_name",
+    "source_philo_type",
+    "source_word_count",
+    "target_doc_id",
+    "target_philo_seq",
+    "target_parent",
+    "target_prev",
+    "target_next",
+    "target_parent",
+    "target_philo_name",
+    "target_philo_type",
+}
+
 YEAR_FINDER = re.compile(r"^.*?(\d{1,}).*")
 TOKENIZER = re.compile(r"\w+")
 
@@ -43,14 +63,13 @@ TOKENIZER = re.compile(r"\w+")
 class WebAppConfig:
     """ Web app config class"""
 
-    def __init__(self, field_types, db_name, api_server, source_database_link, target_database_link):
+    def __init__(self, field_types, db_name, api_server, source_database_link, target_database_link, algorithm):
         with open("/var/lib/text-pair/config/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
-        for field, field_type in field_types.items():
-            self.options["metadataTypes"][field] = field_type
         self.options["apiServer"] = api_server
         self.options["appPath"] = os.path.join("text-pair", db_name)
         self.options["databaseName"] = db_name
+        self.options["matchingAlgorithm"] = algorithm
         self.options["sourcePhiloDBLink"] = source_database_link
         self.options["targetPhiloDBLink"] = target_database_link
 
@@ -121,7 +140,7 @@ def parse_file(file):
 def clean_text(text):
     """Clean passages for HTML viewing before storing"""
     text = text.replace("<", "&lt;")
-    text = text.replace(">", "gt;")
+    text = text.replace(">", "&gt;")
     return text
 
 
@@ -170,7 +189,7 @@ def load_db(file, table_name, field_types, searchable_fields):
             field_names.append("source_year")
         if "target_year" not in field_names:
             field_names.append("target_year")
-        fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
+        fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid" and f not in FILTERED_FIELDS]
         fields_in_table.extend(fields_and_types)
     cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
     cursor.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
@@ -209,37 +228,19 @@ def load_db(file, table_name, field_types, searchable_fields):
             else:
                 field_type = "TEXT"
         if field_type == "TEXT":
-            cursor.execute(
-                "CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(
-                    field, table_name, table_name, field
-                )
-            )
+            cursor.execute("CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
             if not field.endswith("passage"):
-                cursor.execute(
-                    "CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field)
-                )
+                cursor.execute("CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field))
         elif not field.endswith("year") and field_type == "INTEGER":  # year is a special case used for results ordering
             cursor.execute("CREATE INDEX {}_{}_idx ON {} USING BTREE({})".format(field, table_name, table_name, field))
-    cursor.execute(
-        "CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(
-            table_name, table_name
-        )
-    )
+    cursor.execute("CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(table_name, table_name))
     database.commit()
 
     print("Populating index table...")
     ordered_table = table_name + "_ordered"
     cursor2.execute("DROP TABLE if exists {}".format(ordered_table))
-    cursor2.execute(
-        "CREATE TABLE {} ({})".format(
-            ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"
-        )
-    )
-    cursor.execute(
-        "SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC".format(
-            table_name
-        )
-    )
+    cursor2.execute("CREATE TABLE {} ({})".format(ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"))
+    cursor.execute("SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC".format(table_name))
     lines = 0
     rows = []
     rowid = 0
@@ -259,9 +260,7 @@ def load_db(file, table_name, field_types, searchable_fields):
         lines = 0
     print("Creating indexes...")
     cursor2.execute(
-        "CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(
-            ordered_table, ordered_table
-        )
+        "CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table)
     )
     database.commit()
     database.close()
@@ -280,9 +279,9 @@ def set_up_app(web_config, db_path):
         os.system(f"""cp /var/lib/text-pair/web/apache_htaccess.conf {os.path.join(db_path, ".htaccess")}""")
 
 
-def create_web_app(file, table, field_types, web_app_dir, api_server, source_database_link, target_database_link):
+def create_web_app(file, table, field_types, web_app_dir, api_server, source_database_link, target_database_link, algorithm):
     """Main routine"""
-    web_config = WebAppConfig(field_types, table, api_server, source_database_link, target_database_link)
+    web_config = WebAppConfig(field_types, table, api_server, source_database_link, target_database_link, algorithm)
     print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
     print("\n### Setting up Web Application ###", flush=True)
@@ -293,6 +292,5 @@ def create_web_app(file, table, field_types, web_app_dir, api_server, source_dat
     db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
     print("\n### Finished ###", flush=True)
     print(f"The database is viewable at this URL: {db_url}")
-    print(
-        f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
-    )
+    print(f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory")
+

@@ -5,12 +5,13 @@ import argparse
 import os
 import re
 from collections import defaultdict, namedtuple
+from typing import Dict
 
-from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config
+from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config, run_vsm
 
 TextPAIRParams = namedtuple(
-    "AlignedParams",
-    "algo, paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, file",
+    "TextPairParams",
+    "paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, file",
 )
 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
@@ -21,9 +22,6 @@ TRIM_LAST_SLASH = re.compile(r"/\Z")
 def parse_command_line():
     """Command line parsing function"""
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--algo", help="similarity algorithm to choose. Defaults to sa (for sequence alignment)", type=str, default="sa"
-    )
     parser.add_argument("--config", help="configuration file used to override defaults", type=str, default="")
     parser.add_argument("--source_files", help="path to source files from which to compare", type=str)
     parser.add_argument("--target_files", help="path to target files to compared to source files", type=str, default="")
@@ -132,7 +130,6 @@ def parse_command_line():
         paths["target"]["common_ngrams"] = args["target_common_ngrams"]
 
     return TextPAIRParams(
-        args["algo"],
         paths,
         tei_parsing,
         preprocessing_params,
@@ -236,10 +233,12 @@ def run_alignment(pair_params):
             pair_params.web_app_config["api_server"],
             pair_params.web_app_config["source_philo_db_link"],
             pair_params.web_app_config["target_philo_db_link"],
+            pair_params.matching_params["matching_algorithm"],
         )
 
 
-def run_vsm_similarity(pair_params):
+def run_vsm_similarity(pair_params: TextPAIRParams) -> None:
+    """Run VSM similarity"""
     if pair_params.only_align is False:
         if pair_params.tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")
@@ -327,6 +326,7 @@ def run_vsm_similarity(pair_params):
             pair_params.web_app_config["api_server"],
             pair_params.web_app_config["source_philo_db_link"],
             pair_params.web_app_config["target_philo_db_link"],
+            pair_params.matching_params["matching_algorithm"],
         )
 
 
@@ -342,8 +342,9 @@ if __name__ == "__main__":
             pair_params.web_app_config["api_server"],
             pair_params.web_app_config["source_philo_db_link"],
             pair_params.web_app_config["target_philo_db_link"],
+            pair_params.matching_params["matching_algorithm"],
         )
-    elif pair_params.algo == "sa":
+    elif pair_params.matching_params["matching_algorithm"] == "sa":
         run_alignment(pair_params)
-    elif pair_params.algo == "vsm":
+    elif pair_params.matching_params["matching_algorithm"] == "vsm":
         run_vsm_similarity(pair_params)

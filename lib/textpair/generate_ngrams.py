@@ -156,6 +156,7 @@ class Ngrams:
         os.system("rm -r {}/temp".format(self.output_path))
 
     def text_to_ngram(self, text_object):
+        """Tranform doc to inverted index of ngrams"""
         doc_ngrams = []
         metadata = {}
         # Make sure we only have strings in our metadata:

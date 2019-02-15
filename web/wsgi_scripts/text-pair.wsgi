@@ -79,6 +79,7 @@ class formArguments:
 
 
 def get_pg_type(table_name):
+    """Find PostgreSQL field type"""
     database = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
@@ -88,9 +89,6 @@ def get_pg_type(table_name):
     cursor.execute(f"select * from {table_name}")
     type_mapping = {23: "INTEGER", 25: "TEXT", 701: "FLOAT"}
     field_types = {column.name: type_mapping[column.type_code] for column in cursor.description}
-    import sys
-
-    print("COLUMNS:", field_types, file=sys.stderr)
     return field_types
 
 
@@ -114,7 +112,7 @@ def parse_args(request):
     ]
     for key, value in request.args.items():
         if key in other_args_keys:
-            if key == "page" or key == "id_anchor" or key == "timeSeriesInterval":
+            if key in ("page", "id_anchor", "timeSeriesInterval"):
                 if value.isdigit():
                     other_args[key] = int(value)
             elif key == "direction":
@@ -170,6 +168,7 @@ def query_builder(query_args, other_args, field_types):
                     sql_values.append("\m{}\M".format(value))
                 sql_fields.append(query)
         elif field_type == "INTEGER" or field_type == "FLOAT":
+            value = value.replace('"', "")
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
                 if values[0] == "-":
@@ -246,9 +245,7 @@ def search_alignments():
             current_path, other_args.page - 1, alignments[0]["rowid_ordered"]
         )
     try:
-        next_url = "{}&page={}&id_anchor={}&direction=next".format(
-            current_path, other_args.page + 1, alignments[-1]["rowid_ordered"]
-        )
+        next_url = "{}&page={}&id_anchor={}&direction=next".format(current_path, other_args.page + 1, alignments[-1]["rowid_ordered"])
     except IndexError:
         next_url = ""
     start_position = 0
@@ -262,6 +259,61 @@ def search_alignments():
         "start_position": start_position,
     }
     response = jsonify(result_object)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+
+
+@application.route("/retrieve_all/", methods=["GET"])
+def retrieve_all():
+    """Retrieve all results and only return metadata"""
+    sql_fields, sql_values, other_args, column_names = parse_args(request)
+    database = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
+    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    if sql_values:
+        query = f"SELECT * FROM {other_args.db_table} WHERE {sql_fields}"
+        cursor.execute(query, sql_values)
+    else:
+        query = f"SELECT * FROM {other_args.db_table}"
+        cursor.execute(query)
+
+    alignments = []
+    filtered_columns = {
+        "source_passage",
+        "source_context_before",
+        "source_context_after",
+        "source_doc_id",
+        "source_philo_id",
+        "source_philo_seq",
+        "source_parent",
+        "source_prev",
+        "source_next",
+        "source_parent",
+        "source_philo_name",
+        "source_philo_type",
+        "source_word_count",
+        "target_passage",
+        "target_context_before",
+        "target_context_after",
+        "target_doc_id",
+        "target_philo_id",
+        "target_philo_seq",
+        "target_parent",
+        "target_prev",
+        "target_next",
+        "target_parent",
+        "target_philo_name",
+        "target_philo_type",
+        "rowid",
+    }
+    column_names = [column_name for column_name in column_names if column_name not in filtered_columns]
+    for row in cursor:
+        metadata = {key: row[key] for key in column_names}
+        alignments.append(metadata)
+    response = jsonify(alignments)
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
 
@@ -296,20 +348,13 @@ def generate_time_series():
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {} WHERE {}) t \
                 GROUP BY interval ORDER BY interval".format(
-            other_args.directionSelected,
-            other_args.timeSeriesInterval,
-            other_args.timeSeriesInterval,
-            other_args.db_table,
-            sql_fields,
+            other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table, sql_fields
         )
     else:
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {}) t \
                 GROUP BY interval ORDER BY interval".format(
-            other_args.directionSelected,
-            other_args.timeSeriesInterval,
-            other_args.timeSeriesInterval,
-            other_args.db_table,
+            other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table
         )
     database = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
@@ -380,10 +425,7 @@ def facets():
             elif length > 3000:
                 counts["3001-"] += count
             total_count += count
-        results = [
-            {"field": interval, "count": count}
-            for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
-        ]
+        results = [{"field": interval, "count": count} for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)]
     response = jsonify({"facet": other_args.facet, "results": results, "total_count": total_count})
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response

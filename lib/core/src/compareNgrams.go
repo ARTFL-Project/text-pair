@@ -888,12 +888,18 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			localAlignment["source_context_before"] = sourcePassages[0]
 			localAlignment["source_passage"] = sourcePassages[1]
 			localAlignment["source_context_after"] = sourcePassages[2]
+			sourcePositions := getRelativePosition(alignment.source.startByte, alignment.source.endByte, sourceMetadata, sourceDocID)
+			localAlignment["source_start_position"] = sourcePositions[0]
+			localAlignment["source_end_position"] = sourcePositions[1]
 			localAlignment["target_start_byte"] = strconv.Itoa(int(alignment.target.startByte))
 			localAlignment["target_end_byte"] = strconv.Itoa(int(alignment.target.endByte))
 			targetPassages := alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)
 			localAlignment["target_context_before"] = targetPassages[0]
 			localAlignment["target_passage"] = targetPassages[1]
 			localAlignment["target_context_after"] = targetPassages[2]
+			targetPositions := getRelativePosition(alignment.target.startByte, alignment.target.endByte, targetMetadata, &alignments.docID)
+			localAlignment["target_start_position"] = targetPositions[0]
+			localAlignment["target_end_position"] = targetPositions[1]
 			localAlignment["banality"] = fmt.Sprintf("%v", alignment.banality)
 			*counts++
 			localAlignment["passage_id"] = strconv.Itoa(*counts)
@@ -905,6 +911,16 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			duplicatesFile.WriteString(fmt.Sprintf("%s\n", strings.Join(alignments.duplicates, "\t")))
 		}
 	}
+}
+
+// Returns position of passage within document in percentages
+func getRelativePosition(startByte int32, endByte int32, metadata map[string]map[string]string, docID *string) []string {
+	docStart, _ := strconv.Atoi(metadata[*docID]["start_byte"])
+	docEnd, _ := strconv.Atoi(metadata[*docID]["end_byte"])
+	coefficient := (float64(docEnd) - float64(docStart)) / 100
+	startPosition := fmt.Sprintf("%f", math.Round(float64(startByte)/coefficient))
+	endPosition := fmt.Sprintf("%f", math.Round(float64(endByte)/coefficient))
+	return []string{startPosition, endPosition}
 }
 
 // Returns three passages: the context before, the match itself, and the context after

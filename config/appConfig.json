@@ -13,18 +13,6 @@
     "targetPhiloDBLink": "",
     "sourceLabel": "Source",
     "targetLabel": "Target",
-    "metadataTypes": {
-        "source_passage": "TEXT",
-        "source_author": "TEXT",
-        "source_title": "TEXT",
-        "source_year": "INTEGER",
-        "source_passage_length": "INTEGER",
-        "target_passage": "TEXT",
-        "target_author": "TEXT",
-        "target_title": "TEXT",
-        "target_year": "INTEGER",
-        "target_passage_length": "INTEGER"
-    },
     "sourceCitation": [{
             "field": "source_author",
             "style": {}

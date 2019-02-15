@@ -110,7 +110,7 @@
                                 <a
                                     class="diff-btn"
                                     diffed="false"
-                                    @click="showMatches(alignment.source_passage, alignment.target_passage, alignment.source_passage_length, alignment.target_passage.length)"
+                                    @click="showMatches(alignment)"
                                 >Show matching words</a>
                                 <div
                                     class="loading position-absolute"
@@ -274,362 +274,394 @@ import searchArguments from "./searchArguments";
 import { AtomSpinner } from "epic-spinners";
 import Worker from "worker-loader!./diffStrings";
 import Velocity from "velocity-animate";
-import XregExp from "xregexp";
 
 export default {
-  name: "searchResults",
-  components: {
-    searchArguments,
-    AtomSpinner
-  },
-  data() {
-    return {
-      loading: false,
-      done: false,
-      results: { alignments: [] },
-      counts: null,
-      resultsLeft: 0,
-      lastRowID: null,
-      page: 0,
-      error: null,
-      globalConfig: this.$globalConfig,
-      facetResults: null,
-      facetLoading: null
-    };
-  },
-  created() {
-    // fetch the data when the view is created and the data is
-    // already being observed
-    this.fetchData();
-  },
-  watch: {
-    // call again the method if the route changes
-    $route: "fetchData"
-  },
-  methods: {
-    fetchData() {
-      this.results = { alignments: [] }; // clear alignments with new search
-      this.facetResults = null; // clear facet results with new search
-      this.error = null;
-      this.loading = true;
-      let params = { ...this.$route.query };
-      params.db_table = this.$globalConfig.databaseName;
-      EventBus.$emit("searchArgsUpdate", { counts: "", searchParams: params });
-      this.$http
-        .post(
-          `${
-            this.$globalConfig.apiServer
-          }/search_alignments/?${this.paramsToUrl(params)}`,
-          {
-            metadata: this.$globalConfig.metadataTypes
-          }
-        )
-        .then(response => {
-          this.results = response.data;
-          this.lastRowID = this.results.alignments[
-            this.results.alignments.length - 1
-          ].rowid_ordered;
-          this.page++;
-          this.loading = false;
-          this.done = true;
-          this.$http
-            .post(
-              `${
-                this.$globalConfig.apiServer
-              }/count_results/?${this.paramsToUrl(params)}`,
-              {
-                metadata: this.$globalConfig.metadataTypes
-              }
-            )
-            .then(response => {
-              let counts = response.data.counts;
-              EventBus.$emit("searchArgsUpdate", {
-                counts: counts,
+    name: "searchResults",
+    components: {
+        searchArguments,
+        AtomSpinner
+    },
+    data() {
+        return {
+            loading: false,
+            done: false,
+            results: { alignments: [] },
+            counts: null,
+            resultsLeft: 0,
+            lastRowID: null,
+            page: 0,
+            error: null,
+            globalConfig: this.$globalConfig,
+            facetResults: null,
+            facetLoading: null
+        };
+    },
+    created() {
+        // fetch the data when the view is created and the data is
+        // already being observed
+        this.fetchData();
+    },
+    watch: {
+        // call again the method if the route changes
+        $route: "fetchData"
+    },
+    methods: {
+        fetchData() {
+            this.results = { alignments: [] }; // clear alignments with new search
+            this.facetResults = null; // clear facet results with new search
+            this.error = null;
+            this.loading = true;
+            let params = { ...this.$route.query };
+            params.db_table = this.$globalConfig.databaseName;
+            EventBus.$emit("searchArgsUpdate", {
+                counts: "",
                 searchParams: params
-              });
-              this.resultsLeft =
-                counts -
-                (this.results.start_position + this.results.alignments.length);
-            })
-            .catch(error => {
-              console.log(error);
             });
-          Array.from(document.getElementsByClassName("facet-list")).forEach(
-            function(element) {
-              element.classList.remove("hide");
+            this.$http
+                .post(
+                    `${
+                    this.$globalConfig.apiServer
+                    }/search_alignments/?${this.paramsToUrl(params)}`,
+                    {
+                        metadata: this.$globalConfig.metadataTypes
+                    }
+                )
+                .then(response => {
+                    this.results = response.data;
+                    this.lastRowID = this.results.alignments[
+                        this.results.alignments.length - 1
+                    ].rowid_ordered;
+                    this.page++;
+                    this.loading = false;
+                    this.done = true;
+                    this.$http
+                        .post(
+                            `${
+                            this.$globalConfig.apiServer
+                            }/count_results/?${this.paramsToUrl(params)}`,
+                            {
+                                metadata: this.$globalConfig.metadataTypes
+                            }
+                        )
+                        .then(response => {
+                            let counts = response.data.counts;
+                            EventBus.$emit("searchArgsUpdate", {
+                                counts: counts,
+                                searchParams: params
+                            });
+                            this.resultsLeft =
+                                counts -
+                                (this.results.start_position +
+                                    this.results.alignments.length);
+                        })
+                        .catch(error => {
+                            console.log(error);
+                        });
+                    Array.from(
+                        document.getElementsByClassName("facet-list")
+                    ).forEach(function (element) {
+                        element.classList.remove("hide");
+                    });
+                    document
+                        .querySelector("#metadata-list")
+                        .classList.remove("show");
+                })
+                .catch(error => {
+                    this.loading = false;
+                    this.error = error.toString();
+                    console.log(error);
+                });
+        },
+        goToContext(alignment, direction) {
+            let rootURL = "";
+            let params = {};
+            if (direction == "source") {
+                rootURL = this.globalConfig.sourcePhiloDBLink;
+                params = {
+                    filename: alignment.source_filename.substr(
+                        alignment.source_filename.lastIndexOf("/") + 1
+                    ),
+                    start_byte: alignment.source_start_byte,
+                    end_byte: alignment.source_end_byte
+                };
+            } else {
+                rootURL = this.globalConfig.targetPhiloDBLink;
+                params = {
+                    filename: alignment.target_filename.substr(
+                        alignment.target_filename.lastIndexOf("/") + 1
+                    ),
+                    start_byte: alignment.target_start_byte,
+                    end_byte: alignment.target_end_byte
+                };
             }
-          );
-          document.querySelector("#metadata-list").classList.remove("show");
-        })
-        .catch(error => {
-          this.loading = false;
-          this.error = error.toString();
-          console.log(error);
-        });
-    },
-    goToContext(alignment, direction) {
-      let rootURL = "";
-      let params = {};
-      if (direction == "source") {
-        rootURL = this.globalConfig.sourcePhiloDBLink;
-        params = {
-          filename: alignment.source_filename.substr(
-            alignment.source_filename.lastIndexOf("/") + 1
-          ),
-          start_byte: alignment.source_start_byte,
-          end_byte: alignment.source_end_byte
-        };
-      } else {
-        rootURL = this.globalConfig.targetPhiloDBLink;
-        params = {
-          filename: alignment.target_filename.substr(
-            alignment.target_filename.lastIndexOf("/") + 1
-          ),
-          start_byte: alignment.target_start_byte,
-          end_byte: alignment.target_end_byte
-        };
-      }
-      this.$http
-        .get(`${rootURL}/scripts/alignment_to_text.py?`, {
-          params: params
-        })
-        .then(response => {
-          window.open(`${rootURL}/${response.data.link}`, "_blank");
-        })
-        .catch(error => {
-          alert(error);
-        });
-    },
-    previousPage() {
-      let queryParams = { ...this.$route.query };
-      queryParams.page = parseInt(this.results.page) - 1;
-      queryParams.direction = "previous";
-      queryParams.id_anchor = this.results.alignments[0].rowid_ordered;
-      this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-    },
-    nextPage() {
-      let queryParams = { ...this.$route.query };
-      queryParams.page = parseInt(this.results.page) + 1;
-      queryParams.direction = "next";
-      queryParams.id_anchor = this.results.alignments[
-        this.results.alignments.length - 1
-      ].rowid_ordered;
-      this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-    },
-    facetSearch(field) {
-      let queryParams = { ...this.$route.query };
-      queryParams.db_table = this.$globalConfig.databaseName;
-      queryParams.facet = field;
-      this.facetLoading = true;
-      this.$http
-        .post(
-          `${this.$globalConfig.apiServer}/facets/?${this.paramsToUrl(
-            queryParams
-          )}`,
-          {
-            metadata: this.$globalConfig.metadataTypes
-          }
-        )
-        .then(response => {
-          this.facetDirectionLabel = this.$globalConfig[
-            `${response.data.facet.split("_")[0]}Label`
-          ];
-          this.facetResults = response.data;
-          this.toggleFacetList();
-          this.facetLoading = false;
-        })
-        .catch(error => {
-          this.facetLoading = false;
-          this.error = error.toString();
-          console.log("ERROR", error);
-        });
-    },
-    toggleFacetList() {
-      Array.from(document.getElementsByClassName("facet-list")).forEach(
-        function(element) {
-          element.classList.toggle("hide");
+            this.$http
+                .get(`${rootURL}/scripts/alignment_to_text.py?`, {
+                    params: params
+                })
+                .then(response => {
+                    window.open(`${rootURL}/${response.data.link}`, "_blank");
+                })
+                .catch(error => {
+                    alert(error);
+                });
+        },
+        previousPage() {
+            let queryParams = { ...this.$route.query };
+            queryParams.page = parseInt(this.results.page) - 1;
+            queryParams.direction = "previous";
+            queryParams.id_anchor = this.results.alignments[0].rowid_ordered;
+            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
+        },
+        nextPage() {
+            let queryParams = { ...this.$route.query };
+            queryParams.page = parseInt(this.results.page) + 1;
+            queryParams.direction = "next";
+            queryParams.id_anchor = this.results.alignments[
+                this.results.alignments.length - 1
+            ].rowid_ordered;
+            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
+        },
+        facetSearch(field) {
+            let queryParams = { ...this.$route.query };
+            queryParams.db_table = this.$globalConfig.databaseName;
+            queryParams.facet = field;
+            this.facetLoading = true;
+            this.$http
+                .post(
+                    `${this.$globalConfig.apiServer}/facets/?${this.paramsToUrl(
+                        queryParams
+                    )}`,
+                    {
+                        metadata: this.$globalConfig.metadataTypes
+                    }
+                )
+                .then(response => {
+                    this.facetDirectionLabel = this.$globalConfig[
+                        `${response.data.facet.split("_")[0]}Label`
+                    ];
+                    this.facetResults = response.data;
+                    this.toggleFacetList();
+                    this.facetLoading = false;
+                })
+                .catch(error => {
+                    this.facetLoading = false;
+                    this.error = error.toString();
+                    console.log("ERROR", error);
+                });
+        },
+        toggleFacetList() {
+            Array.from(document.getElementsByClassName("facet-list")).forEach(
+                function (element) {
+                    element.classList.toggle("hide");
+                }
+            );
+            document.querySelector("#metadata-list").classList.toggle("show");
+        },
+        closeFacetResults() {
+            this.facetResults = null;
+            this.toggleFacetList();
+        },
+        filteredSearch(fieldName, value) {
+            let queryParams = { ...this.$route.query };
+            delete queryParams.page;
+            delete queryParams.id_anchor;
+            queryParams.db_table = this.$globalConfig.databaseName;
+            queryParams[fieldName] = `"${value}"`;
+            EventBus.$emit("urlUpdate", queryParams);
+            this.facetResults = null;
+            this.results = { alignments: [] };
+            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
+        },
+        showDifferences(
+            sourceText,
+            targetText,
+            sourcePassageLength,
+            targetPassageLength
+        ) {
+            if (sourcePassageLength > 10000 || targetPassageLength > 10000) {
+                alert(
+                    "Passage of 10000 words or more may take up a long time to compare"
+                );
+            }
+            let parent = event.srcElement.parentNode.parentNode.parentNode;
+            let loading = parent.querySelector(".loading");
+            let sourceElement = parent.querySelector(".source-passage");
+            let targetElement = parent.querySelector(".target-passage");
+            if (event.srcElement.getAttribute("diffed") == "false") {
+                loading.style.display = "initial";
+                let outerEvent = event;
+                this.worker = new Worker();
+                this.worker.postMessage([sourceText, targetText]);
+                this.worker.onmessage = function (response) {
+                    let differences = response.data;
+                    let newSourceString = "";
+                    let newTargetString = "";
+                    for (let diffObj of differences) {
+                        let [diffCode, text] = diffObj;
+                        if (diffCode === 0) {
+                            newSourceString += text;
+                            newTargetString += text;
+                        } else if (diffCode === -1) {
+                            newSourceString += `<span class="removed">${text}</span>`;
+                        } else if (diffCode === 1) {
+                            newTargetString += `<span class="added">${text}</span>`;
+                        }
+                    }
+                    sourceElement.innerHTML = newSourceString;
+                    targetElement.innerHTML = newTargetString;
+                    outerEvent.srcElement.setAttribute("diffed", "true");
+                    loading.style.display = "none";
+                    outerEvent.srcElement.textContent = "Hide differences";
+                };
+            } else {
+                sourceElement.innerHTML = sourceText;
+                targetElement.innerHTML = targetText;
+                event.srcElement.setAttribute("diffed", "false");
+                event.srcElement.textContent = "Show differences";
+            }
+        },
+        showMatches: function (alignment) {
+            let parent = event.srcElement.parentNode.parentNode.parentNode;
+            let sourceElement = parent.querySelector(".source-passage");
+            let targetElement = parent.querySelector(".target-passage");
+            if (event.srcElement.getAttribute("diffed") == "false") {
+                let source = alignment.source_passage_with_matches
+                    .replace(/&gt;/g, ">")
+                    .replace(/&lt;/g, "<");
+                sourceElement.innerHTML = source;
+                let target = alignment.target_passage_with_matches
+                    .replace(/&gt;/g, ">")
+                    .replace(/&lt;/g, "<");
+                targetElement.innerHTML = target;
+                event.srcElement.setAttribute("diffed", "true");
+                event.srcElement.textContent = "Hide matching words";
+            } else {
+                sourceElement.innerHTML = alignment.source_passage;
+                targetElement.innerHTML = alignment.target_passage;
+                event.srcElement.setAttribute("diffed", "false");
+                event.srcElement.textContent = "Show matching words";
+            }
+        },
+        beforeEnter: function (el) {
+            el.style.opacity = 0;
+            el.style.height = 0;
+        },
+        enter: function (el, done) {
+            var delay = el.dataset.index * 100;
+            setTimeout(function () {
+                Velocity(
+                    el,
+                    { opacity: 1, height: "100%" },
+                    { complete: done }
+                );
+            }, delay);
+        },
+        toggleSearchForm() {
+            EventBus.$emit("toggleSearchForm");
         }
-      );
-      document.querySelector("#metadata-list").classList.toggle("show");
-    },
-    closeFacetResults() {
-      this.facetResults = null;
-      this.toggleFacetList();
-    },
-    filteredSearch(fieldName, value) {
-      let queryParams = { ...this.$route.query };
-      delete queryParams.page;
-      delete queryParams.id_anchor;
-      queryParams.db_table = this.$globalConfig.databaseName;
-      if (this.$globalConfig.metadataTypes[fieldName] == "TEXT") {
-        queryParams[fieldName] = `"${value}"`;
-      } else {
-        queryParams[fieldName] = value;
-      }
-      EventBus.$emit("urlUpdate", queryParams);
-      this.facetResults = null;
-      this.results = { alignments: [] };
-      this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-    },
-    showDifferences(
-      sourceText,
-      targetText,
-      sourcePassageLength,
-      targetPassageLength
-    ) {
-      if (sourcePassageLength > 10000 || targetPassageLength > 10000) {
-        alert(
-          "Passage of 10000 words or more may take up a long time to compare"
-        );
-      }
-      let parent = event.srcElement.parentNode.parentNode;
-      let loading = parent.querySelector(".loading");
-      let sourceElement = parent.querySelector(".source-passage");
-      let targetElement = parent.querySelector(".target-passage");
-      if (event.srcElement.getAttribute("diffed") == "false") {
-        loading.style.display = "initial";
-        let outerEvent = event;
-        this.worker = new Worker();
-        this.worker.postMessage([sourceText, targetText]);
-        this.worker.onmessage = function(response) {
-          let differences = response.data;
-          let newSourceString = "";
-          let newTargetString = "";
-          for (let diffObj of differences) {
-            let [diffCode, text] = diffObj;
-            if (diffCode === 0) {
-              newSourceString += text;
-              newTargetString += text;
-            } else if (diffCode === -1) {
-              newSourceString += `<span class="removed">${text}</span>`;
-            } else if (diffCode === 1) {
-              newTargetString += `<span class="added">${text}</span>`;
-            }
-          }
-          sourceElement.innerHTML = newSourceString;
-          targetElement.innerHTML = newTargetString;
-          outerEvent.srcElement.setAttribute("diffed", "true");
-          loading.style.display = "none";
-          outerEvent.srcElement.textContent = "Hide differences";
-        };
-      } else {
-        sourceElement.innerHTML = sourceText;
-        targetElement.innerHTML = targetText;
-        event.srcElement.setAttribute("diffed", "false");
-        event.srcElement.textContent = "Show differences";
-      }
-    },
-    showMatches: function(
-      sourceText,
-      targetText,
-      sourcePassageLength,
-      targetPassageLength
-    ) {},
-    beforeEnter: function(el) {
-      el.style.opacity = 0;
-      el.style.height = 0;
-    },
-    enter: function(el, done) {
-      var delay = el.dataset.index * 100;
-      setTimeout(function() {
-        Velocity(el, { opacity: 1, height: "100%" }, { complete: done });
-      }, delay);
-    },
-    toggleSearchForm() {
-      EventBus.$emit("toggleSearchForm");
     }
-  }
 };
 </script>
 
 <style scoped>
 .card-link {
-  color: #007bff !important;
+    color: #007bff !important;
 }
 
 .card-link:hover,
 .page-link {
-  cursor: pointer;
+    cursor: pointer;
 }
 
 .list-group-item:first-child,
 .list-group-item:last-child {
-  border-radius: 0 !important;
+    border-radius: 0 !important;
 }
 
 .facet-result {
-  cursor: pointer;
+    cursor: pointer;
 }
 
 .facet-count {
-  text-pair: right;
+    text-pair: right;
 }
 
 .list-group-item:focus,
 .list-group-item:active {
-  outline: none !important;
+    outline: none !important;
 }
 
 .source-passage,
 .target-passage {
-  color: dodgerblue;
+    color: dodgerblue;
 }
 
 /deep/ .added {
-  color: darkblue;
-  font-weight: 700;
+    color: darkblue;
+    font-weight: 700;
 }
 
 /deep/ .removed {
-  color: green;
-  font-weight: 700;
-  text-decoration: line-through;
+    color: green;
+    font-weight: 700;
+    text-decoration: line-through;
+}
+
+/deep/ .token-match {
+    color: darkblue;
+    font-weight: 700;
+    letter-spacing: -0.0075em;
+}
+
+/deep/ .filtered-token {
+    letter-spacing: -0.0075em;
+    opacity: 0.25;
 }
 
 .diff-btn {
-  display: inline-block;
-  padding: 0.2rem;
-  margin-bottom: 2px;
-  border: solid 1px #ddd;
-  cursor: pointer;
+    display: inline-block;
+    padding: 0.2rem;
+    margin-bottom: 2px;
+    border: solid 1px #ddd;
+    cursor: pointer;
 }
 
 .diff-btn:hover {
-  color: #565656 !important;
-  background-color: #f8f8f8;
+    color: #565656 !important;
+    background-color: #f8f8f8;
 }
 
 .separator {
-  padding: 5px;
+    padding: 5px;
 }
 
 .facet-list {
-  transition: all 0.2s ease-out;
+    transition: all 0.2s ease-out;
 }
 
 .facet-list button:hover {
-  cursor: pointer;
+    cursor: pointer;
 }
 
 .facet-list.hide {
-  max-height: 0px;
-  opacity: 0;
-  margin: 0 !important;
+    max-height: 0px;
+    opacity: 0;
+    margin: 0 !important;
 }
 
 #metadata-list {
-  display: none;
-  opacity: 0;
-  cursor: pointer;
-  transition: all 0.2s ease-out;
+    display: none;
+    opacity: 0;
+    cursor: pointer;
+    transition: all 0.2s ease-out;
 }
 
 #metadata-list.show {
-  display: block;
-  opacity: 1;
+    display: block;
+    opacity: 1;
 }
 
 #metadata-list:hover {
-  color: #565656;
+    color: #565656;
 }
 </style>

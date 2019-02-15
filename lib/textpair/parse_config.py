@@ -9,7 +9,7 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
     """Read config file and store into 4 dicts for each phase of the alignment"""
     tei_parsing = {}
     preprocessing_params = {"source": {}, "target": {}}
-    matching_params = {}
+    matching_params = {"matching_algorithm": "sa"}
     web_app_config = {"skip_web_app": skip_web_app}
     config = configparser.ConfigParser()
     config.read(textpair_config)
@@ -28,7 +28,7 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
             tei_parsing[key] = value
     for key, value in dict(config["PREPROCESSING"]).items():
         if value:
-            if key in ["skipgram", "numbers", "word_order", "modernize", "ascii"]:
+            if key in ("skipgram", "numbers", "word_order", "modernize", "ascii"):
                 if value.lower() == "yes" or value.lower() == "true":
                     value = True
                 else:
@@ -38,7 +38,7 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
                     preprocessing_params["source"]["text_object_level"] = value
                 else:
                     preprocessing_params["target"]["text_object_level"] = value
-            elif key == "ngram" or key == "gap" or key == "minimum_word_length":
+            elif key in ("ngram", "gap", "minimum_word_length"):
                 preprocessing_params["source"][key] = int(value)
                 preprocessing_params["target"][key] = int(value)
             elif key == "pos_to_keep":
