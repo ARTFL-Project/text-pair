@@ -109,6 +109,8 @@ def parse_args(request):
         "id_anchor",
         "directionSelected",
         "timeSeriesInterval",
+        "field",
+        "value",
     ]
     for key, value in request.args.items():
         if key in other_args_keys:
@@ -263,10 +265,14 @@ def search_alignments():
     return response
 
 
-@application.route("/retrieve_all/", methods=["GET"])
+@application.route("/retrieve_all_docs/", methods=["GET"])
 def retrieve_all():
     """Retrieve all results and only return metadata"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
+    if other_args.field.startswith("source_"):
+        direction = "source_"
+    else:
+        direction = "target_"
     database = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
@@ -274,18 +280,17 @@ def retrieve_all():
     )
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if sql_values:
-        query = f"SELECT * FROM {other_args.db_table} WHERE {sql_fields}"
+        query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
         cursor.execute(query, sql_values)
     else:
-        query = f"SELECT * FROM {other_args.db_table}"
+        query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}'"""
         cursor.execute(query)
 
-    alignments = []
     filtered_columns = {
         "source_passage",
         "source_context_before",
         "source_context_after",
-        "source_doc_id",
+        # "source_doc_id",
         "source_philo_id",
         "source_philo_seq",
         "source_parent",
@@ -295,10 +300,12 @@ def retrieve_all():
         "source_philo_name",
         "source_philo_type",
         "source_word_count",
+        "source_start_byte",
+        "source_end_byte",
         "target_passage",
         "target_context_before",
         "target_context_after",
-        "target_doc_id",
+        # "target_doc_id",
         "target_philo_id",
         "target_philo_seq",
         "target_parent",
@@ -307,13 +314,21 @@ def retrieve_all():
         "target_parent",
         "target_philo_name",
         "target_philo_type",
+        "target_start_byte",
+        "target_end_byte",
         "rowid",
     }
-    column_names = [column_name for column_name in column_names if column_name not in filtered_columns]
+    column_names = [
+        column_name for column_name in column_names if column_name not in filtered_columns and column_name.startswith(direction)
+    ]
+    docs_found = {}
+    doc_id = f"{direction}doc_id"
     for row in cursor:
-        metadata = {key: row[key] for key in column_names}
-        alignments.append(metadata)
-    response = jsonify(alignments)
+        if row[doc_id] not in docs_found:
+            docs_found[row[doc_id]] = {"count": 0, **{key: row[key] for key in column_names}}
+        docs_found[row[doc_id]]["count"] += 1
+
+    response = jsonify(list(docs_found.values()))
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
 
