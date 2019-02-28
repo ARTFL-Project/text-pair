@@ -78,14 +78,20 @@ class formArguments:
         return repr(self.dict)
 
 
-def get_pg_type(table_name):
-    """Find PostgreSQL field type"""
+def db_connect():
+    """Connect to database and return cursor"""
     database = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    return cursor
+
+
+def get_pg_type(table_name):
+    """Find PostgreSQL field type"""
+    cursor = db_connect()
     cursor.execute(f"select * from {table_name}")
     type_mapping = {23: "INTEGER", 25: "TEXT", 701: "FLOAT"}
     field_types = {column.name: type_mapping[column.type_code] for column in cursor.description}
@@ -226,12 +232,7 @@ def search_alignments():
                     o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(
                 other_args.db_table, other_args.db_table, other_args.id_anchor
             )
-    database = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor = db_connect()
     cursor.execute(query, sql_values)
     alignments = []
     for row in cursor:
@@ -267,18 +268,13 @@ def search_alignments():
 
 @application.route("/retrieve_all_docs/", methods=["GET"])
 def retrieve_all():
-    """Retrieve all results and only return metadata"""
+    """Retrieve all docs and only return metadata"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
     if other_args.field.startswith("source_"):
         direction = "source_"
     else:
         direction = "target_"
-    database = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor = db_connect()
     if sql_values:
         query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
         cursor.execute(query, sql_values)
@@ -287,33 +283,16 @@ def retrieve_all():
         cursor.execute(query)
 
     filtered_columns = {
+        "source_filename",
         "source_passage",
         "source_context_before",
         "source_context_after",
-        # "source_doc_id",
-        "source_philo_id",
-        "source_philo_seq",
-        "source_parent",
-        "source_prev",
-        "source_next",
-        "source_parent",
-        "source_philo_name",
-        "source_philo_type",
-        "source_word_count",
         "source_start_byte",
         "source_end_byte",
+        "target_filename",
         "target_passage",
         "target_context_before",
         "target_context_after",
-        # "target_doc_id",
-        "target_philo_id",
-        "target_philo_seq",
-        "target_parent",
-        "target_prev",
-        "target_next",
-        "target_parent",
-        "target_philo_name",
-        "target_philo_type",
         "target_start_byte",
         "target_end_byte",
         "rowid",
@@ -333,6 +312,31 @@ def retrieve_all():
     return response
 
 
+@application.route("/retrieve_all_passage_pairs/", methods=["GET"])
+def retrieve_all_passage_pairs():
+    """Retrieve all passage pair metadata matching a particular query
+    NOTE that this does not retrieve passages themselves"""
+    sql_fields, sql_values, other_args, column_names = parse_args(request)
+    filtered_columns = {
+        "source_passage",
+        "source_context_before",
+        "source_context_after",
+        "source_filename",
+        "target_passage",
+        "target_context_before",
+        "target_context_after",
+        "target_filename",
+    }
+    column_names = [column_name for column_name in column_names if column_name not in filtered_columns]
+    query = f"SELECT * FROM {other_args.db_table} WHERE {sql_fields}"
+    cursor = db_connect()
+    cursor.execute(query, sql_values)
+    results = [{key: row[key] for key in column_names} for row in cursor]
+    response = jsonify(results)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+
+
 @application.route("/count_results/", methods=["GET", "POST"])
 def count_results():
     """Search alignments according to URL params"""
@@ -341,12 +345,7 @@ def count_results():
         query = "SELECT COUNT(*) FROM {} WHERE {}".format(other_args.db_table, sql_fields)
     else:
         query = "SELECT COUNT(*) FROM {}".format(other_args.db_table)
-    database = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor = db_connect()
     cursor.execute(query, sql_values)
     result_object = {"counts": cursor.fetchone()[0]}
     response = jsonify(result_object)
@@ -371,12 +370,7 @@ def generate_time_series():
                 GROUP BY interval ORDER BY interval".format(
             other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table
         )
-    database = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor = db_connect()
     cursor.execute(query, sql_values)
     results = []
     total_results = 0
@@ -400,12 +394,7 @@ def generate_time_series():
 def facets():
     """Retrieve facet result"""
     sql_fields, sql_values, other_args, _ = parse_args(request)
-    database = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor = db_connect()
     if sql_fields:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
             other_args.facet, other_args.db_table, sql_fields, other_args.facet

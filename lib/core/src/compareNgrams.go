@@ -918,8 +918,8 @@ func getRelativePosition(startByte int32, endByte int32, metadata map[string]map
 	docStart, _ := strconv.Atoi(metadata[*docID]["start_byte"])
 	docEnd, _ := strconv.Atoi(metadata[*docID]["end_byte"])
 	coefficient := (float64(docEnd) - float64(docStart)) / 100
-	startPosition := fmt.Sprintf("%f", math.Round(float64(startByte)/coefficient))
-	endPosition := fmt.Sprintf("%f", math.Round(float64(endByte)/coefficient))
+	startPosition := fmt.Sprintf("%d", int(math.Round(float64(startByte)/coefficient)))
+	endPosition := fmt.Sprintf("%d", int(math.Round(float64(endByte)/coefficient)))
 	return []string{startPosition, endPosition}
 }
 

@@ -31,13 +31,16 @@ DEFAULT_FIELD_TYPES = {
     "target_start_byte": "INTEGER",
     "source_end_byte": "INTEGER",
     "target_end_byte": "INTEGER",
+    "source_start_position": "INTEGER",
+    "target_start_position": "INTEGER",
+    "source_end_position": "INTEGER",
+    "target_end_position": "INTEGER",
     "source_passage_length": "INTEGER",
     "target_passage_length": "INTEGER",
     "similarity": "FLOAT",
 }
 
 FILTERED_FIELDS = {
-    "source_doc_id",
     "source_philo_seq",
     "source_parent",
     "source_prev",
@@ -46,7 +49,6 @@ FILTERED_FIELDS = {
     "source_philo_name",
     "source_philo_type",
     "source_word_count",
-    "target_doc_id",
     "target_philo_seq",
     "target_parent",
     "target_prev",
@@ -148,6 +150,8 @@ def validate_field_type(fields, field_types, field_names):
     """Check field type and modify value type if needed"""
     values = []
     for field in field_names:
+        if field in FILTERED_FIELDS:
+            continue
         value = fields.get(field, "")
         field_type = field_types.get(field, "TEXT")
         if field_type.upper() == "INTEGER" and not field.endswith("passage_length") and field != "rowid":
@@ -183,13 +187,13 @@ def load_db(file, table_name, field_types, searchable_fields):
         extra_fields = json.loads(
             input_file.readline().rstrip("\n")
         ).keys()  # TODO: we need to add fields on the fly as they occur, since not all are in the first line
-        field_names.extend(extra_fields)
+        field_names.extend([f for f in extra_fields if f not in FILTERED_FIELDS])
         field_names.extend(["source_passage_length", "target_passage_length"])
         if "source_year" not in field_names:
             field_names.append("source_year")
         if "target_year" not in field_names:
             field_names.append("target_year")
-        fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid" and f not in FILTERED_FIELDS]
+        fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
         fields_in_table.extend(fields_and_types)
     cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
     cursor.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
@@ -234,6 +238,8 @@ def load_db(file, table_name, field_types, searchable_fields):
         elif not field.endswith("year") and field_type == "INTEGER":  # year is a special case used for results ordering
             cursor.execute("CREATE INDEX {}_{}_idx ON {} USING BTREE({})".format(field, table_name, table_name, field))
     cursor.execute("CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(table_name, table_name))
+    cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
+    cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
     database.commit()
 
     print("Populating index table...")
