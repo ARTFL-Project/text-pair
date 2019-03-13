@@ -23,8 +23,10 @@ from tqdm import tqdm
 
 TAGS = re.compile(r"<[^>]+>")
 
-PASSAGE_GROUP = namedlist("PassageGroup", [("start_byte", 0), ("end_byte", 0), ("filename", None), ("metadata", {})])
-MERGED_GROUP = namedlist("MergedGroup", [("source", PASSAGE_GROUP()), ("target", PASSAGE_GROUP())])
+PASSAGE_GROUP = namedlist(
+    "PassageGroup", [("vector", []), ("start_byte", 0), ("end_byte", 0), ("filename", None), ("metadata", {})]
+)
+MERGED_GROUP = namedlist("MergedGroup", [("source", PASSAGE_GROUP()), ("target", PASSAGE_GROUP()), ("similarity", 0.0)])
 
 PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
 
@@ -33,17 +35,6 @@ class CorpusLoader(TextCorpus):
     """Subclass of gensim's TextCorpus"""
 
     # pylint: disable=W0231,W0223
-
-    texts: Iterable[Tokens]
-    vectors: List[List[Tuple[int, int]]]
-    min_text_obj_length: int
-    n_chunk: int
-    length: int
-    metadata: list
-    dictionary: Dictionary
-    phrase_model: Phraser
-    text_object_definition: str
-
     def __init__(
         self,
         texts: Iterator[Tokens],
@@ -55,21 +46,24 @@ class CorpusLoader(TextCorpus):
         phrase_model: Phrases = None,
     ):
         """Intialize CorpusLoader"""
-        self.texts = texts
-        self.vectors = []
-        self.min_text_obj_length = min_text_obj_length
-        self.n_chunk = n_chunk
-        self.length = 0
-        self.metadata = []
+        self.texts: Iterable[Tokens] = texts
+        self.vectors: List[List[Tuple[int, int]]] = []
+        self.min_text_obj_length: int = min_text_obj_length
+        self.n_chunk: int = n_chunk
+        self.length: int = 0
+        self.metadata: list = []
         self.text_object_level_split = text_object_level_split
-        self.dictionary = dictionary
-        self.phrase_model = phrase_model
-        self.text_object_definition = text_object_definition
+        self.dictionary: Dictionary = dictionary
+        self.phrase_model: Phraser = phrase_model
+        self.text_object_definition: str = text_object_definition
         self.load_texts(dictionary)
 
     def __iter__(self) -> Iterator[List[Tuple[int, int]]]:
         for vector in self.vectors:
             yield vector
+
+    def __getitem__(self, item: int) -> List[Tuple[int, int]]:
+        return self.vectors[item]
 
     def __len__(self) -> int:
         return len(self.vectors)
@@ -164,40 +158,36 @@ def phrase_detection(source_path, preproc, target_path=None, scoring="npmi") -> 
     return phrase_model
 
 
-def get_text(metadata, length=300) -> Tuple[str, str, str]:
+def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -> str:
     """Grab all texts"""
-    start_byte: int
-    end_byte: int
-    filename: str
-    start_byte, end_byte, filename = metadata["start_byte"], metadata["end_byte"], metadata["filename"]
-    passages: List[str] = []
-    byte_ranges: List[Tuple[int, int]] = [
-        (start_byte - 300, start_byte),
-        (start_byte, end_byte),
-        (end_byte, end_byte + 300),
-    ]
-    for start, end in byte_ranges:
-        if start < 0:
-            start = 0
-        length = end - start
-        with open(filename, "rb") as text_file:
-            text_file.seek(start)
-            text: str = text_file.read(length).decode("utf8", "ignore")
-        text = TAGS.sub("", text)
-        text = unescape_xml(text)
-        text = unescape_html(text)
-        text = text.strip()
-        passages.append(text)
-    return passages[0], passages[1], passages[2]
+    if start_byte < 0:
+        start_byte = 0
+    length = end_byte - start_byte
+    with open(filename, "rb") as text_file:
+        text_file.seek(start_byte)
+        text: str = text_file.read(length).decode("utf8", "ignore")
+    text = TAGS.sub("", text)
+    text = unescape_xml(text)
+    text = unescape_html(text)
+    text = text.strip()
+    return text
 
 
-def post_process_passages(
-    source_passage: str,
-    target_passage: str,
-    preproc: PreProcessor,
-    dictionary: Dictionary,
-    model: SparseMatrixSimilarity,
-) -> Tuple[str, str, float]:
+def vectorize(model: SparseMatrixSimilarity, dictionary: Dictionary, tokens: List[Token]) -> List[Tuple[int, int]]:
+    """Vectorize list of tokens"""
+    return model[dictionary.doc2bow([w for w in tokens if w], allow_update=False)]
+
+
+def get_similarity(
+    dictionary: Dictionary, source_vector: List[Tuple[int, int]], target_vector: List[Tuple[int, int]]
+) -> float:
+    """Get similarity score"""
+    index = SparseMatrixSimilarity([source_vector], num_features=len(dictionary))
+    similarity = index[target_vector][0]
+    return similarity
+
+
+def post_process_passages(source_passage: str, target_passage: str, preproc: PreProcessor) -> Tuple[str, str]:
     """Post process function to highlight matching words in HTML tags"""
     source_tokens = preproc.process_string(source_passage)
     target_tokens = preproc.process_string(target_passage)
@@ -223,16 +213,23 @@ def post_process_passages(
         else:
             target_passage_with_matches.append(token.surface_form)
 
-    # Get similarity of merged passage
-    source_vector = model[dictionary.doc2bow([w for w in source_tokens if w], allow_update=False)]
-    target_vector = model[dictionary.doc2bow([w for w in target_tokens if w], allow_update=False)]
-    index = SparseMatrixSimilarity([source_vector], num_features=len(dictionary), num_docs=1)
-    similarity = index[target_vector][0]
-
-    return "".join(source_passage_with_matches), "".join(target_passage_with_matches), similarity
+    return "".join(source_passage_with_matches), "".join(target_passage_with_matches)
 
 
-def merge_passages(matches: List[namedlist]):
+def evaluate_score(start_score: float, new_score: float, min_score: float) -> bool:
+    """Evaluate if new score is within 2/3 of start score"""
+    if new_score / start_score > 0.66 or new_score >= min_score:
+        return True
+    return False
+
+
+def merge_passages(
+    matches: List[namedlist],
+    preproc: PreProcessor,
+    model: SparseMatrixSimilarity,
+    dictionary: Dictionary,
+    min_score: float,
+) -> List[namedlist]:
     """Merge all passages into bigger passages"""
     # pylint: disable=E1101
     matches.sort(
@@ -248,26 +245,52 @@ def merge_passages(matches: List[namedlist]):
     merged_group: namedlist = MERGED_GROUP()
     saved_groups: List[namedlist] = []
     total_matches: int = len(matches)
+    start_score: float = 0.0
     for pos, match in enumerate(matches):
         source: namedlist
         target: namedlist
         source, target = match
+        merged_source: bool = False
+        merged_target: bool = False
         if merged_group.source.filename is None:
-            merged_group = MERGED_GROUP(source, target)
+            start_score = get_similarity(dictionary, source.vector, target.vector)
+            merged_group = MERGED_GROUP(source, target, start_score)
             continue
         if source.filename != merged_group.source.filename or target.filename != merged_group.target.filename:
             saved_groups.append(merged_group)
-            merged_group = MERGED_GROUP(source, target)
+            start_score = get_similarity(dictionary, source.vector, target.vector)
+            merged_group = MERGED_GROUP(source, target, start_score)
             continue
-        if source.start_byte <= merged_group.source.end_byte and target.start_byte <= merged_group.target.end_byte:
-            if source.end_byte > merged_group.source.end_byte and target.end_byte > merged_group.target.end_byte:
-                merged_group.source.end_byte = source.end_byte
-                merged_group.source.metadata["end_byte"] = source.end_byte
-                merged_group.target.end_byte = target.end_byte
-                merged_group.target.metadata["end_byte"] = target.end_byte
-        else:
+        if source.start_byte <= merged_group.source.end_byte:
+            if source.end_byte > merged_group.source.end_byte:
+                source_tokens = preproc.process_string(
+                    get_text(merged_group.source.start_byte, source.end_byte, source.metadata["filename"])
+                )
+                source_vector = vectorize(model, dictionary, source_tokens)
+                new_score = get_similarity(dictionary, source_vector, merged_group.target.vector)
+                if evaluate_score(start_score, new_score, min_score) is True:
+                    merged_group.source.end_byte = source.end_byte
+                    merged_group.source.metadata["end_byte"] = source.end_byte
+                    merged_group.source.vector = source_vector
+                    merged_group.similarity = new_score
+                    merged_source = True
+        if target.start_byte <= merged_group.target.end_byte:
+            if target.end_byte > merged_group.target.end_byte:
+                target_tokens = preproc.process_string(
+                    get_text(merged_group.target.start_byte, target.end_byte, target.metadata["filename"])
+                )
+                target_vector = vectorize(model, dictionary, target_tokens)
+                new_score = get_similarity(dictionary, merged_group.source.vector, target_vector)
+                if evaluate_score(start_score, new_score, min_score) is True:
+                    merged_group.target.end_byte = target.end_byte
+                    merged_group.target.metadata["end_byte"] = target.end_byte
+                    merged_group.target.vector = target_vector
+                    merged_group.similarity = new_score
+                    merged_target = True
+        if merged_source is False and merged_target is False:
             saved_groups.append(merged_group)
-            merged_group = MERGED_GROUP(source, target)
+            start_score = get_similarity(dictionary, source.vector, target.vector)
+            merged_group = MERGED_GROUP(source, target, start_score)
         if pos + 1 == total_matches:
             saved_groups.append(merged_group)
     return saved_groups
@@ -275,6 +298,9 @@ def merge_passages(matches: List[namedlist]):
 
 def run_vsm(config: Dict[str, Any]):
     """Main function"""
+    if config["text_object_definition"] not in ("n_token", "text_object"):
+        print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
+        exit()
 
     if config["text_object_definition"] == "n_token":
         config["text_object_type"] = config["text_object_level_split"]
@@ -337,12 +363,14 @@ def run_vsm(config: Dict[str, Any]):
                 matches.append(
                     (
                         PASSAGE_GROUP(
+                            source_corpus[source_pos],
                             source_corpus.metadata[source_pos]["start_byte"],
                             source_corpus.metadata[source_pos]["end_byte"],
                             source_corpus.metadata[source_pos]["filename"],
                             source_corpus.metadata[source_pos],
                         ),
                         PASSAGE_GROUP(
+                            target_corpus[target_pos],
                             target_corpus.metadata[target_pos]["start_byte"],
                             target_corpus.metadata[target_pos]["end_byte"],
                             target_corpus.metadata[target_pos]["filename"],
@@ -353,20 +381,27 @@ def run_vsm(config: Dict[str, Any]):
             pbar.update()
     print(f"{count} found...")
     print("Merging matches...")
-    # passage_groups = merge_passages(matches)
+    passage_groups = merge_passages(matches, preproc, model, source_corpus.dictionary, config["min_similarity"])
+
     with open("alignments.jsonl", "w") as output:
-        for source, target in matches:
-            source_context_before, source_passage, source_context_after = get_text(source.metadata)
-            target_context_before, target_passage, target_context_after = get_text(target.metadata)
-            source_passage_with_matches, target_passage_with_matches, similarity = post_process_passages(
-                source_passage, target_passage, preproc, source_corpus.dictionary, model
+        for source, target, similarity in passage_groups:
+            source_context_before = get_text(source.start_byte - 300, source.start_byte, source.metadata["filename"])
+            source_passage = get_text(source.start_byte, source.end_byte, source.metadata["filename"])
+            source_context_after = get_text(source.end_byte, source.end_byte + 300, source.metadata["filename"])
+            target_context_before = get_text(target.start_byte - 300, target.start_byte, target.metadata["filename"])
+            target_passage = get_text(target.start_byte, target.end_byte, target.metadata["filename"])
+            target_context_after = get_text(target.end_byte, target.end_byte + 300, target.metadata["filename"])
+            source_passage_with_matches, target_passage_with_matches = post_process_passages(
+                source_passage, target_passage, preproc
             )
             result_object: str = json.dumps(
                 {
+                    "source_doc_id": source.metadata["philo_id"].split()[0],
                     "source_context_before": source_context_before,
                     "source_passage": source_passage,
                     "source_context_after": source_context_after,
                     "source_passage_with_matches": source_passage_with_matches,
+                    "target_doc_id": target.metadata["philo_id"].split()[0],
                     "target_context_before": target_context_before,
                     "target_passage": target_passage,
                     "target_context_after": target_context_after,
@@ -377,11 +412,11 @@ def run_vsm(config: Dict[str, Any]):
                 }
             )
             print(result_object, file=output)
-    # print(f"Found {len(passage_groups)}...")
+    print(f"Found {len(passage_groups)}...")
 
 
 if __name__ == "__main__":
-    config: Dict[str, Any] = {
+    configuration: Dict[str, Any] = {
         "source_path": "/var/www/html/philologic/rousseau_politics/data/words_and_philo_ids",
         "target_path": "/var/www/html/philologic/robesAPext2/data/words_and_philo_ids",
         "language": "french",
@@ -395,15 +430,15 @@ if __name__ == "__main__":
         "ngram": None,
         "gap": 0,
         "text_object_level_split": "div1",
-        "text_object_definition": "n_token",
-        "min_text_obj_length": 20,
+        "text_object_definition": "text_object",
+        "min_text_obj_length": 15,
         "minimum_word_length": 3,
         "lemmatizer": "/home/clovis/french_lemmas",
         "stopwords": "/shared/PhiloLogic4/extras/FrenchStopwords.txt",
         "workers": 32,
         "pos_to_keep": ["NOUN", "PROPN", "ADJ"],
-        "n_chunk": 2,
+        "n_chunk": 3,
         "min_similarity": 0.2,
         "similarity_metric": "cosine",
     }
-    run_vsm(config)
+    run_vsm(configuration)
