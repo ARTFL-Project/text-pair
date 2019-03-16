@@ -108,9 +108,9 @@ class CorpusLoader(TextCorpus):
                     if len(chunk) != self.min_text_obj_length:
                         try:
                             chunk_group[-1].extend(chunk)
-                            self.vectors.pop()
+                            self.metadata.pop()
                             vector = self.__vector_builder(chunk_group)
-                            self.vectors.append(vector)
+                            self.vectors[-1] = vector
                             break
                         except IndexError:
                             pass
@@ -249,16 +249,16 @@ def merge_passages(
     for pos, match in enumerate(matches):
         source: namedlist
         target: namedlist
-        source, target = match
+        source, target, similarity = match
         merged_source: bool = False
         merged_target: bool = False
         if merged_group.source.filename is None:
-            start_score = get_similarity(dictionary, source.vector, target.vector)
+            start_score = similarity
             merged_group = MERGED_GROUP(source, target, start_score)
             continue
         if source.filename != merged_group.source.filename or target.filename != merged_group.target.filename:
             saved_groups.append(merged_group)
-            start_score = get_similarity(dictionary, source.vector, target.vector)
+            start_score = similarity
             merged_group = MERGED_GROUP(source, target, start_score)
             continue
         if source.start_byte <= merged_group.source.end_byte:
@@ -289,7 +289,7 @@ def merge_passages(
                     merged_target = True
         if merged_source is False and merged_target is False:
             saved_groups.append(merged_group)
-            start_score = get_similarity(dictionary, source.vector, target.vector)
+            start_score = similarity
             merged_group = MERGED_GROUP(source, target, start_score)
         if pos + 1 == total_matches:
             saved_groups.append(merged_group)
@@ -376,15 +376,23 @@ def run_vsm(config: Dict[str, Any]):
                             target_corpus.metadata[target_pos]["filename"],
                             target_corpus.metadata[target_pos],
                         ),
+                        source_vector_results[target_pos],
                     )
                 )
             pbar.update()
     print(f"{count} found...")
     print("Merging matches...")
-    passage_groups = merge_passages(matches, preproc, model, source_corpus.dictionary, config["min_similarity"])
+    last_count = count
+    for iteration in range(config["max_iter"]):
+        matches = merge_passages(matches, preproc, model, source_corpus.dictionary, config["min_similarity"])
+        current_count = len(matches)
+        print(f"{current_count} matches after iteration {iteration+1}")
+        if last_count / current_count < 1.1:  # we stop iterating if there's minimal change between iterations
+            break
+        last_count = current_count
 
     with open("alignments.jsonl", "w") as output:
-        for source, target, similarity in passage_groups:
+        for source, target, similarity in matches:
             source_context_before = get_text(source.start_byte - 300, source.start_byte, source.metadata["filename"])
             source_passage = get_text(source.start_byte, source.end_byte, source.metadata["filename"])
             source_context_after = get_text(source.end_byte, source.end_byte + 300, source.metadata["filename"])
@@ -412,12 +420,12 @@ def run_vsm(config: Dict[str, Any]):
                 }
             )
             print(result_object, file=output)
-    print(f"Found {len(passage_groups)}...")
+    print(f"Found {len(matches)}...")
 
 
 if __name__ == "__main__":
     configuration: Dict[str, Any] = {
-        "source_path": "/var/www/html/philologic/rousseau_politics/data/words_and_philo_ids",
+        "source_path": "/var/www/html/philologic/contrat_social/data/words_and_philo_ids",
         "target_path": "/var/www/html/philologic/robesAPext2/data/words_and_philo_ids",
         "language": "french",
         "text_object_type": "sent",
@@ -430,15 +438,16 @@ if __name__ == "__main__":
         "ngram": None,
         "gap": 0,
         "text_object_level_split": "div1",
-        "text_object_definition": "text_object",
-        "min_text_obj_length": 15,
-        "minimum_word_length": 3,
+        "text_object_definition": "n_token",
+        "min_text_obj_length": 5,
+        "minimum_word_length": 5,
         "lemmatizer": "/home/clovis/french_lemmas",
         "stopwords": "/shared/PhiloLogic4/extras/FrenchStopwords.txt",
         "workers": 32,
         "pos_to_keep": ["NOUN", "PROPN", "ADJ"],
-        "n_chunk": 3,
+        "n_chunk": 10,
         "min_similarity": 0.2,
         "similarity_metric": "cosine",
+        "max_iter": 10,
     }
     run_vsm(configuration)
