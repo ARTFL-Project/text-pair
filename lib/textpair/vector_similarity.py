@@ -4,12 +4,14 @@
 import json
 import os
 import re
+import sys
 from collections import deque
 from html import unescape as unescape_html
 from itertools import chain
-from typing import Dict, List, Optional, Deque, Tuple, Any, Iterator, Iterable
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Tuple
 from xml.sax.saxutils import unescape as unescape_xml
 
+from dill import load, dump
 import numpy as np
 from gensim.corpora.dictionary import Dictionary
 from gensim.corpora.textcorpus import TextCorpus
@@ -18,7 +20,7 @@ from gensim.models.phrases import Phraser, Phrases
 from gensim.similarities import LevenshteinSimilarityIndex
 from gensim.similarities.docsim import SparseMatrixSimilarity
 from namedlist import namedlist
-from text_preprocessing import PreProcessor, Tokens, Token
+from text_preprocessing import PreProcessor, Token, Tokens
 from tqdm import tqdm
 
 TAGS = re.compile(r"<[^>]+>")
@@ -29,6 +31,8 @@ PASSAGE_GROUP = namedlist(
 MERGED_GROUP = namedlist("MergedGroup", [("source", PASSAGE_GROUP()), ("target", PASSAGE_GROUP()), ("similarity", 0.0)])
 
 PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
+
+TEMP_DIR = os.getcwd()
 
 
 class CorpusLoader(TextCorpus):
@@ -56,6 +60,8 @@ class CorpusLoader(TextCorpus):
         self.dictionary: Dictionary = dictionary
         self.phrase_model: Phraser = phrase_model
         self.text_object_definition: str = text_object_definition
+        os.system(f"mkdir -p {TEMP_DIR}/tmp_docs")
+        self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/tmp_docs/")
         self.load_texts(dictionary)
 
     def __iter__(self) -> Iterator[List[Tuple[int, int]]]:
@@ -75,7 +81,17 @@ class CorpusLoader(TextCorpus):
         chunk_group: Deque[Tokens] = deque(maxlen=self.n_chunk)
         min_chunk_length: int = self.n_chunk * self.min_text_obj_length
         current_text_level_id: str = "0"
+        full_doc = Tokens([], {})
+        current_doc_id = None
+        text = None
         for text in self.texts:
+            doc_id = text.metadata["philo_id"].split()[0]
+            if doc_id != current_doc_id and current_doc_id is not None:
+                self.__save_doc(full_doc)
+                current_doc_id = doc_id
+                full_doc = Tokens([], text.metadata)
+            full_doc.extend(text)
+            text.purge()
             text_level_id: str = " ".join(
                 text.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.text_object_level_split]]
             )
@@ -119,8 +135,18 @@ class CorpusLoader(TextCorpus):
                     if len(chunk_group) == self.n_chunk:
                         vector = self.__vector_builder(chunk_group)
                         self.vectors.append(vector)
-
+        self.__save_doc(full_doc)
         self.length = len(self.vectors)
+
+    def __save_doc(self, doc: Tokens):
+        """Save doc to tmp dir for later retrieval"""
+        byte_index = {}
+        for pos, token in enumerate(doc):
+            byte_index[token.ext["start_byte"]] = pos
+            byte_index[token.ext["end_byte"]] = pos
+        cached_file_path = os.path.join(self.tmp_dir, str(hash(doc.metadata["parsed_filename"])))
+        with open(cached_file_path, "wb") as output:
+            dump((doc, byte_index), output)
 
     def __vector_builder(self, chunk_group) -> List[Tuple[int, int]]:
         """Build vector representation of text chunks"""
@@ -187,10 +213,222 @@ def get_similarity(
     return similarity
 
 
-def post_process_passages(source_passage: str, target_passage: str, preproc: PreProcessor) -> Tuple[str, str]:
+def evaluate_score(start_score: float, new_score: float, min_score: float) -> bool:
+    """Evaluate if new score is within 2/3 of start score"""
+    if new_score / start_score > 0.66 or new_score >= min_score:
+        return True
+    return False
+
+def get_docs_with_matches(matches: List[Tuple[namedlist, namedlist, float]]) -> Dict[str, Tokens]:
+    """Fetch all documents with matches"""
+    docs_with_matches: Dict[str, Tokens] = {}
+    for source, target, _ in matches:
+        if source.metadata["parsed_filename"] not in docs_with_matches:
+            with open(
+                os.path.join(f"{TEMP_DIR}/tmp_docs", str(hash(source.metadata["parsed_filename"]))), "rb"
+            ) as input_doc:
+                docs_with_matches[source.metadata["parsed_filename"]] = load(input_doc)
+        if target.metadata["parsed_filename"] not in docs_with_matches:
+            with open(
+                os.path.join(f"{TEMP_DIR}/tmp_docs", str(hash(target.metadata["parsed_filename"]))), "rb"
+            ) as input_doc:
+                docs_with_matches[target.metadata["parsed_filename"]] = load(input_doc)
+    return docs_with_matches
+
+
+def get_passage(doc: Tokens, start_byte: int, end_byte: int) -> Tokens:
+    """Get passage within Tokens object"""
+    text, byte_index = doc
+    start_index = byte_index[start_byte]
+    end_index = byte_index[end_byte] + 1
+    return text[start_index:end_index]
+
+
+def merge_passages(
+    matches: List[namedlist],
+    preproc: PreProcessor,
+    model: SparseMatrixSimilarity,
+    dictionary: Dictionary,
+    min_score: float,
+    max_iter: int,
+) -> List[namedlist]:
+    """Merge all passages into bigger passages"""
+    # pylint: disable=E1101
+    last_count = len(matches)
+    print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
+    docs_with_matches: Dict[str, Tokens] = get_docs_with_matches(matches)
+    for iteration in range(max_iter):
+        matches.sort(
+            key=lambda x: (
+                x[0].filename,
+                x[1].filename,
+                x[0].start_byte,
+                x[0].start_byte - x[0].end_byte,
+                x[1].start_byte,
+                x[1].start_byte - x[1].end_byte,
+            )
+        )  # sort by smaller start byte and bigger end_byte
+        merged_group: namedlist = MERGED_GROUP()
+        saved_groups: List[namedlist] = []
+        total_matches: int = len(matches)
+        start_score: float = 0.0
+        for pos, match in enumerate(matches):
+            source: namedlist
+            target: namedlist
+            source, target, similarity = match
+            merged_source: bool = False
+            merged_target: bool = False
+            if merged_group.source.filename is None:
+                start_score = similarity
+                merged_group = MERGED_GROUP(source, target, start_score)
+                continue
+            if source.filename != merged_group.source.filename or target.filename != merged_group.target.filename:
+                saved_groups.append(merged_group)
+                start_score = similarity
+                merged_group = MERGED_GROUP(source, target, start_score)
+                continue
+            if source.start_byte <= merged_group.source.end_byte:
+                if source.end_byte > merged_group.source.end_byte:
+                    source_tokens = get_passage(
+                        docs_with_matches[source.metadata["parsed_filename"]],
+                        merged_group.source.start_byte,
+                        source.end_byte,
+                    )
+                    source_vector = vectorize(model, dictionary, source_tokens)
+                    new_score = get_similarity(dictionary, source_vector, merged_group.target.vector)
+                    if evaluate_score(start_score, new_score, min_score) is True:
+                        merged_group.source.end_byte = source.end_byte
+                        merged_group.source.metadata["end_byte"] = source.end_byte
+                        merged_group.source.vector = source_vector
+                        merged_group.similarity = new_score
+                        merged_source = True
+            if target.start_byte <= merged_group.target.end_byte:
+                if target.end_byte > merged_group.target.end_byte:
+                    target_tokens = get_passage(
+                        docs_with_matches[target.metadata["parsed_filename"]],
+                        merged_group.target.start_byte,
+                        target.end_byte,
+                    )
+                    target_vector = vectorize(model, dictionary, target_tokens)
+                    new_score = get_similarity(dictionary, merged_group.source.vector, target_vector)
+                    if evaluate_score(start_score, new_score, min_score) is True:
+                        merged_group.target.end_byte = target.end_byte
+                        merged_group.target.metadata["end_byte"] = target.end_byte
+                        merged_group.target.vector = target_vector
+                        merged_group.similarity = new_score
+                        merged_target = True
+            if merged_source is False and merged_target is False:
+                saved_groups.append(merged_group)
+                start_score = similarity
+                merged_group = MERGED_GROUP(source, target, start_score)
+            if pos + 1 == total_matches:
+                saved_groups.append(merged_group)
+        current_count = len(saved_groups)
+        if last_count / current_count <= 1.0:  # we stop iterating if there's minimal change between iterations
+            print()
+            break
+        print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
+        last_count = current_count
+        matches = saved_groups
+    return matches
+
+
+def optimize_matches(
+    matches: List[Tuple[namedlist, namedlist, float]], model: SparseMatrixSimilarity, dictionary: Dictionary
+) -> Tuple[List[Tuple[namedlist, namedlist, float]], Dict[str, Tokens]]:
+    """Optimize match by trimming on left and right side of matches until best score is reached"""
+    print("Optimizing matches...")
+    docs_with_matches: Dict[str, Tokens] = get_docs_with_matches(matches)
+    optimized_matches: List[Tuple[namedlist, namedlist, float]] = []
+    for source, target, best_score in matches:
+        source_tokens = get_passage(
+            docs_with_matches[source.metadata["parsed_filename"]], source.start_byte, source.end_byte
+        )
+        target_tokens = get_passage(
+            docs_with_matches[target.metadata["parsed_filename"]], target.start_byte, target.end_byte
+        )
+        # print(target_tokens)
+        while True:
+            token = source_tokens.popleft()
+            source_vector = vectorize(model, dictionary, source_tokens)
+            new_score = get_similarity(dictionary, source_vector, target.vector)
+            if new_score >= best_score:
+                best_score = new_score
+                source.start_byte = source_tokens.metadata["start_byte"]
+            else:
+                source_tokens.appendleft(token)
+                break
+        while True:
+            token = source_tokens.pop()
+            source_vector = vectorize(model, dictionary, source_tokens)
+            new_score = get_similarity(dictionary, source_vector, target.vector)
+            if new_score >= best_score:
+                best_score = new_score
+                source.end_byte = source_tokens.metadata["end_byte"]
+            else:
+                source_tokens.append(token)
+                break
+        source.vector = vectorize(model, dictionary, source_tokens)
+        while True:
+            token = target_tokens.popleft()
+            target_vector = vectorize(model, dictionary, target_tokens)
+            new_score = get_similarity(dictionary, source.vector, target_vector)
+            # print(token, best_score, new_score)
+            if new_score >= best_score:
+                best_score = new_score
+                target.start_byte = target_tokens.metadata["start_byte"]
+            else:
+                target_tokens.appendleft(token)
+                break
+        while True:
+            token = target_tokens.pop()
+            target_vector = vectorize(model, dictionary, target_tokens)
+            new_score = get_similarity(dictionary, target_vector, source.vector)
+            if new_score >= best_score:
+                best_score = new_score
+                target.end_byte = target_tokens.metadata["end_byte"]
+            else:
+                target_tokens.append(token)
+                break
+        target.vector = vectorize(model, dictionary, target_tokens)
+        optimized_matches.append((source, target, best_score))
+    return optimized_matches, docs_with_matches
+
+
+def get_tokens(passage: namedlist, preproc: PreProcessor) -> List[Token]:
+    """Get tokens while making sure we grab a full sentence for POS tagging"""
+    sentence_boundaries: set = {".", "!", "?"}
+    text: str = " "
+    start_byte: int = passage.start_byte
+    end_byte: int = passage.end_byte
+    while text[0] not in sentence_boundaries:
+        start_byte -= 1
+        with open(passage.filename, "rb") as text_file:
+            text_file.seek(start_byte)
+            text = text_file.read(end_byte-start_byte).decode("utf8", "ignore")
+        if start_byte == 0:
+            break
+    start_byte += 1 # We don't want the sentence boundarie in our string
+    while text[-1] not in sentence_boundaries:
+        end_byte += 1
+        with open(passage.filename, "rb") as text_file:
+            text_file.seek(start_byte)
+            text = text_file.read(end_byte-start_byte).decode("utf8", "ignore")
+    tokens: List[Token] = []
+    for token in preproc.process_string(text):
+        end_position = start_byte + len(token.surface_form.encode("utf8"))
+        if start_byte >= passage.start_byte and end_position <= passage.end_byte:
+            tokens.append(token)
+        if end_position > passage.end_byte:
+            break
+        start_byte = end_position
+    return tokens
+
+
+def post_process_passages(source: namedlist, target: namedlist, preproc: PreProcessor) -> Tuple[str, str]:
     """Post process function to highlight matching words in HTML tags"""
-    source_tokens = preproc.process_string(source_passage)
-    target_tokens = preproc.process_string(target_passage)
+    source_tokens = get_tokens(source, preproc)
+    target_tokens = get_tokens(target, preproc)
     source_map = {token.surface_form: token.text for token in source_tokens}
     target_map = {token.surface_form: token.text for token in target_tokens}
     source_target_intersect = set(
@@ -213,87 +451,7 @@ def post_process_passages(source_passage: str, target_passage: str, preproc: Pre
         else:
             target_passage_with_matches.append(token.surface_form)
 
-    return "".join(source_passage_with_matches), "".join(target_passage_with_matches)
-
-
-def evaluate_score(start_score: float, new_score: float, min_score: float) -> bool:
-    """Evaluate if new score is within 2/3 of start score"""
-    if new_score / start_score > 0.66 or new_score >= min_score:
-        return True
-    return False
-
-
-def merge_passages(
-    matches: List[namedlist],
-    preproc: PreProcessor,
-    model: SparseMatrixSimilarity,
-    dictionary: Dictionary,
-    min_score: float,
-) -> List[namedlist]:
-    """Merge all passages into bigger passages"""
-    # pylint: disable=E1101
-    matches.sort(
-        key=lambda x: (
-            x[0].filename,
-            x[1].filename,
-            x[0].start_byte,
-            x[0].start_byte - x[0].end_byte,
-            x[1].start_byte,
-            x[1].start_byte - x[1].end_byte,
-        )
-    )  # sort by smaller start byte and bigger end_byte
-    merged_group: namedlist = MERGED_GROUP()
-    saved_groups: List[namedlist] = []
-    total_matches: int = len(matches)
-    start_score: float = 0.0
-    for pos, match in enumerate(matches):
-        source: namedlist
-        target: namedlist
-        source, target, similarity = match
-        merged_source: bool = False
-        merged_target: bool = False
-        if merged_group.source.filename is None:
-            start_score = similarity
-            merged_group = MERGED_GROUP(source, target, start_score)
-            continue
-        if source.filename != merged_group.source.filename or target.filename != merged_group.target.filename:
-            saved_groups.append(merged_group)
-            start_score = similarity
-            merged_group = MERGED_GROUP(source, target, start_score)
-            continue
-        if source.start_byte <= merged_group.source.end_byte:
-            if source.end_byte > merged_group.source.end_byte:
-                source_tokens = preproc.process_string(
-                    get_text(merged_group.source.start_byte, source.end_byte, source.metadata["filename"])
-                )
-                source_vector = vectorize(model, dictionary, source_tokens)
-                new_score = get_similarity(dictionary, source_vector, merged_group.target.vector)
-                if evaluate_score(start_score, new_score, min_score) is True:
-                    merged_group.source.end_byte = source.end_byte
-                    merged_group.source.metadata["end_byte"] = source.end_byte
-                    merged_group.source.vector = source_vector
-                    merged_group.similarity = new_score
-                    merged_source = True
-        if target.start_byte <= merged_group.target.end_byte:
-            if target.end_byte > merged_group.target.end_byte:
-                target_tokens = preproc.process_string(
-                    get_text(merged_group.target.start_byte, target.end_byte, target.metadata["filename"])
-                )
-                target_vector = vectorize(model, dictionary, target_tokens)
-                new_score = get_similarity(dictionary, merged_group.source.vector, target_vector)
-                if evaluate_score(start_score, new_score, min_score) is True:
-                    merged_group.target.end_byte = target.end_byte
-                    merged_group.target.metadata["end_byte"] = target.end_byte
-                    merged_group.target.vector = target_vector
-                    merged_group.similarity = new_score
-                    merged_target = True
-        if merged_source is False and merged_target is False:
-            saved_groups.append(merged_group)
-            start_score = similarity
-            merged_group = MERGED_GROUP(source, target, start_score)
-        if pos + 1 == total_matches:
-            saved_groups.append(merged_group)
-    return saved_groups
+    return " ".join(source_passage_with_matches), " ".join(target_passage_with_matches)
 
 
 def run_vsm(config: Dict[str, Any]):
@@ -301,9 +459,10 @@ def run_vsm(config: Dict[str, Any]):
     if config["text_object_definition"] not in ("n_token", "text_object"):
         print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
         exit()
-
     if config["text_object_definition"] == "n_token":
         config["text_object_type"] = config["text_object_level_split"]
+    if config["max_iter"] == "inf":
+        config["max_iter"] = sys.maxsize ** 10
     preproc: PreProcessor = PreProcessor(
         language=config["language"],
         stemmer=config["stemmer"],
@@ -323,7 +482,9 @@ def run_vsm(config: Dict[str, Any]):
     )
     # phrase_model = phrase_detection(config["source_path"], preproc, config["target_path"])
     phrase_model: Optional[Phraser] = None
-    source_texts: Iterator[Tokens] = preproc.process_texts((file.path for file in os.scandir(config["source_path"])))
+    source_texts: Iterator[Tokens] = preproc.process_texts(
+        (file.path for file in os.scandir(config["source_path"])), keep_all=True
+    )
     source_corpus: CorpusLoader = CorpusLoader(
         source_texts,
         text_object_definition=config["text_object_definition"],
@@ -332,7 +493,9 @@ def run_vsm(config: Dict[str, Any]):
         text_object_level_split=config["text_object_level_split"],
         phrase_model=phrase_model,
     )
-    target_texts: Iterator[Tokens] = preproc.process_texts((file.path for file in os.scandir(config["target_path"])))
+    target_texts: Iterator[Tokens] = preproc.process_texts(
+        (file.path for file in os.scandir(config["target_path"])), keep_all=True
+    )
     target_corpus: CorpusLoader = CorpusLoader(
         target_texts,
         text_object_definition=config["text_object_definition"],
@@ -380,28 +543,21 @@ def run_vsm(config: Dict[str, Any]):
                     )
                 )
             pbar.update()
-    print(f"{count} found...")
-    print("Merging matches...")
-    last_count = count
-    for iteration in range(config["max_iter"]):
-        matches = merge_passages(matches, preproc, model, source_corpus.dictionary, config["min_similarity"])
-        current_count = len(matches)
-        print(f"{current_count} matches after iteration {iteration+1}")
-        if last_count / current_count < 1.1:  # we stop iterating if there's minimal change between iterations
-            break
-        last_count = current_count
-
+    print(f"{count} matches found.")
+    matches = merge_passages(
+        matches, preproc, model, source_corpus.dictionary, config["min_similarity"], config["max_iter"]
+    )
+    matches, docs_with_matches = optimize_matches(matches, model, source_corpus.dictionary)
+    print("Writing out results...")
     with open("alignments.jsonl", "w") as output:
-        for source, target, similarity in matches:
+        for source, target, best_score in matches:
             source_context_before = get_text(source.start_byte - 300, source.start_byte, source.metadata["filename"])
             source_passage = get_text(source.start_byte, source.end_byte, source.metadata["filename"])
             source_context_after = get_text(source.end_byte, source.end_byte + 300, source.metadata["filename"])
             target_context_before = get_text(target.start_byte - 300, target.start_byte, target.metadata["filename"])
             target_passage = get_text(target.start_byte, target.end_byte, target.metadata["filename"])
             target_context_after = get_text(target.end_byte, target.end_byte + 300, target.metadata["filename"])
-            source_passage_with_matches, target_passage_with_matches = post_process_passages(
-                source_passage, target_passage, preproc
-            )
+            source_passage_with_matches, target_passage_with_matches = post_process_passages(source, target, preproc)
             result_object: str = json.dumps(
                 {
                     "source_doc_id": source.metadata["philo_id"].split()[0],
@@ -414,13 +570,14 @@ def run_vsm(config: Dict[str, Any]):
                     "target_passage": target_passage,
                     "target_context_after": target_context_after,
                     "target_passage_with_matches": target_passage_with_matches,
-                    "similarity": float(similarity),
+                    "similarity": str(best_score),
                     **{f"source_{field}": value for field, value in source.metadata.items()},
                     **{f"target_{field}": value for field, value in target.metadata.items()},
                 }
             )
             print(result_object, file=output)
     print(f"Found {len(matches)}...")
+    os.system(f"rm -rf {TEMP_DIR}/tmp_docs")
 
 
 if __name__ == "__main__":
@@ -439,15 +596,15 @@ if __name__ == "__main__":
         "gap": 0,
         "text_object_level_split": "div1",
         "text_object_definition": "n_token",
-        "min_text_obj_length": 5,
-        "minimum_word_length": 5,
+        "min_text_obj_length": 3,
+        "minimum_word_length": 3,
         "lemmatizer": "/home/clovis/french_lemmas",
         "stopwords": "/shared/PhiloLogic4/extras/FrenchStopwords.txt",
         "workers": 32,
         "pos_to_keep": ["NOUN", "PROPN", "ADJ"],
-        "n_chunk": 10,
+        "n_chunk": 15,
         "min_similarity": 0.2,
         "similarity_metric": "cosine",
-        "max_iter": 10,
+        "max_iter": "inf",
     }
     run_vsm(configuration)

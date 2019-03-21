@@ -232,12 +232,22 @@ def load_db(file, table_name, field_types, searchable_fields):
             else:
                 field_type = "TEXT"
         if field_type == "TEXT":
-            cursor.execute("CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(field, table_name, table_name, field))
+            cursor.execute(
+                "CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(
+                    field, table_name, table_name, field
+                )
+            )
             if not field.endswith("passage"):
-                cursor.execute("CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field))
+                cursor.execute(
+                    "CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field)
+                )
         elif not field.endswith("year") and field_type == "INTEGER":  # year is a special case used for results ordering
             cursor.execute("CREATE INDEX {}_{}_idx ON {} USING BTREE({})".format(field, table_name, table_name, field))
-    cursor.execute("CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(table_name, table_name))
+    cursor.execute(
+        "CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(
+            table_name, table_name
+        )
+    )
     cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
     cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
     database.commit()
@@ -245,8 +255,16 @@ def load_db(file, table_name, field_types, searchable_fields):
     print("Populating index table...")
     ordered_table = table_name + "_ordered"
     cursor2.execute("DROP TABLE if exists {}".format(ordered_table))
-    cursor2.execute("CREATE TABLE {} ({})".format(ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"))
-    cursor.execute("SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC".format(table_name))
+    cursor2.execute(
+        "CREATE TABLE {} ({})".format(
+            ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"
+        )
+    )
+    cursor.execute(
+        "SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC".format(
+            table_name
+        )
+    )
     lines = 0
     rows = []
     rowid = 0
@@ -266,7 +284,9 @@ def load_db(file, table_name, field_types, searchable_fields):
         lines = 0
     print("Creating indexes...")
     cursor2.execute(
-        "CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(ordered_table, ordered_table)
+        "CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(
+            ordered_table, ordered_table
+        )
     )
     database.commit()
     database.close()
@@ -285,18 +305,30 @@ def set_up_app(web_config, db_path):
         os.system(f"""cp /var/lib/text-pair/web/apache_htaccess.conf {os.path.join(db_path, ".htaccess")}""")
 
 
-def create_web_app(file, table, field_types, web_app_dir, api_server, source_database_link, target_database_link, algorithm):
+def create_web_app(
+    file,
+    table,
+    field_types,
+    web_app_dir,
+    api_server,
+    source_database_link,
+    target_database_link,
+    algorithm,
+    load_only_db=False,
+):
     """Main routine"""
     web_config = WebAppConfig(field_types, table, api_server, source_database_link, target_database_link, algorithm)
     print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
-    print("\n### Setting up Web Application ###", flush=True)
-    web_config.update(fields_in_table)
-    db_dir = os.path.join(web_app_dir, table)
-    print("Building web application...", flush=True)
-    set_up_app(web_config, db_dir)
-    db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
-    print("\n### Finished ###", flush=True)
-    print(f"The database is viewable at this URL: {db_url}")
-    print(f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory")
-
+    if load_only_db is False:
+        print("\n### Setting up Web Application ###", flush=True)
+        web_config.update(fields_in_table)
+        db_dir = os.path.join(web_app_dir, table)
+        print("Building web application...", flush=True)
+        set_up_app(web_config, db_dir)
+        db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
+        print("\n### Finished ###", flush=True)
+        print(f"The database is viewable at this URL: {db_url}")
+        print(
+            f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
+        )

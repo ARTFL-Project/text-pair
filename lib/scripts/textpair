@@ -11,7 +11,7 @@ from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config
 
 TextPAIRParams = namedtuple(
     "TextPairParams",
-    "paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, file",
+    "paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, update_db, file",
 )
 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
@@ -60,6 +60,9 @@ def parse_command_line():
         help="define whether to load results into a database and build a corresponding web app",
         action="store_true",
         default=False,
+    )
+    parser.add_argument(
+        "--update_db", help="update database without rebuilding web_app", action="store_true", default=False
     )
     parser.add_argument("--file", help="alignment file to load", type=str, default=None)
     parser.add_argument(
@@ -140,6 +143,7 @@ def parse_command_line():
         args["debug"],
         args["only_align"],
         args["load_only_web_app"],
+        args["update_db"],
         args["file"],
     )
 
@@ -332,7 +336,20 @@ def run_vsm_similarity(pair_params: TextPAIRParams) -> None:
 
 if __name__ == "__main__":
     pair_params = parse_command_line()
-    if pair_params.only_web_app is True:
+    if pair_params.update_db is True:
+        FIELD_TYPES.update(pair_params.web_app_config["field_types"])
+        create_web_app(
+            pair_params.file,
+            pair_params.web_app_config["table_name"],
+            FIELD_TYPES,
+            pair_params.web_app_config["web_application_directory"],
+            pair_params.web_app_config["api_server"],
+            pair_params.web_app_config["source_philo_db_link"],
+            pair_params.web_app_config["target_philo_db_link"],
+            pair_params.matching_params["matching_algorithm"],
+            load_only_db=True,
+        )
+    elif pair_params.only_web_app is True:
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
             pair_params.file,
