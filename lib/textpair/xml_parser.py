@@ -140,10 +140,12 @@ class TEIParser:
             os.system("rm -rf {}".format(output_path))
         os.system("mkdir -p {}/metadata".format(output_path))
         os.system("mkdir -p {}/texts".format(output_path))
-        self.text_path = str(Path(output_path).joinpath("texts"))
-        self.metadata_path = str(Path(output_path).joinpath("metadata/metadata.json"))
-        files = glob(str(Path(file_path).joinpath("*")))
-        self.files = list(zip(range(len(files)), files))
+        self.text_path = os.path.join(output_path, "texts")
+        self.metadata_path = os.path.join(output_path, "metadata/metadata.json")
+        if os.path.isfile(file_path):
+            self.files = [(0, file_path)]
+        else:
+            self.files = [(pos, f.path) for pos, f in enumerate(os.scandir(file_path))]
         self.workers = cores
         self.debug = debug
         if words_to_keep == "all":
@@ -157,19 +159,17 @@ class TEIParser:
         print("Parsing headers in all files...", flush=True)
         metadata = {}
         invalid_files = []
-        pool = Pool(self.workers)
-        chunksize = len(self.files) // self.workers
-        with tqdm(total=len(self.files), leave=self.debug) as pbar:
-            for file_id, local_metadata, invalid_file in pool.imap_unordered(
-                self.parse_header, self.files, chunksize=chunksize or 1
-            ):
-                if invalid_file:
-                    invalid_files.append((file_id, invalid_file))
-                else:
-                    metadata[file_id] = local_metadata
-                pbar.update()
-        pool.close()
-        pool.join()
+        with Pool(self.workers) as pool:
+            chunksize = len(self.files) // self.workers
+            with tqdm(total=len(self.files), leave=self.debug) as pbar:
+                for file_id, local_metadata, invalid_file in pool.imap_unordered(
+                    self.parse_header, self.files, chunksize=chunksize or 1
+                ):
+                    if invalid_file:
+                        invalid_files.append((file_id, invalid_file))
+                    else:
+                        metadata[file_id] = local_metadata
+                    pbar.update()
         if invalid_files:
             for f in invalid_files:
                 self.files.remove(f)
@@ -259,11 +259,11 @@ class TEIParser:
                     word = line.strip()
                     self.words_to_keep.add(word)
         print("Parsing text body of all files...", flush=True)
-        pool = Pool(self.workers)
-        chunksize = len(self.files) // self.workers // 10
-        with tqdm(total=len(self.files), leave=self.debug) as pbar:
-            for _ in pool.imap_unordered(self.parse_file, self.files, chunksize=chunksize or 1):
-                pbar.update()
+        with Pool(self.workers) as pool:
+            chunksize = len(self.files) // self.workers // 10
+            with tqdm(total=len(self.files), leave=self.debug) as pbar:
+                for _ in pool.imap_unordered(self.parse_file, self.files, chunksize=chunksize or 1):
+                    pbar.update()
         pool.close()
         pool.join()
 

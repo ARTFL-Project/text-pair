@@ -39,6 +39,7 @@ class Ngrams:
         ascii=False,
         pos_to_keep=[],
         debug=False,
+        **kwargs
     ):
         self.config = {
             "ngram": ngram,
@@ -127,7 +128,7 @@ class Ngrams:
             progress=False,
         )
         with tqdm(total=len(files), leave=False) as pbar:
-            for local_metadata in preprocessor.process_texts(files):
+            for local_metadata in preprocessor.process_texts(files, progress=False):
                 if self.metadata_done is False:
                     combined_metadata.update(local_metadata)
                 pbar.update()

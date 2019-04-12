@@ -8,7 +8,7 @@ import sys
 from collections import deque
 from html import unescape as unescape_html
 from itertools import chain
-from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Tuple, Set, Union
 from xml.sax.saxutils import unescape as unescape_xml
 
 from dill import load, dump
@@ -18,7 +18,8 @@ from gensim.corpora.textcorpus import TextCorpus
 from gensim.models import TfidfModel
 from gensim.models.phrases import Phraser, Phrases
 from gensim.similarities import LevenshteinSimilarityIndex
-from gensim.similarities.docsim import SparseMatrixSimilarity
+from gensim.similarities.docsim import SparseMatrixSimilarity, MatrixSimilarity
+from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from namedlist import namedlist
 from text_preprocessing import PreProcessor, Token, Tokens
 from tqdm import tqdm
@@ -35,49 +36,46 @@ PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5
 TEMP_DIR = os.getcwd()
 
 
-class CorpusLoader(TextCorpus):
-    """Subclass of gensim's TextCorpus"""
+def fast_cosine(X, Y):
+    return np.inner(X, Y) / np.sqrt(np.dot(X, X) * np.dot(Y, Y))
 
-    # pylint: disable=W0231,W0223
+
+class CorpusLoader(TextCorpus):
+    """Base class for linking gensim's TextCorpus and the text-preprocessing output"""
+
     def __init__(
         self,
         texts: Iterator[Tokens],
-        dictionary: Dictionary = None,
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_level_split: str = "doc",
         phrase_model: Phrases = None,
     ):
-        """Intialize CorpusLoader"""
+        """Intialize CorpusVectorizer"""
         self.texts: Iterable[Tokens] = texts
-        self.vectors: List[List[Tuple[int, int]]] = []
         self.min_text_obj_length: int = min_text_obj_length
         self.n_chunk: int = n_chunk
         self.length: int = 0
         self.metadata: list = []
         self.text_object_level_split = text_object_level_split
-        self.dictionary: Dictionary = dictionary
         self.phrase_model: Phraser = phrase_model
         self.text_object_definition: str = text_object_definition
         os.system(f"mkdir -p {TEMP_DIR}/tmp_docs")
         self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/tmp_docs/")
-        self.load_texts(dictionary)
 
     def __iter__(self) -> Iterator[List[Tuple[int, int]]]:
-        for vector in self.vectors:
-            yield vector
+        for text_chunk in self.text_chunks:
+            yield text_chunk
 
     def __getitem__(self, item: int) -> List[Tuple[int, int]]:
         return self.vectors[item]
 
     def __len__(self) -> int:
-        return len(self.vectors)
+        return self.length
 
-    def load_texts(self, dictionary: Dictionary):
+    def get_text_chunks(self) -> Iterator[List[str]]:
         """Load all texts and create gensim dictionary"""
-        if dictionary is None:
-            self.dictionary = Dictionary()
         chunk_group: Deque[Tokens] = deque(maxlen=self.n_chunk)
         min_chunk_length: int = self.n_chunk * self.min_text_obj_length
         current_text_level_id: str = "0"
@@ -88,7 +86,6 @@ class CorpusLoader(TextCorpus):
             doc_id = text.metadata["philo_id"].split()[0]
             if doc_id != current_doc_id and current_doc_id is not None:
                 self.__save_doc(full_doc)
-                current_doc_id = doc_id
                 full_doc = Tokens([], text.metadata)
             full_doc.extend(text)
             text.purge()
@@ -98,13 +95,13 @@ class CorpusLoader(TextCorpus):
             if text_level_id != current_text_level_id:
                 chunk_group_length: int = sum([len(t) for t in chunk_group])
                 if chunk_group_length >= min_chunk_length:
-                    vector = self.__vector_builder(chunk_group)
-                    self.vectors.append(vector)
+                    self.__store_metadata(chunk_group)
+                    self.length += 1
+                    yield [t.text for chunk in chunk_group for t in chunk]
                 chunk_group.clear()
             current_text_level_id = text_level_id
             if self.phrase_model is not None:
                 text = Tokens(self.phrase_model[text], text.metadata)
-            self.dictionary.add_documents([text])
             if self.text_object_definition == "text_object":
                 if len(text) < self.min_text_obj_length:
                     try:
@@ -117,26 +114,33 @@ class CorpusLoader(TextCorpus):
                 if len(chunk_group) == self.n_chunk:
                     chunk_group_length = sum([len(t) for t in chunk_group])
                     if chunk_group_length >= min_chunk_length:
-                        vector = self.__vector_builder(chunk_group)
-                        self.vectors.append(vector)
+                        self.__store_metadata(chunk_group)
+                        self.length += 1
+                        yield [t.text for chunk in chunk_group for t in chunk]
             else:
+                chunks_to_return: List[List[Tokens]] = []
                 for chunk in text.split_tokens(self.min_text_obj_length):
-                    if len(chunk) != self.min_text_obj_length:
+                    if not chunk:
+                        continue
+                    if len(chunk) != self.min_text_obj_length:  # We've reached the end of our text object
                         try:
                             chunk_group[-1].extend(chunk)
                             self.metadata.pop()
-                            vector = self.__vector_builder(chunk_group)
-                            self.vectors[-1] = vector
+                            self.__store_metadata(chunk_group)
+                            chunks_to_return[-1] = [t.text for chunk in chunk_group for t in chunk]
                             break
                         except IndexError:
                             pass
                     else:
                         chunk_group.append(chunk)
                     if len(chunk_group) == self.n_chunk:
-                        vector = self.__vector_builder(chunk_group)
-                        self.vectors.append(vector)
+                        self.__store_metadata(chunk_group)
+                        self.length += 1
+                        chunks_to_return.append([t.text for chunk in chunk_group for t in chunk])
+                for chunk in chunks_to_return:
+                    yield chunk
+            current_doc_id = doc_id
         self.__save_doc(full_doc)
-        self.length = len(self.vectors)
 
     def __save_doc(self, doc: Tokens):
         """Save doc to tmp dir for later retrieval"""
@@ -149,17 +153,55 @@ class CorpusLoader(TextCorpus):
         with open(cached_file_path, "wb") as output:
             dump((doc, start_bytes, end_bytes), output)
 
-    def __vector_builder(self, chunk_group) -> List[Tuple[int, int]]:
-        """Build vector representation of text chunks"""
+    def __store_metadata(self, chunk_group: Iterable[Tokens]):
+        """Store Metadata for each chunk"""
         metadata: Dict[str, Any] = chunk_group[0].metadata
         metadata["start_byte"] = chunk_group[0][0].ext["start_byte"]
         metadata["end_byte"] = chunk_group[-1][-1].ext["end_byte"]
         self.metadata.append(metadata)
-        chunks: List[Token] = []
-        for chunk in chunk_group:
-            chunks.extend(chunk.tokens)
-        vector: List[Tuple[int, int]] = self.dictionary.doc2bow(chunks, allow_update=False)
-        return vector
+
+    def getstream(self) -> Iterator[List[Tuple[int, int]]]:
+        """Yield vector when interating"""
+        for text_chunk in self.text_chunks:
+            yield text_chunk
+
+
+class CorpusVectorizer(CorpusLoader):
+    def __init__(
+        self,
+        texts: Iterator[Tokens],
+        dictionary: Dictionary = None,
+        text_object_definition: str = "n_token",
+        min_text_obj_length: int = 15,
+        n_chunk: int = 3,
+        text_object_level_split: str = "doc",
+        phrase_model: Phrases = None,
+    ):
+        """Intialize CorpusVectorizer"""
+        super().__init__(
+            texts,
+            text_object_definition=text_object_definition,
+            min_text_obj_length=min_text_obj_length,
+            n_chunk=n_chunk,
+            text_object_level_split=text_object_level_split,
+            phrase_model=phrase_model,
+        )
+        if dictionary is None:
+            self.dictionary = Dictionary()
+        else:
+            self.dictionary = dictionary
+        os.system(f"mkdir -p {TEMP_DIR}/tmp_docs")
+        self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/tmp_docs/")
+        self.vectors: List[List[Tuple[int, int]]] = [
+            self.dictionary.doc2bow(text_chunk, allow_update=True) for text_chunk in self.get_text_chunks()
+        ]
+
+    def __iter__(self) -> Iterator[List[Tuple[int, int]]]:
+        for vector in self.vectors:
+            yield vector
+
+    def __getitem__(self, item: int) -> List[Tuple[int, int]]:
+        return self.vectors[item]
 
     def getstream(self) -> Iterator[List[Tuple[int, int]]]:
         """Yield vector when interating"""
@@ -170,6 +212,46 @@ class CorpusLoader(TextCorpus):
         """Update vectors with TF-IDF score"""
         for pos, vector in enumerate(self.vectors):
             self.vectors[pos] = model[vector]
+
+
+class Doc2VecCorpus(CorpusLoader):
+    def __init__(
+        self,
+        texts: Iterator[Tokens],
+        text_object_definition: str = "n_token",
+        min_text_obj_length: int = 15,
+        n_chunk: int = 3,
+        text_object_level_split: str = "doc",
+        phrase_model: Phrases = None,
+    ):
+        """Intialize CorpusVectorizer"""
+        super().__init__(
+            texts,
+            text_object_definition=text_object_definition,
+            min_text_obj_length=min_text_obj_length,
+            n_chunk=n_chunk,
+            text_object_level_split=text_object_level_split,
+            phrase_model=phrase_model,
+        )
+        self.text_chunks = list(self.get_text_chunks())
+        self.vectors: List[Any] = []
+
+    def build_vectors(self, model):
+        for chunk in self.text_chunks:
+            vector = model.infer_vector(chunk)
+            self.vectors.append(list(enumerate(vector)))
+
+    def __iter__(self) -> Iterator[List[Tuple[int, int]]]:
+        for vector in self.vectors:
+            yield vector
+
+    def __getitem__(self, item: int) -> List[Tuple[int, int]]:
+        return self.vectors[item]
+
+    def getstream(self) -> Iterator[List[Tuple[int, int]]]:
+        """Yield vector when interating"""
+        for vector in self.vectors:
+            yield vector
 
 
 def phrase_detection(source_path, preproc, target_path=None, scoring="npmi") -> Phraser:
@@ -186,6 +268,7 @@ def phrase_detection(source_path, preproc, target_path=None, scoring="npmi") -> 
 
 
 def clean_text(text: str) -> str:
+    """Cleaning text function which removes tags and converts entities"""
     text = TAGS.sub("", text)
     text = unescape_xml(text)
     text = unescape_html(text)
@@ -204,16 +287,21 @@ def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -
     return clean_text(text)
 
 
-def vectorize(model: SparseMatrixSimilarity, dictionary: Dictionary, tokens: List[Token]) -> List[Tuple[int, int]]:
+def vectorize(
+    model: Union[TfidfModel, Doc2Vec], tokens: List[Token], dictionary: Optional[Dictionary] = None
+) -> List[Tuple[int, int]]:
     """Vectorize list of tokens"""
-    return model[dictionary.doc2bow([w for w in tokens if w], allow_update=False)]
+    if isinstance(model, TfidfModel):
+        return model[dictionary.doc2bow([w for w in tokens if w], allow_update=False)]
+    else:
+        return list(enumerate(model.infer_vector(tokens)))
 
 
 def get_similarity(
-    dictionary: Dictionary, source_vector: List[Tuple[int, int]], target_vector: List[Tuple[int, int]]
+    num_features: int, source_vector: List[Tuple[int, int]], target_vector: List[Tuple[int, int]]
 ) -> float:
     """Get similarity score"""
-    index = SparseMatrixSimilarity([source_vector], num_features=len(dictionary))
+    index = SparseMatrixSimilarity([source_vector], num_features=num_features)
     similarity = index[target_vector][0]
     return similarity
 
@@ -251,14 +339,18 @@ def get_passage(doc: Tuple[Tokens, Dict[int, int], Dict[int, int]], start_byte: 
 
 
 def merge_passages(
-    matches: List[namedlist], model: SparseMatrixSimilarity, dictionary: Dictionary, min_score: float, max_iter: int
+    matches: List[namedlist],
+    model: SparseMatrixSimilarity,
+    min_score: float,
+    num_features: int,
+    dictionary: Optional[Dictionary] = None,
 ) -> List[namedlist]:
     """Merge all passages into bigger passages"""
     # pylint: disable=E1101
     last_count = len(matches)
     print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
-    for iteration in range(max_iter):
+    for iteration in range(sys.maxsize ** 10): # TODO: To replace with while loop
         matches.sort(
             key=lambda x: (
                 x[0].filename,
@@ -273,7 +365,6 @@ def merge_passages(
         saved_groups: List[namedlist] = []
         total_matches: int = len(matches)
         start_score: float = 0.0
-        already_saved = False
         for pos, match in enumerate(matches):
             source: namedlist
             target: namedlist
@@ -296,8 +387,8 @@ def merge_passages(
                         merged_group.source.start_byte,
                         source.end_byte,
                     )
-                    source_vector = vectorize(model, dictionary, source_tokens)
-                    new_score = get_similarity(dictionary, source_vector, merged_group.target.vector)
+                    source_vector = vectorize(model, source_tokens, dictionary=dictionary)
+                    new_score = get_similarity(num_features, source_vector, merged_group.target.vector)
                     if evaluate_score(start_score, new_score, min_score) is True:
                         merged_group.source.end_byte = source.end_byte
                         merged_group.source.metadata["end_byte"] = source.end_byte
@@ -313,8 +404,8 @@ def merge_passages(
                         merged_group.target.start_byte,
                         target.end_byte,
                     )
-                    target_vector = vectorize(model, dictionary, target_tokens)
-                    new_score = get_similarity(dictionary, merged_group.source.vector, target_vector)
+                    target_vector = vectorize(model, target_tokens, dictionary=dictionary)
+                    new_score = get_similarity(num_features, merged_group.source.vector, target_vector)
                     if evaluate_score(start_score, new_score, min_score) is True:
                         merged_group.target.end_byte = target.end_byte
                         merged_group.target.metadata["end_byte"] = target.end_byte
@@ -339,10 +430,36 @@ def merge_passages(
     return matches
 
 
+def optimize_match(
+    tokens: Tokens,
+    intersection: Set[str],
+    passage_group: namedlist,
+    model: SparseMatrixSimilarity,
+    dictionary: Optional[Dictionary] = None,
+) -> namedlist:
+    """Optimize a single match by trimming non-matching words on left and right side"""
+    start = None
+    end = None
+    for pos, token in enumerate(tokens):
+        if token.text in intersection:
+            if start is None:
+                start = pos
+                passage_group.start_byte = token.ext["start_byte"]
+                passage_group.metadata["start_byte"] = token.ext["start_byte"]
+            end = pos
+    passage_group.vector = vectorize(model, tokens[start:end], dictionary=dictionary)
+    passage_group.end_byte = tokens[end].ext["end_byte"]
+    passage_group.metadata["end_byte"] = tokens[end].ext["end_byte"]
+    return passage_group
+
+
 def optimize_matches(
-    matches: List[Tuple[namedlist, namedlist, float]], model: SparseMatrixSimilarity, dictionary: Dictionary
+    matches: List[Tuple[namedlist, namedlist, float]],
+    model: SparseMatrixSimilarity,
+    num_features: int,
+    dictionary: Optional[Dictionary] = None,
 ) -> Tuple[List[Tuple[namedlist, namedlist, float]], Dict[str, Tokens]]:
-    """Optimize match by trimming on left and right side of matches until best score is reached"""
+    """Optimize matches to get highest sim score"""
     print("Optimizing matches...")
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
     optimized_matches: List[Tuple[namedlist, namedlist, float]] = []
@@ -353,53 +470,17 @@ def optimize_matches(
         target_tokens = get_passage(
             docs_with_matches[target.metadata["parsed_filename"]], target.start_byte, target.end_byte
         )
-        while True:
-            token = source_tokens.popleft()
-            source_vector = vectorize(model, dictionary, source_tokens)
-            new_score = get_similarity(dictionary, source_vector, target.vector)
-            if new_score >= best_score:
-                best_score = new_score
-                source.start_byte = source_tokens.metadata["start_byte"]
-                source.metadata["start_byte"] = source.start_byte
-            else:
-                source_tokens.appendleft(token)
-                break
-        while True:
-            token = source_tokens.pop()
-            source_vector = vectorize(model, dictionary, source_tokens)
-            new_score = get_similarity(dictionary, source_vector, target.vector)
-            if new_score >= best_score:
-                best_score = new_score
-                source.end_byte = source_tokens.metadata["end_byte"]
-                source.metadata["end_byte"] = source.end_byte
-            else:
-                source_tokens.append(token)
-                break
-        source.vector = vectorize(model, dictionary, source_tokens)
-        while True:
-            token = target_tokens.popleft()
-            target_vector = vectorize(model, dictionary, target_tokens)
-            new_score = get_similarity(dictionary, source.vector, target_vector)
-            if new_score >= best_score:
-                best_score = new_score
-                target.start_byte = target_tokens.metadata["start_byte"]
-                target.metadata["start_byte"] = target.start_byte
-            else:
-                target_tokens.appendleft(token)
-                break
-        while True:
-            token = target_tokens.pop()
-            target_vector = vectorize(model, dictionary, target_tokens)
-            new_score = get_similarity(dictionary, target_vector, source.vector)
-            if new_score >= best_score:
-                best_score = new_score
-                target.end_byte = target_tokens.metadata["end_byte"]
-                target.metadata["end_byte"] = target.end_byte
-            else:
-                target_tokens.append(token)
-                break
-        target.vector = vectorize(model, dictionary, target_tokens)
-        optimized_matches.append((source, target, best_score))
+        intersection = {t.text for t in source_tokens if t.text}.intersection(target_tokens)
+        source = optimize_match(source_tokens, intersection, source, model, dictionary=dictionary)
+        target = optimize_match(target_tokens, intersection, target, model, dictionary=dictionary)
+        best_score = get_similarity(num_features, target.vector, source.vector)
+
+        # Let's check the jaccard score to weed out matches with overinflated IDF weighting
+        source_set = {token.text for token in source_tokens if token.text}
+        target_set = {token.text for token in target_tokens if token.text}
+        jaccard_sim = len(source_set.intersection(target_set)) / len(source_set.union(target_set))
+        if jaccard_sim > 0.1:
+            optimized_matches.append((source, target, best_score))
     return optimized_matches, docs_with_matches
 
 
@@ -433,8 +514,6 @@ def get_tokens(
                 surface_form = token.surface_form
                 token = full_tokens[start_bytes[start_byte]]
                 token.surface_form = surface_form
-            #     print(repr(token))
-            #     # print("passed", full_tokens[byte_index[start_byte]])
             except KeyError:  # Token was not indexed at parse time
                 pass
             tokens.append(token)
@@ -483,38 +562,17 @@ def post_process_passages(
     return clean_text("".join(source_passage_with_matches)), clean_text("".join(target_passage_with_matches))
 
 
-def run_vsm(config: Dict[str, Any]):
-    """Main function"""
-    if config["text_object_definition"] not in ("n_token", "text_object"):
-        print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
-        exit()
-    if config["text_object_definition"] == "n_token":
-        config["text_object_type"] = config["text_object_level_split"]
-    if config["max_iter"] == "inf":
-        config["max_iter"] = sys.maxsize ** 10
-    preproc: PreProcessor = PreProcessor(
-        language=config["language"],
-        stemmer=config["stemmer"],
-        lemmatizer=config["lemmatizer"],
-        modernize=config["modernize"],
-        lowercase=config["lowercase"],
-        strip_numbers=config["numbers"],
-        stopwords=config["stopwords"],
-        pos_to_keep=config["pos_to_keep"],
-        ngrams=config["ngram"],
-        ngram_gap=config["gap"],
-        text_object_type=config["text_object_type"],
-        min_word_length=config["minimum_word_length"],
-        ascii=config["ascii"],
-        is_philo_db=True,
-        workers=config["workers"],
-    )
+def simple_similarity(
+    source_texts: Iterator[Tokens],
+    config: Dict[str, Any],
+    preproc: PreProcessor,
+    phrase_model: Optional[Phraser],
+    target_texts: Optional[Iterator[Tokens]] = None,
+):
+    count: int = 0
+    matches: List[namedlist] = []
     # phrase_model = phrase_detection(config["source_path"], preproc, config["target_path"])
-    phrase_model: Optional[Phraser] = None
-    source_texts: Iterator[Tokens] = preproc.process_texts(
-        (file.path for file in os.scandir(config["source_path"])), keep_all=True
-    )
-    source_corpus: CorpusLoader = CorpusLoader(
+    source_corpus: CorpusVectorizer = CorpusVectorizer(
         source_texts,
         text_object_definition=config["text_object_definition"],
         min_text_obj_length=config["min_text_obj_length"],
@@ -522,10 +580,7 @@ def run_vsm(config: Dict[str, Any]):
         text_object_level_split=config["text_object_level_split"],
         phrase_model=phrase_model,
     )
-    target_texts: Iterator[Tokens] = preproc.process_texts(
-        (file.path for file in os.scandir(config["target_path"])), keep_all=True
-    )
-    target_corpus: CorpusLoader = CorpusLoader(
+    target_corpus: CorpusVectorizer = CorpusVectorizer(
         target_texts,
         text_object_definition=config["text_object_definition"],
         dictionary=source_corpus.dictionary,
@@ -539,16 +594,11 @@ def run_vsm(config: Dict[str, Any]):
     model: TfidfModel = TfidfModel(chain(source_corpus.vectors, target_corpus.vectors), smartirs="atc")
     source_corpus.update_with_tfidf(model)
     target_corpus.update_with_tfidf(model)
-    if config["similarity_metric"] == "cosine":
-        index: SparseMatrixSimilarity = SparseMatrixSimilarity(
-            source_corpus, num_features=len(source_corpus.dictionary), num_docs=len(source_corpus)
-        )
-    elif config["similarity_metric"] == "soft_cosine":
-        _ = LevenshteinSimilarityIndex(source_corpus.dictionary)
-    count: int = 0
-    matches: List[namedlist] = []
+    index: SparseMatrixSimilarity = SparseMatrixSimilarity(
+        source_corpus, num_features=len(source_corpus.dictionary), num_docs=len(source_corpus)
+    )
+    results: np.array = index[target_corpus]
     with tqdm(total=source_corpus.length, leave=False) as pbar:
-        results: np.array = index[target_corpus]
         for source_pos, source_vector_results in enumerate(results.T):
             filtered_results: np.array = np.where(source_vector_results > config["min_similarity"])[0]
             count += len(filtered_results)
@@ -574,8 +624,118 @@ def run_vsm(config: Dict[str, Any]):
                 )
             pbar.update()
     print(f"{count} matches found.")
-    matches = merge_passages(matches, model, source_corpus.dictionary, config["min_similarity"], config["max_iter"])
-    matches, docs_with_matches = optimize_matches(matches, model, source_corpus.dictionary)
+    matches = merge_passages(
+        matches, model, config["min_similarity"], len(source_corpus.dictionary), dictionary=source_corpus.dictionary
+    )
+    return matches, model, len(source_corpus.dictionary), dictionary
+
+
+def doc2vec_similarity(
+    source_texts: Iterator[Tokens],
+    config: Dict[str, Any],
+    preproc: PreProcessor,
+    phrase_model: Optional[Phraser],
+    target_texts: Optional[Iterator[Tokens]] = None,
+):
+    count: int = 0
+    matches: List[namedlist] = []
+    # phrase_model = phrase_detection(config["source_path"], preproc, config["target_path"])
+    source_corpus: Doc2VecCorpus = Doc2VecCorpus(
+        source_texts,
+        text_object_definition=config["text_object_definition"],
+        min_text_obj_length=config["min_text_obj_length"],
+        n_chunk=config["n_chunk"],
+        text_object_level_split=config["text_object_level_split"],
+        phrase_model=phrase_model,
+    )
+    target_corpus: Doc2VecCorpus = Doc2VecCorpus(
+        target_texts,
+        text_object_definition=config["text_object_definition"],
+        min_text_obj_length=config["min_text_obj_length"],
+        n_chunk=config["n_chunk"],
+        text_object_level_split=config["text_object_level_split"],
+        phrase_model=phrase_model,
+    )
+    if not os.path.exists(config["doc2vec_model"]):
+        docs = [
+            TaggedDocument(doc, [i]) for i, doc in enumerate(chain(source_corpus.text_chunks, target_corpus.text_chunks))
+        ]
+        model = Doc2Vec(docs, vector_size=50, window=5, min_count=2, workers=config["workers"], epochs=20)
+        model.delete_temporary_training_data(keep_doctags_vectors=True, keep_inference=True)
+        model.save(config["doc2vec_model"])
+    else:
+        model = Doc2Vec.load(config["doc2vec_model"])
+    source_corpus.build_vectors(model)
+    target_corpus.build_vectors(model)
+    index = MatrixSimilarity(source_corpus, num_features=len(source_corpus.vectors[0]), corpus_len=len(source_corpus))
+    results = index[target_corpus]
+    with tqdm(total=source_corpus.length, leave=False) as pbar:
+        for source_pos, source_vector_results in enumerate(results.T):
+            filtered_results: np.array = np.where(source_vector_results > config["min_similarity"])[0]
+            count += len(filtered_results)
+            for target_pos in filtered_results:
+                matches.append(
+                    (
+                        PASSAGE_GROUP(
+                            source_corpus[source_pos],
+                            source_corpus.metadata[source_pos]["start_byte"],
+                            source_corpus.metadata[source_pos]["end_byte"],
+                            source_corpus.metadata[source_pos]["filename"],
+                            source_corpus.metadata[source_pos],
+                        ),
+                        PASSAGE_GROUP(
+                            target_corpus[target_pos],
+                            target_corpus.metadata[target_pos]["start_byte"],
+                            target_corpus.metadata[target_pos]["end_byte"],
+                            target_corpus.metadata[target_pos]["filename"],
+                            target_corpus.metadata[target_pos],
+                        ),
+                        source_vector_results[target_pos],
+                    )
+                )
+            pbar.update()
+    print(f"{count} matches found.")
+    matches = merge_passages(matches, model, config["min_similarity"], 50)
+    return matches
+
+
+def run_vsm(config: Dict[str, Any]):
+    """Main function"""
+    if config["text_object_definition"] not in ("n_token", "text_object"):
+        print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
+        exit()
+    if config["text_object_definition"] == "n_token":
+        config["text_object_type"] = config["text_object_level_split"]
+    preproc: PreProcessor = PreProcessor(
+        language=config["language"],
+        stemmer=config["stemmer"],
+        lemmatizer=config["lemmatizer"],
+        modernize=config["modernize"],
+        lowercase=config["lowercase"],
+        strip_numbers=config["numbers"],
+        stopwords=config["stopwords"],
+        pos_to_keep=config["pos_to_keep"],
+        ngrams=config["ngram"],
+        ngram_gap=config["gap"],
+        text_object_type=config["text_object_type"],
+        min_word_length=config["minimum_word_length"],
+        ascii=config["ascii"],
+        is_philo_db=True,
+        workers=config["workers"],
+    )
+    phrase_model: Optional[Phraser] = None
+    source_texts: Iterator[Tokens] = preproc.process_texts(
+        (file.path for file in os.scandir(config["source_path"])), keep_all=True
+    )
+    target_texts: Iterator[Tokens] = preproc.process_texts(
+        (file.path for file in os.scandir(config["target_path"])), keep_all=True
+    )
+    if config["similarity_metric"] == "cosine":
+        matches, model, num_features, dictionary = simple_similarity(source_texts, config, preproc, phrase_model, target_texts=target_texts)
+        matches, docs_with_matches = optimize_matches(matches, model, num_features, dictionary=dictionary)
+    elif config["similarity_metric"] == "doc2vec":
+        matches = doc2vec_similarity(source_texts, config, preproc, phrase_model, target_texts=target_texts)
+
     print("Writing out results...")
     with open("alignments.jsonl", "w") as output:
         for source, target, best_score in matches:
@@ -585,13 +745,17 @@ def run_vsm(config: Dict[str, Any]):
             target_context_before = get_text(target.start_byte - 300, target.start_byte, target.metadata["filename"])
             target_passage = get_text(target.start_byte, target.end_byte, target.metadata["filename"])
             target_context_after = get_text(target.end_byte, target.end_byte + 300, target.metadata["filename"])
-            source_passage_with_matches, target_passage_with_matches = post_process_passages(
-                source,
-                target,
-                preproc,
-                docs_with_matches[source.metadata["parsed_filename"]],
-                docs_with_matches[target.metadata["parsed_filename"]],
-            )
+            if config["similarity_metric"] == "cosine":
+                source_passage_with_matches, target_passage_with_matches = post_process_passages(
+                    source,
+                    target,
+                    preproc,
+                    docs_with_matches[source.metadata["parsed_filename"]],
+                    docs_with_matches[target.metadata["parsed_filename"]],
+                )
+            else:
+                source_passage_with_matches = source_passage
+                target_passage_with_matches = target_passage
             result_object: str = json.dumps(
                 {
                     "source_doc_id": source.metadata["philo_id"].split()[0],
@@ -628,17 +792,17 @@ if __name__ == "__main__":
         "numbers": True,
         "ngram": None,
         "gap": 0,
-        "text_object_level_split": "div1",
-        "text_object_definition": "n_token",
-        "min_text_obj_length": 3,
+        "text_object_level_split": "para",
+        "text_object_definition": "text_object",
+        "min_text_obj_length": 5,
         "minimum_word_length": 3,
         "lemmatizer": "/home/clovis/french_lemmas",
         "stopwords": "/shared/PhiloLogic4/extras/FrenchStopwords.txt",
         "workers": 32,
         "pos_to_keep": ["NOUN", "PROPN", "ADJ", "VERB"],
-        "n_chunk": 15,
-        "min_similarity": 0.25,
-        "similarity_metric": "cosine",
-        "max_iter": "inf",
+        "n_chunk": 1,
+        "min_similarity": 0.7,
+        "similarity_metric": "doc2vec",
+        "doc2vec_model": "../../extras/doc2vec.model"
     }
     run_vsm(configuration)
