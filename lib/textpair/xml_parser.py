@@ -142,7 +142,10 @@ class TEIParser:
         os.system("mkdir -p {}/texts".format(output_path))
         self.text_path = str(Path(output_path).joinpath("texts"))
         self.metadata_path = str(Path(output_path).joinpath("metadata/metadata.json"))
-        files = glob(str(Path(file_path).joinpath("*")))
+        if os.path.isfile(file_path):
+            files = [file_path]
+        else:
+            files = glob(str(Path(file_path).joinpath("*")))
         self.files = list(zip(range(len(files)), files))
         self.workers = cores
         self.debug = debug
