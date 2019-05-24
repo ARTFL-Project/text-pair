@@ -909,17 +909,17 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 
 // Returns three passages: the context before, the match itself, and the context after
 func alignmentToText(alignment *position, filename string, config *matchingParams) []string {
-	beforeContext := getText(&filename, alignment.startByte-int32(config.contextSize), alignment.startByte)
+	beforeContext := getText(&filename, alignment.startByte-int32(config.contextSize), alignment.startByte, "before")
 	beforeContext = cleanStart.ReplaceAllString(beforeContext, "") // avoid truncation at beginning
-	matchingPassage := getText(&filename, alignment.startByte, alignment.endByte)
-	afterContext := getText(&filename, alignment.endByte, alignment.endByte+int32(config.contextSize))
+	matchingPassage := getText(&filename, alignment.startByte, alignment.endByte, "match")
+	afterContext := getText(&filename, alignment.endByte, alignment.endByte+int32(config.contextSize), "after")
 	afterContext = cleanEnd.ReplaceAllString(afterContext, "") // avoid truncation at the end
 	passages := []string{beforeContext, matchingPassage, afterContext}
 	return passages
 }
 
 // Get text passages using file location and start and end byte
-func getText(fileLocation *string, startByte int32, endByte int32) string {
+func getText(fileLocation *string, startByte int32, endByte int32, passageType string) string {
 	f, err := os.Open(*fileLocation)
 	checkErr(err, fmt.Sprintf("getText (opening %s)", *fileLocation))
 	if startByte < 0 {
@@ -935,8 +935,10 @@ func getText(fileLocation *string, startByte int32, endByte int32) string {
 	passage = bytes.Replace(passage, []byte("\xc2\xa0"), []byte(" "), -1) // remove non-breaking spaces
 	text := string(passage)
 	text = tags.ReplaceAllString(text, "")
-	text = brokenBeginTags.ReplaceAllString(text, "")
-	text = brokenEndTags.ReplaceAllString(text, "")
+	if passageType != "match" {
+		text = brokenBeginTags.ReplaceAllString(text, "")
+		text = brokenEndTags.ReplaceAllString(text, "")
+	}
 	text = html.UnescapeString(text)
 	text = strings.Replace(text, "\\n", "\n", -1)
 	text = strings.Replace(text, "\\t", "\t", -1)
