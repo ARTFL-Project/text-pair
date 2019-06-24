@@ -7,7 +7,7 @@ import re
 from collections import defaultdict, namedtuple
 from typing import Dict
 
-from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config, run_vsm
+from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config, run_vsa
 
 TextPAIRParams = namedtuple(
     "TextPairParams",
@@ -241,8 +241,8 @@ def run_alignment(pair_params):
         )
 
 
-def run_vsm_similarity(pair_params: TextPAIRParams) -> None:
-    """Run VSM similarity"""
+def run_vsa_similarity(pair_params: TextPAIRParams) -> None:
+    """Run vsa similarity"""
     if pair_params.only_align is False:
         if pair_params.tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")
@@ -363,5 +363,5 @@ if __name__ == "__main__":
         )
     elif pair_params.matching_params["matching_algorithm"] == "sa":
         run_alignment(pair_params)
-    elif pair_params.matching_params["matching_algorithm"] == "vsm":
-        run_vsm_similarity(pair_params)
+    elif pair_params.matching_params["matching_algorithm"] == "vsa":
+        run_vsa_similarity(pair_params)

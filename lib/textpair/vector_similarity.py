@@ -64,10 +64,6 @@ class CorpusLoader(TextCorpus):
         os.system(f"mkdir -p {TEMP_DIR}/tmp_docs")
         self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/tmp_docs/")
 
-    def __iter__(self) -> Iterator[List[Tuple[int, int]]]:
-        for text_chunk in self.text_chunks:
-            yield text_chunk
-
     def __getitem__(self, item: int) -> List[Tuple[int, int]]:
         return self.vectors[item]
 
@@ -82,7 +78,10 @@ class CorpusLoader(TextCorpus):
         full_doc = Tokens([], {})
         current_doc_id = None
         text = None
+        done = 0
         for text in self.texts:
+            print(f"\rProcessing texts... {done} done...", end="", flush=True)
+            done += 1
             doc_id = text.metadata["philo_id"].split()[0]
             if doc_id != current_doc_id and current_doc_id is not None:
                 self.__save_doc(full_doc)
@@ -141,6 +140,8 @@ class CorpusLoader(TextCorpus):
                     yield chunk
             current_doc_id = doc_id
         self.__save_doc(full_doc)
+        del self.texts
+        print()
 
     def __save_doc(self, doc: Tokens):
         """Save doc to tmp dir for later retrieval"""
@@ -159,12 +160,6 @@ class CorpusLoader(TextCorpus):
         metadata["start_byte"] = chunk_group[0][0].ext["start_byte"]
         metadata["end_byte"] = chunk_group[-1][-1].ext["end_byte"]
         self.metadata.append(metadata)
-
-    def getstream(self) -> Iterator[List[Tuple[int, int]]]:
-        """Yield vector when interating"""
-        for text_chunk in self.text_chunks:
-            yield text_chunk
-
 
 class CorpusVectorizer(CorpusLoader):
     def __init__(
@@ -217,7 +212,7 @@ class CorpusVectorizer(CorpusLoader):
 class Doc2VecCorpus(CorpusLoader):
     def __init__(
         self,
-        texts: Iterator[Tokens],
+        texts: Iterator[Tokens] = None,
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
@@ -288,11 +283,14 @@ def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -
 
 
 def vectorize(
-    model: Union[TfidfModel, Doc2Vec], tokens: List[Token], dictionary: Optional[Dictionary] = None
+    model: Optional[Union[TfidfModel, Doc2Vec]], tokens: List[Token], dictionary: Optional[Dictionary] = None
 ) -> List[Tuple[int, int]]:
     """Vectorize list of tokens"""
     if isinstance(model, TfidfModel):
-        return model[dictionary.doc2bow([w for w in tokens if w], allow_update=False)]
+        try:
+            return model[dictionary.doc2bow([w for w in tokens if w], allow_update=False)]
+        except ValueError:
+            return None
     else:
         return list(enumerate(model.infer_vector(tokens)))
 
@@ -308,6 +306,7 @@ def get_similarity(
 
 def evaluate_score(start_score: float, new_score: float, min_score: float) -> bool:
     """Evaluate if new score is within 2/3 of start score"""
+    # TODO: should we use Jaccard sim instead to control for sparsity?
     if new_score / start_score > 0.66 or new_score >= min_score:
         return True
     return False
@@ -347,6 +346,7 @@ def merge_passages(
 ) -> List[namedlist]:
     """Merge all passages into bigger passages"""
     # pylint: disable=E1101
+    # TODO: should merging be done using Jaccard sim metric: to avoid sparsity
     last_count = len(matches)
     print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
@@ -440,16 +440,22 @@ def optimize_match(
     """Optimize a single match by trimming non-matching words on left and right side"""
     start = None
     end = None
+    new_start_byte = None
+    new_metadata_start_byte = None
     for pos, token in enumerate(tokens):
         if token.text in intersection:
             if start is None:
                 start = pos
-                passage_group.start_byte = token.ext["start_byte"]
-                passage_group.metadata["start_byte"] = token.ext["start_byte"]
+                new_start_byte = token.ext["start_byte"]
+                new_metadata_start_byte = token.ext["start_byte"]
             end = pos
-    passage_group.vector = vectorize(model, tokens[start:end], dictionary=dictionary)
-    passage_group.end_byte = tokens[end].ext["end_byte"]
-    passage_group.metadata["end_byte"] = tokens[end].ext["end_byte"]
+    new_vector = vectorize(model, tokens[start:end], dictionary=dictionary)
+    if new_vector is not None:
+        passage_group.start_byte = new_start_byte
+        passage_group.metadata["start_byte"] = new_metadata_start_byte
+        passage_group.vector = new_vector
+        passage_group.end_byte = tokens[end].ext["end_byte"]
+        passage_group.metadata["end_byte"] = tokens[end].ext["end_byte"]
     return passage_group
 
 
@@ -479,7 +485,7 @@ def optimize_matches(
         source_set = {token.text for token in source_tokens if token.text}
         target_set = {token.text for token in target_tokens if token.text}
         jaccard_sim = len(source_set.intersection(target_set)) / len(source_set.union(target_set))
-        if jaccard_sim > 0.1:
+        if jaccard_sim > 0.15:
             optimized_matches.append((source, target, best_score))
     return optimized_matches, docs_with_matches
 
@@ -499,8 +505,11 @@ def get_tokens(
             text = text_file.read(end_byte - start_byte).decode("utf8", "ignore")
         if start_byte == 0:
             break
+    max_size = os.path.getsize(passage.filename)
     while text[-1] not in sentence_boundaries:
         end_byte += 1
+        if end_byte > max_size:
+            break
         with open(passage.filename, "rb") as text_file:
             text_file.seek(start_byte)
             text = text_file.read(end_byte - start_byte).decode("utf8", "ignore")
@@ -537,23 +546,18 @@ def post_process_passages(
     target_tokens = get_tokens(target, preproc, target_doc)
     source_set = {token.text for token in source_tokens if token.text}
     target_set = {token.text for token in target_tokens if token.text}
-    # print(source_set, target_set)
     source_passage_with_matches = []
     for token in source_tokens:
         if token.text and token.text in target_set:
-            # if source_map[token.surface_form] and source_map[token.surface_form] in source_target_intersect:
             source_passage_with_matches.append(f'&lt;span class="token-match"&gt;{token.surface_form}&lt;/span&gt;')
         elif not token.text:
-            # elif source_map[token.surface_form] == "":
             source_passage_with_matches.append(f'&lt;span class="filtered-token"&gt;{token.surface_form}&lt;/span&gt;')
         else:
             source_passage_with_matches.append(token.surface_form)
     target_passage_with_matches = []
     for token in target_tokens:
         if token.text and token.text in source_set:
-            # if target_map[token.surface_form] and target_map[token.surface_form] in source_target_intersect:
             target_passage_with_matches.append(f'&lt;span class="token-match"&gt;{token.surface_form}&lt;/span&gt;')
-        # elif target_map[token.surface_form] == "":
         elif not token.text:
             target_passage_with_matches.append(f'&lt;span class="filtered-token"&gt;{token.surface_form}&lt;/span&gt;')
         else:
@@ -580,6 +584,7 @@ def simple_similarity(
         text_object_level_split=config["text_object_level_split"],
         phrase_model=phrase_model,
     )
+
     target_corpus: CorpusVectorizer = CorpusVectorizer(
         target_texts,
         text_object_definition=config["text_object_definition"],
@@ -627,7 +632,7 @@ def simple_similarity(
     matches = merge_passages(
         matches, model, config["min_similarity"], len(source_corpus.dictionary), dictionary=source_corpus.dictionary
     )
-    return matches, model, len(source_corpus.dictionary), dictionary
+    return matches, model, len(source_corpus.dictionary), source_corpus.dictionary
 
 
 def doc2vec_similarity(
@@ -724,12 +729,20 @@ def run_vsm(config: Dict[str, Any]):
         workers=config["workers"],
     )
     phrase_model: Optional[Phraser] = None
-    source_texts: Iterator[Tokens] = preproc.process_texts(
-        (file.path for file in os.scandir(config["source_path"])), keep_all=True
-    )
-    target_texts: Iterator[Tokens] = preproc.process_texts(
-        (file.path for file in os.scandir(config["target_path"])), keep_all=True
-    )
+    if config["source_corpus"] is not None:
+        with open(config["source_corpus"], "rb") as input_file:
+            source_texts = load(input_file)
+    else:
+        source_texts: Iterator[Tokens] = preproc.process_texts(
+            (file.path for file in os.scandir(config["source_path"])), keep_all=True, progress=False,
+        )
+    if config["target_corpus"] is not None:
+        with open(config["target_corpus"], "rb") as input_file:
+            target_texts = load(input_file)
+    else:
+        target_texts: Iterator[Tokens] = preproc.process_texts(
+            (file.path for file in os.scandir(config["target_path"])), keep_all=True, progress=False
+        )
     if config["similarity_metric"] == "cosine":
         matches, model, num_features, dictionary = simple_similarity(source_texts, config, preproc, phrase_model, target_texts=target_texts)
         matches, docs_with_matches = optimize_matches(matches, model, num_features, dictionary=dictionary)
@@ -780,10 +793,12 @@ def run_vsm(config: Dict[str, Any]):
 
 if __name__ == "__main__":
     configuration: Dict[str, Any] = {
-        "source_path": "/var/www/html/philologic/contrat_social/data/words_and_philo_ids",
-        "target_path": "/var/www/html/philologic/robesAPext3/data/words_and_philo_ids",
+        "source_path": "/var/www/html/philologic/toutvoltaire/data/words_and_philo_ids",
+        "target_path": "/var/www/html/philologic/AP_split/data/words_and_philo_ids",
+        "source_corpus": None,
+        "target_corpus": None,
         "language": "french",
-        "text_object_type": "sent",
+        "text_object_type": "text_object",
         "is_philo_db": True,
         "modernize": True,
         "ascii": True,
@@ -792,17 +807,17 @@ if __name__ == "__main__":
         "numbers": True,
         "ngram": None,
         "gap": 0,
-        "text_object_level_split": "para",
-        "text_object_definition": "text_object",
-        "min_text_obj_length": 5,
+        "text_object_level_split": "div1",
+        "text_object_definition": "n_token",
+        "min_text_obj_length": 10,
         "minimum_word_length": 3,
-        "lemmatizer": "/home/clovis/french_lemmas",
+        "lemmatizer": "spacy",
         "stopwords": "/shared/PhiloLogic4/extras/FrenchStopwords.txt",
         "workers": 32,
-        "pos_to_keep": ["NOUN", "PROPN", "ADJ", "VERB"],
-        "n_chunk": 1,
-        "min_similarity": 0.7,
-        "similarity_metric": "doc2vec",
-        "doc2vec_model": "../../extras/doc2vec.model"
+        "pos_to_keep": ["NOUN", "ADJ", "VERB"],
+        "n_chunk": 5,
+        "min_similarity": 0.3,
+        "similarity_metric": "cosine",
+        "doc2vec_model": ""
     }
     run_vsm(configuration)
