@@ -149,7 +149,7 @@ func mergeSourcePassages(passages []map[string]string, mergedSourcePassages []*p
 			passageGroupUpdate(currentGroup, passage, groupID, mergedTargetPassages)
 		} else {
 			filename := passage["source_filename"]
-			currentGroup.sourcePassage = getText(&filename, int32(currentGroup.startByte), int32(currentGroup.endByte))
+			currentGroup.sourcePassage = getText(&filename, int32(currentGroup.startByte), int32(currentGroup.endByte), "match")
 			currentGroup = passageGroupInit(passage, groupID, mergedTargetPassages)
 		}
 	}
