@@ -54,6 +54,7 @@ sudo chmod -R your_user /var/www/html/text-pair/
 ```console
 sudo a2enmod rewrite
 sudo vim /etc/apache2/apache2.conf
+Include /etc/text-pair/*conf
 ```
 Change AllowOverride from None to All
 
