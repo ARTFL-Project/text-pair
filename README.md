@@ -26,7 +26,7 @@ Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be 
 -   A running instance of Apache
 
 #### Install script
-See <a href="docs/ubuntu_install.md">Ubuntu install instructions</a>
+See <a href="docs/ubuntu_installation.md">Ubuntu install instructions</a>
 
 -   Run `install.sh` script. This should install all needed components
 -   Make sure you include `/etc/text-pair/apache_wsgi.conf` in your main Apache configuration file to enable searching
