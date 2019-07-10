@@ -484,8 +484,8 @@ export default {
       }
       let parent = event.srcElement.parentNode.parentNode;
       let loading = parent.querySelector(".loading");
-      let sourceElement = parent.querySelector(".source-passage");
-      let targetElement = parent.querySelector(".target-passage");
+      let sourceElement = parent.parentNode.querySelector(".source-passage");
+      let targetElement = parent.parentNode.querySelector(".target-passage");
       if (event.srcElement.getAttribute("diffed") == "false") {
         loading.style.display = "initial";
         let outerEvent = event;
