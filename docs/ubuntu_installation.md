@@ -50,7 +50,7 @@ sudo mkdir /var/www/html/text-pair/
 sudo chmod -R your_user /var/www/html/text-pair/
 ```
 
-### Apache configuration (may require extra work)###
+### Apache configuration (may require extra work) ###
 ```console
 sudo a2enmod rewrite
 sudo vim /etc/apache2/apache2.conf
