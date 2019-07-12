@@ -65,4 +65,5 @@ Add the following at the bottom of the file (to execute the wsgi search script):
 
 ### Run install script ###
 Run the following script at the root of the text-pair folder:
+
 `sh install.sh`
