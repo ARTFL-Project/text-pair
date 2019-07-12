@@ -23,7 +23,7 @@ Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be 
 -   Python 3.6 and up
 -   Node and NPM
 -   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database by running the following command in the PostgreSQL shell: `CREATE EXTENSION pg_trgm;` run as a superuser.
--   A running instance of Apache
+-   A running instance of Apache with mod_wsgi configured
 
 #### Install script
 See <a href="docs/ubuntu_installation.md">Ubuntu install instructions</a>
