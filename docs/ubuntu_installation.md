@@ -62,3 +62,7 @@ Add the following at the bottom of the file (to execute the wsgi search script):
 `Include /etc/text-pair/*conf`
 
 * Restart Apache: `sudo apachectl graceful`
+
+### Run install script ###
+Run the following script at the root of the text-pair folder:
+`sh install.sh`
