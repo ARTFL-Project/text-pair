@@ -1,7 +1,11 @@
 <template>
     <div class="mt-3">
         <div class="row">
-            <div class="m-4" style="font-size: 120%" v-if="error">No results for your query</div>
+            <div
+                class="m-4"
+                style="font-size: 120%"
+                v-if="error"
+            >No results for your query</div>
             <search-arguments></search-arguments>
         </div>
         <div class="row">
@@ -11,7 +15,11 @@
                     style="left: 50%; transform: translateX(-50%);"
                     v-if="loading"
                 >
-                    <atom-spinner :animation-duration="800" :size="65" color="#000"/>
+                    <atom-spinner
+                        :animation-duration="800"
+                        :size="65"
+                        color="#000"
+                    />
                 </div>
                 <transition-group
                     name="staggered-fade"
@@ -30,16 +38,17 @@
                         <div class="corner-btn left">{{ results.start_position + index + 1 }}</div>
                         <div class="row">
                             <div class="col mt-4">
-                                <h6 class="text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
+                                <h6
+                                    class="text-center pb-2"
+                                    v-html="globalConfig.sourceLabel"
+                                ></h6>
                                 <p class="pt-3 px-3">
                                     <span
                                         v-for="(citation, citationIndex) in globalConfig.sourceCitation"
                                         :key="citation.field"
                                         v-if="alignment[citation.field]"
                                     >
-                                        <span
-                                            :style="citation.style"
-                                        >{{ alignment[citation.field] }}</span>
+                                        <span :style="citation.style">{{ alignment[citation.field] }}</span>
                                         <span
                                             class="separator"
                                             v-if="citationIndex != globalConfig.sourceCitation.length - 1"
@@ -47,19 +56,18 @@
                                     </span>
                                 </p>
                             </div>
-                            <div
-                                class="col mt-4 border border-top-0 border-right-0 border-bottom-0"
-                            >
-                                <h6 class="text-center pb-2" v-html="globalConfig.targetLabel"></h6>
+                            <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0">
+                                <h6
+                                    class="text-center pb-2"
+                                    v-html="globalConfig.targetLabel"
+                                ></h6>
                                 <p class="pt-3 px-3">
                                     <span
                                         v-for="(citation, citationIndex) in globalConfig.targetCitation"
                                         :key="citation.field"
                                         v-if="alignment[citation.field]"
                                     >
-                                        <span
-                                            :style="citation.style"
-                                        >{{ alignment[citation.field] }}</span>
+                                        <span :style="citation.style">{{ alignment[citation.field] }}</span>
                                         <span
                                             class="separator"
                                             v-if="citationIndex != globalConfig.targetCitation.length - 1"
@@ -72,9 +80,7 @@
                             <div class="col mb-2">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.source_context_before }}
-                                    <span
-                                        class="source-passage"
-                                    >{{ alignment.source_passage }}</span>
+                                    <span class="source-passage">{{ alignment.source_passage }}</span>
                                     {{ alignment.source_context_after }}
                                 </p>
                                 <a
@@ -84,14 +90,10 @@
                                     @click="goToContext(alignment, 'source')"
                                 >View passage in context</a>
                             </div>
-                            <div
-                                class="col mb-2 border border-top-0 border-right-0 border-bottom-0"
-                            >
+                            <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.target_context_before }}
-                                    <span
-                                        class="target-passage"
-                                    >{{ alignment.target_passage }}</span>
+                                    <span class="target-passage">{{ alignment.target_passage }}</span>
                                     {{ alignment.target_context_after }}
                                 </p>
                                 <a
@@ -103,7 +105,7 @@
                             </div>
                         </div>
                         <div class="text-muted text-center mb-2">
-                            <div v-if="globalConfig.matchingAlgorithm == 'vsa'">
+                            <div v-if="globalConfig.matchingAlgorithm == 'vsm'">
                                 <div>{{ alignment.similarity.toFixed(2) *100 }} % similar</div>
                                 <a
                                     class="diff-btn"
@@ -141,10 +143,20 @@
                         </div>
                     </div>
                 </transition-group>
-                <nav aria-label="Page navigation" v-if="done">
+                <nav
+                    aria-label="Page navigation"
+                    v-if="done"
+                >
                     <ul class="pagination justify-content-center mb-4">
-                        <li class="page-item" v-if="results.page > 1">
-                            <a class="page-link" v-on:click="previousPage()" aria-label="Previous">
+                        <li
+                            class="page-item"
+                            v-if="results.page > 1"
+                        >
+                            <a
+                                class="page-link"
+                                v-on:click="previousPage()"
+                                aria-label="Previous"
+                            >
                                 <span aria-hidden="true">&laquo;</span>
                                 <span class="sr-only">Previous</span>
                             </a>
@@ -152,8 +164,15 @@
                         <li class="page-item">
                             <a class="page-link">Page {{ results.page }}</a>
                         </li>
-                        <li class="page-item" v-if="this.resultsLeft > 0">
-                            <a class="page-link" v-on:click="nextPage()" aria-label="Next">
+                        <li
+                            class="page-item"
+                            v-if="this.resultsLeft > 0"
+                        >
+                            <a
+                                class="page-link"
+                                v-on:click="nextPage()"
+                                aria-label="Next"
+                            >
                                 <span aria-hidden="true">&raquo;</span>
                                 <span class="sr-only">Next</span>
                             </a>
@@ -170,7 +189,10 @@
                         @click="toggleFacetList()"
                     >Show options</div>
                     <div class="mt-3 mb-3 pr-3 pl-3 facet-list">
-                        <h6 class="text-center" v-html="globalConfig.sourceLabel"></h6>
+                        <h6
+                            class="text-center"
+                            v-html="globalConfig.sourceLabel"
+                        ></h6>
                         <div class="list-group">
                             <button
                                 type="button"
@@ -182,7 +204,10 @@
                         </div>
                     </div>
                     <div class="mb-3 pr-3 pl-3 facet-list">
-                        <h6 class="text-center" v-html="globalConfig.targetLabel"></h6>
+                        <h6
+                            class="text-center"
+                            v-html="globalConfig.targetLabel"
+                        ></h6>
                         <div class="list-group">
                             <button
                                 type="button"
@@ -199,17 +224,30 @@
                     style="left: 50%; transform: translateX(-50%);"
                     v-if="facetLoading"
                 >
-                    <atom-spinner :animation-duration="800" :size="65" color="#000"/>
+                    <atom-spinner
+                        :animation-duration="800"
+                        :size="65"
+                        color="#000"
+                    />
                 </div>
-                <div class="card rounded-0 shadow-1 mt-3" v-if="facetResults">
-                    <div class="corner-btn destroy right" @click="closeFacetResults()">X</div>
+                <div
+                    class="card rounded-0 shadow-1 mt-3"
+                    v-if="facetResults"
+                >
+                    <div
+                        class="corner-btn destroy right"
+                        @click="closeFacetResults()"
+                    >X</div>
                     <h6 class="card-header text-center">
                         Frequency by
                         <span v-html="facetDirectionLabel"></span>&nbsp;
                         <span class="text-capitalize">{{ facetResults.facet.split("_")[1] }}</span>
                     </h6>
                     <div class="mt-1 p-2">
-                        <div class="pb-2 text-center" style="opacity: .5">Showing top 100 results</div>
+                        <div
+                            class="pb-2 text-center"
+                            style="opacity: .5"
+                        >Showing top 100 results</div>
                         <div class="list-group">
                             <div
                                 class="list-group-item list-group-item-action facet-result"
@@ -219,9 +257,7 @@
                             >
                                 <div class="row">
                                     <div class="col pr-1 pl-1">{{ field.field || "N/A"}}</div>
-                                    <div
-                                        class="col-4 pr-1 pl-1 facet-count"
-                                    >{{ field.count.toLocaleString() }}</div>
+                                    <div class="col-4 pr-1 pl-1 facet-count">{{ field.count.toLocaleString() }}</div>
                                 </div>
                             </div>
                         </div>
@@ -284,7 +320,7 @@ export default {
             this.$http
                 .post(
                     `${
-                        this.$globalConfig.apiServer
+                    this.$globalConfig.apiServer
                     }/search_alignments/?${this.paramsToUrl(params)}`,
                     {
                         metadata: this.$globalConfig.metadataTypes
@@ -301,7 +337,7 @@ export default {
                     this.$http
                         .post(
                             `${
-                                this.$globalConfig.apiServer
+                            this.$globalConfig.apiServer
                             }/count_results/?${this.paramsToUrl(params)}`,
                             {
                                 metadata: this.$globalConfig.metadataTypes
@@ -323,7 +359,7 @@ export default {
                         });
                     Array.from(
                         document.getElementsByClassName("facet-list")
-                    ).forEach(function(element) {
+                    ).forEach(function (element) {
                         element.classList.remove("hide");
                     });
                     document
@@ -415,7 +451,7 @@ export default {
         },
         toggleFacetList() {
             Array.from(document.getElementsByClassName("facet-list")).forEach(
-                function(element) {
+                function (element) {
                     element.classList.toggle("hide");
                 }
             );
@@ -456,7 +492,7 @@ export default {
                 let outerEvent = event;
                 this.worker = new Worker();
                 this.worker.postMessage([sourceText, targetText]);
-                this.worker.onmessage = function(response) {
+                this.worker.onmessage = function (response) {
                     let differences = response.data;
                     let newSourceString = "";
                     let newTargetString = "";
@@ -484,7 +520,7 @@ export default {
                 event.srcElement.textContent = "Show differences";
             }
         },
-        showMatches: function(alignment) {
+        showMatches: function (alignment) {
             let parent = event.srcElement.parentNode.parentNode.parentNode;
             let sourceElement = parent.querySelector(".source-passage");
             let targetElement = parent.querySelector(".target-passage");
@@ -506,13 +542,13 @@ export default {
                 event.srcElement.textContent = "Show matching words";
             }
         },
-        beforeEnter: function(el) {
+        beforeEnter: function (el) {
             el.style.opacity = 0;
             el.style.height = 0;
         },
-        enter: function(el, done) {
+        enter: function (el, done) {
             var delay = el.dataset.index * 100;
-            setTimeout(function() {
+            setTimeout(function () {
                 Velocity(
                     el,
                     { opacity: 1, height: "100%" },

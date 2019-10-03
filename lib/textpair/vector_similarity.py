@@ -161,6 +161,7 @@ class CorpusLoader(TextCorpus):
         metadata["end_byte"] = chunk_group[-1][-1].ext["end_byte"]
         self.metadata.append(metadata)
 
+
 class CorpusVectorizer(CorpusLoader):
     def __init__(
         self,
@@ -350,7 +351,7 @@ def merge_passages(
     last_count = len(matches)
     print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
-    for iteration in range(sys.maxsize ** 10): # TODO: To replace with while loop
+    for iteration in range(sys.maxsize ** 10):  # TODO: To replace with while loop
         matches.sort(
             key=lambda x: (
                 x[0].filename,
@@ -663,7 +664,8 @@ def doc2vec_similarity(
     )
     if not os.path.exists(config["doc2vec_model"]):
         docs = [
-            TaggedDocument(doc, [i]) for i, doc in enumerate(chain(source_corpus.text_chunks, target_corpus.text_chunks))
+            TaggedDocument(doc, [i])
+            for i, doc in enumerate(chain(source_corpus.text_chunks, target_corpus.text_chunks))
         ]
         model = Doc2Vec(docs, vector_size=50, window=5, min_count=2, workers=config["workers"], epochs=20)
         model.delete_temporary_training_data(keep_doctags_vectors=True, keep_inference=True)
@@ -704,7 +706,7 @@ def doc2vec_similarity(
     return matches
 
 
-def run_vsm(config: Dict[str, Any]):
+def run_vsa(config: Dict[str, Any]):
     """Main function"""
     if config["text_object_definition"] not in ("n_token", "text_object"):
         print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
@@ -734,7 +736,7 @@ def run_vsm(config: Dict[str, Any]):
             source_texts = load(input_file)
     else:
         source_texts: Iterator[Tokens] = preproc.process_texts(
-            (file.path for file in os.scandir(config["source_path"])), keep_all=True, progress=False,
+            (file.path for file in os.scandir(config["source_path"])), keep_all=True, progress=False
         )
     if config["target_corpus"] is not None:
         with open(config["target_corpus"], "rb") as input_file:
@@ -744,7 +746,9 @@ def run_vsm(config: Dict[str, Any]):
             (file.path for file in os.scandir(config["target_path"])), keep_all=True, progress=False
         )
     if config["similarity_metric"] == "cosine":
-        matches, model, num_features, dictionary = simple_similarity(source_texts, config, preproc, phrase_model, target_texts=target_texts)
+        matches, model, num_features, dictionary = simple_similarity(
+            source_texts, config, preproc, phrase_model, target_texts=target_texts
+        )
         matches, docs_with_matches = optimize_matches(matches, model, num_features, dictionary=dictionary)
     elif config["similarity_metric"] == "doc2vec":
         matches = doc2vec_similarity(source_texts, config, preproc, phrase_model, target_texts=target_texts)
@@ -818,6 +822,6 @@ if __name__ == "__main__":
         "n_chunk": 5,
         "min_similarity": 0.3,
         "similarity_metric": "cosine",
-        "doc2vec_model": ""
+        "doc2vec_model": "",
     }
-    run_vsm(configuration)
+    run_vsa(configuration)
