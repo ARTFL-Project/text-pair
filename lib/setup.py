@@ -25,6 +25,15 @@ setup(
     author_email="clovisgladstone@gmail.com",
     packages=["textpair"],
     scripts=["scripts/textpair"],
-    install_requires=["multiprocess", "mmh3", "unidecode", "tqdm", "cython", "pystemmer", "lxml"],
+    install_requires=[
+        "multiprocess",
+        "mmh3",
+        "unidecode",
+        "tqdm",
+        "cython",
+        "pystemmer",
+        "lxml",
+        "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v0.8#egg=text_preprocessing",
+    ],
     extras_require={"web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]},
 )
