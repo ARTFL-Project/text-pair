@@ -1,3 +1,7 @@
+"Nous ne faisons que nous entregloser", Montaigne <i>Essais</i>
+
+ Since all we do is glose over what's been written before us, we may as well build a tool to detect these gloses... 
+ 
 # TextPAIR (Pairwise Alignment for Intertextual Relations)
 
 TextPAIR is a scalable and high-performance sequence aligner for humanities text analysis designed to identify "similar passages" in large collections of texts. These may include direct quotations, plagiarism and other forms of borrowings, commonplace expressions and the like. It is a complete rewrite and rethink of the <a href="https://code.google.com/archive/p/text-pair/">original implementation</a> released in 2009.
