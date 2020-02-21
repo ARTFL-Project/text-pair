@@ -1,6 +1,4 @@
-"Nous ne faisons que nous entregloser", Montaigne (<i>Essais</i>)
-
- Since all we do is glose over what's been written before us, we may as well build a tool to detect these gloses... 
+"Nous ne faisons que nous entregloser" Montaigne wrote famously (<i>Essais</i>)... Since all we do is glose over what's been written before us, we may as well build a tool to detect these gloses... 
  
 # TextPAIR (Pairwise Alignment for Intertextual Relations)
 
