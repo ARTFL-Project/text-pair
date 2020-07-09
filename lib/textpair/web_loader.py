@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """Web loading module"""
 
-import argparse
 import configparser
 import json
 import os
 import re
-import sys
 from collections import OrderedDict
 
 from psycopg2.extras import execute_values
-from textpair import parse_config
 from tqdm import tqdm
 
 try:
@@ -126,11 +123,6 @@ class WebAppConfig:
         self.options["targetCitation"] = target_fields
 
 
-def count_lines(filename):
-    """Count lines in file"""
-    return sum(1 for _ in open(filename, "rbU"))
-
-
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
     with open(file, encoding="utf8", errors="ignore") as input_file:
@@ -168,6 +160,14 @@ def validate_field_type(fields, field_types, field_names):
     return values
 
 
+def get_metadata_fields(file):
+    fields = set()
+    with open(file, errors="ignore") as input_file:
+        for line in input_file:
+            fields.update(json.loads(line).keys())
+    return fields
+
+
 def load_db(file, table_name, field_types, searchable_fields):
     """Load SQL table"""
     config = configparser.ConfigParser()
@@ -179,14 +179,16 @@ def load_db(file, table_name, field_types, searchable_fields):
     )
     cursor = database.cursor()
     cursor2 = database.cursor()
-    line_count = count_lines(file) - 1  # skip first line with field names
+
     alignments = parse_file(file)
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
+    extra_fields = set()
+    line_count = 0
     with open(file, errors="ignore") as input_file:
-        extra_fields = json.loads(
-            input_file.readline().rstrip("\n")
-        ).keys()  # TODO: we need to add fields on the fly as they occur, since not all are in the first line
+        for line in input_file:
+            extra_fields.update(json.loads(line).keys())
+            line_count += 1
         field_names.extend([f for f in extra_fields if f not in FILTERED_FIELDS])
         field_names.extend(["source_passage_length", "target_passage_length"])
         if "source_year" not in field_names:

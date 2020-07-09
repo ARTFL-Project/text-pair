@@ -106,7 +106,7 @@ type position struct {
 type alignmentsPerDoc struct {
 	docID      string
 	matches    []Alignment
-	duplicates []string
+	duplicates string
 }
 
 // CombinedAlignments holds all alignments for a single source doc
@@ -515,9 +515,10 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							if len(sourceTargetIntersection) < config.minimumMatchingNgramsInDocs {
 								continue
 							} else if float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100 > config.duplicateThreshold {
-								sourceInfo := fmt.Sprintf("%s (%s) [%s]", sourceMetadata[sourceFile.DocID]["title"], sourceMetadata[sourceFile.DocID]["author"], sourceMetadata[sourceFile.DocID]["filename"])
-								targetInfo := fmt.Sprintf("%s (%s) [%s]", targetMetadata[targetFile.DocID]["title"], targetMetadata[targetFile.DocID]["author"], targetMetadata[targetFile.DocID]["filename"])
-								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, []Alignment{}, []string{sourceInfo, targetInfo}})
+								sourceInfo := fmt.Sprintf("%s\t%s\t%s\t%s\t%s-%s", sourceMetadata[sourceFile.DocID]["title"], sourceMetadata[sourceFile.DocID]["author"], sourceMetadata[sourceFile.DocID]["filename"], sourceMetadata[sourceFile.DocID]["philo_id"], sourceMetadata[sourceFile.DocID]["start_byte"], sourceMetadata[sourceFile.DocID]["end_byte"])
+								targetInfo := fmt.Sprintf("%s\t%s\t%s\t%s\t%s-%s", targetMetadata[targetFile.DocID]["title"], targetMetadata[targetFile.DocID]["author"], targetMetadata[targetFile.DocID]["filename"], targetMetadata[targetFile.DocID]["philo_id"], targetMetadata[targetFile.DocID]["start_byte"], targetMetadata[targetFile.DocID]["end_byte"])
+								duplicateInfo := fmt.Sprintf("%s\t%s\t%f", sourceInfo, targetInfo, float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100)
+								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, []Alignment{}, duplicateInfo})
 								continue
 							}
 							mostCommonNgrams := getMostCommonNgrams(sourceTargetIntersection, &config.banalNgrams, commonNgrams)
@@ -542,7 +543,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 								alignments = mergeWithPrevious(alignments, config, debugOutput)
 							}
 							if len(alignments) > 0 {
-								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments, []string{}})
+								localAlignments = append(localAlignments, alignmentsPerDoc{targetFile.DocID, alignments, ""})
 							}
 							debugOutput.Sync()
 							debugOutput.Close()
@@ -663,9 +664,9 @@ func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDoc
 }
 
 func creatDuplicateFilesOutputFile(config *matchingParams) *os.File {
-	duplicateFiles, err := os.Create(fmt.Sprintf(filepath.Join(config.outputPath, "duplicate_files.txt")))
+	duplicateFiles, err := os.Create(fmt.Sprintf(filepath.Join(config.outputPath, "duplicate_files.tsv")))
 	checkErr(err, "creatDuplicateFilesOutputFile")
-	duplicateFiles.WriteString("## Duplicates of source files in target files\n")
+	duplicateFiles.WriteString("source_title\tsource_author\tsource_filename\tsource_philo_id\tsource_byte_offsets\ttarget_title\ttarget_author\ttarget_filename\target_philo_id\ttarget_byte_offsets\toverlap\n")
 	return duplicateFiles
 }
 
@@ -908,7 +909,7 @@ func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string,
 			f.Write(jsonString)
 		}
 		if len(alignments.duplicates) > 0 {
-			duplicatesFile.WriteString(fmt.Sprintf("%s\n", strings.Join(alignments.duplicates, "\t")))
+			duplicatesFile.WriteString(fmt.Sprintf("%s\n", alignments.duplicates))
 		}
 	}
 }

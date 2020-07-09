@@ -20,7 +20,9 @@ matchingParams = namedlist(
     output_path, num_workers, sorting_field, debug""",
 )
 position = namedlist("position", [("start_byte", 0), ("end_byte", 0), ("start_ngram_index", 0), ("end_ngram_index", 0)])
-Alignment = namedlist("Alignment", [("source", position()), ("target", position()), ("total_matching_ngrams", 0), ("banality", False)])
+Alignment = namedlist(
+    "Alignment", [("source", position()), ("target", position()), ("total_matching_ngrams", 0), ("banality", False)]
+)
 matchValues = namedlist(
     "matchValues",
     [
@@ -62,17 +64,17 @@ class compareNgrams:
         target_batch=1,
         source_common_ngrams=None,
         target_common_ngrams=None,
-        most_common_ngram_threshold=1000,
-        common_ngrams_limit=25,
+        most_common_ngram_threshold=5000,
+        common_ngrams_limit=20,
         matching_window_size=30,
         max_gap=15,
-        flex_gap=False,
+        flex_gap=True,
         minimum_matching_ngrams=4,
         minimum_matching_ngrams_in_window=4,
         minimum_matching_ngrams_in_doc=4,
         context_size=300,
         banal_ngrams=25,
-        duplicate_threshold=80,
+        duplicate_threshold=50,
         merge_on_byte_distance=True,
         merge_on_ngram_distance=True,
         passage_distance=0.5,
@@ -111,7 +113,9 @@ class compareNgrams:
         else:
             self.target_files = []
             self.target_metadata = {}
-        self.most_common_ngrams = self.__compile_most_common_ngrams(source_common_ngrams, target_common_ngrams, most_common_ngram_threshold)
+        self.most_common_ngrams = self.__compile_most_common_ngrams(
+            source_common_ngrams, target_common_ngrams, most_common_ngram_threshold
+        )
 
     def __load_metadata(self, file_location):
         if not os.path.exists(file_location):
@@ -216,7 +220,9 @@ class compareNgrams:
                         target_prefix = "Loading target files"
                         if self.config.target_batch > 1:
                             target_prefix += f" from target batch {target_batch_number + 1}"
-                        target_file_indexes = self.__get_json_docs(target_file_batches[target_batch_number], target_prefix)
+                        target_file_indexes = self.__get_json_docs(
+                            target_file_batches[target_batch_number], target_prefix
+                        )
                     local_source_files_done = {}
                     percent_steps = self.__build_percent_map(len(source_file_indexes))
                     print("\n\rComparing files... 0%", end="")
@@ -232,7 +238,9 @@ class compareNgrams:
                                     continue
                                 elif target_file.doc_id in local_source_files_done:
                                     continue
-                            source_target_intersection, total_common_ngrams = self.__get_intersection(source_file, target_file)
+                            source_target_intersection, total_common_ngrams = self.__get_intersection(
+                                source_file, target_file
+                            )
                             if len(source_target_intersection) < self.config.minimum_matching_ngrams_in_docs:
                                 continue
                             elif total_common_ngrams / source_file.ngram_length * 100 > self.config.duplicate_threshold:
@@ -245,7 +253,10 @@ class compareNgrams:
                                         matches.append(ngramMatch(source_ngram_index, target_ngram_index, ngram))
                             matches.sort(key=lambda x: (x.source.n_index, x.target.n_index))
                             alignments = self.__match_passages(matches, most_common_ngrams)
-                            if self.config.merge_on_byte_distance is True or self.config.merge_on_ngram_distance is True:
+                            if (
+                                self.config.merge_on_byte_distance is True
+                                or self.config.merge_on_ngram_distance is True
+                            ):
                                 alignments = self.__merge_with_previous(alignments)
                             if alignments:
                                 local_alignments.append(alignmentsPerDoc(target_file.doc_id, alignments, []))
@@ -377,7 +388,10 @@ class compareNgrams:
                         continue
                     else:
                         m.in_alignment = False
-                if source.n_index > m.max_source_gap and m.matches_in_current_window < self.config.minimum_matching_ngrams_in_window:
+                if (
+                    source.n_index > m.max_source_gap
+                    and m.matches_in_current_window < self.config.minimum_matching_ngrams_in_window
+                ):
                     m.in_alignment = False
                 if source.n_index > m.source_window_boundary or target.n_index > m.target_window_boundary:
                     if m.matches_in_current_window < self.config.minimum_matching_ngrams_in_window:
@@ -455,7 +469,8 @@ class compareNgrams:
             current_alignment_merged = False
             if self.config.merge_on_byte_distance is True:
                 distance_value = floor(
-                    (previous_alignment.source.end_byte - previous_alignment.source.start_byte) * self.config.passage_distance_multiplier
+                    (previous_alignment.source.end_byte - previous_alignment.source.start_byte)
+                    * self.config.passage_distance_multiplier
                 )
                 max_source_distance = previous_alignment.source.end_byte + distance_value
                 max_target_distance = previous_alignment.target.end_byte + distance_value
@@ -524,7 +539,9 @@ class compareNgrams:
         return merged_alignments
 
     def __alignment_to_text(self, alignment, filename):
-        before_context = self.__get_text(filename, alignment.start_byte - self.config.context_size, alignment.start_byte)
+        before_context = self.__get_text(
+            filename, alignment.start_byte - self.config.context_size, alignment.start_byte
+        )
         # TODO : clean start
         matching_passage = self.__get_text(filename, alignment.start_byte, alignment.end_byte)
         after_context = self.__get_text(filename, alignment.end_byte, alignment.end_byte + self.config.context_size)
@@ -540,8 +557,8 @@ class compareNgrams:
 
 def main():
     compare = compareNgrams(
-        "/shared/alignments/test/output/source/ngrams",
-        "/shared/alignments/test/output/source/metadata/metadata.json",
+        "/shared/alignments/frantext/output/source/ngrams",
+        "/shared/alignments/frantext/output/source/metadata/metadata.json",
         workers=32
         # flex_gap=True,
         # minimum_matching_ngrams_in_doc=3,
