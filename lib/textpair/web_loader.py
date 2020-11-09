@@ -57,6 +57,7 @@ FILTERED_FIELDS = {
 
 YEAR_FINDER = re.compile(r"^.*?(\d{1,}).*")
 TOKENIZER = re.compile(r"\w+")
+CONTROL_CHARS = dict.fromkeys(range(32))
 
 
 class WebAppConfig:
@@ -155,6 +156,7 @@ def validate_field_type(fields, field_types, field_names):
             else:
                 value = None
         if field_type == "TEXT" and isinstance(value, str):
+            value = value.translate(CONTROL_CHARS)
             value = clean_text(value)
         values.append(value)
     return values
