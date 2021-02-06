@@ -13,6 +13,10 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
     web_app_config = {"skip_web_app": skip_web_app}
     config = configparser.ConfigParser()
     config.read(textpair_config)
+    file_paths = {
+        "source_files": config["FILE_PATHS"]["source_file_path"] or "",
+        "target_files": config["FILE_PATHS"]["target_file_path"] or "",
+    }
     for key, value in dict(config["TEI_PARSING"]).items():
         if key.startswith("parse"):
             if value.lower() == "yes" or value.lower() == "true":
@@ -72,4 +76,4 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
             print("Please define a table_name in the Web Application section of your config file")
             exit()
 
-    return tei_parsing, preprocessing_params, matching_params, web_app_config
+    return file_paths, tei_parsing, preprocessing_params, matching_params, web_app_config

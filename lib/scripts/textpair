@@ -75,7 +75,7 @@ def parse_command_line():
     args = vars(parser.parse_args())
     if args["config"]:
         if os.path.exists(args["config"]):
-            tei_parsing, preprocessing_params, matching_params, web_app_config = parse_config(
+            file_paths, tei_parsing, preprocessing_params, matching_params, web_app_config = parse_config(
                 args["config"], output_path=args["output_path"], skip_web_app=args["skip_web_app"]
             )
         else:
@@ -86,6 +86,10 @@ def parse_command_line():
         print("No config file provided.")
         print("Exiting...")
         exit()
+    if not args["source_files"]:
+        args["source_files"] = file_paths["source_files"]
+    if not args["target_files"]:
+        args["target_files"] = file_paths["target_files"]
     web_app_config["skip_web_app"] = args["skip_web_app"]
     paths = {"source": {}, "target": defaultdict(str)}
     if args["only_align"] is False:
@@ -97,7 +101,12 @@ def parse_command_line():
             paths["source"]["metadata_path"] = os.path.join(args["output_path"], "source/metadata/metadata.json")
             paths["source"]["is_philo_db"] = False
         else:
-            paths["source"]["input_files_for_ngrams"] = args["source_files"]
+            if args["is_philo_db"] is True:
+                paths["source"]["input_files_for_ngrams"] = os.path.join(
+                    args["source_files"], "data/words_and_philo_ids"
+                )
+            else:
+                paths["source"]["input_files_for_ngrams"] = args["source_files"]
             paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
             paths["source"]["metadata_path"] = args["source_metadata"] or os.path.join(
                 args["output_path"], "source/metadata/metadata.json"
@@ -114,7 +123,12 @@ def parse_command_line():
                 paths["target"]["metadata_path"] = os.path.join(args["output_path"], "target/metadata/metadata.json")
                 paths["target"]["is_philo_db"] = False
             else:
-                paths["target"]["input_files_for_ngrams"] = args["target_files"]
+                if args["is_philo_db"] is True:
+                    paths["target"]["input_files_for_ngrams"] = os.path.join(
+                        args["target_files"], "data/words_and_philo_ids"
+                    )
+                else:
+                    paths["target"]["input_files_for_ngrams"] = args["target_files"]
                 paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
                 paths["target"]["metadata_path"] = args["target_metadata"] or os.path.join(
                     args["output_path"], "target/metadata/metadata.json"
