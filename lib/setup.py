@@ -20,7 +20,7 @@ else:
 
 setup(
     name="textpair",
-    version="2.0",
+    version="2.0beta1",
     author="The ARTFL Project",
     author_email="clovisgladstone@gmail.com",
     packages=["textpair"],
@@ -33,7 +33,7 @@ setup(
         "cython",
         "pystemmer",
         "lxml",
-        "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v0.8#egg=text_preprocessing",
+        "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v0.8.2#egg=text_preprocessing",
     ],
     extras_require={"web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]},
 )
