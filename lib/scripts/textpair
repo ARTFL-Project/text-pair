@@ -11,7 +11,7 @@ from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config
 
 TextPAIRParams = namedtuple(
     "TextPairParams",
-    "paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, update_db, file",
+    "dbname, paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, update_db, file",
 )
 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
@@ -22,7 +22,13 @@ TRIM_LAST_SLASH = re.compile(r"/\Z")
 def parse_command_line():
     """Command line parsing function"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", help="configuration file used to override defaults", type=str, default="")
+    parser.add_argument(
+        "dbname",
+        help="Name of TextPAIR database. This will also be used for the PostgreSQL table name. Must not be longer than 30 characters",
+    )
+    parser.add_argument(
+        "--config", help="configuration file used to override defaults", type=str, default="", required=True
+    )
     parser.add_argument("--source_files", help="path to source files from which to compare", type=str)
     parser.add_argument("--target_files", help="path to target files to compared to source files", type=str, default="")
     parser.add_argument(
@@ -147,6 +153,7 @@ def parse_command_line():
         paths["target"]["common_ngrams"] = args["target_common_ngrams"]
 
     return TextPAIRParams(
+        args["dbname"],
         paths,
         tei_parsing,
         preprocessing_params,
@@ -245,7 +252,7 @@ def run_alignment(pair_params):
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
             output_file,
-            pair_params.web_app_config["table_name"],
+            pair_params.dbname,
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],
             pair_params.web_app_config["api_server"],
@@ -266,7 +273,7 @@ def run_vsa_similarity(pair_params: TextPAIRParams) -> None:
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
             output_file,
-            pair_params.web_app_config["table_name"],
+            pair_params.dbname,
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],
             pair_params.web_app_config["api_server"],
@@ -282,7 +289,7 @@ if __name__ == "__main__":
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
             pair_params.file,
-            pair_params.web_app_config["table_name"],
+            pair_params.dbname,
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],
             pair_params.web_app_config["api_server"],
@@ -295,7 +302,7 @@ if __name__ == "__main__":
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
             pair_params.file,
-            pair_params.web_app_config["table_name"],
+            pair_params.dbname,
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],
             pair_params.web_app_config["api_server"],

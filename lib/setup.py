@@ -33,6 +33,8 @@ setup(
         "cython",
         "pystemmer",
         "lxml",
+        "gensim",
+        "namedlist",
         "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v0.8.2#egg=text_preprocessing",
     ],
     extras_require={"web": ["mod_wsgi", "flask", "flask-cors", "psycopg2-binary"]},

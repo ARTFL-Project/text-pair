@@ -64,7 +64,6 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
         for key, value in dict(config["WEB_APPLICATION"]).items():
             if (
                 key == "api_server"
-                or key == "table_name"
                 or key == "web_application_directory"
                 or key == "source_philo_db_link"
                 or key == "target_philo_db_link"
@@ -72,8 +71,5 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
                 web_app_config[key] = value
             else:
                 web_app_config["field_types"][key] = value
-        if web_app_config["table_name"] == "":
-            print("Please define a table_name in the Web Application section of your config file")
-            exit()
 
     return file_paths, tei_parsing, preprocessing_params, matching_params, web_app_config
