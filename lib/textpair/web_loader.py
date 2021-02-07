@@ -67,7 +67,7 @@ class WebAppConfig:
         with open("/var/lib/text-pair/config/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
-        self.options["appPath"] = os.path.join("text-pair", db_name)
+        self.options["appPath"] = os.path.join("/text-pair", db_name)
         self.options["databaseName"] = db_name
         self.options["matchingAlgorithm"] = algorithm
         self.options["sourcePhiloDBLink"] = source_database_link

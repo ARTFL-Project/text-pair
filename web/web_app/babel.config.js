@@ -1,6 +1,5 @@
 module.exports = {
-  plugins: ["transform-object-rest-spread"],
-  presets: [
-    '@vue/app'
-  ]
+    presets: [
+        '@vue/cli-plugin-babel/preset'
+    ]
 }
