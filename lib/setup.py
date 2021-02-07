@@ -20,7 +20,7 @@ else:
 
 setup(
     name="textpair",
-    version="2.0beta1",
+    version="2.0-beta.3",
     author="The ARTFL Project",
     author_email="clovisgladstone@gmail.com",
     packages=["textpair"],
