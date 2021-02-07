@@ -8,7 +8,7 @@
         "lint": "vue-cli-service lint"
     },
     "dependencies": {
-        "axios": "^0.18.0",
+        "axios": "^0.21.1",
         "chart.js": "^2.7.2",
         "epic-spinners": "^1.0.3",
         "velocity-animate": "^1.5.2",
