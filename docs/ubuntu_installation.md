@@ -3,7 +3,7 @@
 ### Install dependencies ###
 
 ```console
-sudo apt install postgresql nodejs npm python3-pip apache2  apache2-dev libapache2-mod-wsgi-py3
+sudo apt install postgresql nodejs npm python3-pip apache2  apache2-dev libapache2-mod-wsgi-py3 libssl1.0-dev
 ```
 
 ### Configure PostgreSQL ###
