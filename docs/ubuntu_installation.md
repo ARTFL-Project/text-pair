@@ -47,7 +47,7 @@ Fill in the database info in text-pair config: `sudo vim /etc/text-pair/config/g
 
 ```console
 sudo mkdir /var/www/html/text-pair/
-sudo chmod -R your_user /var/www/html/text-pair/
+sudo chown -R $(whoami) /var/www/html/text-pair/
 ```
 
 ### Apache configuration (may require extra work) ###
