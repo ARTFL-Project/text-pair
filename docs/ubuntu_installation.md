@@ -41,7 +41,7 @@ CREATE EXTENSION pg_trgm;
 sudo vim /etc/postgresql/10/pg_hba.conf
 ```
 
-Fill in the database info in text-pair config: `sudo vim /etc/text-pair/global_settings.ini`
+Fill in the database info in text-pair config: `sudo vim /etc/text-pair/config/global_settings.ini`
 
 ### Create webspace with proper permissions ###
 
@@ -62,6 +62,10 @@ Add the following at the bottom of the file (to execute the wsgi search script):
 `Include /etc/text-pair/*conf`
 
 * Restart Apache: `sudo apachectl graceful`
+
+#### NOTE ####
+If you get a syntax error for the Include directive in Apache, replace that line with:
+`IncludeOptional /etc/text-pair/*conf`
 
 ### Run install script ###
 Run the following script at the root of the text-pair folder:
