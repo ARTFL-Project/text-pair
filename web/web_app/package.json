@@ -12,7 +12,7 @@
         "chart.js": "^2.7.2",
         "epic-spinners": "^1.0.3",
         "velocity-animate": "^1.5.2",
-        "vue": "^2.5.17",
+        "vue": "^2.6.12",
         "vue-router": "^3.0.1"
     },
     "devDependencies": {
