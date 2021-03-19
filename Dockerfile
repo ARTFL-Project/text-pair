@@ -4,6 +4,8 @@ RUN apt update && apt install -y postgresql postgresql-contrib apache2-dev curl 
 
 RUN curl -sL https://deb.nodesource.com/setup_14.x | sudo -E bash && apt-get install -y nodejs
 
+RUN apt-get clean && rm -rf /var/lib/apt
+
 RUN mkdir textpair && curl -L  https://github.com/ARTFL-Project/text-pair/archive/v2.0-beta.3.tar.gz | tar xz -C textpair --strip-components 1 &&\
     cd textpair && sh install.sh
 
