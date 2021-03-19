@@ -20,6 +20,8 @@ Common shingles across texts indicate many different types of textual borrowings
 
 Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be supported.
 
+We do offer a Docker image for TextPAIR (or you can build the image from the Dockerfile provided in the repository). See below for more details.
+
 #### Dependencies
 
 -   Python 3.6 and up
@@ -33,6 +35,26 @@ See <a href="docs/ubuntu_installation.md">Ubuntu install instructions</a>
 -   Run `install.sh` script. This should install all needed components
 -   Make sure you include `/etc/text-pair/apache_wsgi.conf` in your main Apache configuration file to enable searching
 -   Edit `/etc/text-pair/global_settings.ini` to provide your PostgreSQL user, database, and password.
+
+## Docker setup
+You can also install the artfl/textpair Docker image from Dockerhub. Note that it also comes with PhiloLogic preinstalled.
+
+`docker pull artfl/textpair`
+
+When starting a container, you need to provide a volume for mounted at /data. If you also wish to build your TextPAIR alignments from PhiloLogic databases, you will also need to provide a mountpoint for the philologic directory
+
+To run the container without PhiloLogic on port 80, run the following:
+
+`docker run -td -p 80:80 -v /PATH/TO/DATA:/data artfl/textpair`
+
+To run the container with PhiloLogic included on port 80:
+
+`docker run -td -p 80:80 -v /PATH/TO/DATA:/data -v /PATH/TO/philologic:/var/www/html/philologic artfl/textpair`
+
+You can then enter the container shell with the following command:
+
+`docker exec -it CONTAINER_NAME /bin/bash`
+
 
 ## Quick start
 
