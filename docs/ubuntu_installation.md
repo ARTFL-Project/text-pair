@@ -17,7 +17,7 @@ sudo -i -u postgres
 ```console
 psql
 ```
-* Open postgres shell: psql`
+* Open postgres shell: `psql`
 
 * Create database and user:
 
