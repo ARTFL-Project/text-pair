@@ -20,7 +20,7 @@ else:
 
 setup(
     name="textpair",
-    version="2.0-beta.3",
+    version="2.0-beta.4",
     author="The ARTFL Project",
     author_email="clovisgladstone@gmail.com",
     packages=["textpair"],
@@ -37,5 +37,5 @@ setup(
         "namedlist",
         "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v0.8.3#egg=text_preprocessing",
     ],
-    extras_require={"web": ["flask", "flask-cors", "psycopg2", "gunicorn", "uvicorn", "uvloop", "httptools",]},
+    extras_require={"web": ["fastapi", "psycopg2", "gunicorn", "uvicorn", "uvloop", "httptools",]},
 )

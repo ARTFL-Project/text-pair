@@ -34,3 +34,9 @@ if [ ! -f /etc/text-pair/global_settings.ini ]
 else
     echo "/etc/text-pair/global_settings.ini already exists, not modifying..."
 fi
+
+echo "\n## IMPORTANT ##"
+echo "In order to start the TextPAIR web app, you need to configure and start up the web_server.sh script."
+echo "You can either:"
+echo "- Start it manually at /var/lib/text-pair/api_server/web_server.sh"
+echo "- Use the systemd init script located at /var/lib/text-pair/api_server/textpair.service: for this you will need to copy it to your OS systemd folder (usually /etc/systemd/system/) and run 'systemctl enable textpair && systemctl start textpair' as root"
