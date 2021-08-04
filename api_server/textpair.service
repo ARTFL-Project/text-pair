@@ -1,0 +1,9 @@
+[Unit]
+Description=TextPAIR start-up
+After=network.service
+
+[Service]
+ExecStart=/var/lib/text-pair/api_server/web_server.sh
+
+[Install]
+WantedBy=default.target

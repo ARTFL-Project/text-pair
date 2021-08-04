@@ -152,7 +152,12 @@ def validate_field_type(fields, field_types, field_names):
                 value = str(value)
             year_match = YEAR_FINDER.search(value)
             if year_match:
-                value = int(year_match.groups()[0])
+                matching_year = year_match.groups()[0]
+                neg_match = re.search(fr"^(\-{matching_year})", value)  # account for negative years
+                if neg_match:
+                    value = int(neg_match.groups()[0])
+                else:
+                    value = int(year_match.groups()[0])
             else:
                 value = None
         if field_type == "TEXT" and isinstance(value, str):
@@ -301,12 +306,10 @@ def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
     os.system("rm -rf {}".format(db_path))
     os.mkdir(db_path)
-    os.system("cp -R /var/lib/text-pair/web/web_app/. {}".format(db_path))
+    os.system("cp -R /var/lib/text-pair/web-app/. {}".format(db_path))
     with open(os.path.join(db_path, "appConfig.json"), "w") as config_file:
         json.dump(web_config(), config_file, indent=4)
     os.system(f"""cd {db_path}; npm install --silent > "/dev/null" 2>&1; npm run build > "/dev/null" 2>&1;""")
-    if web_config.webServer.lower() == "apache":
-        os.system(f"""cp /var/lib/text-pair/web/apache_htaccess.conf {os.path.join(db_path, ".htaccess")}""")
 
 
 def create_web_app(

@@ -3,30 +3,29 @@
 sudo pip3 install lib/.[web] --upgrade
 
 echo "\nMoving web application components into place..."
-sudo rm -rf /var/lib/text-pair
 sudo mkdir -p /var/lib/text-pair
+if [ ! -f /var/lib/text-pair/api_server/web_server.sh ]
+    then
+        sudo cp -Rf api_server /var/lib/text-pair/api_server/
+else
+    echo "/var/lib/text-pair/api_server/web_server.sh already exists, not modifying..."
+fi
 
 if [ -d web/web_app/node_modules ]
     then
         sudo rm -rf web/web_app/node_modules
 fi
-sudo cp -Rf web /var/lib/text-pair/
+sudo cp -Rf api /var/lib/text-pair/
+sudo cp -Rf web-app /var/lib/text-pair/
 sudo cp -Rf config /var/lib/text-pair/
 
 echo "\nMoving global configuration into place..."
 sudo mkdir -p /etc/text-pair
-if [ ! -f /etc/text-pair/apache_wsgi.conf ]
-    then
-        sudo cp -R web/apache_wsgi.conf /etc/text-pair
-        echo "\nMake sure you include /etc/text-pair/apache_wsgi.conf in your main Apache configuration file in order to enable searching through the web app."
-else
-    echo "/etc/text-pair/apache_wsgi.conf already exists, not modifying..."
-fi
-
 if [ ! -f /etc/text-pair/global_settings.ini ]
     then
         sudo touch /etc/text-pair/global_settings.ini
-        echo "## DATABASE SETTINGS ##" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
+        echo "[WEB_APP]" | sudo tee -a /etc/topologic/global_settings.ini > /dev/null
+        echo "web_app_path =" | sudo tee -a /etc/topologic/global_settings.ini > /dev/null
         echo "[DATABASE]" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
         echo "database_name =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
         echo "database_user =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null

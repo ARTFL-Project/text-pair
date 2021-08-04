@@ -2,19 +2,33 @@
 """Routing and search code for sequence alignment"""
 
 import configparser
+import os
 import re
 from collections import OrderedDict, Counter
+from typing import Dict
 
 import psycopg2
 import psycopg2.extras
-from flask import Flask, jsonify, render_template, request
-from flask_cors import CORS
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import Response
 
-application = Flask(__name__)
-CORS(application)
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+)
 
 GLOBAL_CONFIG = configparser.ConfigParser()
 GLOBAL_CONFIG.read("/etc/text-pair/global_settings.ini")
+APP_PATH = GLOBAL_CONFIG["WEB_APP"]["web_app_path"]
+
+DATABASE = psycopg2.connect(
+    user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+    password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+    database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+)
 
 BOOLEAN_ARGS = re.compile(r"""(NOT \w+)|(OR \w+)|(\w+)|("")""")
 
@@ -78,20 +92,20 @@ class formArguments:
         return repr(self.dict)
 
 
-def db_connect():
-    """Connect to database and return cursor"""
-    database = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    return cursor
+# def db_connect():
+#     """Connect to database and return cursor"""
+#     database = psycopg2.connect(
+#         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+#         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+#         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+#     )
+#     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
+#     return cursor
 
 
 def get_pg_type(table_name):
     """Find PostgreSQL field type"""
-    cursor = db_connect()
+    cursor = DATABASE.cursor()
     cursor.execute(f"select * from {table_name}")
     type_mapping = {23: "INTEGER", 25: "TEXT", 701: "FLOAT"}
     field_types = {column.name: type_mapping[column.type_code] for column in cursor.description}
@@ -118,7 +132,7 @@ def parse_args(request):
         "field",
         "value",
     ]
-    for key, value in request.args.items():
+    for key, value in request.query_params.items():
         if key in other_args_keys:
             if key in ("page", "id_anchor", "timeSeriesInterval"):
                 if value.isdigit():
@@ -200,14 +214,39 @@ def query_builder(query_args, other_args, field_types):
     return " AND ".join(sql_fields), sql_values
 
 
-@application.route("/")
-def index():
+def get_resource(path):
+    with open(path) as resource_file:
+        resource = resource_file.read()
+    return resource
+
+
+@app.get("/{db_path}/css/{resource}")
+def get_css_resource(db_path: str, resource: str):
+    """Retrieve CSS resources"""
+    resource = get_resource(os.path.join(APP_PATH, db_path, "dist/css", resource))
+    return Response(resource, media_type="text/css")
+
+
+@app.get("/{db_path}/js/{resource}")
+def get_js_resource(db_path: str, resource: str):
+    """Retrieve JS resources"""
+    resource = get_resource(os.path.join(APP_PATH, db_path, "dist/js", resource))
+    return Response(resource, media_type="application/javascript")
+
+
+@app.get("/{db_path}/search")
+@app.get("/{db_path}/time")
+@app.get("/{db_path}")
+def index(db_path: str):
     """Return index.html which lists available databases"""
-    return render_template("index.html")
+    with open(os.path.join(APP_PATH, db_path, "dist/index.html")) as html:
+        index_html = html.read()
+    return HTMLResponse(index_html)
 
 
-@application.route("/search_alignments/", methods=["GET", "POST"])
-def search_alignments():
+# @app.get("/{db_path}/search_alignments/")
+@app.post("/search_alignments/")
+def search_alignments(request: Request, metadata: Dict[str, str]):
     """Search alignments according to URL params"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
     if other_args.direction == "next":
@@ -232,7 +271,7 @@ def search_alignments():
                     o.rowid_ordered < {} ORDER BY o.rowid_ordered desc LIMIT 50".format(
                 other_args.db_table, other_args.db_table, other_args.id_anchor
             )
-    cursor = db_connect()
+    cursor = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     alignments = []
     for row in cursor:
@@ -242,41 +281,42 @@ def search_alignments():
     if other_args.direction == "previous":
         alignments.reverse()
     previous_url = ""
-    current_path = re.sub(r"&(page|id_anchor|direction)=(previous|next|\d*)", "", request.path)
+    current_path = re.sub(r"&(page|id_anchor|direction)=(previous|next|\d*)", "", request.url.path)
     if other_args.page > 1:
         previous_url = "{}&page={}&id_anchor={}&direction=previous".format(
             current_path, other_args.page - 1, alignments[0]["rowid_ordered"]
         )
     try:
-        next_url = "{}&page={}&id_anchor={}&direction=next".format(current_path, other_args.page + 1, alignments[-1]["rowid_ordered"])
+        next_url = "{}&page={}&id_anchor={}&direction=next".format(
+            current_path, other_args.page + 1, alignments[-1]["rowid_ordered"]
+        )
     except IndexError:
         next_url = ""
     start_position = 0
     if other_args.page > 1:
         start_position = 50 * (other_args.page - 1)
-    result_object = {
+    return {
         "alignments": alignments,
         "page": other_args.page,
         "next_url": next_url,
         "previous_url": previous_url,
         "start_position": start_position,
     }
-    response = jsonify(result_object)
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
 
 
-@application.route("/retrieve_all_docs/", methods=["GET"])
-def retrieve_all():
+@app.get("/{db_path}/retrieve_all_docs/")
+def retrieve_all(request: Request):
     """Retrieve all docs and only return metadata"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
     if other_args.field.startswith("source_"):
         direction = "source_"
     else:
         direction = "target_"
-    cursor = db_connect()
+    cursor = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if sql_values:
-        query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
+        query = (
+            f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
+        )
         cursor.execute(query, sql_values)
     else:
         query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}'"""
@@ -298,7 +338,9 @@ def retrieve_all():
         "rowid",
     }
     column_names = [
-        column_name for column_name in column_names if column_name not in filtered_columns and column_name.startswith(direction)
+        column_name
+        for column_name in column_names
+        if column_name not in filtered_columns and column_name.startswith(direction)
     ]
     docs_found = {}
     doc_id = f"{direction}doc_id"
@@ -307,13 +349,11 @@ def retrieve_all():
             docs_found[row[doc_id]] = {"count": 0, **{key: row[key] for key in column_names}}
         docs_found[row[doc_id]]["count"] += 1
 
-    response = jsonify(list(docs_found.values()))
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
+    return list(docs_found.values())
 
 
-@application.route("/retrieve_all_passage_pairs/", methods=["GET"])
-def retrieve_all_passage_pairs():
+@app.get("/retrieve_all_passage_pairs/")
+def retrieve_all_passage_pairs(request: Request):
     """Retrieve all passage pair metadata matching a particular query
     NOTE that this does not retrieve passages themselves"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
@@ -329,32 +369,30 @@ def retrieve_all_passage_pairs():
     }
     column_names = [column_name for column_name in column_names if column_name not in filtered_columns]
     query = f"SELECT * FROM {other_args.db_table} WHERE {sql_fields}"
-    cursor = db_connect()
+    cursor = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     results = [{key: row[key] for key in column_names} for row in cursor]
-    response = jsonify(results)
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
+    return results
 
 
-@application.route("/count_results/", methods=["GET", "POST"])
-def count_results():
+# @app.get("/count_results/")
+@app.post("/count_results/")
+def count_results(request: Request):
     """Search alignments according to URL params"""
     sql_fields, sql_values, other_args, _ = parse_args(request)
     if sql_fields:
         query = "SELECT COUNT(*) FROM {} WHERE {}".format(other_args.db_table, sql_fields)
     else:
         query = "SELECT COUNT(*) FROM {}".format(other_args.db_table)
-    cursor = db_connect()
+    cursor = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     result_object = {"counts": cursor.fetchone()[0]}
-    response = jsonify(result_object)
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
+    return result_object
 
 
-@application.route("/generate_time_series/", methods=["GET", "POST"])
-def generate_time_series():
+# @app.get("/generate_time_series/")
+@app.post("/generate_time_series/")
+def generate_time_series(request: Request):
     """Generate a time series from search results"""
     # TODO: don't assume year is the field to use
     sql_fields, sql_values, other_args, _ = parse_args(request)
@@ -362,15 +400,22 @@ def generate_time_series():
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {} WHERE {}) t \
                 GROUP BY interval ORDER BY interval".format(
-            other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table, sql_fields
+            other_args.directionSelected,
+            other_args.timeSeriesInterval,
+            other_args.timeSeriesInterval,
+            other_args.db_table,
+            sql_fields,
         )
     else:
         query = "select interval AS year, COUNT(*) FROM \
                 (SELECT floor({}_year/{})*{} AS interval FROM {}) t \
                 GROUP BY interval ORDER BY interval".format(
-            other_args.directionSelected, other_args.timeSeriesInterval, other_args.timeSeriesInterval, other_args.db_table
+            other_args.directionSelected,
+            other_args.timeSeriesInterval,
+            other_args.timeSeriesInterval,
+            other_args.db_table,
         )
-    cursor = db_connect()
+    cursor = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     results = []
     total_results = 0
@@ -385,16 +430,15 @@ def generate_time_series():
         results.append({"year": year, "count": count})
         next_year = year + other_args.timeSeriesInterval
         total_results += count
-    response = jsonify({"counts": total_results, "results": results})
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
+    return {"counts": total_results, "results": results}
 
 
-@application.route("/facets/", methods=["GET", "POST"])
-def facets():
+# @app.get("/facets/")
+@app.post("/facets/")
+def facets(request: Request):
     """Retrieve facet result"""
     sql_fields, sql_values, other_args, _ = parse_args(request)
-    cursor = db_connect()
+    cursor = DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if sql_fields:
         query = "SELECT {}, COUNT(*) FROM {} WHERE {} GROUP BY {} ORDER BY COUNT(*) DESC".format(
             other_args.facet, other_args.db_table, sql_fields, other_args.facet
@@ -429,16 +473,15 @@ def facets():
             elif length > 3000:
                 counts["3001-"] += count
             total_count += count
-        results = [{"field": interval, "count": count} for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)]
-    response = jsonify({"facet": other_args.facet, "results": results, "total_count": total_count})
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
+        results = [
+            {"field": interval, "count": count}
+            for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
+        ]
+    return {"facet": other_args.facet, "results": results, "total_count": total_count}
 
 
-@application.route("/metadata/", methods=["GET"])
-def metadata():
+@app.get("/metadata/")
+def metadata(request: Request):
     """Retrieve all searchable metadata fields"""
     _, _, _, metadata_fields = parse_args(request)
-    response = jsonify(metadata_fields)
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
+    return metadata_fields
