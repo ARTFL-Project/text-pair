@@ -4,7 +4,7 @@
 import configparser
 import os
 import re
-from collections import OrderedDict, Counter
+from collections import Counter, OrderedDict
 from typing import Dict
 
 import psycopg2
@@ -13,7 +13,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
-
 
 app = FastAPI()
 app.add_middleware(
@@ -90,17 +89,6 @@ class formArguments:
 
     def __str__(self):
         return repr(self.dict)
-
-
-# def db_connect():
-#     """Connect to database and return cursor"""
-#     database = psycopg2.connect(
-#         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-#         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-#         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-#     )
-#     cursor = database.cursor(cursor_factory=psycopg2.extras.DictCursor)
-#     return cursor
 
 
 def get_pg_type(table_name):
