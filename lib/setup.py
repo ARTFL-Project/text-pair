@@ -34,8 +34,9 @@ setup(
         "pystemmer",
         "lxml",
         "gensim",
-        "namedlist",
-        "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v0.8.3#egg=text_preprocessing",
+        "namedlist",  # to remove
+        "recordclass",
+        "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v0.8.4#egg=text_preprocessing",
     ],
     extras_require={"web": ["fastapi", "psycopg2", "gunicorn", "uvicorn", "uvloop", "httptools",]},
 )

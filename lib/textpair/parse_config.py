@@ -42,7 +42,7 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
                     preprocessing_params["source"]["text_object_level"] = value
                 else:
                     preprocessing_params["target"]["text_object_level"] = value
-            elif key in ("ngram", "gap", "minimum_word_length"):
+            elif key in ("ngram", "gap", "minimum_word_length", "n_chunk", "min_text_object_length"):
                 preprocessing_params["source"][key] = int(value)
                 preprocessing_params["target"][key] = int(value)
             elif key == "pos_to_keep":
@@ -58,18 +58,18 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
                     value = "true"
                 else:
                     value = "false"
+            elif key == "min_similarity":
+                value = float(value)
             matching_params[key] = value
     if skip_web_app is False:
         web_app_config["field_types"] = {}
         for key, value in dict(config["WEB_APPLICATION"]).items():
-            if (
-                key == "api_server"
-                or key == "web_application_directory"
-                or key == "source_philo_db_link"
-                or key == "target_philo_db_link"
-            ):
+            if key == "api_server" or key == "source_philo_db_link" or key == "target_philo_db_link":
                 web_app_config[key] = value
             else:
                 web_app_config["field_types"][key] = value
+    global_config = configparser.ConfigParser()
+    global_config.read("/etc/text-pair/global_settings.ini")
+    web_app_config["web_application_directory"] = global_config["WEB_APP"]["web_app_path"]
 
     return file_paths, tei_parsing, preprocessing_params, matching_params, web_app_config

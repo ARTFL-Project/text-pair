@@ -1,7 +1,7 @@
 #!/usr/bin env python3
 
 
-import json
+import rapidjson as json
 import os
 from collections import defaultdict
 from math import floor

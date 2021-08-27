@@ -267,7 +267,12 @@ def run_vsa_similarity(pair_params: TextPAIRParams) -> None:
     print("\n### Starting vector space alignment ###")
     if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         pair_params.paths["target"]["ngram_output_path"] = pair_params.paths["source"]["ngram_output_path"]
-    run_vsa({**pair_params.preprocessing_params, **pair_params.matching_params})
+    run_vsa(
+        pair_params.paths["source"]["input_files_for_ngrams"],
+        pair_params.paths["target"]["input_files_for_ngrams"],
+        pair_params.workers,
+        {**pair_params.preprocessing_params, **pair_params.matching_params},
+    )
     if pair_params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl")
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])

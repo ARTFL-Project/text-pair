@@ -9,6 +9,7 @@ from typing import Dict
 
 import psycopg2
 import psycopg2.extras
+from psycopg2 import pool
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -23,7 +24,9 @@ GLOBAL_CONFIG = configparser.ConfigParser()
 GLOBAL_CONFIG.read("/etc/text-pair/global_settings.ini")
 APP_PATH = GLOBAL_CONFIG["WEB_APP"]["web_app_path"]
 
-DATABASE = psycopg2.connect(
+POOL = pool.ThreadedConnectionPool(
+    1,
+    100,
     user=GLOBAL_CONFIG["DATABASE"]["database_user"],
     password=GLOBAL_CONFIG["DATABASE"]["database_password"],
     database=GLOBAL_CONFIG["DATABASE"]["database_name"],
@@ -91,10 +94,12 @@ class formArguments:
 
 def get_pg_type(table_name):
     """Find PostgreSQL field type"""
-    with DATABASE.cursor() as cursor:
+    with POOL.getconn() as conn:
+        cursor = conn.cursor()
         cursor.execute(f"select * from {table_name}")
         type_mapping = {23: "INTEGER", 25: "TEXT", 701: "FLOAT"}
         field_types = {column.name: type_mapping[column.type_code] for column in cursor.description}
+        POOL.putconn(conn)
     return field_types
 
 
@@ -224,7 +229,7 @@ def get_js_resource(db_path: str, resource: str):
 @app.get("/{db_path}/time")
 @app.get("/{db_path}")
 def index(db_path: str):
-    """Return index.html which lists available databases"""
+    """Return index.html which lists available POOLs"""
     with open(os.path.join(APP_PATH, db_path, "dist/index.html")) as html:
         index_html = html.read()
     return HTMLResponse(index_html)
@@ -248,7 +253,8 @@ def search_alignments(request: Request, metadata: Dict[str, str]):
         else:
             query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {other_args.id_anchor} ORDER BY o.rowid_ordered desc LIMIT 50"
-    with DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+    with POOL.getconn() as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute(query, sql_values)
         alignments = []
         for row in cursor:
@@ -311,7 +317,8 @@ def retrieve_all(request: Request):
     ]
     docs_found = {}
     doc_id = f"{direction}doc_id"
-    with DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+    with POOL.getconn() as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         if sql_values:
             query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
             cursor.execute(query, sql_values)
@@ -322,6 +329,7 @@ def retrieve_all(request: Request):
             if row[doc_id] not in docs_found:
                 docs_found[row[doc_id]] = {"count": 0, **{key: row[key] for key in column_names}}
             docs_found[row[doc_id]]["count"] += 1
+        POOL.putconn(conn)
     return list(docs_found.values())
 
 
@@ -342,9 +350,11 @@ def retrieve_all_passage_pairs(request: Request):
     }
     column_names = [column_name for column_name in column_names if column_name not in filtered_columns]
     query = f"SELECT * FROM {other_args.db_table} WHERE {sql_fields}"
-    with DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+    with POOL.getconn() as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute(query, sql_values)
         results = [{key: row[key] for key in column_names} for row in cursor]
+        POOL.putconn(conn)
     return results
 
 
@@ -356,9 +366,11 @@ def count_results(request: Request):
         query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE {sql_fields}"
     else:
         query = f"SELECT COUNT(*) FROM {other_args.db_table}"
-    with DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+    with POOL.getconn() as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute(query, sql_values)
         result_object = {"counts": cursor.fetchone()[0]}
+        POOL.putconn(conn)
     return result_object
 
 
@@ -380,7 +392,8 @@ def generate_time_series(request: Request):
     results = []
     total_results = 0
     next_year = None
-    with DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+    with POOL.getconn() as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute(query, sql_values)
         for year, count in cursor:
             if year is None:
@@ -392,6 +405,7 @@ def generate_time_series(request: Request):
             results.append({"year": year, "count": count})
             next_year = year + other_args.timeSeriesInterval
             total_results += count
+        POOL.putconn(conn)
     return {"counts": total_results, "results": results}
 
 
@@ -401,7 +415,8 @@ def facets(request: Request):
     sql_fields, sql_values, other_args, _ = parse_args(request)
     results = []
     total_count = 0
-    with DATABASE.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+    with POOL.getconn() as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         if sql_fields:
             query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
                 WHERE {sql_fields} GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
@@ -436,6 +451,7 @@ def facets(request: Request):
                 {"field": interval, "count": count}
                 for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
             ]
+        POOL.putconn(conn)
     return {"facet": other_args.facet, "results": results, "total_count": total_count}
 
 

@@ -93,7 +93,7 @@
                             </div>
                         </div>
                         <div class="text-muted text-center mb-2">
-                            <div v-if="globalConfig.matchingAlgorithm == 'vsm'">
+                            <div v-if="globalConfig.matchingAlgorithm == 'vsa'">
                                 <div>{{ alignment.similarity.toFixed(2) * 100 }} % similar</div>
                                 <a class="diff-btn" diffed="false" @click="showMatches(alignment)"
                                     >Show matching words</a
