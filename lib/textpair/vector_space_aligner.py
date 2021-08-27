@@ -2,30 +2,30 @@
 """Passage similarity detection"""
 
 from __future__ import annotations
+
 import json
 import os
 import re
 import sys
 from collections import deque
 from html import unescape as unescape_html
-from itertools import chain
-from typing import Any, Deque, Dict, Generator, Iterable, Iterator, List, Optional, Tuple, Set, Union
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 from xml.sax.saxutils import unescape as unescape_xml
 
-from dill import load, dump
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
+from dill import dump, load
 from recordclass import dataobject
-from text_preprocessing import PreProcessor, Token, Tokens
-from tqdm import tqdm
-from scipy.sparse import csr, csr_matrix
+from scipy.sparse import csr_matrix
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
-from annoy import AnnoyIndex
+from text_preprocessing import PreProcessor, Token, Tokens
 
 TAGS = re.compile(r"<[^>]+>")
 
 
 class PassageGroup(dataobject, fast_new=True):
+    """Text passage with all associated properties and vector representation"""
+
     vector: csr_matrix = csr_matrix([])
     start_byte: int = 0
     end_byte: int = 0
@@ -34,6 +34,8 @@ class PassageGroup(dataobject, fast_new=True):
 
 
 class MergedGroup(dataobject, fast_new=True):
+    """A source and target PassageGroup pair with similarity"""
+
     source: PassageGroup = PassageGroup()
     target: PassageGroup = PassageGroup()
     similarity: float = 0.0
@@ -44,11 +46,9 @@ PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5
 TEMP_DIR = os.getcwd()
 
 
-def fast_cosine(X, Y):
-    return np.inner(X, Y) / np.sqrt(np.dot(X, X) * np.dot(Y, Y))
-
-
 class Corpus:
+    """A Corpus of passages as preprocessed by the text-preprocessor"""
+
     def __init__(
         self,
         texts: Iterable[Tokens],
@@ -57,7 +57,6 @@ class Corpus:
         n_chunk: int = 3,
         text_object_level_split: str = "doc",
         vectorizer: Optional[TfidfVectorizer] = None,
-        index: Optional[AnnoyIndex] = None,
         start_index: int = 0,
     ):
         """Intialize CorpusVectorizer"""
@@ -75,30 +74,15 @@ class Corpus:
         else:
             self.vectorizer = vectorizer
             self.vectors: csr_matrix = self.vectorizer.transform(self.__get_text_chunks())  # type: ignore
-        self.length: int = self.vectors.shape[0]
-        self.dim: int = self.vectors.shape[1]
+        self.length: int = self.vectors.shape[0]  # type: ignore
+        self.dim: int = self.vectors.shape[1]  # type: ignore
         self.start_index = start_index
-        # if index is None:
-        #     self.index: AnnoyIndex = AnnoyIndex(self.dim, "angular")
-        #     self.add_to_index(vectors)
-        # else:
-        #     self.vectors = vectors
 
     def __getitem__(self, item: int) -> csr_matrix:
-        # return np.array(self.index.get_item_vector(item)).reshape(1, -1)
         return self.vectors[item]
 
     def __len__(self) -> int:
         return self.length
-
-    # def add_to_index(self, vectors):
-    #     for i, doc_vector in tqdm(
-    #         enumerate(vectors), total=vectors.shape[0], desc="Adding document vectors to Annoy index", leave=False,
-    #     ):
-    #         self.index.add_item(i + self.start_index, doc_vector[0].toarray()[0])
-
-    # def build_index(self):
-    #     self.index.build(1000, n_jobs=os.cpu_count() or 1)
 
     def __get_text_chunks(self) -> Iterator[str]:
         """Process all texts into smaller text chunks"""
@@ -191,17 +175,6 @@ class Corpus:
 
     def inner_compare(self) -> csr_matrix:
         """Compare corpus with itself"""
-        # inner_matches: np.array = np.zeros((self.length, self.length))
-        # for doc_id in range(self.length):
-        #     metadata = self.metadata[doc_id]
-        #     docs, scores = self.index.get_nns_by_item(doc_id, self.length, include_distances=True)
-        #     for doc, score in zip(docs, scores):
-        #         score = 1 - score / 2  # normalize score between 0 and 1
-        #         if self.metadata[doc]["year"] >= metadata["year"] and score >= min_similarity:
-        #             inner_matches[doc_id, doc] = score
-        #         else:
-        #             inner_matches[doc_id, doc] = 0.0
-        # return csr_matrix(inner_matches)
         results: csr_matrix = linear_kernel(self.vectors)  # type: ignore
         scores: csr_matrix
         for doc_id, scores in enumerate(results):
@@ -215,23 +188,6 @@ class Corpus:
 
     def outer_compare(self, target_corpus: Corpus):
         """Compare corpus with another corpus"""
-        # inner_matches: np.ndarray = np.zeros((self.length, target_corpus.length))
-        # for doc_id in range(0, target_corpus.start_index):
-        #     metadata = self.metadata[doc_id]
-        #     docs, scores = self.index.get_nns_by_item(doc_id, self.length, include_distances=True)
-        #     for inner_doc_id, score in zip(docs, scores):
-        #         inner_doc_id = inner_doc_id - target_corpus.start_index
-        #         # score = 1 - score / 2  # normalize score between 0 and 1
-        #         # print(inner_doc_id, len(target_corpus.metadata))
-        #         if (
-        #             inner_doc_id >= doc_id
-        #             and target_corpus.metadata[inner_doc_id]["year"] >= metadata["year"]
-        #             and score >= min_similarity
-        #         ):
-        #             inner_matches[doc_id, inner_doc_id] = score
-        #         else:
-        #             inner_matches[doc_id, inner_doc_id] = score
-        # return csr_matrix(inner_matches)
         results: csr_matrix = linear_kernel(self.vectors, target_corpus.vectors)  # type: ignore
         scores: csr_matrix
         for doc_id, scores in enumerate(results):
@@ -265,9 +221,9 @@ def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -
 
 
 def evaluate_score(start_score: float, new_score: float, min_score: float) -> bool:
-    """Evaluate if new score is within 2/3 of start score"""
+    """Evaluate if new score is within 3/4 of start score"""
     # TODO: should we use Jaccard sim instead to control for sparsity?
-    if new_score / start_score > 0.66 or new_score >= min_score:
+    if new_score >= min_score or new_score / start_score > 0.75:
         return True
     return False
 
@@ -289,7 +245,7 @@ def get_docs_with_matches(matches: List[MergedGroup]) -> Dict[str, Tuple[Tokens,
     return docs_with_matches
 
 
-def get_passage(doc: Tuple[Tokens, Dict[int, int], Dict[int, int]], start_byte: int, end_byte: int) -> Tokens:
+def get_passage(doc: Tuple[Tokens, Dict[int, int], Dict[int, int]], start_byte: int, end_byte: int) -> Iterable[Token]:
     """Get passage within Tokens object"""
     text, start_bytes, end_bytes = doc
     start_index = start_bytes[start_byte]
@@ -318,7 +274,7 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
         merged_group: MergedGroup = MergedGroup()
         saved_groups: List[MergedGroup] = []
         total_matches: int = len(matches)
-        start_score: float = 0.0
+        start_score: float = min_score
         for pos, match in enumerate(matches):
             merged_source: bool = False
             merged_target: bool = False
@@ -344,7 +300,7 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
                     source_vector: csr_matrix = corpus.vectorizer.transform([" ".join(source_tokens)])  # type: ignore
                     score_array: np.ndarray = linear_kernel(source_vector, merged_group.target.vector)  # type: ignore
                     new_score: float = score_array[0, 0]
-                    if evaluate_score(start_score, new_score, min_score) is True:
+                    if evaluate_score(start_score or min_score, new_score, min_score) is True:
                         merged_group.source.end_byte = match.source.end_byte
                         merged_group.source.metadata["end_byte"] = match.source.end_byte
                         merged_group.source.vector = source_vector
@@ -362,7 +318,7 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
                     target_vector: csr_matrix = corpus.vectorizer.transform([" ".join(target_tokens)])  # type: ignore
                     score_array: np.ndarray = linear_kernel(merged_group.source.vector, target_vector)  # type: ignore
                     new_score: float = score_array[0, 0]
-                    if evaluate_score(start_score, new_score, min_score) is True:
+                    if evaluate_score(start_score or min_score, new_score, min_score) is True:
                         merged_group.target.end_byte = match.target.end_byte
                         merged_group.target.metadata["end_byte"] = match.target.end_byte
                         merged_group.target.vector = target_vector
@@ -387,7 +343,7 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
 
 
 def optimize_match(
-    tokens: Tokens, intersection: Set[str], passage_group: PassageGroup, corpus: Corpus,
+    tokens: Iterable[Token], intersection: Set[str], passage_group: PassageGroup, corpus: Corpus,
 ) -> PassageGroup:
     """Optimize a single match by trimming non-matching words on left and right side"""
     start = None
@@ -442,7 +398,7 @@ def optimize_matches(
 
 
 def get_tokens(
-    passage: recordclass, preproc: PreProcessor, doc: Tuple[Tokens, Dict[int, int], Dict[int, int]]
+    passage: PassageGroup, preproc: PreProcessor, doc: Tuple[Tokens, Dict[int, int], Dict[int, int]]
 ) -> List[Token]:
     """Get tokens while making sure we grab a full sentence for POS tagging"""
     sentence_boundaries: set = {".", "!", "?"}
@@ -486,8 +442,8 @@ def get_tokens(
 
 
 def post_process_passages(
-    source: recordclass,
-    target: recordclass,
+    source: PassageGroup,
+    target: PassageGroup,
     source_preproc: PreProcessor,
     target_preproc: PreProcessor,
     source_doc: Tuple[Tokens, Dict[int, int], Dict[int, int]],
@@ -543,18 +499,15 @@ def simple_similarity(
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
             text_object_level_split=target_config["text_object_level_split"],
-            # index=source_corpus.index,
             start_index=source_corpus.length,
         )
-        # source_corpus.add_to_index(target_corpus.vectors)
-        # source_corpus.build_index()
+
         matching_docs = source_corpus.outer_compare(target_corpus)
     else:
-        # source_corpus.build_index()
         matching_docs = source_corpus.inner_compare()
         target_corpus = source_corpus
     for source_doc, score_array in enumerate(matching_docs):
-        filtered_results: np.array = np.where(score_array > min_similarity)[0]
+        filtered_results: np.array = np.where(score_array > min_similarity)[0]  # type: ignore
         count += len(filtered_results)
         for target_doc in filtered_results:
             matches.append(
@@ -567,7 +520,6 @@ def simple_similarity(
                         source_corpus.metadata[source_doc],
                     ),
                     PassageGroup(
-                        # source_corpus[target_doc + target_corpus.start_index],
                         target_corpus[target_doc],
                         target_corpus.metadata[target_doc]["start_byte"],
                         target_corpus.metadata[target_doc]["end_byte"],
@@ -577,7 +529,6 @@ def simple_similarity(
                     score_array[source_doc],  # type: ignore
                 )
             )
-    # source_corpus.index.unload()  # release index from RAM
     print(f"{count} matches found.")
     matches = merge_passages(matches, source_corpus, min_similarity,)
     return matches, source_corpus
@@ -659,35 +610,3 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
             print(result_object, file=output)
     print(f"Found {len(matches)}...")
     os.system(f"rm -rf {TEMP_DIR}/tmp_docs")
-
-
-if __name__ == "__main__":
-    configuration: Dict[str, Any] = {
-        "source_path": "/var/www/html/philologic/toutvoltaire/data/words_and_philo_ids",
-        "target_path": "/var/www/html/philologic/AP_split/data/words_and_philo_ids",
-        "source_corpus": None,
-        "target_corpus": None,
-        "language": "french",
-        "text_object_type": "text_object",
-        "is_philo_db": True,
-        "modernize": True,
-        "ascii": True,
-        "stemmer": True,
-        "lowercase": True,
-        "numbers": True,
-        "ngram": None,
-        "gap": 0,
-        "text_object_level_split": "div1",
-        "text_object_definition": "n_token",
-        "min_text_obj_length": 10,
-        "minimum_word_length": 3,
-        "lemmatizer": "spacy",
-        "stopwords": "/shared/PhiloLogic4/extras/FrenchStopwords.txt",
-        "workers": 32,
-        "pos_to_keep": ["NOUN", "ADJ", "VERB"],
-        "n_chunk": 5,
-        "min_similarity": 0.3,
-        "similarity_metric": "cosine",
-        "doc2vec_model": "",
-    }
-    run_vsa(configuration)
