@@ -48,6 +48,9 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
             elif key == "pos_to_keep":
                 preprocessing_params["source"][key] = [i.strip() for i in value.split(",")]
                 preprocessing_params["target"][key] = preprocessing_params["source"][key]
+            elif key in ("min_freq", "max_freq"):
+                preprocessing_params["source"][key] = float(value)
+                preprocessing_params["target"][key] = float(value)
             else:
                 preprocessing_params["source"][key] = value
                 preprocessing_params["target"][key] = value

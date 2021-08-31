@@ -9,7 +9,7 @@ import re
 import sys
 from collections import deque
 from html import unescape as unescape_html
-from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
 from xml.sax.saxutils import unescape as unescape_xml
 
 import numpy as np
@@ -58,6 +58,8 @@ class Corpus:
         n_chunk: int = 3,
         text_object_level_split: str = "doc",
         vectorizer: Optional[TfidfVectorizer] = None,
+        min_freq: Union[int, float] = 1,
+        max_freq: float = 1.0,
     ):
         """Intialize CorpusVectorizer"""
         self.texts: Iterable[Tokens] = texts
@@ -71,7 +73,7 @@ class Corpus:
         if vectorizer is None:
             os.system(f"rm -rf {self.tmp_dir}/*")
             os.system(f"mkdir {os.path.join(self.tmp_dir, self.direction)}")
-            self.vectorizer = TfidfVectorizer(max_df=0.9, min_df=0.05, sublinear_tf=True)
+            self.vectorizer = TfidfVectorizer(max_df=max_freq, min_df=min_freq, sublinear_tf=True)
             self.vectors: csr_matrix = self.vectorizer.fit_transform(self.__get_text_chunks())  # type: ignore
         else:
             self.direction = "target"
@@ -197,6 +199,7 @@ class Corpus:
 
     def outer_compare(self, target_corpus: Corpus):
         """Compare corpus with another corpus"""
+        print("Comparing source collection to target collection...", flush=True)
         results: csr_matrix = linear_kernel(self.vectors, target_corpus.vectors)  # type: ignore
         scores: csr_matrix
         for doc_id, scores in enumerate(results):
@@ -499,6 +502,8 @@ def simple_similarity(
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
         text_object_level_split=source_config["text_object_level_split"],
+        min_freq=source_config["min_freq"],
+        max_freq=source_config["max_freq"],
     )
     if target_texts is not None:
         target_corpus: Corpus = Corpus(
@@ -539,6 +544,7 @@ def simple_similarity(
                 )
             )
     print(f"{count} matches found.")
+    print("\n### Post-processing results ###", flush=True)
     matches = merge_passages(matches, source_corpus, min_similarity,)
     return matches, source_corpus
 
@@ -569,10 +575,10 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
     )
     matches, docs_with_matches = optimize_matches(matches, source_corpus)
 
-    print("Writing out results...")
+    print("Writing out processed results...")
     os.system("mkdir -p output/results")
     with open("output/results/alignments.jsonl", "w") as output:
-        for match in matches:
+        for match in tqdm(matches, total=len(matches), leave=False):
             source_context_before = get_text(
                 match.source.start_byte - 300, match.source.start_byte, match.source.metadata["filename"]
             )
