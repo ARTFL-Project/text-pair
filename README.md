@@ -1,5 +1,5 @@
-"Nous ne faisons que nous entregloser" Montaigne wrote famously in his <i>Essais</i>... Since all we do is glose over what's already been written, we may as well build a tool to detect these intertextual relationships... 
- 
+"Nous ne faisons que nous entregloser" Montaigne wrote famously in his <i>Essais</i>... Since all we do is glose over what's already been written, we may as well build a tool to detect these intertextual relationships...
+
 # TextPAIR (Pairwise Alignment for Intertextual Relations)
 
 TextPAIR is a scalable and high-performance sequence aligner for humanities text analysis designed to identify "similar passages" in large collections of texts. These may include direct quotations, plagiarism and other forms of borrowings, commonplace expressions and the like. It is a complete rewrite and rethink of the <a href="https://code.google.com/archive/p/text-pair/">original implementation</a> released in 2009.
@@ -30,6 +30,7 @@ We do offer a Docker image for TextPAIR (or you can build the image from the Doc
 -   A running instance of Apache with mod_wsgi configured
 
 #### Install script
+
 See <a href="docs/ubuntu_installation.md">Ubuntu install instructions</a>
 
 -   Run `install.sh` script. This should install all needed components
@@ -37,6 +38,7 @@ See <a href="docs/ubuntu_installation.md">Ubuntu install instructions</a>
 -   Edit `/etc/text-pair/global_settings.ini` to provide your PostgreSQL user, database, and password.
 
 ## Docker setup
+
 You can also install the artfl/textpair Docker image from Dockerhub. Note that it also comes with PhiloLogic preinstalled.
 
 `docker pull artfl/textpair`
@@ -54,7 +56,6 @@ To run the container with PhiloLogic included on port 80:
 You can then enter the container shell with the following command:
 
 `docker exec -it CONTAINER_NAME /bin/bash`
-
 
 ## Quick start
 
@@ -176,3 +177,12 @@ In this file, there are a number of fields that can be configured:
 Once you've edited these fields to your liking, you can regenerate your database by running the `npm run build` command from the directory where the `appConfig.json` file is located.
 
 Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
+
+## Post processing alignment results
+
+TextPAIR produces two different files (found in the `output/results/` directory) as a result of each alignment task:
+
+-   The `alignments.jsonl` file: this contains all alignments which were found by TextPAIR. Each line is formatted as an individual JSON string.
+-   The `duplicate_files.txt` file: this contains a list of potential duplicate files TextPAIR identified between the source and target databases.
+
+These files are designed to be used for further inspection of the alignments, and potential post processing tasks such as alignment filtering or clustering.

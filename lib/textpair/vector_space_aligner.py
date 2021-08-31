@@ -57,7 +57,6 @@ class Corpus:
         n_chunk: int = 3,
         text_object_level_split: str = "doc",
         vectorizer: Optional[TfidfVectorizer] = None,
-        start_index: int = 0,
     ):
         """Intialize CorpusVectorizer"""
         self.texts: Iterable[Tokens] = texts
@@ -66,17 +65,21 @@ class Corpus:
         self.metadata: List[Dict[str, Any]] = []
         self.text_object_level_split = text_object_level_split
         self.text_object_definition: str = text_object_definition
-        os.system(f"mkdir -p {TEMP_DIR}/tmp_docs")
-        self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/tmp_docs/")
+        self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/output/")
+        self.direction: str = "source"
         if vectorizer is None:
+            os.system(f"rm -rf {self.tmp_dir}/*")
+            os.system(f"mkdir {os.path.join(self.tmp_dir, self.direction)}")
             self.vectorizer = TfidfVectorizer(max_df=0.9, min_df=0.1, sublinear_tf=True)
             self.vectors: csr_matrix = self.vectorizer.fit_transform(self.__get_text_chunks())  # type: ignore
         else:
+            self.direction = "target"
+            os.system(f"mkdir {os.path.join(self.tmp_dir, self.direction)}")
             self.vectorizer = vectorizer
             self.vectors: csr_matrix = self.vectorizer.transform(self.__get_text_chunks())  # type: ignore
         self.length: int = self.vectors.shape[0]  # type: ignore
         self.dim: int = self.vectors.shape[1]  # type: ignore
-        self.start_index = start_index
+        print(self.vectorizer.vocabulary_.keys())
 
     def __getitem__(self, item: int) -> csr_matrix:
         return self.vectors[item]
@@ -96,6 +99,9 @@ class Corpus:
         for text in self.texts:
             print(f"\rProcessing texts... {done} done...", end="", flush=True)
             done += 1
+            text.metadata["parsed_filename"] = os.path.join(
+                self.tmp_dir, self.direction, os.path.basename(text.metadata["parsed_filename"])
+            )
             doc_id = text.metadata["philo_id"].split()[0]
             if doc_id != current_doc_id and current_doc_id is not None:
                 self.__save_doc(full_doc)
@@ -162,8 +168,7 @@ class Corpus:
         for pos, token in enumerate(doc):
             start_bytes[token.ext["start_byte"]] = pos
             end_bytes[token.ext["end_byte"]] = pos
-        cached_file_path = os.path.join(self.tmp_dir, str(hash(doc.metadata["parsed_filename"])))
-        with open(cached_file_path, "wb") as output:
+        with open(doc.metadata["parsed_filename"], "wb") as output:
             dump((doc, start_bytes, end_bytes), output)
 
     def __store_metadata(self, chunk_group: Iterable[Tokens]):
@@ -233,14 +238,11 @@ def get_docs_with_matches(matches: List[MergedGroup]) -> Dict[str, Tuple[Tokens,
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = {}
     for match in matches:
         if match.source.metadata["parsed_filename"] not in docs_with_matches:
-            with open(
-                os.path.join(f"{TEMP_DIR}/tmp_docs", str(hash(match.source.metadata["parsed_filename"]))), "rb"
-            ) as input_doc:
+            print(match.source.metadata["parsed_filename"])
+            with open(match.source.metadata["parsed_filename"], "rb") as input_doc:
                 docs_with_matches[match.source.metadata["parsed_filename"]] = load(input_doc)
         if match.target.metadata["parsed_filename"] not in docs_with_matches:
-            with open(
-                os.path.join(f"{TEMP_DIR}/tmp_docs", str(hash(match.target.metadata["parsed_filename"]))), "rb"
-            ) as input_doc:
+            with open(match.target.metadata["parsed_filename"], "rb") as input_doc:
                 docs_with_matches[match.target.metadata["parsed_filename"]] = load(input_doc)
     return docs_with_matches
 
@@ -257,10 +259,13 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
     """Merge all passages into bigger passages"""
     # pylint: disable=E1101
     # TODO: should merging be done using Jaccard sim metric: to avoid sparsity
-    last_count = len(matches)
-    print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
-    for iteration in range(sys.maxsize ** 10):  # TODO: To replace with while loop
+    last_count = len(matches)
+    current_count = last_count + 1
+    iteration = 1
+    print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
+    while last_count / current_count <= 1.0:  # we stop iterating if there are minimal change between iterations
+        last_count = current_count
         matches.sort(
             key=lambda x: (
                 x.source.filename,
@@ -275,6 +280,21 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
         saved_groups: List[MergedGroup] = []
         total_matches: int = len(matches)
         start_score: float = min_score
+
+        # source_doc = docs_with_matches[matches[-1].source.metadata["parsed_filename"]]
+        # text, start_bytes, end_bytes = source_doc
+        # start_index = start_bytes[matches[-1].source.start_byte]
+        # end_index = end_bytes[matches[-1].source.end_byte] + 1
+        # t = set(t.text for t in text[start_index:end_index])
+        # print("SOURCE\n", text[start_index:end_index])
+        # target_doc = docs_with_matches[matches[-1].target.metadata["parsed_filename"]]
+        # text, start_bytes, end_bytes = target_doc
+        # start_index = start_bytes[matches[-1].target.start_byte]
+        # end_index = end_bytes[matches[-1].target.end_byte] + 1
+        # print("\nTARGET\n", text[start_index:end_index])
+        # print(t.intersection(t.text for t in text[start_index:end_index]), matches[-1].similarity)
+        # exit()
+
         for pos, match in enumerate(matches):
             merged_source: bool = False
             merged_target: bool = False
@@ -332,13 +352,10 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
                 merged_group = MergedGroup(match.source, match.target, start_score)
             if pos + 1 == total_matches:
                 saved_groups.append(merged_group)
-        current_count = len(saved_groups)
-        if last_count / current_count <= 1.0:  # we stop iterating if there's minimal change between iterations
-            print()
-            break
-        print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
-        last_count = current_count
         matches = saved_groups
+        iteration += 1
+        current_count = len(saved_groups)
+        print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
     return matches
 
 
@@ -374,6 +391,7 @@ def optimize_matches(
     print("Optimizing matches...")
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
     optimized_matches: List[MergedGroup] = []
+    match_count = 0
     for match in matches:
         source_tokens = get_passage(
             docs_with_matches[match.source.metadata["parsed_filename"]], match.source.start_byte, match.source.end_byte
@@ -394,6 +412,7 @@ def optimize_matches(
         # print(jaccard_sim)
         # if jaccard_sim > 0.15:
         optimized_matches.append(MergedGroup(source, target, best_score))
+        match_count += 1
     return optimized_matches, docs_with_matches
 
 
@@ -499,7 +518,6 @@ def simple_similarity(
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
             text_object_level_split=target_config["text_object_level_split"],
-            start_index=source_corpus.length,
         )
 
         matching_docs = source_corpus.outer_compare(target_corpus)
@@ -526,7 +544,7 @@ def simple_similarity(
                         target_corpus.metadata[target_doc]["filename"],
                         target_corpus.metadata[target_doc],
                     ),
-                    score_array[source_doc],  # type: ignore
+                    score_array[target_doc],  # type: ignore
                 )
             )
     print(f"{count} matches found.")
