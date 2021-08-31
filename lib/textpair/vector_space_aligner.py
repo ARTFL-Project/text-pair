@@ -19,6 +19,7 @@ from scipy.sparse import csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from text_preprocessing import PreProcessor, Token, Tokens
+from tqdm import tqdm
 
 TAGS = re.compile(r"<[^>]+>")
 
@@ -70,7 +71,7 @@ class Corpus:
         if vectorizer is None:
             os.system(f"rm -rf {self.tmp_dir}/*")
             os.system(f"mkdir {os.path.join(self.tmp_dir, self.direction)}")
-            self.vectorizer = TfidfVectorizer(max_df=0.9, min_df=0.1, sublinear_tf=True)
+            self.vectorizer = TfidfVectorizer(max_df=0.9, min_df=0.05, sublinear_tf=True)
             self.vectors: csr_matrix = self.vectorizer.fit_transform(self.__get_text_chunks())  # type: ignore
         else:
             self.direction = "target"
@@ -79,7 +80,6 @@ class Corpus:
             self.vectors: csr_matrix = self.vectorizer.transform(self.__get_text_chunks())  # type: ignore
         self.length: int = self.vectors.shape[0]  # type: ignore
         self.dim: int = self.vectors.shape[1]  # type: ignore
-        print(self.vectorizer.vocabulary_.keys())
 
     def __getitem__(self, item: int) -> csr_matrix:
         return self.vectors[item]
@@ -103,7 +103,9 @@ class Corpus:
                 self.tmp_dir, self.direction, os.path.basename(text.metadata["parsed_filename"])
             )
             doc_id = text.metadata["philo_id"].split()[0]
-            if doc_id != current_doc_id and current_doc_id is not None:
+            if (
+                doc_id != current_doc_id and current_doc_id is not None
+            ):  # we save the current doc when doc_ids don't match
                 self.__save_doc(full_doc)
                 full_doc = Tokens([], text.metadata)
             full_doc.extend(text)
@@ -113,10 +115,10 @@ class Corpus:
             )
             if text_level_id != current_text_level_id:
                 chunk_group_length: int = sum([len(t) for t in chunk_group])
-                if chunk_group_length >= min_chunk_length:
-                    self.__store_metadata(chunk_group)
-                    # self.length += 1
-                    yield " ".join([t.text for chunk in chunk_group for t in chunk])
+                if chunk_group_length >= min_chunk_length and self.text_object_definition == "text_object":
+                    chunk = [t for chunk in chunk_group for t in chunk]
+                    self.__store_metadata(chunk_group[0].metadata, chunk)
+                    yield " ".join(chunk)
                 chunk_group.clear()
             current_text_level_id = text_level_id
             if self.text_object_definition == "text_object":
@@ -131,30 +133,29 @@ class Corpus:
                 if len(chunk_group) == self.n_chunk:
                     chunk_group_length = sum([len(t) for t in chunk_group])
                     if chunk_group_length >= min_chunk_length:
-                        self.__store_metadata(chunk_group)
-                        # self.length += 1
-                        yield " ".join([t.text for chunk in chunk_group for t in chunk])
+                        chunk = [t for chunk in chunk_group for t in chunk]
+                        self.__store_metadata(chunk_group[0].metadata, chunk)
+                        yield " ".join(chunk)
             else:
-                chunks_to_return: List[List[str]] = []
+                chunks_to_return: List[List[Token]] = []
                 for chunk in text.split_tokens(self.min_text_obj_length):
                     if not chunk:
                         continue
                     if len(chunk) != self.min_text_obj_length:  # We've reached the end of our text object
                         try:
                             chunk_group[-1].extend(chunk)
-                            self.metadata.pop()
-                            self.__store_metadata(chunk_group)
-                            chunks_to_return[-1] = [t.text for chunk in chunk_group for t in chunk]
+                            chunk = [t for chunk in chunk_group for t in chunk if t.text]
+                            self.__store_metadata(chunk_group[0].metadata, chunk)
+                            yield " ".join(chunk)
                             break
                         except IndexError:
                             pass
                     else:
                         chunk_group.append(chunk)
                     if len(chunk_group) == self.n_chunk:
-                        self.__store_metadata(chunk_group)
-                        # self.length += 1
-                        chunks_to_return.append([t.text for chunk in chunk_group for t in chunk])
+                        chunks_to_return.append([t for chunk in chunk_group for t in chunk if t.text])
                 for chunk in chunks_to_return:
+                    self.__store_metadata(chunk_group[0].metadata, chunk)
                     yield " ".join(chunk)
             current_doc_id = doc_id
         self.__save_doc(full_doc)
@@ -171,12 +172,15 @@ class Corpus:
         with open(doc.metadata["parsed_filename"], "wb") as output:
             dump((doc, start_bytes, end_bytes), output)
 
-    def __store_metadata(self, chunk_group: Iterable[Tokens]):
+    def __store_metadata(self, metadata: Dict[str, Any], tokens: List[Token]):
         """Store Metadata for each chunk"""
-        metadata: Dict[str, Any] = chunk_group[0].metadata
-        metadata["start_byte"] = chunk_group[0][0].ext["start_byte"]
-        metadata["end_byte"] = chunk_group[-1][-1].ext["end_byte"]
-        self.metadata.append(metadata)
+        # metadata: Dict[str, Any] = chunk_group[0].metadata
+        # metadata["start_byte"] = chunk_group[0][0].ext["start_byte"]
+        # metadata["end_byte"] = chunk_group[-1][-1].ext["end_byte"]
+        self.metadata.append(
+            {**metadata, "start_byte": tokens[0].ext["start_byte"], "end_byte": tokens[-1].ext["end_byte"],}
+        )
+        # self.metadata.append(metadata)
 
     def inner_compare(self) -> csr_matrix:
         """Compare corpus with itself"""
@@ -238,7 +242,6 @@ def get_docs_with_matches(matches: List[MergedGroup]) -> Dict[str, Tuple[Tokens,
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = {}
     for match in matches:
         if match.source.metadata["parsed_filename"] not in docs_with_matches:
-            print(match.source.metadata["parsed_filename"])
             with open(match.source.metadata["parsed_filename"], "rb") as input_doc:
                 docs_with_matches[match.source.metadata["parsed_filename"]] = load(input_doc)
         if match.target.metadata["parsed_filename"] not in docs_with_matches:
@@ -280,20 +283,6 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
         saved_groups: List[MergedGroup] = []
         total_matches: int = len(matches)
         start_score: float = min_score
-
-        # source_doc = docs_with_matches[matches[-1].source.metadata["parsed_filename"]]
-        # text, start_bytes, end_bytes = source_doc
-        # start_index = start_bytes[matches[-1].source.start_byte]
-        # end_index = end_bytes[matches[-1].source.end_byte] + 1
-        # t = set(t.text for t in text[start_index:end_index])
-        # print("SOURCE\n", text[start_index:end_index])
-        # target_doc = docs_with_matches[matches[-1].target.metadata["parsed_filename"]]
-        # text, start_bytes, end_bytes = target_doc
-        # start_index = start_bytes[matches[-1].target.start_byte]
-        # end_index = end_bytes[matches[-1].target.end_byte] + 1
-        # print("\nTARGET\n", text[start_index:end_index])
-        # print(t.intersection(t.text for t in text[start_index:end_index]), matches[-1].similarity)
-        # exit()
 
         for pos, match in enumerate(matches):
             merged_source: bool = False
@@ -356,6 +345,7 @@ def merge_passages(matches: List[MergedGroup], corpus: Corpus, min_score: float,
         iteration += 1
         current_count = len(saved_groups)
         print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
+    print(flush=True)
     return matches
 
 
@@ -392,7 +382,7 @@ def optimize_matches(
     docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
     optimized_matches: List[MergedGroup] = []
     match_count = 0
-    for match in matches:
+    for match in tqdm(matches, total=len(matches), leave=False):
         source_tokens = get_passage(
             docs_with_matches[match.source.metadata["parsed_filename"]], match.source.start_byte, match.source.end_byte
         )
@@ -524,6 +514,7 @@ def simple_similarity(
     else:
         matching_docs = source_corpus.inner_compare()
         target_corpus = source_corpus
+
     for source_doc, score_array in enumerate(matching_docs):
         filtered_results: np.array = np.where(score_array > min_similarity)[0]  # type: ignore
         count += len(filtered_results)
@@ -626,5 +617,3 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
                 }
             )
             print(result_object, file=output)
-    print(f"Found {len(matches)}...")
-    os.system(f"rm -rf {TEMP_DIR}/tmp_docs")
