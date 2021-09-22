@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from collections import deque
 from html import unescape as unescape_html
 from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
@@ -15,11 +14,13 @@ from xml.sax.saxutils import unescape as unescape_xml
 import numpy as np
 from dill import dump, load
 from recordclass import dataobject
+
 from scipy.sparse import csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from text_preprocessing import PreProcessor, Token, Tokens
 from tqdm import tqdm
+
 
 TAGS = re.compile(r"<[^>]+>")
 
@@ -99,7 +100,7 @@ class Corpus:
         text = None
         done = 0
         for text in self.texts:
-            print(f"\rProcessing texts... {done} done...", end="", flush=True)
+            print(f"\rProcessing {self.direction} texts... {done} text chunks extracted...", end="", flush=True)
             done += 1
             text.metadata["parsed_filename"] = os.path.join(
                 self.tmp_dir, self.direction, os.path.basename(text.metadata["parsed_filename"])
@@ -176,13 +177,9 @@ class Corpus:
 
     def __store_metadata(self, metadata: Dict[str, Any], tokens: List[Token]):
         """Store Metadata for each chunk"""
-        # metadata: Dict[str, Any] = chunk_group[0].metadata
-        # metadata["start_byte"] = chunk_group[0][0].ext["start_byte"]
-        # metadata["end_byte"] = chunk_group[-1][-1].ext["end_byte"]
         self.metadata.append(
             {**metadata, "start_byte": tokens[0].ext["start_byte"], "end_byte": tokens[-1].ext["end_byte"],}
         )
-        # self.metadata.append(metadata)
 
     def inner_compare(self) -> csr_matrix:
         """Compare corpus with itself"""
@@ -217,6 +214,7 @@ def clean_text(text: str) -> str:
     text = TAGS.sub("", text)
     text = unescape_xml(text)
     text = unescape_html(text)
+    text = text.replace("\n", " ")
     text = text.strip()
     return text
 
@@ -378,7 +376,7 @@ def optimize_match(
 
 
 def optimize_matches(
-    matches: List[MergedGroup], corpus: Corpus,
+    matches: List[MergedGroup], corpus: Corpus, min_matching_words: int
 ) -> Tuple[List[MergedGroup], Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]]]:
     """Optimize matches to get highest sim score"""
     print("Optimizing matches...")
@@ -393,63 +391,47 @@ def optimize_matches(
             docs_with_matches[match.target.metadata["parsed_filename"]], match.target.start_byte, match.target.end_byte
         )
         intersection = {t.text for t in source_tokens if t.text}.intersection({t.text for t in target_tokens})
-        source = optimize_match(source_tokens, intersection, match.source, corpus)
-        target = optimize_match(target_tokens, intersection, match.target, corpus)
-        best_score_matrix: np.ndarray = linear_kernel(target.vector, source.vector)  # type: ignore
-        best_score: float = best_score_matrix[0, 0]
-
-        # Let's check the jaccard score to weed out matches with overinflated IDF weighting
-        # source_set = {token.text for token in source_tokens if token.text}
-        # target_set = {token.text for token in target_tokens if token.text}
-        # jaccard_sim = len(source_set.intersection(target_set)) / len(source_set.union(target_set))
-        # print(jaccard_sim)
-        # if jaccard_sim > 0.15:
-        optimized_matches.append(MergedGroup(source, target, best_score))
-        match_count += 1
+        if len(intersection) > min_matching_words:
+            source = optimize_match(source_tokens, intersection, match.source, corpus)
+            target = optimize_match(target_tokens, intersection, match.target, corpus)
+            best_score_matrix: np.ndarray = linear_kernel(target.vector, source.vector)  # type: ignore
+            best_score: float = best_score_matrix[0, 0]
+            optimized_matches.append(MergedGroup(source, target, best_score))
+            match_count += 1
+    if len(matches) != match_count:
+        print(
+            f"{match_count} matches remaining: {len(matches)-match_count} matches were dropped due to low number of unique matching words."
+        )
     return optimized_matches, docs_with_matches
 
 
 def get_tokens(
     passage: PassageGroup, preproc: PreProcessor, doc: Tuple[Tokens, Dict[int, int], Dict[int, int]]
 ) -> List[Token]:
-    """Get tokens while making sure we grab a full sentence for POS tagging"""
-    sentence_boundaries: set = {".", "!", "?"}
+    """Get tokens """
     text: str = " "
     start_byte: int = passage.start_byte
     end_byte: int = passage.end_byte
-    while text[0] not in sentence_boundaries:
-        start_byte -= 1
-        with open(passage.filename, "rb") as text_file:
-            text_file.seek(start_byte)
-            text = text_file.read(end_byte - start_byte).decode("utf8", "ignore")
-        if start_byte == 0:
-            break
-    max_size = os.path.getsize(passage.filename)
-    while text[-1] not in sentence_boundaries:
-        end_byte += 1
-        if end_byte > max_size:
-            break
-        with open(passage.filename, "rb") as text_file:
-            text_file.seek(start_byte)
-            text = text_file.read(end_byte - start_byte).decode("utf8", "ignore")
+    with open(passage.filename, "rb") as text_file:
+        text_file.seek(start_byte)
+        text = text_file.read(end_byte - start_byte).decode("utf8", "ignore")
     tokens: List[Token] = []
     full_tokens, start_bytes, _ = doc
+    pos = 0
     for token in preproc.process_string(text):
-        # print(token)
+        pos += 1
         end_byte = start_byte + len(token.surface_form.encode("utf8"))
-        if start_byte >= passage.start_byte and end_byte <= passage.end_byte:
-            try:
-                surface_form = token.surface_form
-                token = full_tokens[start_bytes[start_byte]]
-                token.surface_form = surface_form
-            except KeyError:  # Token was not indexed at parse time
-                pass
-            tokens.append(token)
-            # print("missed", repr(token))
-        if end_byte > passage.end_byte:
-            break
+        # if start_byte >= passage.start_byte and end_byte <= passage.end_byte:
+        surface_form = token.surface_form.replace("\n", " ")
+        try:
+            token = full_tokens[start_bytes[start_byte]]
+        except KeyError:  # Token was not indexed at parse time
+            pass
+        token.surface_form = surface_form
+        tokens.append(token)
+        # if end_byte > passage.end_byte:
+        #     break
         start_byte = end_byte
-    # exit()
     return tokens
 
 
@@ -471,7 +453,9 @@ def post_process_passages(
         if token.text and token.text in target_set:
             source_passage_with_matches.append(f'&lt;span class="token-match"&gt;{token.surface_form}&lt;/span&gt;')
         elif not token.text:
-            source_passage_with_matches.append(f'&lt;span class="filtered-token"&gt;{token.surface_form}&lt;/span&gt;')
+            source_passage_with_matches.append(
+                f'&lt;span class="filtered-token"&gt;{token.surface_form or " "}&lt;/span&gt;'
+            )
         else:
             source_passage_with_matches.append(token.surface_form)
     target_passage_with_matches = []
@@ -493,7 +477,7 @@ def simple_similarity(
     min_similarity: float,
     target_texts: Optional[Iterable[Tokens]] = None,
 ) -> Tuple[List[MergedGroup], Corpus]:
-    """Annoy cosine similarity"""
+    """Cosine similarity"""
     count: int = 0
     matches: List[MergedGroup] = []
     source_corpus: Corpus = Corpus(
@@ -561,6 +545,8 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
         config["source"]["text_object_type"] = config["source"]["text_object_level_split"]
     if config["target"]["text_object_definition"] == "n_token":
         config["target"]["text_object_type"] = config["target"]["text_object_level_split"]
+    config["source"]["strip_tags"] = True  # this is useful for post-processing passages where we have tags included.
+    config["target"]["strip_tags"] = True
     source_preproc: PreProcessor = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
     source_texts: Iterable[Tokens] = source_preproc.process_texts(
         (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
@@ -573,10 +559,24 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
     matches, source_corpus = simple_similarity(
         source_texts, config["source"], config["target"], config["min_similarity"], target_texts=target_texts,
     )
-    matches, docs_with_matches = optimize_matches(matches, source_corpus)
+    matches, docs_with_matches = optimize_matches(matches, source_corpus, config["min_matching_words"])
 
-    print("Writing out processed results...")
+    print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
+    source_preproc.options = {
+        **source_preproc.options,
+        "strip_tags": False,
+        "with_pos": False,
+        "spacy_lemmatizer": False,
+    }
+    source_preproc.pos_to_keep = set()
+    target_preproc.options = {
+        **target_preproc.options,
+        "strip_tags": False,
+        "with_pos": False,
+        "spacy_lemmatizer": False,
+    }
+    target_preproc.pos_to_keep = set()
     with open("output/results/alignments.jsonl", "w") as output:
         for match in tqdm(matches, total=len(matches), leave=False):
             source_context_before = get_text(

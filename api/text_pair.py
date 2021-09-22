@@ -6,6 +6,8 @@ import os
 import re
 from collections import Counter, OrderedDict
 from typing import Dict
+from pathlib import Path
+import time
 
 import psycopg2
 import psycopg2.extras
@@ -205,23 +207,32 @@ def query_builder(query_args, other_args, field_types):
     return " AND ".join(sql_fields), sql_values
 
 
-def get_resource(path):
-    with open(path) as resource_file:
-        resource = resource_file.read()
-    return resource
+@app.get("/")
+def list_dir():
+    """List Text-PAIR databases"""
+    textpair_dbs = sorted(Path(APP_PATH).iterdir(), key=os.path.getmtime, reverse=True)
+    links = "<h3>Text-PAIR databases</h3><hr/><table style='font-size: 130%'>"
+    for db in textpair_dbs:
+        date_components = time.ctime(os.path.getmtime(db)).split()
+        date = f"{' '.join(date_components[0:3])} {date_components[-1]} {date_components[3]}"
+        links += f'<tr><td><a href="{db.name}">{db.name}</a></td><td>{date}</td></tr>'
+    links += "</table>"
+    return HTMLResponse(links)
 
 
 @app.get("/{db_path}/css/{resource}")
 def get_css_resource(db_path: str, resource: str):
     """Retrieve CSS resources"""
-    resource = get_resource(os.path.join(APP_PATH, db_path, "dist/css", resource))
+    with open(os.path.join(APP_PATH, db_path, "dist/css", resource)) as resource_file:
+        resource = resource_file.read()
     return Response(resource, media_type="text/css")
 
 
 @app.get("/{db_path}/js/{resource}")
 def get_js_resource(db_path: str, resource: str):
     """Retrieve JS resources"""
-    resource = get_resource(os.path.join(APP_PATH, db_path, "dist/js", resource))
+    with open(os.path.join(APP_PATH, db_path, "dist/js", resource)) as resource_file:
+        resource = resource_file.read()
     return Response(resource, media_type="application/javascript")
 
 

@@ -484,7 +484,7 @@ export default {
 }
 
 .facet-count {
-    text-pair: right;
+    float: right;
 }
 
 .list-group-item:focus,
@@ -497,25 +497,24 @@ export default {
     color: dodgerblue;
 }
 
-/deep/ .added {
+::v-deep .added {
     color: darkblue;
     font-weight: 700;
 }
 
-/deep/ .removed {
+::v-deep .removed {
     color: green;
     font-weight: 700;
     text-decoration: line-through;
 }
 
-/deep/ .token-match {
+::v-deep .token-match {
     color: darkblue;
     font-weight: 700;
-    letter-spacing: -0.0075em;
+    letter-spacing: 0.5px;
 }
 
-/deep/ .filtered-token {
-    letter-spacing: -0.0075em;
+::v-deep .filtered-token {
     opacity: 0.25;
 }
 
