@@ -40,9 +40,9 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
                     value = False
             if key.endswith("object_level"):
                 if key.startswith("source"):
-                    preprocessing_params["source"]["text_object_level"] = value
+                    preprocessing_params["source"]["text_object_type"] = value
                 else:
-                    preprocessing_params["target"]["text_object_level"] = value
+                    preprocessing_params["target"]["text_object_type"] = value
             elif key in ("ngram", "gap", "minimum_word_length", "n_chunk", "min_text_object_length",):
                 preprocessing_params["source"][key] = int(value)
                 preprocessing_params["target"][key] = int(value)
@@ -64,7 +64,7 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
                     value = "false"
             elif key == "min_similarity":
                 value = float(value)
-            elif key == "min_matching_words":
+            elif key in ("min_matching_words", "source_batch", "target_batch"):
                 value = int(value)
             matching_params[key] = value
     if skip_web_app is False:

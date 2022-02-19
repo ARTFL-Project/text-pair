@@ -511,7 +511,7 @@ export default {
 ::v-deep .token-match {
     color: darkblue;
     font-weight: 700;
-    letter-spacing: 0.5px;
+    letter-spacing: -0.5px;
 }
 
 ::v-deep .filtered-token {
