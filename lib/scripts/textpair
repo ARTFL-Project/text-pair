@@ -144,7 +144,7 @@ def parse_command_line():
     else:
         paths["source"]["ngram_output_path"] = args["source_files"].replace(
             "/ngrams", ""
-        )  # we add the path furth below, so we assume it's been given on the CLI
+        )  # we add the path further below, so we assume it's been given on the CLI
         paths["source"]["metadata_path"] = args["source_metadata"]
         paths["source"]["common_ngrams"] = args["source_common_ngrams"]
         matching_params["ngram_index"] = args["ngram_index"]
@@ -188,9 +188,9 @@ def run_alignment(pair_params):
         ngrams.generate(
             pair_params.paths["source"]["input_files_for_ngrams"],
             pair_params.paths["source"]["ngram_output_path"],
-            metadata=pair_params.paths["source"]["metadata_path"],
-            is_philo_db=pair_params.paths["source"]["is_philo_db"],
-            workers=pair_params.workers,
+            pair_params.paths["source"]["metadata_path"],
+            pair_params.paths["source"]["is_philo_db"],
+            pair_params.workers,
         )
         if pair_params.paths["target"]:
             if pair_params.tei_parsing["parse_target_files"] is True:
@@ -209,9 +209,9 @@ def run_alignment(pair_params):
             ngrams.generate(
                 pair_params.paths["target"]["input_files_for_ngrams"],
                 pair_params.paths["target"]["ngram_output_path"],
-                metadata=pair_params.paths["target"]["metadata_path"],
-                is_philo_db=pair_params.paths["target"]["is_philo_db"],
-                workers=pair_params.workers,
+                pair_params.paths["target"]["metadata_path"],
+                pair_params.paths["target"]["is_philo_db"],
+                pair_params.workers,
             )
     print("\n### Starting sequence alignment ###")
     if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source

@@ -28,7 +28,7 @@ APP_PATH = GLOBAL_CONFIG["WEB_APP"]["web_app_path"]
 
 POOL = pool.ThreadedConnectionPool(
     1,
-    100,
+    20,
     user=GLOBAL_CONFIG["DATABASE"]["database_user"],
     password=GLOBAL_CONFIG["DATABASE"]["database_password"],
     database=GLOBAL_CONFIG["DATABASE"]["database_name"],
@@ -98,9 +98,8 @@ def get_pg_type(table_name):
     """Find PostgreSQL field type"""
     with POOL.getconn() as conn:
         cursor = conn.cursor()
-        cursor.execute(f"select * from {table_name}")
-        type_mapping = {23: "INTEGER", 25: "TEXT", 701: "FLOAT"}
-        field_types = {column.name: type_mapping[column.type_code] for column in cursor.description}
+        cursor.execute(f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name ='{table_name}'")
+        field_types = {field: field_type.upper() for field, field_type in cursor}
         POOL.putconn(conn)
     return field_types
 
