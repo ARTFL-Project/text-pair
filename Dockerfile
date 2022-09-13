@@ -1,12 +1,14 @@
 FROM artfl/philologic:latest
 
-RUN apt update && apt install -y postgresql postgresql-contrib apache2-dev curl git locales
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt update && apt install -y postgresql postgresql-contrib apache2-dev curl git locales libpq-dev
 
 RUN curl -sL https://deb.nodesource.com/setup_14.x | sudo -E bash && apt-get install -y nodejs
 
 RUN apt-get clean && rm -rf /var/lib/apt
 
-RUN mkdir textpair && curl -L  https://github.com/ARTFL-Project/text-pair/archive/v2.0-beta.4.tar.gz | tar xz -C textpair --strip-components 1 &&\
+RUN mkdir textpair && curl -L  https://github.com/ARTFL-Project/text-pair/archive/v2.0-beta.5.tar.gz | tar xz -C textpair --strip-components 1 &&\
     cd textpair && sh install.sh
 
 RUN echo "<Location /text-pair-api>\nProxyPass http://localhost:8000 Keepalive=On\nProxyPassReverse http://localhost:8000\n</Location>\n<Location /text-pair>\nProxyPass http://localhost:8000 Keepalive=On\nProxyPassReverse http://localhost:8000\n</Location>\n" >> /etc/apache2/sites-enabled/000-default.conf
