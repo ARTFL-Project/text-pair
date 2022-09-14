@@ -24,8 +24,8 @@ sudo mkdir -p /etc/text-pair
 if [ ! -f /etc/text-pair/global_settings.ini ]
     then
         sudo touch /etc/text-pair/global_settings.ini
-        echo "[WEB_APP]" | sudo tee -a /etc/topologic/global_settings.ini > /dev/null
-        echo "web_app_path =" | sudo tee -a /etc/topologic/global_settings.ini > /dev/null
+        echo "[WEB_APP]" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
+        echo "web_app_path =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
         echo "[DATABASE]" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
         echo "database_name =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
         echo "database_user =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
