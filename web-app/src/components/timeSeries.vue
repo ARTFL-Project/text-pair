@@ -6,7 +6,7 @@
         </div>
         <div class="row mt-3">
             <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="loading">
-                <atom-spinner :animation-duration="800" :size="65" color="#000" />
+                <!-- <atom-spinner :animation-duration="800" :size="65" color="#000" /> -->
             </div>
             <div class="col">
                 <canvas id="myChart" height="800"></canvas>
@@ -16,17 +16,17 @@
 </template>
 
 <script>
-import { EventBus } from "../main.js";
 import Chart from "chart.js/dist/Chart.js";
 import searchArguments from "./searchArguments";
-import { AtomSpinner } from "epic-spinners";
+// import { AtomSpinner } from "epic-spinners";
 
 export default {
     name: "timeSeries",
     components: {
         searchArguments,
-        AtomSpinner,
+        // AtomSpinner,
     },
+    inject: ["$http"],
     data() {
         return {
             loading: true,
@@ -66,7 +66,7 @@ export default {
                 .then((response) => {
                     this.loading = false;
                     this.done = true;
-                    EventBus.$emit("searchArgsUpdate", { counts: response.data.counts, searchParams: params });
+                    this.emitter.emit("searchArgsUpdate", { counts: response.data.counts, searchParams: params });
                     this.drawChart(response.data.results);
                 })
                 .catch((error) => {
@@ -165,7 +165,7 @@ export default {
                     } else {
                         params[`${params.directionSelected}_year`] = label;
                     }
-                    EventBus.$emit("urlUpdate", params);
+                    vm.emitter.emit("urlUpdate", params);
                     vm.$router.push(`/search?${vm.paramsToUrl(params)}`);
                 }
             };

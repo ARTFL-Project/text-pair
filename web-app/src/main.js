@@ -1,18 +1,24 @@
-import Vue from 'vue';
+import { createApp } from 'vue'
+// import { configureCompat } from 'vue'
 import App from "./App.vue";
 import router from "./router";
 import axios from "axios";
-
+import emitter from 'tiny-emitter/instance'
 import globalConfig from "../appConfig.json";
 
-Vue.config.productionTip = false;
-Vue.prototype.$http = axios;
-Vue.prototype.$globalConfig = globalConfig;
 
-export const EventBus = new Vue(); // To pass messages between components
+// configureCompat({
+//     // MODE: 3,
+// })
+
+const app = createApp(App)
+app.config.globalProperties.$globalConfig = globalConfig
+app.config.globalProperties.emitter = emitter
+app.config.unwrapInjectedRef = true
+app.provide("$http", axios)
 
 
-Vue.mixin({
+app.mixin({
     methods: {
         paramsToUrl: function(formValues) {
             var queryParams = [];
@@ -25,11 +31,6 @@ Vue.mixin({
         }
     }
 });
+app.use(router)
 
-new Vue({
-    el: "#app",
-    router,
-    template: "<App/>",
-    components: { App },
-    render: h => h(App)
-});
+router.isReady().then(() => app.mount('#app'))

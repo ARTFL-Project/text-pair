@@ -1,19 +1,29 @@
 module.exports = {
     devServer: {
-        disableHostCheck: true,
-        host: "0.0.0.0",
+        compress: true,
+        allowedHosts: 'all',
         headers: {
             'Access-Control-Allow-Origin': '*'
         }
     },
-    configureWebpack: {
-        output: {
-            globalObject: 'this'
-        }
-    },
+    // chainWebpack: (config) => {
+    //     config.resolve.alias.set('vue', '@vue/compat')
+    //     config.module
+    //         .rule('vue')
+    //         .use('vue-loader')
+    //         .tap((options) => {
+    //             return {
+    //                 ...options,
+    //                 compilerOptions: {
+    //                     compatConfig: {
+    //                         MODE: 2
+    //                     }
+    //                 }
+    //             }
+    //         })
+    // },
     publicPath: process.env.NODE_ENV === 'production' ?
-        getAppPath() :
-        '/'
+        getAppPath() : '/'
 }
 
 

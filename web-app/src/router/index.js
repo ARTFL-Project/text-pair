@@ -1,17 +1,16 @@
-import Vue from 'vue';
-import VueRouter from "vue-router";
-import searchResults from "../components/searchResults";
-import timeSeries from "../components/timeSeries";
-
+import { createRouter, createWebHistory } from 'vue-router'
 import globalConfig from "../../appConfig.json";
 
-Vue.use(VueRouter);
+const searchResults = () =>
+    import ('../components/searchResults');
+const timeSeries = () =>
+    import ('../components/timeSeries');
 
-export default new VueRouter({
-    mode: "history",
-    base: globalConfig.appPath,
-    routes: [
-        {
+
+
+const router = createRouter({
+    history: createWebHistory(globalConfig.appPath),
+    routes: [{
             path: "/search",
             name: "searchResults",
             component: searchResults
@@ -24,9 +23,13 @@ export default new VueRouter({
     ],
     scrollBehavior(to, from, savedPosition) {
         if (savedPosition) {
-            return savedPosition;
+            return savedPosition
         } else {
-            return { x: 0, y: 0 };
+            return {
+                left: 0,
+                top: 0
+            }
         }
     }
-});
+})
+export default router

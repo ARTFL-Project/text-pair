@@ -23,7 +23,8 @@
                 v-for="(paramGroup, groupIndex) in searchParams"
                 :key="groupIndex"
             >
-                <h6 class="text-center text-capitalize" v-html="paramGroup.direction">
+                <h6 class="text-center text-capitalize">
+                    <span v-html="paramGroup.direction"></span>
                     {{ paramGroup.direction }} Parameters:
                 </h6>
                 <div v-if="paramGroup.params != null">
@@ -45,13 +46,11 @@
     </div>
 </template>
 <script>
-import { EventBus } from "../main.js";
-
 export default {
     name: "searchArguments",
     created() {
         var vm = this;
-        EventBus.$on("searchArgsUpdate", (params) => {
+        this.emitter.on("searchArgsUpdate", (params) => {
             vm.counts = params.counts.toLocaleString();
             vm.searchParams = this.processParams(params.searchParams);
             if ("banality" in params.searchParams && params.searchParams.banality.length > 0) {
@@ -76,7 +75,7 @@ export default {
     },
     methods: {
         toggleSearchForm() {
-            EventBus.$emit("toggleSearchForm");
+            this.emitter.emit("toggleSearchForm");
         },
         processParams(params) {
             let searchParams = [];
@@ -106,7 +105,7 @@ export default {
             delete queryParams.id_anchor;
             queryParams.db_table = this.$globalConfig.databaseName;
             queryParams[metadata.fieldName] = "";
-            EventBus.$emit("urlUpdate", queryParams);
+            this.emitter.emit("urlUpdate", queryParams);
             this.facetResults = null;
             this.results = { alignments: [] };
             let route = this.$route.path;

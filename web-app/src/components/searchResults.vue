@@ -7,7 +7,7 @@
         <div class="row">
             <div class="col position-relative">
                 <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="loading">
-                    <atom-spinner :animation-duration="800" :size="65" color="#000" />
+                    <!-- <atom-spinner :animation-duration="800" :size="65" color="#000" /> -->
                 </div>
                 <transition-group
                     name="staggered-fade"
@@ -102,7 +102,7 @@
                                     class="loading position-absolute"
                                     style="display: none; left: 50%; transform: translateX(-50%)"
                                 >
-                                    <atom-spinner :animation-duration="800" :size="25" color="#000" />
+                                    <!-- <atom-spinner :animation-duration="800" :size="25" color="#000" /> -->
                                 </div>
                             </div>
                             <div v-if="globalConfig.matchingAlgorithm == 'sa'">
@@ -123,7 +123,7 @@
                                     class="loading position-absolute"
                                     style="display: none; left: 50%; transform: translateX(-50%)"
                                 >
-                                    <atom-spinner :animation-duration="800" :size="25" color="#000" />
+                                    <!-- <atom-spinner :animation-duration="800" :size="25" color="#000" /> -->
                                 </div>
                             </div>
                         </div>
@@ -187,7 +187,7 @@
                     style="left: 50%; transform: translateX(-50%)"
                     v-if="facetLoading"
                 >
-                    <atom-spinner :animation-duration="800" :size="65" color="#000" />
+                    <!-- <atom-spinner :animation-duration="800" :size="65" color="#000" /> -->
                 </div>
                 <div class="card rounded-0 shadow-1 mt-3" v-if="facetResults">
                     <div class="corner-btn destroy right" @click="closeFacetResults()">X</div>
@@ -219,9 +219,8 @@
 </template>
 
 <script>
-import { EventBus } from "../main.js";
 import searchArguments from "./searchArguments";
-import { AtomSpinner } from "epic-spinners";
+// import { AtomSpinner } from "epic-spinners";
 import Worker from "worker-loader!./diffStrings";
 import Velocity from "velocity-animate";
 
@@ -229,8 +228,9 @@ export default {
     name: "searchResults",
     components: {
         searchArguments,
-        AtomSpinner,
+        // AtomSpinner,
     },
+    inject: ["$http"],
     data() {
         return {
             loading: false,
@@ -263,7 +263,7 @@ export default {
             this.loading = true;
             let params = { ...this.$route.query };
             params.db_table = this.$globalConfig.databaseName;
-            EventBus.$emit("searchArgsUpdate", {
+            this.emitter.emit("searchArgsUpdate", {
                 counts: "",
                 searchParams: params,
             });
@@ -283,7 +283,7 @@ export default {
                         })
                         .then((response) => {
                             let counts = response.data.counts;
-                            EventBus.$emit("searchArgsUpdate", {
+                            this.emitter.emit("searchArgsUpdate", {
                                 counts: counts,
                                 searchParams: params,
                             });
@@ -383,7 +383,7 @@ export default {
             delete queryParams.id_anchor;
             queryParams.db_table = this.$globalConfig.databaseName;
             queryParams[fieldName] = `"${value}"`;
-            EventBus.$emit("urlUpdate", queryParams);
+            this.emitter.emit("urlUpdate", queryParams);
             this.facetResults = null;
             this.results = { alignments: [] };
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
@@ -458,7 +458,7 @@ export default {
             }, delay);
         },
         toggleSearchForm() {
-            EventBus.$emit("toggleSearchForm");
+            this.emitter.emit("toggleSearchForm");
         },
     },
 };
@@ -497,24 +497,24 @@ export default {
     color: dodgerblue;
 }
 
-::v-deep .added {
+:deep(.added) {
     color: darkblue;
     font-weight: 700;
 }
 
-::v-deep .removed {
+:deep(.removed) {
     color: green;
     font-weight: 700;
     text-decoration: line-through;
 }
 
-::v-deep .token-match {
+:deep(.token-match) {
     color: darkblue;
     font-weight: 700;
     letter-spacing: -0.5px;
 }
 
-::v-deep .filtered-token {
+:deep(.filtered-token) {
     opacity: 0.25;
 }
 
