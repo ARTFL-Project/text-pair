@@ -1,12 +1,13 @@
 <template>
     <div class="mt-3">
-        <div class="row">
+        <div class="row" style="padding: 0 0.75rem">
             <div class="m-4" style="font-size: 120%" v-if="error">No results for your query</div>
             <search-arguments></search-arguments>
         </div>
         <div class="row">
             <div class="col position-relative">
                 <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="loading">
+                    <clip-loader :loading="loading" color="#000" size="65"></clip-loader>
                     <!-- <atom-spinner :animation-duration="800" :size="65" color="#000" /> -->
                 </div>
                 <transition-group
@@ -26,7 +27,7 @@
                         <div class="corner-btn left">{{ results.start_position + index + 1 }}</div>
                         <div class="row">
                             <div class="col mt-4">
-                                <h6 class="text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
+                                <h6 class="passage-label text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
                                 <p class="pt-3 px-3">
                                     <span
                                         v-for="(citation, citationIndex) in globalConfig.sourceCitation"
@@ -43,8 +44,15 @@
                                     </span>
                                 </p>
                             </div>
-                            <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0">
-                                <h6 class="text-center pb-2" v-html="globalConfig.targetLabel"></h6>
+                            <div
+                                class="
+                                    col
+                                    mt-4
+                                    border border-top-0 border-right-0 border-bottom-0
+                                    target-passage-container
+                                "
+                            >
+                                <h6 class="passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
                                 <p class="pt-3 px-3">
                                     <span
                                         v-for="(citation, citationIndex) in globalConfig.targetCitation"
@@ -77,7 +85,14 @@
                                     >View passage in context</a
                                 >
                             </div>
-                            <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0">
+                            <div
+                                class="
+                                    col
+                                    mb-2
+                                    border border-top-0 border-right-0 border-bottom-0
+                                    target-passage-container
+                                "
+                            >
                                 <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
                                     {{ alignment.target_context_before }}
                                     <span class="target-passage">{{ alignment.target_passage }}</span>
@@ -149,12 +164,12 @@
                     </ul>
                 </nav>
             </div>
-            <div class="col-3 pl-0 position-relative">
-                <div class="card rounded-0 shadow-1">
+            <div id="facets" class="col-3 pl-0 position-relative">
+                <div class="card shadow-1">
                     <h6 class="card-header text-center">Browse by Metadata Counts</h6>
                     <div id="metadata-list" class="mx-auto p-2" @click="toggleFacetList()">Show options</div>
-                    <div class="mt-3 mb-3 pr-3 pl-3 facet-list">
-                        <h6 class="text-center" v-html="globalConfig.sourceLabel"></h6>
+                    <div class="mt-2 mb-3 pr-3 pl-3 facet-list">
+                        <span class="dropdown-header text-center" v-html="globalConfig.sourceLabel"></span>
                         <div class="list-group">
                             <button
                                 type="button"
@@ -168,7 +183,7 @@
                         </div>
                     </div>
                     <div class="mb-3 pr-3 pl-3 facet-list">
-                        <h6 class="text-center" v-html="globalConfig.targetLabel"></h6>
+                        <h6 class="dropdown-header text-center" v-html="globalConfig.targetLabel"></h6>
                         <div class="list-group">
                             <button
                                 type="button"
@@ -221,6 +236,7 @@
 <script>
 import searchArguments from "./searchArguments";
 // import { AtomSpinner } from "epic-spinners";
+import ClipLoader from "vue-spinner/src/PulseLoader.vue";
 import Worker from "worker-loader!./diffStrings";
 import Velocity from "velocity-animate";
 
@@ -228,6 +244,7 @@ export default {
     name: "searchResults",
     components: {
         searchArguments,
+        ClipLoader,
         // AtomSpinner,
     },
     inject: ["$http"],
@@ -268,9 +285,7 @@ export default {
                 searchParams: params,
             });
             this.$http
-                .post(`${this.$globalConfig.apiServer}/search_alignments/?${this.paramsToUrl(params)}`, {
-                    metadata: this.$globalConfig.metadataTypes,
-                })
+                .get(`${this.$globalConfig.apiServer}/search_alignments/?${this.paramsToUrl(params)}`)
                 .then((response) => {
                     this.results = response.data;
                     this.lastRowID = this.results.alignments[this.results.alignments.length - 1].rowid_ordered;
@@ -278,9 +293,7 @@ export default {
                     this.loading = false;
                     this.done = true;
                     this.$http
-                        .post(`${this.$globalConfig.apiServer}/count_results/?${this.paramsToUrl(params)}`, {
-                            metadata: this.$globalConfig.metadataTypes,
-                        })
+                        .get(`${this.$globalConfig.apiServer}/count_results/?${this.paramsToUrl(params)}`)
                         .then((response) => {
                             let counts = response.data.counts;
                             this.emitter.emit("searchArgsUpdate", {
@@ -464,7 +477,16 @@ export default {
 };
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+@import "../assets/theme.module.scss";
+
+#facets,
+.corner-btn {
+    font-family: "Open-Sans", sans-serif;
+}
+.passage-label {
+    font-family: "Open-Sans", sans-serif;
+}
 .card-link {
     color: #007bff !important;
 }
@@ -494,16 +516,17 @@ export default {
 
 .source-passage,
 .target-passage {
-    color: dodgerblue;
+    // font-weight: 700;
+    color: $passage-color;
 }
 
 :deep(.added) {
-    color: darkblue;
+    color: $added-color;
     font-weight: 700;
 }
 
 :deep(.removed) {
-    color: green;
+    color: $removed-color;
     font-weight: 700;
     text-decoration: line-through;
 }
@@ -524,6 +547,7 @@ export default {
     margin-bottom: 2px;
     border: solid 1px #ddd;
     cursor: pointer;
+    font-family: "Open-Sans", sans-serif;
 }
 
 .diff-btn:hover {
@@ -563,5 +587,23 @@ export default {
 
 #metadata-list:hover {
     color: #565656;
+}
+
+.target-passage-container {
+    border-right-width: 0 !important;
+}
+
+.dropdown-header {
+    display: block;
+    padding: 0.5rem 1rem;
+    margin-bottom: 0;
+    font-size: 0.875rem;
+    color: #6c757d;
+    white-space: nowrap;
+}
+
+.facet-list .list-group-item {
+    border-left-width: 0 !important;
+    border-right-width: 0 !important;
 }
 </style>

@@ -19,7 +19,11 @@ from starlette.responses import Response
 
 app = FastAPI()
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 GLOBAL_CONFIG = configparser.ConfigParser()
@@ -98,7 +102,9 @@ def get_pg_type(table_name):
     """Find PostgreSQL field type"""
     with POOL.getconn() as conn:
         cursor = conn.cursor()
-        cursor.execute(f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name ='{table_name}'")
+        cursor.execute(
+            f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name ='{table_name}'"
+        )
         field_types = {field: field_type.upper() for field, field_type in cursor}
         POOL.putconn(conn)
     return field_types
@@ -245,8 +251,8 @@ def index(db_path: str):
     return HTMLResponse(index_html)
 
 
-@app.post("/search_alignments/")
-def search_alignments(request: Request, metadata: Dict[str, str]):
+@app.get("/search_alignments/")
+def search_alignments(request: Request):
     """Search alignments according to URL params"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
     if other_args.direction == "next":
@@ -368,7 +374,7 @@ def retrieve_all_passage_pairs(request: Request):
     return results
 
 
-@app.post("/count_results/")
+@app.get("/count_results/")
 def count_results(request: Request):
     """Search alignments according to URL params"""
     sql_fields, sql_values, other_args, _ = parse_args(request)

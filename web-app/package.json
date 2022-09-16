@@ -11,11 +11,13 @@
     },
     "dependencies": {
         "axios": "^0.21.1",
+        "bootstrap": "^5.2.1",
         "chart.js": "^2.7.2",
         "tiny-emitter": "^2.1.0",
         "velocity-animate": "^1.5.2",
         "vue": "^3.2.0",
-        "vue-router": "^4.0.13"
+        "vue-router": "^4.0.13",
+        "vue-spinner": "^1.0.4"
     },
     "devDependencies": {
         "@babel/core": "^7.12.16",

@@ -1,7 +1,7 @@
 <template>
     <div id="search-form" class="card rounded-0 mt-3 shadow-1">
         <div class="card-body rounded-0" style="position: relative">
-            <h5 id="show-form" class="p-2 hide" @click="toggleSearchForm()">Show search form</h5>
+            <h6 id="show-form" class="p-2 hide" @click="toggleSearchForm()">Show search form</h6>
             <form @submit.prevent @keyup.enter="searchSelected()">
                 <div class="row">
                     <div class="col">
@@ -69,53 +69,48 @@
 
                 <!-- Search reports -->
                 <ul class="nav nav-tabs" id="myTab" role="tablist">
-                    <li class="nav-item">
-                        <a
-                            class="nav-link"
+                    <li class="nav-item" role="presentation">
+                        <button
+                            class="nav-link active"
                             id="search-alignments-tab"
-                            data-toggle="tab"
-                            href="#search-alignments"
+                            data-bs-toggle="tab"
+                            data-bs-target="#search-alignments"
                             role="tab"
+                            type="button"
                             aria-controls="search-alignments"
-                            aria-expanded="true"
-                            v-bind:class="{ active: searchActive }"
-                            @click="searchSelected = search"
-                            >Search Alignments</a
+                            aria-selected="true"
                         >
+                            Search Alignments
+                        </button>
                     </li>
-                    <li class="nav-item">
-                        <a
+                    <li class="nav-item" role="presentation">
+                        <button
                             class="nav-link"
                             id="time-series-tab"
-                            data-toggle="tab"
-                            href="#time-series"
+                            data-bs-toggle="tab"
+                            data-bs-target="#time-series"
                             role="tab"
+                            type="button"
                             aria-controls="time-series"
-                            aria-expanded="true"
-                            v-bind:class="{ active: timeActive }"
-                            @click="searchSelected = displayTimeSeries"
-                            >Display Time Series</a
+                            aria-selected="false"
                         >
+                            Display Time Series
+                        </button>
                     </li>
                 </ul>
                 <div class="tab-content mt-3" id="myTabContent">
                     <div
-                        class="tab-pane fade"
+                        class="tab-pane show fade active"
                         id="search-alignments"
                         role="tabpanel"
                         aria-labelledby="search-alignments-tab"
-                        v-bind:class="{ show: searchActive, active: searchActive }"
                     >
-                        <button class="btn btn-primary rounded-0" type="button" @click="search()">Search</button>
-                        <button type="button" class="btn btn-secondary rounded-0" @click="clearForm()">Reset</button>
+                        <button class="btn btn-secondary rounded-0" type="button" @click="search()">Search</button>
+                        <button type="button" class="btn btn-outline-secondary rounded-0" @click="clearForm()">
+                            Reset
+                        </button>
                     </div>
-                    <div
-                        class="tab-pane fade"
-                        id="time-series"
-                        role="tabpanel"
-                        aria-labelledby="time-series-tab"
-                        v-bind:class="{ show: timeActive, active: timeActive }"
-                    >
+                    <div class="tab-pane fade" id="time-series" role="tabpanel" aria-labelledby="time-series-tab">
                         Group
                         <div class="my-dropdown" style="display: inline-block">
                             <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">
@@ -341,9 +336,21 @@ export default {
 };
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+@import "../assets/theme.module.scss";
+
+#search-form {
+    font-family: "Open-Sans", sans-serif;
+}
 .input-group > span {
     font-size: 0.85rem !important;
+}
+
+.input-group
+    > :not(:first-child):not(.dropdown-menu):not(.valid-tooltip):not(.valid-feedback):not(.invalid-tooltip):not(.invalid-feedback) {
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+    border-left-color: $link-color;
 }
 
 .my-dropdown {
@@ -401,6 +408,11 @@ my-dropdown .btn:active {
 
 #show-form:hover {
     color: #565656;
+}
+
+#search-form > div > form > div:nth-child(1) > div.col.border.border-top-0.border-right-0.border-bottom-0,
+#search-form > div > form > div:nth-child(2) > div.col.border.border-top-0.border-right-0.border-bottom-0 {
+    border-right-width: 0 !important;
 }
 </style>
 

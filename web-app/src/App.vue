@@ -1,44 +1,49 @@
 <template>
-  <div id="app">
-    <main-header></main-header>
-    <div class="container-fluid">
-      <search-form></search-form>
-      <router-view></router-view>
+    <div id="app">
+        <main-header></main-header>
+        <div class="container-fluid">
+            <search-form></search-form>
+            <router-view></router-view>
+        </div>
     </div>
-  </div>
 </template>
 
 <script>
-import mainHeader from "./components/header"
-import searchForm from "./components/searchForm"
+import mainHeader from "./components/header";
+import searchForm from "./components/searchForm";
 
 export default {
     name: "app",
     components: {
         mainHeader,
-        searchForm
+        searchForm,
     },
-    data: function() {
+    data: function () {
         return {
-            globalConfig: this.$globalConfig
-        }
-    }
-}
+            globalConfig: this.$globalConfig,
+        };
+    },
+};
 </script>
 
-<style>
+<style lang="scss">
+@import "./assets/theme.module.scss";
+@import "../node_modules/bootstrap/scss/bootstrap.scss";
 body,
 .btn {
     font-size: 0.85rem;
 }
 
+a {
+    text-decoration: none;
+}
+
 #app {
-    font-family: "Open Sans", sans-serif;
+    font-family: "Source Serif Pro", serif;
 }
 
 .shadow-1 {
-    box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.16),
-        0 2px 10px 0 rgba(0, 0, 0, 0.12);
+    box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.16), 0 2px 10px 0 rgba(0, 0, 0, 0.12);
 }
 
 .btn-light {
@@ -47,7 +52,7 @@ body,
 
 .corner-btn {
     position: absolute;
-    transition: all .1s ease-out;
+    transition: all 0.1s ease-out;
     padding: 5px;
     line-height: 1;
     top: 0;

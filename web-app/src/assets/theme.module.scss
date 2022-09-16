@@ -1,0 +1,106 @@
+// Custom Bootstrap changes: don't edit
+$popover-max-width: 50%;
+.custom-popover {
+    overflow: auto;
+    text-align: justify !important;
+    max-height: 60%;
+}
+
+// Theme colors
+$header-color: rgb(245, 219, 157);
+$button-color: rgba(143, 57, 49, .8);
+$button-color-active: rgb(143, 57, 49);
+$link-color: rgb(143, 57, 49);
+$added-color: rgb(128, 0, 0);
+$passage-color: rgb(164, 52, 58);
+$removed-color: rgb(62, 117, 200);
+// Themed elements
+nav.navbar {
+    background-color: $header-color !important;
+}
+
+$secondary: $button-color;
+.btn-secondary.active {
+    background-color: $button-color-active !important;
+}
+
+.btn-outline-secondary.active {
+    color: #fff !important;
+}
+
+$info: $button-color;
+.btn-light {
+    border: solid 1px rgb(206, 212, 218) !important;
+}
+
+.btn-light.active {
+    background-color: #eee !important;
+}
+
+.link-color {
+    color: $link-color
+}
+
+a {
+    color: $link-color !important
+}
+
+a.btn-secondary {
+    color: #fff !important;
+}
+
+.number,
+.card-header {
+    background-color: $header-color !important;
+    color: $link-color !important;
+}
+
+.input-group-text,
+.custom-control-input:checked~.custom-control-label::before,
+.custom-control-input:focus~.custom-control-label::before {
+    color: $link-color !important;
+    background-color: #fff !important;
+    border-color: $link-color !important;
+}
+
+.metadata-args,
+.remove-metadata,
+.term-groups,
+.close-pill {
+    border-color: $link-color !important;
+}
+
+.metadata-label,
+.remove-metadata:hover,
+.term-group-word:hover,
+.close-pill:hover {
+    background-color: $button-color !important;
+    color: #fff !important;
+}
+
+.custom-control-label::after {
+    background-color: $button-color !important;
+}
+
+.custom-select:focus,
+.custom-control-input:checked~.custom-control-label::before,
+.custom-control-input:focus~.custom-control-label::before,
+input[type="text"]:focus {
+    box-shadow: 0 0 0 0.05rem $button-color !important;
+    border-color: $button-color !important;
+    opacity: .5
+}
+
+.corner-btn {
+    background-color: $header-color !important;
+    color: $link-color !important;
+}
+
+.card,
+.card-header {
+    border-radius: 0 !important;
+}
+
+:export {
+    color: $link-color
+}

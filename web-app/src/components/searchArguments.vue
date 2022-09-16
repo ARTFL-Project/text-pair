@@ -1,20 +1,19 @@
 <template>
     <div
-        class="ml-3 mr-3 mt-2 mb-4 pr-2 pl-2 pt-2 shadow-1"
-        style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125); width: 100%"
+        id="search-arguments"
+        class="mt-2 mb-4 pt-2 shadow-1"
+        style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125)"
     >
         <div class="mb-1 p-2" style="font-size: 1rem" v-if="counts && !error">
             {{ counts }} results for the following query:
         </div>
         <div class="m-2 pt-2 pb-1" v-if="banality">
-            <div class="metadata-args">
+            <div class="metadata-args rounded-pill">
                 <span class="metadata-label"> Banality filter </span>
-                <span class="remove-metadata">
-                    <span class="corner-btn destroy right" @click="removeMetadata({ fieldName: 'banality' })">x</span>
-                </span>
                 <span class="metadata-value">
                     {{ banality }}
                 </span>
+                <span class="remove-metadata" @click="removeMetadata({ fieldName: 'banality' })">x </span>
             </div>
         </div>
         <div class="row pl-2" v-if="!error">
@@ -25,19 +24,17 @@
             >
                 <h6 class="text-center text-capitalize">
                     <span v-html="paramGroup.direction"></span>
-                    {{ paramGroup.direction }} Parameters:
+                    Parameters:
                 </h6>
                 <div v-if="paramGroup.params != null">
                     <div class="metadata-args" v-for="metadata in paramGroup.params" :key="metadata.field">
                         <span class="metadata-label">
                             {{ metadata.label }}
                         </span>
-                        <span class="remove-metadata">
-                            <span class="corner-btn destroy right" @click="removeMetadata(metadata)">x</span>
-                        </span>
                         <span class="metadata-value">
                             {{ checkValue(metadata.value) }}
                         </span>
+                        <span class="remove-metadata" @click="removeMetadata(metadata)">x</span>
                     </div>
                 </div>
                 <div class="metadata-args none" v-if="paramGroup.params == null">None</div>
@@ -49,18 +46,17 @@
 export default {
     name: "searchArguments",
     created() {
-        var vm = this;
         this.emitter.on("searchArgsUpdate", (params) => {
-            vm.counts = params.counts.toLocaleString();
-            vm.searchParams = this.processParams(params.searchParams);
+            this.counts = params.counts.toLocaleString();
+            this.searchParams = this.processParams(params.searchParams);
             if ("banality" in params.searchParams && params.searchParams.banality.length > 0) {
                 if (params.searchParams.banality == "false") {
-                    vm.banality = "Filter all";
+                    this.banality = "Filter all";
                 } else {
-                    vm.banality = "Only banalities";
+                    this.banality = "Only banalities";
                 }
             } else {
-                vm.banality = false;
+                this.banality = false;
             }
         });
     },
@@ -69,7 +65,10 @@ export default {
             globalConfig: this.$globalConfig,
             counts: null,
             error: null,
-            searchParams: null,
+            searchParams: [
+                { direction: this.$globalConfig.sourceLabel, params: null },
+                { direction: this.$globalConfig.targetLabel, params: null },
+            ],
             banality: null,
         };
     },
@@ -96,6 +95,7 @@ export default {
                     searchParams.push({ direction: this.globalConfig[`${direction}Label`], params: null });
                 }
             }
+            console.log(searchParams);
             return searchParams;
         },
         removeMetadata(metadata) {
@@ -122,11 +122,21 @@ export default {
 };
 </script>
 <style scoped>
+#search-arguments {
+    font-family: "Open-Sans", sans-serif;
+}
 .metadata-args {
-    display: inline-block !important;
-    margin-top: 20px;
     border: 1px solid #ddd;
-    text-align: justify;
+    display: -webkit-inline-box !important;
+    display: -ms-inline-flexbox !important;
+    display: inline-flex !important;
+    margin-right: 5px;
+    border-radius: 50rem;
+    width: -webkit-fit-content;
+    width: -moz-fit-content;
+    width: fit-content;
+    line-height: 2;
+    margin-bottom: 0.5rem;
 }
 
 .metadata-args.none {
@@ -134,24 +144,48 @@ export default {
 }
 
 .metadata-label {
-    border: 1px solid #ddd;
-    border-width: 0px 1px 0px 0px;
-    padding: 0px 5px;
-    background-color: #e9ecef;
-    float: left;
-    line-height: 29px;
+    display: -webkit-box;
+    display: -ms-flexbox;
+    display: flex;
+    -webkit-box-align: center;
+    -ms-flex-align: center;
+    align-items: center;
+    border: solid #ddd;
+    border-width: 0 1px 0 0;
+    border-top-left-radius: 50rem;
+    border-bottom-left-radius: 50rem;
+    padding: 0 0.5rem;
 }
 
 .metadata-value {
-    padding: 6px 10px 10px 10px;
-    line-height: 29px;
-    /* Needs prefixing */
-    box-decoration-break: clone;
+    display: -webkit-box;
+    display: -ms-flexbox;
+    display: flex;
+    -webkit-box-align: center;
+    -ms-flex-align: center;
+    align-items: center;
     -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+    padding: 0 0.5rem;
 }
 
 .remove-metadata {
-    float: right;
+    display: -webkit-box;
+    display: -ms-flexbox;
+    display: flex;
+    -webkit-box-align: center;
+    -ms-flex-align: center;
+    align-items: center;
+    padding-right: 5px;
+    padding-left: 5px;
+    border-left: 1px solid #ddd;
+    border-top-right-radius: 50rem;
+    border-bottom-right-radius: 50rem;
+    padding: 0 0.5rem;
+}
+
+.remove-metadata:hover {
+    cursor: pointer;
 }
 
 .corner-btn.right {
