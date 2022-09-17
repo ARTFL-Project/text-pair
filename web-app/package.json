@@ -6,7 +6,7 @@
     "author": "Clovis <clovisgladstone@gmail.com>",
     "scripts": {
         "serve": "vue-cli-service serve",
-        "build": "vue-cli-service build",
+        "build": "npm i && vue-cli-service build --modern && rm -rf node_modules",
         "lint": "vue-cli-service lint"
     },
     "dependencies": {
