@@ -68,89 +68,76 @@
                 </div>
 
                 <!-- Search reports -->
-                <ul class="nav nav-tabs" id="myTab" role="tablist">
-                    <li class="nav-item" role="presentation">
-                        <button
-                            class="nav-link active"
-                            id="search-alignments-tab"
-                            data-bs-toggle="tab"
-                            data-bs-target="#search-alignments"
-                            role="tab"
-                            type="button"
-                            aria-controls="search-alignments"
-                            aria-selected="true"
-                        >
-                            Search Alignments
+                <div class="position-relative mb-3" style="width: 100%" aria-label="Search reports">
+                    <button
+                        class="report btn rounded-0 d-inline"
+                        :class="{ 'btn-secondary': timeActive, 'btn-outline-secondary selected': searchActive }"
+                        type="button"
+                        @click="changeReport('search')"
+                    >
+                        Search Alignments
+                    </button>
+                    <button
+                        class="report btn rounded-0 d-inline"
+                        :class="{
+                            'btn-secondary selected': searchActive,
+                            'btn-outline-secondary selected': timeActive,
+                        }"
+                        style="border-left-width: 0"
+                        type="button"
+                        @click="changeReport('time-series')"
+                    >
+                        Display Time Series
+                    </button>
+                    <hr class="tab-line" />
+                </div>
+
+                <div id="search-alignments" v-if="searchActive">
+                    <button class="btn btn-secondary rounded-0" type="button" @click="search()">Search</button>
+                    <button type="button" class="btn btn-outline-secondary rounded-0" @click="clearForm()">
+                        Reset
+                    </button>
+                </div>
+                <div id="time-series" v-if="timeActive">
+                    Group
+                    <div class="my-dropdown" style="display: inline-block">
+                        <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">
+                            {{ directionSelected.label }} &#9662;
                         </button>
-                    </li>
-                    <li class="nav-item" role="presentation">
-                        <button
-                            class="nav-link"
-                            id="time-series-tab"
-                            data-bs-toggle="tab"
-                            data-bs-target="#time-series"
-                            role="tab"
-                            type="button"
-                            aria-controls="time-series"
-                            aria-selected="false"
-                        >
+                        <ul class="my-dropdown-menu shadow-1">
+                            <li
+                                class="my-dropdown-item"
+                                v-for="direction in directions"
+                                :key="direction.label"
+                                @click="selectItem('directionSelected', direction)"
+                            >
+                                {{ direction.label }}
+                            </li>
+                        </ul>
+                    </div>
+                    results by
+                    <div class="my-dropdown" style="display: inline-block">
+                        <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">
+                            {{ timeSeriesInterval.label }} &#9662;
+                        </button>
+                        <ul class="my-dropdown-menu shadow-1">
+                            <li
+                                class="my-dropdown-item text-nowrap"
+                                v-for="interval in globalConfig.timeSeriesIntervals"
+                                :key="interval.label"
+                                @click="selectItem('timeSeriesInterval', interval)"
+                            >
+                                {{ interval.label }}
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="mt-3">
+                        <button class="btn btn-secondary rounded-0" type="button" @click="displayTimeSeries()">
                             Display Time Series
                         </button>
-                    </li>
-                </ul>
-                <div class="tab-content mt-3" id="myTabContent">
-                    <div
-                        class="tab-pane show fade active"
-                        id="search-alignments"
-                        role="tabpanel"
-                        aria-labelledby="search-alignments-tab"
-                    >
-                        <button class="btn btn-secondary rounded-0" type="button" @click="search()">Search</button>
                         <button type="button" class="btn btn-outline-secondary rounded-0" @click="clearForm()">
                             Reset
                         </button>
-                    </div>
-                    <div class="tab-pane fade" id="time-series" role="tabpanel" aria-labelledby="time-series-tab">
-                        Group
-                        <div class="my-dropdown" style="display: inline-block">
-                            <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">
-                                {{ directionSelected.label }} &#9662;
-                            </button>
-                            <ul class="my-dropdown-menu shadow-1">
-                                <li
-                                    class="my-dropdown-item"
-                                    v-for="direction in directions"
-                                    :key="direction.label"
-                                    @click="selectItem('directionSelected', direction)"
-                                >
-                                    {{ direction.label }}
-                                </li>
-                            </ul>
-                        </div>
-                        results by
-                        <div class="my-dropdown" style="display: inline-block">
-                            <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">
-                                {{ timeSeriesInterval.label }} &#9662;
-                            </button>
-                            <ul class="my-dropdown-menu shadow-1">
-                                <li
-                                    class="my-dropdown-item text-nowrap"
-                                    v-for="interval in globalConfig.timeSeriesIntervals"
-                                    :key="interval.label"
-                                    @click="selectItem('timeSeriesInterval', interval)"
-                                >
-                                    {{ interval.label }}
-                                </li>
-                            </ul>
-                        </div>
-                        <div class="mt-3">
-                            <button class="btn btn-primary rounded-0" type="button" @click="displayTimeSeries()">
-                                Display Time Series
-                            </button>
-                            <button type="button" class="btn btn-secondary rounded-0" @click="clearForm()">
-                                Reset
-                            </button>
-                        </div>
                     </div>
                 </div>
             </form>
@@ -332,6 +319,15 @@ export default {
                 });
             }
         },
+        changeReport(report) {
+            if (report == "search") {
+                this.searchActive = true;
+                this.timeActive = false;
+            } else {
+                this.searchActive = false;
+                this.timeActive = true;
+            }
+        },
     },
 };
 </script>
@@ -413,6 +409,27 @@ my-dropdown .btn:active {
 #search-form > div > form > div:nth-child(1) > div.col.border.border-top-0.border-right-0.border-bottom-0,
 #search-form > div > form > div:nth-child(2) > div.col.border.border-top-0.border-right-0.border-bottom-0 {
     border-right-width: 0 !important;
+}
+.tab-line {
+    position: relative;
+    width: 100%;
+    top: -16.9px;
+    color: $button-color;
+    opacity: 0.4;
+    z-index: 0;
+}
+.report {
+    position: relative;
+    z-index: 1;
+}
+.selected {
+    border-bottom-color: #fff;
+}
+
+.report:hover {
+    background: #fff !important;
+    color: $button-color !important;
+    border-bottom-color: #fff;
 }
 </style>
 

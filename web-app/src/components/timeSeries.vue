@@ -6,7 +6,15 @@
         </div>
         <div class="row mt-3">
             <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="loading">
-                <!-- <atom-spinner :animation-duration="800" :size="65" color="#000" /> -->
+                <div class="d-flex justify-content-center position-relative">
+                    <div
+                        class="spinner-border"
+                        style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px"
+                        role="status"
+                    >
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
             </div>
             <div class="col">
                 <canvas id="myChart" height="800"></canvas>

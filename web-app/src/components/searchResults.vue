@@ -6,9 +6,14 @@
         </div>
         <div class="row">
             <div class="col position-relative">
-                <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="loading">
-                    <clip-loader :loading="loading" color="#000" size="65"></clip-loader>
-                    <!-- <atom-spinner :animation-duration="800" :size="65" color="#000" /> -->
+                <div class="d-flex justify-content-center position-relative" v-if="loading">
+                    <div
+                        class="spinner-border"
+                        style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px"
+                        role="status"
+                    >
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
                 </div>
                 <transition-group
                     name="staggered-fade"
@@ -202,7 +207,15 @@
                     style="left: 50%; transform: translateX(-50%)"
                     v-if="facetLoading"
                 >
-                    <!-- <atom-spinner :animation-duration="800" :size="65" color="#000" /> -->
+                    <div class="d-flex justify-content-center position-relative">
+                        <div
+                            class="spinner-border"
+                            style="width: 4rem; height: 4rem; position: absolute; z-index: 50; top: 30px"
+                            role="status"
+                        >
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
                 </div>
                 <div class="card rounded-0 shadow-1 mt-3" v-if="facetResults">
                     <div class="corner-btn destroy right" @click="closeFacetResults()">X</div>
@@ -235,8 +248,6 @@
 
 <script>
 import searchArguments from "./searchArguments";
-// import { AtomSpinner } from "epic-spinners";
-import ClipLoader from "vue-spinner/src/PulseLoader.vue";
 import Worker from "worker-loader!./diffStrings";
 import Velocity from "velocity-animate";
 
@@ -244,8 +255,6 @@ export default {
     name: "searchResults",
     components: {
         searchArguments,
-        ClipLoader,
-        // AtomSpinner,
     },
     inject: ["$http"],
     data() {
