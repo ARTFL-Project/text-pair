@@ -95,7 +95,6 @@ export default {
                     searchParams.push({ direction: this.globalConfig[`${direction}Label`], params: null });
                 }
             }
-            console.log(searchParams);
             return searchParams;
         },
         removeMetadata(metadata) {

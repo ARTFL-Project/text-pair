@@ -77,18 +77,20 @@
                         </div>
                         <div class="row passages">
                             <div class="col mb-2">
-                                <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
+                                <p class="card-text text-justify px-3 pt-2 mb-2">
                                     {{ alignment.source_context_before }}
                                     <span class="source-passage">{{ alignment.source_passage }}</span>
                                     {{ alignment.source_context_after }}
                                 </p>
-                                <a
-                                    class="card-link px-3 pt-2"
-                                    style="position: absolute; bottom: 0"
-                                    v-if="globalConfig.sourcePhiloDBLink"
+                                <button
+                                    type="button"
+                                    class="btn btn-outline-secondary position-absolute rounded-0"
+                                    style="bottom: 0; left: 0"
+                                    v-if="globalConfig.sourceDB.link"
                                     @click="goToContext(alignment, 'source')"
-                                    >View passage in context</a
                                 >
+                                    View passage in context
+                                </button>
                             </div>
                             <div
                                 class="
@@ -98,18 +100,20 @@
                                     target-passage-container
                                 "
                             >
-                                <p class="card-text text-justify px-3 pt-2 pb-4 mb-4">
+                                <p class="card-text text-justify px-3 mb-2">
                                     {{ alignment.target_context_before }}
                                     <span class="target-passage">{{ alignment.target_passage }}</span>
                                     {{ alignment.target_context_after }}
                                 </p>
-                                <a
-                                    class="card-link px-3 pt-2"
-                                    style="position: absolute; bottom: 0"
-                                    v-if="globalConfig.targetPhiloDBLink"
+                                <button
+                                    type="button"
+                                    class="btn btn-outline-secondary position-absolute rounded-0"
+                                    style="bottom: 0; right: 0"
+                                    v-if="globalConfig.targetDB.link"
                                     @click="goToContext(alignment, 'target')"
-                                    >View passage in context</a
                                 >
+                                    View passage in context
+                                </button>
                             </div>
                         </div>
                         <div class="text-muted text-center mb-2">
@@ -122,7 +126,13 @@
                                     class="loading position-absolute"
                                     style="display: none; left: 50%; transform: translateX(-50%)"
                                 >
-                                    <!-- <atom-spinner :animation-duration="800" :size="25" color="#000" /> -->
+                                    <div
+                                        class="spinner-border"
+                                        style="width: 4rem; height: 4rem; position: absolute; z-index: 50; top: 30px"
+                                        role="status"
+                                    >
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
                                 </div>
                             </div>
                             <div v-if="globalConfig.matchingAlgorithm == 'sa'">
@@ -143,7 +153,20 @@
                                     class="loading position-absolute"
                                     style="display: none; left: 50%; transform: translateX(-50%)"
                                 >
-                                    <!-- <atom-spinner :animation-duration="800" :size="25" color="#000" /> -->
+                                    <div
+                                        class="spinner-border"
+                                        style="
+                                            width: 1.4rem;
+                                            height: 1.4rem;
+                                            position: absolute;
+                                            z-index: 50;
+                                            top: 5px;
+                                            left: -10px;
+                                        "
+                                        role="status"
+                                    >
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -329,14 +352,14 @@ export default {
             let rootURL = "";
             let params = {};
             if (direction == "source") {
-                rootURL = this.globalConfig.sourcePhiloDBLink;
+                rootURL = this.globalConfig.sourceDB.link;
                 params = {
                     filename: alignment.source_filename.substr(alignment.source_filename.lastIndexOf("/") + 1),
                     start_byte: alignment.source_start_byte,
                     end_byte: alignment.source_end_byte,
                 };
             } else {
-                rootURL = this.globalConfig.targetPhiloDBLink;
+                rootURL = this.globalConfig.targetDB.link;
                 params = {
                     filename: alignment.target_filename.substr(alignment.target_filename.lastIndexOf("/") + 1),
                     start_byte: alignment.target_start_byte,
