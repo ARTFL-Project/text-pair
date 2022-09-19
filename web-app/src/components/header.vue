@@ -2,11 +2,8 @@
     <nav class="navbar navbar-expand-lg navbar-light bg-light" style="height: 53px" v-once>
         <div class="collapse navbar-collapse top-links">
             <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-                <li class="nav-item">
-                    <a class="nav-link" href="https://artfl-project.uchicago.edu">ARTFL Project</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="https://textual-optics-lab.uchicago.edu">Textual Optics Lab</a>
+                <li class="nav-item" v-for="brand in globalConfig.branding" :key="brand.label">
+                    <a class="nav-link" :href="brand.link">{{ brand.label }}</a>
                 </li>
             </ul>
         </div>
@@ -22,13 +19,6 @@
         >
             <span class="navbar-toggler-icon"></span>
         </button>
-        <div class="collapse navbar-collapse" id="navbarNav">
-            <ul class="navbar-nav">
-                <li class="nav-item" v-for="brand in globalConfig.branding" :key="brand.label">
-                    <a class="nav-link" :href="brand.link">{{ brand.label }}</a>
-                </li>
-            </ul>
-        </div>
     </nav>
 </template>
 

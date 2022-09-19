@@ -6,9 +6,14 @@
     "databaseLabel": "Text Alignments",
     "matchingAlgorithm": "sa",
     "branding": [{
-        "label": "ARTFL-Project",
-        "link": "https://artfl-project.uchicago.edu"
-    }],
+            "label": "ARTFL-Project",
+            "link": "https://artfl-project.uchicago.edu"
+        },
+        {
+            "label": "Textual Optics Lab",
+            "link": "https://textual-optics-lab.uchicago.edu"
+        }
+    ],
     "sourcePhiloDBLink": "",
     "targetPhiloDBLink": "",
     "sourceLabel": "Source",
