@@ -86,7 +86,7 @@
                                     type="button"
                                     class="btn btn-outline-secondary position-absolute rounded-0"
                                     style="bottom: 0; left: 0"
-                                    v-if="globalConfig.sourceDB.link"
+                                    v-if="globalConfig.sourcePhiloDBLink"
                                     @click="goToContext(alignment, 'source')"
                                 >
                                     View passage in context
@@ -109,7 +109,7 @@
                                     type="button"
                                     class="btn btn-outline-secondary position-absolute rounded-0"
                                     style="bottom: 0; right: 0"
-                                    v-if="globalConfig.targetDB.link"
+                                    v-if="globalConfig.targetPhiloDBLink"
                                     @click="goToContext(alignment, 'target')"
                                 >
                                     View passage in context
@@ -352,14 +352,14 @@ export default {
             let rootURL = "";
             let params = {};
             if (direction == "source") {
-                rootURL = this.globalConfig.sourceDB.link.replace(/\/$/, "");
+                rootURL = this.globalConfig.sourcePhiloDBLink.replace(/\/$/, "");
                 params = {
                     filename: alignment.source_filename.substr(alignment.source_filename.lastIndexOf("/") + 1),
                     start_byte: alignment.source_start_byte,
                     end_byte: alignment.source_end_byte,
                 };
             } else {
-                rootURL = this.globalConfig.targetDB.link.replace(/\/$/, "");
+                rootURL = this.globalConfig.targetPhiloDBLink.replace(/\/$/, "");
                 params = {
                     filename: alignment.target_filename.substr(alignment.target_filename.lastIndexOf("/") + 1),
                     start_byte: alignment.target_start_byte,

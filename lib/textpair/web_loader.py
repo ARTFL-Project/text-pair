@@ -61,9 +61,9 @@ CONTROL_CHARS = dict.fromkeys(range(32))
 
 
 class WebAppConfig:
-    """ Web app config class"""
+    """Web app config class"""
 
-    def __init__(self, field_types, db_name, api_server, source_database_link, target_database_link, algorithm):
+    def __init__(self, db_name, api_server, source_database_link, target_database_link, algorithm):
         with open("/var/lib/text-pair/config/appConfig.json") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
@@ -153,7 +153,7 @@ def validate_field_type(fields, field_types, field_names):
             year_match = YEAR_FINDER.search(value)
             if year_match:
                 matching_year = year_match.groups()[0]
-                neg_match = re.search(fr"^(\-{matching_year})", value)  # account for negative years
+                neg_match = re.search(rf"^(\-{matching_year})", value)  # account for negative years
                 if neg_match:
                     value = int(neg_match.groups()[0])
                 else:
@@ -324,7 +324,7 @@ def create_web_app(
     load_only_db=False,
 ):
     """Main routine"""
-    web_config = WebAppConfig(field_types, table, api_server, source_database_link, target_database_link, algorithm)
+    web_config = WebAppConfig(table, api_server, source_database_link, target_database_link, algorithm)
     print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
     if load_only_db is False:
