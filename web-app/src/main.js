@@ -1,15 +1,10 @@
 import { createApp } from 'vue'
-// import { configureCompat } from 'vue'
 import App from "./App.vue";
 import router from "./router";
 import axios from "axios";
 import emitter from 'tiny-emitter/instance'
 import globalConfig from "../appConfig.json";
 
-
-// configureCompat({
-//     // MODE: 3,
-// })
 
 const app = createApp(App)
 app.config.globalProperties.$globalConfig = globalConfig

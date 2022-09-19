@@ -11,9 +11,9 @@ $header-color: rgb(245, 219, 157);
 $button-color: rgba(143, 57, 49, .8);
 $button-color-active: rgb(143, 57, 49);
 $link-color: rgb(143, 57, 49);
-$added-color: rgb(128, 0, 0);
+$removed-color: rgb(120, 157, 74);
 $passage-color: rgb(164, 52, 58);
-$removed-color: rgb(62, 117, 200);
+$added-color: rgb(0, 115, 150);
 // Themed elements
 nav.navbar {
     background-color: $header-color !important;
@@ -102,5 +102,5 @@ input[type="text"]:focus {
 }
 
 :export {
-    color: $link-color
+    color: $passage-color
 }

@@ -31,7 +31,11 @@ export default {
 @import "../node_modules/bootstrap/scss/bootstrap.scss";
 body,
 .btn {
-    font-size: 0.85rem;
+    font-size: 0.9rem;
+}
+
+.passages {
+    font-size: 1rem;
 }
 
 a {

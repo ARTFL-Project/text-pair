@@ -352,14 +352,14 @@ export default {
             let rootURL = "";
             let params = {};
             if (direction == "source") {
-                rootURL = this.globalConfig.sourceDB.link;
+                rootURL = this.globalConfig.sourceDB.link.replace(/\/$/, "");
                 params = {
                     filename: alignment.source_filename.substr(alignment.source_filename.lastIndexOf("/") + 1),
                     start_byte: alignment.source_start_byte,
                     end_byte: alignment.source_end_byte,
                 };
             } else {
-                rootURL = this.globalConfig.targetDB.link;
+                rootURL = this.globalConfig.targetDB.link.replace(/\/$/, "");
                 params = {
                     filename: alignment.target_filename.substr(alignment.target_filename.lastIndexOf("/") + 1),
                     start_byte: alignment.target_start_byte,
@@ -371,7 +371,7 @@ export default {
                     params: params,
                 })
                 .then((response) => {
-                    window.open(`${rootURL}/${response.data.link}`, "_blank");
+                    window.open(`${rootURL}${response.data.link}`, "_blank");
                 })
                 .catch((error) => {
                     alert(error);

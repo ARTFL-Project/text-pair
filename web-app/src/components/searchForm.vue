@@ -198,8 +198,8 @@ export default {
                 }
             }
         });
-        this.emitter.on("toggleSearchForm", function () {
-            vm.toggleSearchForm();
+        this.emitter.on("toggleSearchForm", () => {
+            this.toggleSearchForm();
         });
         if ("banality" in this.$route.query) {
             if (this.$route.query.banality == "true") {
@@ -214,9 +214,11 @@ export default {
             if (this.$route.path == "/search") {
                 this.searchActive = true;
                 this.timeActive = false;
+                this.toggleSearchForm();
             } else {
                 this.searchActive = false;
                 this.timeActive = true;
+                this.toggleSearchForm();
             }
         }
         if (this.$route.query.directionSelected == "source") {
@@ -302,22 +304,24 @@ export default {
             this.toggleDropdown();
         },
         toggleSearchForm() {
-            let form = document.querySelector("form");
-            if (form.style.display == "none") {
-                document.querySelector("#show-form").classList.toggle("hide");
-                Velocity(form, "slideDown", {
-                    duration: 200,
-                    easing: "ease-out",
-                });
-            } else {
-                Velocity(form, "slideUp", {
-                    duration: 200,
-                    easing: "ease-out",
-                    complete: function () {
-                        document.querySelector("#show-form").classList.toggle("hide");
-                    },
-                });
-            }
+            this.$nextTick(() => {
+                let form = document.querySelector("form");
+                if (form.style.display == "none") {
+                    document.querySelector("#show-form").classList.toggle("hide");
+                    Velocity(form, "slideDown", {
+                        duration: 200,
+                        easing: "ease-out",
+                    });
+                } else {
+                    Velocity(form, "slideUp", {
+                        duration: 200,
+                        easing: "ease-out",
+                        complete: function () {
+                            document.querySelector("#show-form").classList.toggle("hide");
+                        },
+                    });
+                }
+            });
         },
         changeReport(report) {
             if (report == "search") {
