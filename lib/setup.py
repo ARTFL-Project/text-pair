@@ -36,6 +36,7 @@ setup(
         "gensim",
         "namedlist",  # to remove
         "recordclass",
+        "sentence-transformers",
         "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0-rc2#egg=text_preprocessing",
     ],
     extras_require={

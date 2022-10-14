@@ -11,22 +11,20 @@ from collections import deque
 from html import unescape as unescape_html
 from math import floor
 from shutil import rmtree
-from typing import Any, Deque, Dict, Generator, Iterable, Iterator, List, Optional, Set, Tuple, Union
+from typing import Any, Deque, Dict, Generator, Iterable, List, Optional, Set, Tuple, Union
 from xml.sax.saxutils import unescape as unescape_xml
 
 import dill as pickle
 import numpy as np
-from numpy.lib.arraysetops import isin
 import spacy
-import tensorflow as tf
-import tensorflow_hub as hub
-import tensorflow_text as text  # Needed for loading universal-sentence-encoder-cmlm/multilingual-preprocess
+import torch
 from dill import dump, load
 from gensim.models import KeyedVectors
 from gensim.similarities import WmdSimilarity
 from numpy.lib.utils import source
 from recordclass import dataobject
 from scipy.sparse import csr_matrix
+from sentence_transformers import SentenceTransformer, util
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from text_preprocessing import PreProcessor, Token, Tokens
@@ -80,7 +78,7 @@ class DocumentChunks:
         self.path = os.path.join(TEMP_DIR, "output/chunks/", save_path)
         if os.path.exists(self.path):
             rmtree(self.path)
-        os.mkdir(self.path)
+        os.makedirs(self.path, exist_ok=True)
 
     def __iter__(self) -> Generator[Union[str, List[str]], None, None]:
         if self.generator_exhausted is False:
@@ -109,21 +107,21 @@ class DocumentChunks:
             with open(filename, "wb") as output_file:
                 pickle.dump(doc, output_file)
         elif self.corpus_type == "SentenceEmbeddingsCorpus":
-            transformed_doc = self.transform_function([doc]).numpy()
-            np.save(filename, transformed_doc)
+            transformed_doc = self.transform_function([doc])
+            torch.save(transformed_doc, f"{filename}.pt")
         else:
             transformed_doc = self.transform_function([doc])
             np.save(f"{filename}.npy", transformed_doc.vector)
             np.save(f"{filename}_norm.npy", transformed_doc.vector_norm)
 
-    def __load(self, doc_name) -> List[str]:
+    def __load(self, doc_name) -> Union[List[str], torch.Tensor, Vector]:
         filename = os.path.join(self.path, str(doc_name))
         if self.transform_function is None:
             with open(filename, "rb") as input_file:
                 doc = pickle.load(input_file)
             return doc
         elif self.corpus_type == "SentenceEmbeddingsCorpus":
-            return tf.convert_to_tensor(np.load(f"{filename}.npy"), dtype=tf.float32)  # type: ignore
+            return torch.load(f"{filename}.pt")
         return Vector(np.load(f"{filename}.npy"), np.load(f"{filename}_norm.npy"))
 
     def __get_doc(self, index: int) -> Union[List[str], str]:
@@ -142,14 +140,14 @@ class DocumentChunks:
 
     def __getitem__(
         self, item: Union[int, slice]
-    ) -> Union[Union[List[str], str], Union[List[Union[List[str], str]], tf.Tensor]]:
+    ) -> Union[Union[List[str], str], Union[List[Union[List[str], str]], torch.Tensor]]:
         if isinstance(item, slice):
             end = item.stop
             if item.stop > len(self):  # avoid index out of range
                 end = len(self)
             if self.transform_function is None or self.corpus_type == "Word2VecEmbeddingCorpus":
                 return [self.__get_doc(index) for index in range(item.start, end)]
-            return tf.concat([self.__get_doc(index) for index in range(item.start, end)], 0)
+            return torch.concat([self.__get_doc(index) for index in range(item.start, end)])
         return self.__get_doc(item)
 
     def __format_doc(self, doc: List[str]) -> Union[str, List[str]]:
@@ -324,7 +322,11 @@ class Corpus(ABC):
     def __store_metadata(self, metadata: Dict[str, Any], tokens: List[Token]):
         """Store Metadata for each chunk"""
         self.metadata.append(
-            {**metadata, "start_byte": tokens[0].ext["start_byte"], "end_byte": tokens[-1].ext["end_byte"],}
+            {
+                **metadata,
+                "start_byte": tokens[0].ext["start_byte"],
+                "end_byte": tokens[-1].ext["end_byte"],
+            }
         )
 
     def process_inner_compare(self, results, min_similarity: float) -> Iterable[MergedGroup]:
@@ -557,7 +559,7 @@ class Word2VecEmbeddingCorpus(Corpus):
 
 
 class SentenceEmbeddingsCorpus(Corpus):
-    """Corpus object which builds doc embeddings using LaBSE (sentence embedding) for similarity"""
+    """Corpus object which builds doc embeddings using sentence transformers for similarity"""
 
     def __init__(
         self,
@@ -579,7 +581,7 @@ class SentenceEmbeddingsCorpus(Corpus):
         )
 
         if model is None:
-            self.model = self.__init_model()
+            self.model = SentenceTransformer("inokufu/flaubert-base-uncased-xnli-sts")
         else:
             self.model = model
 
@@ -590,7 +592,7 @@ class SentenceEmbeddingsCorpus(Corpus):
         self.batch_size = batch_size
         self.chunk_size = floor((self.length + self.batch_size - 1) / self.batch_size)
 
-    def create_batch(self) -> Generator[tf.Tensor, None, None]:
+    def create_batch(self) -> Generator[torch.Tensor, None, None]:
         for i in range(0, self.length, self.chunk_size):
             yield self.docs[i : i + self.chunk_size]  # type: ignore
 
@@ -600,27 +602,15 @@ class SentenceEmbeddingsCorpus(Corpus):
     def __len__(self):
         return self.length
 
-    def __init_model(self):
-        # Constructing model to encode texts into high-dimensional vectors
-        tf_preprocessor = hub.KerasLayer(
-            "https://tfhub.dev/google/universal-sentence-encoder-cmlm/multilingual-preprocess/2"
-        )
-        encoder = hub.KerasLayer("https://tfhub.dev/google/LaBSE/2")
-        sentences = tf.keras.layers.Input(shape=(), dtype=tf.string, name="sentences")
-        encoder_inputs = tf_preprocessor(sentences)
-        sentence_representation = encoder(encoder_inputs)["pooled_output"]
-        normalized_sentence_representation = tf.nn.l2_normalize(sentence_representation, axis=-1)
-        return tf.keras.Model(sentences, normalized_sentence_representation)
-
-    def create_embeddings(self, text_chunks):
+    def create_embeddings(self, text_chunks) -> torch.Tensor:
         """Create document embeddings"""
-        embeddings = self.model(tf.constant(list(text_chunks)))
+        embeddings: torch.Tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)  # type: ignore
         return embeddings
 
     def similarity(self, embeddings_1, embeddings_2) -> np.ndarray:
         """Compute similarity between embeddings"""
-        results = tf.tensordot(embeddings_1, embeddings_2, axes=[[1], [1]])
-        return results.numpy()  # type: ignore
+        results = util.cos_sim(embeddings_1, embeddings_2)
+        return results.cpu().numpy()
 
     def __compare(self, target_corpus: Optional[SentenceEmbeddingsCorpus] = None) -> np.ndarray:
         results: np.ndarray
@@ -635,9 +625,10 @@ class SentenceEmbeddingsCorpus(Corpus):
             for source_embeddings in self.create_batch():
                 end_pos = start_pos + source_embeddings.shape[0]
                 target_start_pos = 0
+                source_torch_embeddings = source_embeddings
                 for target_embeddings in target_corpus.create_batch():
                     target_end_pos = target_start_pos + target_embeddings.shape[0]
-                    partial_results: np.ndarray = self.similarity(source_embeddings, target_embeddings)  # type: ignore
+                    partial_results: np.ndarray = self.similarity(source_torch_embeddings, target_embeddings)  # type: ignore
                     results[start_pos:end_pos, target_start_pos:target_end_pos] = partial_results
                     target_start_pos = target_end_pos
                     count += target_chunk_size
@@ -725,7 +716,9 @@ def get_passage(doc: Tuple[Tokens, Dict[int, int], Dict[int, int]], start_byte: 
 
 
 def merge_passages(
-    matches: Matches, corpus: Union[TfIdfCorpus, WmdCorpus, SentenceEmbeddingsCorpus], min_score: float,
+    matches: Matches,
+    corpus: Union[TfIdfCorpus, WmdCorpus, SentenceEmbeddingsCorpus],
+    min_score: float,
 ) -> List[MergedGroup]:
     """Merge all passages into bigger passages"""
     # pylint: disable=E1101
@@ -785,7 +778,7 @@ def merge_passages(
                         new_score = source_vector[[t.text for t in target_tokens]]  # type: ignore
                     else:
                         source_vector = corpus.create_embeddings([" ".join(source_tokens)])
-                        new_score = source_vector.similarity(source_vector, merged_group.target.vector)
+                        new_score = util.cos_sim(source_vector, merged_group.target.vector)
                     if evaluate_score(start_score or min_score, new_score, min_score) is True:
                         merged_group.source.end_byte = match.source.end_byte
                         merged_group.source.metadata["end_byte"] = match.source.end_byte
@@ -809,7 +802,7 @@ def merge_passages(
                         new_score = merged_group.source.vector[[t.text for t in target_tokens]]  # type: ignore
                     else:
                         target_vector = corpus.create_embeddings([" ".join(target_tokens)])
-                        new_score = target_vector.similarity(merged_group.source.vector)
+                        new_score = util.cos_sim(target_vector, merged_group.source.vector)
                     if evaluate_score(start_score or min_score, new_score, min_score) is True:
                         merged_group.target.end_byte = match.target.end_byte
                         merged_group.target.metadata["end_byte"] = match.target.end_byte
@@ -899,7 +892,7 @@ def optimize_matches(
 def get_tokens(
     passage: PassageGroup, preproc: PreProcessor, doc: Tuple[Tokens, Dict[int, int], Dict[int, int]]
 ) -> List[Token]:
-    """Get tokens """
+    """Get tokens"""
     text: str = " "
     start_byte: int = passage.start_byte
     end_byte: int = passage.end_byte
@@ -1020,9 +1013,14 @@ def word_movers_similarity(
             n_chunk=target_config["n_chunk"],
             text_object_level_split=target_config["text_object_level_split"],
         )
-        matching_docs = source_corpus.outer_compare(target_corpus, config["min_similarity"],)
+        matching_docs = source_corpus.outer_compare(
+            target_corpus,
+            config["min_similarity"],
+        )
     else:
-        matching_docs = source_corpus.inner_compare(config["min_similarity"],)
+        matching_docs = source_corpus.inner_compare(
+            config["min_similarity"],
+        )
         target_corpus = source_corpus
     return source_corpus, matching_docs
 
@@ -1124,11 +1122,19 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
 
     if config["source"]["vectorization"] == "tfidf":
         source_corpus, matches = simple_similarity(
-            source_texts, config["source"], config["target"], config["min_similarity"], target_texts=target_texts,
+            source_texts,
+            config["source"],
+            config["target"],
+            config["min_similarity"],
+            target_texts=target_texts,
         )
     elif config["source"]["vectorization"] == "wmd":
         source_corpus, matches = word_movers_similarity(
-            source_texts, config["source"], config["target"], config["min_similarity"], target_texts=target_texts,
+            source_texts,
+            config["source"],
+            config["target"],
+            config["min_similarity"],
+            target_texts=target_texts,
         )
     elif config["source"]["vectorization"] == "sent_embed":
         source_corpus, matches = sentence_embed_similarity(
@@ -1151,9 +1157,13 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
             target_batch=config["target_batch"],
         )
     print(f"{len(matches)} matches found.")
-    if config["source"]["vectorization"] != "embed":
+    if config["source"]["vectorization"] not in ("embed", "sent_embed"):
         print("\n### Post-processing results ###", flush=True)
-        merged_matches = merge_passages(matches, source_corpus, config["min_similarity"],)
+        merged_matches = merge_passages(
+            matches,
+            source_corpus,
+            config["min_similarity"],
+        )
         matches, docs_with_matches = optimize_matches(merged_matches, source_corpus, config["min_matching_words"])
     else:
         docs_with_matches = get_docs_with_matches(matches)

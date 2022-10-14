@@ -52,7 +52,7 @@
 
                 <!-- Banality filter -->
                 <div id="banality-filter" class="my-dropdown mb-3">
-                    <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">
+                    <button type="button" class="btn btn-outline-secondary rounded-0" @click="toggleDropdown()">
                         {{ banalitySelected }}&nbsp;&nbsp;&#9662;
                     </button>
                     <ul class="my-dropdown-menu shadow-1">
