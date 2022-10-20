@@ -263,8 +263,8 @@ class Corpus(ABC):
                 chunk_group_length: int = sum([len(t) for t in chunk_group])
                 if chunk_group_length >= min_chunk_length and self.text_object_definition == "text_object":
                     chunk_group.popleft()
-                    if chunk_group:
-                        chunk = [t for chunk in chunk_group for t in chunk]
+                    chunk = [t for chunk in chunk_group for t in chunk]
+                    if chunk_group:  # make sure this chunk is new
                         self.__store_metadata(chunk_group[0].metadata, chunk)
                         chunks_done += 1
                         yield [t.text for t in chunk]
@@ -789,8 +789,8 @@ def merge_passages(
                         source_vector = WmdSimilarity([t.text for t in source_tokens], corpus.wmd_index.wv)  # type: ignore
                         new_score = source_vector[[t.text for t in target_tokens]]  # type: ignore
                     else:
-                        source_vector = corpus.create_embeddings([" ".join(source_tokens)])
-                        new_score = util.cos_sim(source_vector, merged_group.target.vector)
+                        source_vector: torch.Tensor = corpus.create_embeddings([" ".join(source_tokens)])
+                        new_score = util.cos_sim(source_vector, merged_group.target.vector).cpu().numpy()[0, 0]
                     if evaluate_score(start_score or min_score, new_score, min_score) is True:
                         merged_group.source.end_byte = match.source.end_byte
                         merged_group.source.metadata["end_byte"] = match.source.end_byte
@@ -813,12 +813,12 @@ def merge_passages(
                     elif isinstance(corpus, WmdCorpus):
                         new_score = merged_group.source.vector[[t.text for t in target_tokens]]  # type: ignore
                     else:
-                        target_vector = corpus.create_embeddings([" ".join(target_tokens)])
-                        new_score = util.cos_sim(target_vector, merged_group.source.vector)
+                        target_vector: torch.Tensor = corpus.create_embeddings([" ".join(target_tokens)])
+                        new_score = util.cos_sim(target_vector, merged_group.source.vector).cpu().numpy()[0, 0]
                     if evaluate_score(start_score or min_score, new_score, min_score) is True:
                         merged_group.target.end_byte = match.target.end_byte
                         merged_group.target.metadata["end_byte"] = match.target.end_byte
-                        merged_group.target.vector = target_vector
+                        merged_group.target.vector = target_vector  # type: ignore
                         merged_group.similarity = new_score
                         merged_target = True
                 elif match.target.end_byte == merged_group.target.end_byte:
@@ -831,7 +831,6 @@ def merge_passages(
                 saved_groups.append(merged_group)
         merged_matches = saved_groups
         iteration += 1
-        print(len(saved_groups), iteration)
         current_count = len(saved_groups)
         print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
     print(flush=True)
@@ -1179,24 +1178,12 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
         )
         matches, docs_with_matches = optimize_matches(merged_matches, source_corpus, config["min_matching_words"])
     else:
+        matches = merge_passages(matches, source_corpus, config["min_similarity"])
         docs_with_matches = get_docs_with_matches(matches)
 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
-    source_preproc.options = {
-        **source_preproc.options,
-        "strip_tags": False,
-        "with_pos": False,
-        "spacy_lemmatizer": False,
-    }
-    source_preproc.pos_to_keep = set()
-    target_preproc.options = {
-        **target_preproc.options,
-        "strip_tags": False,
-        "with_pos": False,
-        "spacy_lemmatizer": False,
-    }
-    target_preproc.pos_to_keep = set()
+
     with open("output/results/alignments.jsonl", "w") as output:
         for match in tqdm(matches, total=len(matches), leave=False):
             source_context_before = get_text(
@@ -1214,6 +1201,20 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
                 match.target.end_byte, match.target.end_byte + 300, match.target.metadata["filename"]
             )
             if config["source"]["vectorization"] == "tfidf":
+                source_preproc.options = {
+                    **source_preproc.options,
+                    "strip_tags": False,
+                    "with_pos": False,
+                    "spacy_lemmatizer": False,
+                }
+                source_preproc.pos_to_keep = set()
+                target_preproc.options = {
+                    **target_preproc.options,
+                    "strip_tags": False,
+                    "with_pos": False,
+                    "spacy_lemmatizer": False,
+                }
+                target_preproc.pos_to_keep = set()
                 source_passage_with_matches, target_passage_with_matches = post_process_passages(
                     match.source,
                     match.target,
