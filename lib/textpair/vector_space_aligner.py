@@ -242,10 +242,9 @@ class Corpus(ABC):
         current_text_level_id: str = "0"
         full_doc = Tokens([], {})
         current_doc_id = None
-        done = 0
+        chunks_done = 0
         for text in self.texts:
-            print(f"\rProcessing {self.direction} texts... {done} text chunks extracted...", end="", flush=True)
-            done += 1
+            print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
             text.metadata["parsed_filename"] = os.path.join(
                 self.tmp_dir, self.direction, os.path.basename(text.metadata["parsed_filename"])
             )
@@ -263,9 +262,12 @@ class Corpus(ABC):
             if text_level_id != current_text_level_id:
                 chunk_group_length: int = sum([len(t) for t in chunk_group])
                 if chunk_group_length >= min_chunk_length and self.text_object_definition == "text_object":
-                    chunk = [t for chunk in chunk_group for t in chunk]
-                    self.__store_metadata(chunk_group[0].metadata, chunk)
-                    yield [t.text for t in chunk]
+                    chunk_group.popleft()
+                    if chunk_group:
+                        chunk = [t for chunk in chunk_group for t in chunk]
+                        self.__store_metadata(chunk_group[0].metadata, chunk)
+                        chunks_done += 1
+                        yield [t.text for t in chunk]
                 chunk_group.clear()
             current_text_level_id = text_level_id
             if self.text_object_definition == "text_object":
@@ -282,6 +284,7 @@ class Corpus(ABC):
                     if chunk_group_length >= min_chunk_length:
                         chunk = [t for c in chunk_group for t in c]
                         self.__store_metadata(chunk_group[0].metadata, chunk)
+                        chunks_done += 1
                         yield [t.text for t in chunk]
             else:
                 chunks_to_return: List[List[Token]] = []
@@ -293,6 +296,7 @@ class Corpus(ABC):
                             chunk_group[-1].extend(chunk)
                             chunk = [t for chunk in chunk_group for t in chunk if t.text]
                             self.__store_metadata(chunk_group[0].metadata, chunk)
+                            chunks_done += 1
                             yield [t.text for t in chunk]
                             break
                         except IndexError:
@@ -303,6 +307,7 @@ class Corpus(ABC):
                         chunks_to_return.append([t for chunk in chunk_group for t in chunk if t.text])
                 for chunk in chunks_to_return:
                     self.__store_metadata(chunk_group[0].metadata, chunk)
+                    chunks_done += 1
                     yield [t.text for t in chunk]
             current_doc_id = doc_id
         self.__save_doc(full_doc)
