@@ -40,7 +40,7 @@ TEMP_DIR = os.getcwd()
 class PassageGroup(dataobject, fast_new=True):
     """Text passage with all associated properties and vector representation"""
 
-    vector: csr_matrix = csr_matrix([])
+    vector: Any = []
     start_byte: int = 0
     end_byte: int = 0
     filename: str = ""
@@ -147,7 +147,7 @@ class DocumentChunks:
                 end = len(self)
             if self.transform_function is None or self.corpus_type == "Word2VecEmbeddingCorpus":
                 return [self.__get_doc(index) for index in range(item.start, end)]
-            return torch.concat([self.__get_doc(index) for index in range(item.start, end)])
+            return torch.cat([self.__get_doc(index) for index in range(item.start, end)])  # type:ignore
         return self.__get_doc(item)
 
     def __format_doc(self, doc: List[str]) -> Union[str, List[str]]:
@@ -359,7 +359,9 @@ class Corpus(ABC):
     ) -> Iterable[MergedGroup]:
         """Compare corpus with another corpus"""
         for outer_doc_id, inner_doc_id in np.argwhere(results >= min_similarity):
-            if self.metadata[outer_doc_id]["year"] < target_corpus.metadata[inner_doc_id]["year"]:
+            if (
+                self.metadata[outer_doc_id]["year"] < target_corpus.metadata[inner_doc_id]["year"]
+            ):  # TODO: makes this <= instead?
                 yield MergedGroup(
                     PassageGroup(
                         self[outer_doc_id],  # type: ignore
@@ -591,6 +593,8 @@ class SentenceEmbeddingsCorpus(Corpus):
         self.length = len(self.docs)
         self.batch_size = batch_size
         self.chunk_size = floor((self.length + self.batch_size - 1) / self.batch_size)
+        with open(f"{direction}_metadata.json", "w") as output:
+            json.dump(self.metadata, output)
 
     def create_batch(self) -> Generator[torch.Tensor, None, None]:
         for i in range(0, self.length, self.chunk_size):
@@ -603,7 +607,7 @@ class SentenceEmbeddingsCorpus(Corpus):
         return self.length
 
     def create_embeddings(self, text_chunks) -> torch.Tensor:
-        """Create document embeddings"""
+        """Create document embedding"""
         embeddings: torch.Tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)  # type: ignore
         return embeddings
 
@@ -616,24 +620,27 @@ class SentenceEmbeddingsCorpus(Corpus):
         results: np.ndarray
         if target_corpus is None:
             target_corpus = self
-        results = np.zeros((self.length, len(target_corpus)))
-        target_len = target_corpus.length
-        target_chunk_size = target_corpus.chunk_size
-        start_pos = 0
-        count = 0
-        with tqdm(total=self.length * target_len, leave=False) as pbar:
-            for source_embeddings in self.create_batch():
-                end_pos = start_pos + source_embeddings.shape[0]
-                target_start_pos = 0
-                source_torch_embeddings = source_embeddings
-                for target_embeddings in target_corpus.create_batch():
-                    target_end_pos = target_start_pos + target_embeddings.shape[0]
-                    partial_results: np.ndarray = self.similarity(source_torch_embeddings, target_embeddings)  # type: ignore
-                    results[start_pos:end_pos, target_start_pos:target_end_pos] = partial_results
-                    target_start_pos = target_end_pos
-                    count += target_chunk_size
-                    pbar.update(self.length * target_embeddings.shape[0])  # type: ignore
-                start_pos = end_pos
+        if self.batch_size == 1 and target_corpus.batch_size:
+            results = self.similarity(self.docs[0 : self.length], target_corpus.docs[0 : target_corpus.length])
+        else:
+            results = np.zeros((self.length, len(target_corpus)))
+            target_len = target_corpus.length
+            target_chunk_size = target_corpus.chunk_size
+            start_pos = 0
+            count = 0
+            with tqdm(total=self.length * target_len, leave=False) as pbar:
+                for source_embeddings in self.create_batch():
+                    end_pos = start_pos + source_embeddings.shape[0]
+                    target_start_pos = 0
+                    source_torch_embeddings = source_embeddings
+                    for target_embeddings in target_corpus.create_batch():
+                        target_end_pos = target_start_pos + target_embeddings.shape[0]
+                        partial_results: np.ndarray = self.similarity(source_torch_embeddings, target_embeddings)  # type: ignore
+                        results[start_pos:end_pos, target_start_pos:target_end_pos] = partial_results
+                        target_start_pos = target_end_pos
+                        count += target_chunk_size
+                        pbar.update(self.length * target_embeddings.shape[0])  # type: ignore
+                    start_pos = end_pos
         return results
 
     def inner_compare(self, min_similarity: float) -> Matches:
@@ -961,7 +968,7 @@ def simple_similarity(
     min_similarity: float,
     target_texts: Optional[Iterable[Tokens]] = None,
 ) -> Tuple[TfIdfCorpus, Matches]:
-    """Cosine similarity"""
+    """Cosine similarity of TF-IDF vectors"""
     source_corpus: TfIdfCorpus = TfIdfCorpus(
         source_texts,
         text_object_definition=source_config["text_object_definition"],
@@ -995,7 +1002,7 @@ def word_movers_similarity(
     min_similarity: float,
     target_texts: Optional[Iterable[Tokens]] = None,
 ) -> Tuple[WmdCorpus, Iterable[MergedGroup]]:
-    """Cosine similarity"""
+    """Word-movers distance"""
     w2v_model = KeyedVectors.load(source_config["w2v_model_path"], mmap="r")
     source_corpus: WmdCorpus = WmdCorpus(
         source_texts,
@@ -1034,7 +1041,7 @@ def sentence_embed_similarity(
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
 ) -> Tuple[SentenceEmbeddingsCorpus, Matches]:
-    """Cosine similarity"""
+    """Cosine similarity of sentence embeddings from transformer models"""
     source_corpus: SentenceEmbeddingsCorpus = SentenceEmbeddingsCorpus(
         source_texts,
         source_batch,
@@ -1070,6 +1077,7 @@ def word2vec_embed_similarity(
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
 ) -> Tuple[Word2VecEmbeddingCorpus, Iterable[MergedGroup]]:
+    """Cosine similarity of sentence embeddings using mean w2v vectors"""
     source_corpus: Word2VecEmbeddingCorpus = Word2VecEmbeddingCorpus(
         source_texts,
         source_config["spacy_model_name"],
