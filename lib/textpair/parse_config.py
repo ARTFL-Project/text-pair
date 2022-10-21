@@ -11,7 +11,7 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
     tei_parsing = {}
     preprocessing_params = {"source": {}, "target": {}}
     matching_params: Dict[str, Any] = {"matching_algorithm": "sa"}
-    web_app_config = {"skip_web_app": skip_web_app}
+    web_app_config: Dict[str, Any] = {"skip_web_app": skip_web_app}
     config = configparser.ConfigParser()
     config.read(textpair_config)
     file_paths = {
@@ -43,7 +43,13 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
                     preprocessing_params["source"]["text_object_type"] = value
                 else:
                     preprocessing_params["target"]["text_object_type"] = value
-            elif key in ("ngram", "gap", "minimum_word_length", "n_chunk", "min_text_object_length",):
+            elif key in (
+                "ngram",
+                "gap",
+                "minimum_word_length",
+                "n_chunk",
+                "min_text_object_length",
+            ):
                 preprocessing_params["source"][key] = int(value)
                 preprocessing_params["target"][key] = int(value)
             elif key == "pos_to_keep":
