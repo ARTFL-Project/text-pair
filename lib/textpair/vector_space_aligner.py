@@ -744,9 +744,6 @@ def merge_passages(
                         source_vector: csr_matrix = corpus.vectorizer.transform([" ".join(source_tokens)])  # type: ignore
                         score_array: np.ndarray = jaccard_sim(source_vector, merged_group.target.vector)  # type: ignore
                         new_score: float = score_array[0, 0]
-                    elif isinstance(corpus, WmdCorpus):
-                        source_vector = WmdSimilarity([t.text for t in source_tokens], corpus.wmd_index.wv)  # type: ignore
-                        new_score = source_vector[[t.text for t in target_tokens]]  # type: ignore
                     else:
                         source_vector: torch.Tensor = corpus.create_embeddings([" ".join(source_tokens)])
                         new_score = util.cos_sim(source_vector, merged_group.target.vector).cpu().numpy()[0, 0]
@@ -769,8 +766,6 @@ def merge_passages(
                         target_vector: csr_matrix = corpus.vectorizer.transform([" ".join(target_tokens)])  # type: ignore
                         score_array: np.ndarray = jaccard_sim(merged_group.source.vector, target_vector)  # type: ignore
                         new_score: float = score_array[0, 0]
-                    elif isinstance(corpus, WmdCorpus):
-                        new_score = merged_group.source.vector[[t.text for t in target_tokens]]  # type: ignore
                     else:
                         target_vector: torch.Tensor = corpus.create_embeddings([" ".join(target_tokens)])
                         new_score = util.cos_sim(target_vector, merged_group.source.vector).cpu().numpy()[0, 0]
@@ -830,7 +825,7 @@ def optimize_match(
 
 
 def optimize_matches(
-    matches: List[MergedGroup], corpus: Union[TfIdfCorpus, WmdCorpus, TransformerCorpus], min_matching_words: int
+    matches: List[MergedGroup], corpus: Union[TfIdfCorpus, TransformerCorpus], min_matching_words: int
 ) -> Tuple[List[MergedGroup], Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]]]:
     """Optimize matches to get highest sim score"""
     print("Optimizing matches...")
@@ -845,7 +840,7 @@ def optimize_matches(
             docs_with_matches[match.target.metadata["parsed_filename"]], match.target.start_byte, match.target.end_byte
         )
         intersection = {t.text for t in source_tokens if t.text}.intersection({t.text for t in target_tokens})
-        if len(intersection) >= min_matching_words or isinstance(corpus, (WmdCorpus, TransformerCorpus)):
+        if len(intersection) >= min_matching_words or isinstance(corpus, TransformerCorpus):
             source = optimize_match(source_tokens, intersection, match.source, corpus)
             target = optimize_match(target_tokens, intersection, match.target, corpus)
             best_score_matrix: np.ndarray = linear_kernel(target.vector, source.vector)  # type: ignore
