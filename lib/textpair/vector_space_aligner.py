@@ -215,8 +215,9 @@ class Corpus(ABC):
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_level_split: str = "doc",
+        direction="source",
     ):
-        """Intialize CorpusVectorizer"""
+        """Initialize Corpus Object"""
         self.texts: Iterable[Tokens] = texts
         self.min_text_obj_length: int = min_text_obj_length
         self.n_chunk: int = n_chunk
@@ -224,7 +225,8 @@ class Corpus(ABC):
         self.text_object_level_split = text_object_level_split
         self.text_object_definition: str = text_object_definition
         self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/output/")
-        self.direction: str = "source"
+        self.direction: str = direction
+        os.makedirs(os.path.join(self.tmp_dir, self.direction), exist_ok=True)
         self.length = 0
 
     def __len__(self) -> int:
@@ -244,7 +246,7 @@ class Corpus(ABC):
         for text in self.texts:
             print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
             text.metadata["parsed_filename"] = os.path.join(
-                self.tmp_dir, self.direction, os.path.basename(text.metadata["parsed_filename"])
+                self.tmp_dir, self.direction, os.path.basename(text.metadata["parsed_filename"].replace(".lz4", ""))
             )
             doc_id = text.metadata["philo_id"].split()[0]
             if (
@@ -397,6 +399,7 @@ class TfIdfCorpus(Corpus):
         vectorizer: Optional[TfidfVectorizer] = None,
         min_freq: Union[int, float] = 1,
         max_freq: float = 1.0,
+        direction="source",
     ):
         super().__init__(
             texts,
@@ -404,6 +407,7 @@ class TfIdfCorpus(Corpus):
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
             text_object_level_split=text_object_level_split,
+            direction=direction,
         )
         if vectorizer is None:
             os.system(f"rm -rf {self.tmp_dir}/*")
@@ -454,6 +458,7 @@ class Word2VecEmbeddingCorpus(Corpus):
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
             text_object_level_split=text_object_level_split,
+            direction=direction,
         )
         if isinstance(model, str):
             self.model = spacy.load(model)
@@ -535,8 +540,8 @@ class TransformerCorpus(Corpus):
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_level_split: str = "doc",
-        direction="source",
         model=None,
+        direction="source",
     ):
         super().__init__(
             texts,
@@ -544,6 +549,7 @@ class TransformerCorpus(Corpus):
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
             text_object_level_split=text_object_level_split,
+            direction=direction,
         )
 
         if model is None:
@@ -552,13 +558,14 @@ class TransformerCorpus(Corpus):
             self.model = model
 
         self.docs = DocumentChunks(
-            self.get_text_chunks(), save_path=direction, return_type="str", transform_function=self.create_embeddings
+            self.get_text_chunks(),
+            save_path=self.direction,
+            return_type="str",
+            transform_function=self.create_embeddings,
         )
         self.length = len(self.docs)
         self.batch_size = batch_size
         self.chunk_size = floor((self.length + self.batch_size - 1) / self.batch_size)
-        with open(f"{direction}_metadata.json", "w") as output:
-            json.dump(self.metadata, output)
 
     def create_batch(self) -> Generator[torch.Tensor, None, None]:
         for i in range(0, self.length, self.chunk_size):
@@ -688,7 +695,7 @@ def get_passage(doc: Tuple[Tokens, Dict[int, int], Dict[int, int]], start_byte: 
 
 def merge_passages(
     matches: Matches,
-    corpus: Union[TfIdfCorpus, WmdCorpus, TransformerCorpus],
+    corpus: Union[TfIdfCorpus, TransformerCorpus],
     min_score: float,
 ) -> List[MergedGroup]:
     """Merge all passages into bigger passages"""
@@ -795,7 +802,7 @@ def optimize_match(
     tokens: Iterable[Token],
     intersection: Set[str],
     passage_group: PassageGroup,
-    corpus: Union[TfIdfCorpus, WmdCorpus, TransformerCorpus],
+    corpus: Union[TfIdfCorpus, TransformerCorpus],
 ) -> PassageGroup:
     """Optimize a single match by trimming non-matching words on left and right side"""
     start = None
@@ -811,8 +818,6 @@ def optimize_match(
             end = pos
     if isinstance(corpus, TfIdfCorpus):
         new_vector: csr_matrix = corpus.vectorizer.transform([" ".join(tokens[start:end])])  # type: ignore
-    elif isinstance(corpus, WmdCorpus):
-        new_vector = WmdSimilarity([t.text for t in tokens], corpus.wmd_index.wv)  # type: ignore
     else:
         new_vector = corpus.create_embeddings([" ".join(tokens)])
     if new_vector is not None:
