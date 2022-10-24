@@ -465,7 +465,10 @@ class Word2VecEmbeddingCorpus(Corpus):
         else:
             self.model = model
         self.docs = DocumentChunks(
-            self.get_text_chunks(), save_path=direction, return_type="str", transform_function=self.create_embeddings
+            self.get_text_chunks(),
+            save_path=self.direction,
+            return_type="str",
+            transform_function=self.create_embeddings,
         )
         self.length = len(self.docs)
         self.batch_size = batch_size
@@ -539,7 +542,7 @@ class TransformerCorpus(Corpus):
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
-        text_object_level_split: str = "doc",
+        text_object_level_split: str = "sent",
         model=None,
         direction="source",
     ):
@@ -1035,6 +1038,8 @@ def word2vec_embed_similarity(
 
 def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, Any]):
     """Main function"""
+    if os.path.exists(os.path.join(TEMP_DIR, "output")):
+        rmtree(os.path.join(TEMP_DIR, "output"))
     if config["source"]["text_object_definition"] not in ("n_token", "text_object"):
         print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
         exit()

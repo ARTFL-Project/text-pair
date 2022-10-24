@@ -37,7 +37,7 @@ setup(
         "namedlist",  # to remove
         "recordclass",
         "sentence-transformers",
-        "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0-rc2#egg=text_preprocessing",
+        "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0-rc3#egg=text_preprocessing",
     ],
     extras_require={
         "web": [
