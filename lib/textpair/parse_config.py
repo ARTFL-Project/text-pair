@@ -58,6 +58,11 @@ def parse_config(textpair_config, output_path="./output", skip_web_app=False):
             elif key in ("min_freq", "max_freq"):
                 preprocessing_params["source"][key] = float(value)
                 preprocessing_params["target"][key] = float(value)
+            elif key == "target_language":
+                if value:
+                    preprocessing_params["target"]["language"] = value
+                else:  # assumes the language key comes before the target_language key...
+                    preprocessing_params["target"]["language"] = preprocessing_params["source"]["language"]
             else:
                 preprocessing_params["source"][key] = value
                 preprocessing_params["target"][key] = value
