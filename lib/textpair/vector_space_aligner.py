@@ -436,7 +436,7 @@ class TfIdfCorpus(Corpus):
     ):
         super().__init__(
             texts,
-            lambda x: None,
+            lambda x: None,  #
             text_object_definition=text_object_definition,
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
@@ -702,8 +702,8 @@ def merge_passages(
                         source_vector = corpus.create_embeddings([" ".join(source_tokens)])
                         new_score = util.cos_sim(source_vector, merged_group.target.vector).cpu().numpy()[0, 0]
                     elif isinstance(corpus, Word2VecEmbeddingCorpus):
-                        source_vector = corpus.create_embeddings([" ".join(source_tokens)])
-                        new_score = linear_kernel(source_vector, merged_group.target.vector)
+                        source_vector = corpus.create_embeddings([" ".join(source_tokens)])[0]
+                        new_score = linear_kernel([source_vector], [merged_group.target.vector])[0, 0]
                     if evaluate_score(start_score or min_score, new_score, min_score) is True:
                         merged_group.source.end_byte = match.source.end_byte
                         merged_group.source.metadata["end_byte"] = match.source.end_byte
@@ -727,8 +727,8 @@ def merge_passages(
                         target_vector = corpus.create_embeddings([" ".join(target_tokens)])
                         new_score = util.cos_sim(target_vector, merged_group.source.vector).cpu().numpy()[0, 0]
                     elif isinstance(corpus, Word2VecEmbeddingCorpus):
-                        target_vector = corpus.create_embeddings([" ".join(target_tokens)])
-                        new_score = linear_kernel(target_vector, merged_group.source.vector)
+                        target_vector = corpus.create_embeddings([" ".join(target_tokens)])[0]
+                        new_score = linear_kernel([target_vector], [merged_group.source.vector])[0, 0]
                     if evaluate_score(start_score or min_score, new_score, min_score) is True:
                         merged_group.target.end_byte = match.target.end_byte
                         merged_group.target.metadata["end_byte"] = match.target.end_byte
@@ -1045,7 +1045,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
         source_corpus,
         config["min_similarity"],
     )
-    if isinstance(source_corpus, (TfIdfCorpus, Word2VecEmbeddingCorpus)):
+    if isinstance(source_corpus, TfIdfCorpus):
         print("\n### Post-processing results ###", flush=True)
         matches, docs_with_matches = optimize_matches(matches, source_corpus, config["min_matching_words"])
     else:
