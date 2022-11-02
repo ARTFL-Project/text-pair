@@ -464,8 +464,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 				}
 				var wait sync.WaitGroup
 				targetLength := len(targetFileIndexes)
-				combinedAlignments := &CombinedAlignments{sourceFile.DocID, []alignmentsPerDoc{}}
-				c := make(chan []alignmentsPerDoc, config.numThreads)
+
 				var start int
 				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
 					start = pos + 1
@@ -475,20 +474,26 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 				var increment int
 				threadsNeeded := config.numThreads
 				if config.numThreads > 1 {
-					localTargeLength := len(targetFileIndexes[start:])
-					filesPerThread := localTargeLength / threadsNeeded
+					localTargetLength := len(targetFileIndexes[start:])
+					filesPerThread := localTargetLength / threadsNeeded
 					for filesPerThread < 10 {
 						threadsNeeded = threadsNeeded / 2 // We reduce the number of Go routines to avoid starvation.
 						if threadsNeeded < 2 {
 							threadsNeeded = 1
 							break
 						}
-						filesPerThread = localTargeLength / threadsNeeded
+						filesPerThread = localTargetLength / threadsNeeded
 					}
 					increment = (targetLength-start)/threadsNeeded + 1
 				} else {
 					increment = targetLength - start
 				}
+
+				c := make(chan []alignmentsPerDoc, threadsNeeded)
+
+				// Defer the closing of c to guarantee against unclosed channel and thus memory leaks
+				defer close(c)
+
 				wait.Add(threadsNeeded)
 				end := start + increment
 				totalTexts := 0
@@ -555,11 +560,8 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 				for i := 0; i < threadsNeeded; i++ {
 					localCombinedAlignments := <-c
 					if len(localCombinedAlignments) > 0 {
-						combinedAlignments.alignments = append(combinedAlignments.alignments, localCombinedAlignments...)
+						writeAlignments(localCombinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, &counts)
 					}
-				}
-				if len(combinedAlignments.alignments) > 0 {
-					writeAligments(combinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, &counts)
 				}
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
@@ -869,9 +871,9 @@ func writeDebugOutput(m *matchValues, match bool, currentAnchor *ngramMatch, deb
 	debugOutput.Sync()
 }
 
-func writeAligments(combinedAlignments *CombinedAlignments, sourceDocID *string, sourceMetadata map[string]map[string]string,
+func writeAlignments(localAlignments []alignmentsPerDoc, sourceDocID *string, sourceMetadata map[string]map[string]string,
 	targetMetadata map[string]map[string]string, f *os.File, duplicatesFile *os.File, config *matchingParams, counts *int) {
-	for _, alignments := range combinedAlignments.alignments {
+	for _, alignments := range localAlignments {
 		fullAlignment := map[string]string{}
 		for key, value := range sourceMetadata[*sourceDocID] {
 			fullAlignment["source_"+key] = value
