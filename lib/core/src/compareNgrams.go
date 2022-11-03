@@ -109,12 +109,6 @@ type alignmentsPerDoc struct {
 	duplicates string
 }
 
-// CombinedAlignments holds all alignments for a single source doc
-type CombinedAlignments struct {
-	sourceID   string
-	alignments []alignmentsPerDoc
-}
-
 // Pair is a data structure to hold a key/value pair.
 type Pair struct {
 	Key   int32
