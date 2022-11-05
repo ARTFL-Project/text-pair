@@ -417,8 +417,8 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 		}
 		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
-	mergedOutput := createOutputFile(config)
 	duplicateFilesOutput := creatDuplicateFilesOutputFile(config)
+	os.MkdirAll(filepath.Join(config.outputPath, "result_chunks"), 0755)
 	counts := 0
 	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
 		prefixString := "Loading source files"
@@ -457,18 +457,20 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					os.Stdout.Sync()
 				}
 				var wait sync.WaitGroup
-				targetLength := len(targetFileIndexes)
 
 				var start int
 				if sourceAgainstSource && sourceBatchNumber == targetBatchNumber {
 					start = pos + 1
+					if start == len(targetFileIndexes) {
+						continue
+					}
 				} else {
 					start = 0
 				}
 				var increment int
 				threadsNeeded := config.numThreads
+				localTargetLength := len(targetFileIndexes[start:])
 				if config.numThreads > 1 {
-					localTargetLength := len(targetFileIndexes[start:])
 					filesPerThread := localTargetLength / threadsNeeded
 					for filesPerThread < 10 {
 						threadsNeeded = threadsNeeded / 2 // We reduce the number of Go routines to avoid starvation.
@@ -478,28 +480,32 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 						}
 						filesPerThread = localTargetLength / threadsNeeded
 					}
-					increment = (targetLength-start)/threadsNeeded + 1
+					increment = localTargetLength / threadsNeeded
 				} else {
-					increment = targetLength - start
+					increment = localTargetLength - start
 				}
-
-				c := make(chan []alignmentsPerDoc, threadsNeeded)
-
-				// Defer the closing of c to guarantee against unclosed channel and thus memory leaks
-				defer close(c)
-
-				wait.Add(threadsNeeded)
 				end := start + increment
+
+				c := make(chan int, threadsNeeded)
+				defer close(c) // Defer the closing of c to guarantee against unclosed channel and thus memory leaks
+				wait.Add(threadsNeeded)
+
 				totalTexts := 0
 				for i := 0; i < threadsNeeded; i++ {
-					if end > targetLength {
-						end = targetLength
+					if end > len(targetFileIndexes) {
+						end = len(targetFileIndexes)
+					}
+					if i == (threadsNeeded - 1) { // Make sure we get the last couple texts in the last thread
+						end = len(targetFileIndexes)
 					}
 					splitTargets := targetFileIndexes[start:end]
 					totalTexts += len(splitTargets)
 					start = end
 					end += increment
-					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, commonNgrams map[int32]bool) {
+					outputFileName := fmt.Sprintf("%s-%s-%s", sourceFile.DocID, splitTargets[0].DocID, splitTargets[len(splitTargets)-1].DocID)
+					resultOutput, _ := os.Create(filepath.Join(config.outputPath, "result_chunks", outputFileName))
+					localCount := 0
+					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, commonNgrams map[int32]bool, resultOutput *os.File) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
 						for _, targetFile := range splitTargets {
@@ -547,23 +553,27 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							debugOutput.Sync()
 							debugOutput.Close()
 						}
-						c <- localAlignments
-					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, config, commonNgrams)
+						writeAlignments(localAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, resultOutput, duplicateFilesOutput, config, &localCount)
+						resultOutput.Sync()
+						resultOutput.Close()
+						c <- localCount
+					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, config, commonNgrams, resultOutput)
 				}
 				wait.Wait()
 				for i := 0; i < threadsNeeded; i++ {
-					localCombinedAlignments := <-c
-					if len(localCombinedAlignments) > 0 {
-						writeAlignments(localCombinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, &counts)
-					}
+					localCount := <-c
+					counts += localCount
+					// if len(localCombinedAlignments) > 0 {
+					// 	writeAlignments(localCombinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, &counts)
+					// }
 				}
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
 			os.Stdout.Sync()
 		}
 	}
-	mergedOutput.Sync()
-	mergedOutput.Close()
+	// mergedOutput.Sync()
+	// mergedOutput.Close()
 	fmt.Printf("%d pairwise alignments found...\n", counts)
 	return counts
 }
@@ -899,7 +909,6 @@ func writeAlignments(localAlignments []alignmentsPerDoc, sourceDocID *string, so
 			// localAlignment["target_end_position"] = targetPositions[1]
 			localAlignment["banality"] = fmt.Sprintf("%v", alignment.banality)
 			*counts++
-			localAlignment["passage_id"] = strconv.Itoa(*counts)
 			jsonString, _ := json.Marshal(localAlignment)
 			jsonString = append(jsonString, "\n"...)
 			f.Write(jsonString)
@@ -999,7 +1008,7 @@ func checkErr(err error, errorMessage string) {
 func makeSliceOfSlices(sliceToSlice []sortedFile, batch int) [][]sortedFile {
 	var sliceOfSlices [][]sortedFile
 	sliceLength := len(sliceToSlice)
-	chunkSize := (sliceLength + batch - 1) / batch
+	chunkSize := int(math.Ceil(float64(sliceLength) / float64(batch)))
 	for i := 0; i < sliceLength; i += chunkSize {
 		end := i + chunkSize
 		if end > sliceLength {

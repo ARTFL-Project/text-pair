@@ -213,6 +213,7 @@ def load_db(file, table_name, field_types, searchable_fields):
     for alignment_fields in tqdm(alignments, total=line_count, leave=False):
         rowid += 1
         alignment_fields["rowid"] = rowid
+        alignment_fields["passage_id"] = rowid
         alignment_fields["source_passage_length"] = len(TOKENIZER.findall(alignment_fields["source_passage"]))
         alignment_fields["target_passage_length"] = len(TOKENIZER.findall(alignment_fields["target_passage"]))
         row = validate_field_type(alignment_fields, field_types, field_names)

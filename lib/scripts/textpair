@@ -1,171 +1,12 @@
 #!/usr/bin/env python3
 """Sequence aligner script"""
 
-import argparse
 import os
-import re
-from collections import defaultdict, namedtuple
 
-from textpair import TEIParser, Ngrams, create_web_app, web_loader, parse_config, run_vsa
+from textpair import TEIParser, Ngrams, create_web_app, web_loader, get_config, run_vsa
 
-TextPAIRParams = namedtuple(
-    "TextPairParams",
-    "dbname, paths, tei_parsing, preprocessing_params, matching_params, output_path, workers, web_app_config, debug, only_align, only_web_app, update_db, file",
-)
 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
-
-TRIM_LAST_SLASH = re.compile(r"/\Z")
-
-
-def parse_command_line():
-    """Command line parsing function"""
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "dbname",
-        help="Name of TextPAIR database. This will also be used for the PostgreSQL table name. Must not be longer than 30 characters",
-    )
-    parser.add_argument(
-        "--config", help="configuration file used to override defaults", type=str, default="", required=True
-    )
-    parser.add_argument("--source_files", help="path to source files from which to compare", type=str)
-    parser.add_argument("--target_files", help="path to target files to compared to source files", type=str, default="")
-    parser.add_argument(
-        "--is_philo_db", help="define if files are from a PhiloLogic instance", action="store_true", default=False
-    )
-    parser.add_argument(
-        "--source_metadata", help="path to source metadata if not from PhiloLogic instance", type=str, default=""
-    )
-    parser.add_argument(
-        "--target_metadata", help="path to target metadata if not from PhiloLogic instance", type=str, default=""
-    )
-    parser.add_argument(
-        "--only_align",
-        help="skip parsing or ngram generation phase to go straight to the aligner",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--source_common_ngrams", help="path to source common ngrams when using --only_align", type=str, default=""
-    )
-    parser.add_argument(
-        "--target_common_ngrams", help="path to target common ngrams when using --only_align", type=str, default=""
-    )
-    parser.add_argument(
-        "--ngram_index", help="path to ngram index when using --only_align with debug", type=str, default=""
-    )
-    parser.add_argument(
-        "--skip_web_app",
-        help="define whether to load results into a database and build a corresponding web app",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--load_only_web_app",
-        help="define whether to load results into a database and build a corresponding web app",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--update_db", help="update database without rebuilding web_app", action="store_true", default=False
-    )
-    parser.add_argument("--file", help="alignment file to load", type=str, default=None)
-    parser.add_argument(
-        "--output_path", help="output path for ngrams and sequence alignment", type=str, default="./output"
-    )
-    parser.add_argument(
-        "--workers", help="How many threads or cores to use for preprocessing and matching", type=int, default=4
-    )
-    parser.add_argument("--debug", help="add debugging", action="store_true", default=False)
-    args = vars(parser.parse_args())
-    if args["config"]:
-        if os.path.exists(args["config"]):
-            file_paths, tei_parsing, preprocessing_params, matching_params, web_app_config = parse_config(
-                args["config"], output_path=args["output_path"], skip_web_app=args["skip_web_app"]
-            )
-        else:
-            print("config file does not exist at the location {} you provided.".format(args["config"]))
-            print("Exiting...")
-            exit()
-    else:
-        print("No config file provided.")
-        print("Exiting...")
-        exit()
-    if not args["source_files"]:
-        args["source_files"] = file_paths["source_files"]
-    if not args["target_files"]:
-        args["target_files"] = file_paths["target_files"]
-    web_app_config["skip_web_app"] = args["skip_web_app"]
-    paths = {"source": {}, "target": defaultdict(str)}
-    if args["only_align"] is False:
-        if tei_parsing["parse_source_files"] is True:
-            paths["source"]["tei_input_files"] = args["source_files"]
-            paths["source"]["parse_output"] = os.path.join(args["output_path"], "source")
-            paths["source"]["input_files_for_ngrams"] = os.path.join(args["output_path"], "source/texts")
-            paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
-            paths["source"]["metadata_path"] = os.path.join(args["output_path"], "source/metadata/metadata.json")
-            paths["source"]["is_philo_db"] = False
-        else:
-            if args["is_philo_db"] is True:
-                paths["source"]["input_files_for_ngrams"] = os.path.join(
-                    args["source_files"], "data/words_and_philo_ids"
-                )
-            else:
-                paths["source"]["input_files_for_ngrams"] = args["source_files"]
-            paths["source"]["ngram_output_path"] = os.path.join(args["output_path"], "source/")
-            paths["source"]["metadata_path"] = args["source_metadata"] or os.path.join(
-                args["output_path"], "source/metadata/metadata.json"
-            )
-            paths["source"]["is_philo_db"] = args["is_philo_db"]
-        paths["source"]["common_ngrams"] = os.path.join(args["output_path"], "source/index/most_common_ngrams.txt")
-        matching_params["ngram_index"] = os.path.join(args["output_path"], "source/index/index.tab")
-        if args["target_files"]:
-            if tei_parsing["parse_target_files"] is True:
-                paths["target"]["tei_input_files"] = args["target_files"]
-                paths["target"]["parse_output"] = os.path.join(args["output_path"], "target")
-                paths["target"]["input_files_for_ngrams"] = os.path.join(args["output_path"], "target/texts")
-                paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
-                paths["target"]["metadata_path"] = os.path.join(args["output_path"], "target/metadata/metadata.json")
-                paths["target"]["is_philo_db"] = False
-            else:
-                if args["is_philo_db"] is True:
-                    paths["target"]["input_files_for_ngrams"] = os.path.join(
-                        args["target_files"], "data/words_and_philo_ids"
-                    )
-                else:
-                    paths["target"]["input_files_for_ngrams"] = args["target_files"]
-                paths["target"]["ngram_output_path"] = os.path.join(args["output_path"], "target/")
-                paths["target"]["metadata_path"] = args["target_metadata"] or os.path.join(
-                    args["output_path"], "target/metadata/metadata.json"
-                )
-                paths["target"]["is_philo_db"] = args["is_philo_db"]
-            paths["target"]["common_ngrams"] = os.path.join(args["output_path"], "target/index/most_common_ngrams.txt")
-    else:
-        paths["source"]["ngram_output_path"] = args["source_files"].replace(
-            "/ngrams", ""
-        )  # we add the path further below, so we assume it's been given on the CLI
-        paths["source"]["metadata_path"] = args["source_metadata"]
-        paths["source"]["common_ngrams"] = args["source_common_ngrams"]
-        matching_params["ngram_index"] = args["ngram_index"]
-        paths["target"]["ngram_output_path"] = args["target_files"].replace("/ngrams", "")
-        paths["target"]["metadata_path"] = args["target_metadata"]
-        paths["target"]["common_ngrams"] = args["target_common_ngrams"]
-
-    return TextPAIRParams(
-        args["dbname"],
-        paths,
-        tei_parsing,
-        preprocessing_params,
-        matching_params,
-        args["output_path"],
-        args["workers"],
-        web_app_config,
-        args["debug"],
-        args["only_align"],
-        args["load_only_web_app"],
-        args["update_db"],
-        args["file"],
-    )
 
 
 def run_alignment(pair_params):
@@ -215,6 +56,9 @@ def run_alignment(pair_params):
     print("\n### Starting sequence alignment ###")
     if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         pair_params.paths["target"]["ngram_output_path"] = pair_params.paths["source"]["ngram_output_path"]
+    results_chunks_path = os.path.join(pair_params.output_path, "results/result_chunks")
+    if os.path.exists(results_chunks_path):
+        os.system(f"rm -rf {results_chunks_path}")
     command = f"""compareNgrams \
                 --output_path={pair_params.output_path}/results \
                 --threads={pair_params.workers} \
@@ -243,9 +87,15 @@ def run_alignment(pair_params):
                 --passage_distance_multiplier={pair_params.matching_params["passage_distance_multiplier"]} \
                 --debug={str(pair_params.debug).lower()} \
                 --ngram_index={pair_params.matching_params["ngram_index"]}"""
+    # merge_command = f'''ls -1v {results_chunks_path} | xargs -i sh -c "cat {results_chunks_path}/{{}} >> {pair_params.output_path}/results/alignments.jsonl && rm {results_chunks_path}/{{}}"'''
+    os.system(f"rm {pair_params.output_path}/results/alignments.jsonl")
+    merge_command = f"for i in `ls -1v {results_chunks_path}`; do cat {results_chunks_path}/$i >> {pair_params.output_path}/results/alignments.jsonl; rm {results_chunks_path}/$i; done"
     if pair_params.debug:
-        print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
+        print(f"Running alignment with following arguments:\n{' '.join(command.split())} && {merge_command}")
     os.system(command)
+    print("Merging alignments into one file (this may take a while)... ", end="", flush=True)
+    os.system(merge_command)
+    print("done.")
     if pair_params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl")
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
@@ -261,7 +111,7 @@ def run_alignment(pair_params):
         )
 
 
-def run_vsa_similarity(pair_params: TextPAIRParams) -> None:
+def run_vsa_similarity(pair_params) -> None:
     """Run vsa similarity"""
     print("\n### Starting vector space alignment ###")
     if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
@@ -288,7 +138,7 @@ def run_vsa_similarity(pair_params: TextPAIRParams) -> None:
 
 
 if __name__ == "__main__":
-    pair_params = parse_command_line()
+    pair_params = get_config()
     if pair_params.update_db is True:
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
