@@ -87,9 +87,9 @@ def run_alignment(pair_params):
                 --passage_distance_multiplier={pair_params.matching_params["passage_distance_multiplier"]} \
                 --debug={str(pair_params.debug).lower()} \
                 --ngram_index={pair_params.matching_params["ngram_index"]}"""
-    # merge_command = f'''ls -1v {results_chunks_path} | xargs -i sh -c "cat {results_chunks_path}/{{}} >> {pair_params.output_path}/results/alignments.jsonl && rm {results_chunks_path}/{{}}"'''
-    os.system(f"rm {pair_params.output_path}/results/alignments.jsonl")
-    merge_command = f"for i in `ls -1v {results_chunks_path}`; do cat {results_chunks_path}/$i >> {pair_params.output_path}/results/alignments.jsonl; rm {results_chunks_path}/$i; done"
+    if os.path.exists(f"{pair_params.output_path}/results/alignments.jsonl"):
+        os.system(f"rm {pair_params.output_path}/results/alignments.jsonl")
+    merge_command = f"find {results_chunks_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {pair_params.output_path}/results/alignments.jsonl.lz4; rm -rf {results_chunks_path}"
     if pair_params.debug:
         print(f"Running alignment with following arguments:\n{' '.join(command.split())} && {merge_command}")
     os.system(command)

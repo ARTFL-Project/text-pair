@@ -7,10 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"html"
-	"io/ioutil"
 	"log"
 	"math"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -217,7 +217,7 @@ func openJSONMetadata(fileLocation *string) map[string]map[string]string {
 	} else {
 		filePath = *fileLocation
 	}
-	jsonFile, err := ioutil.ReadFile(filePath)
+	jsonFile, err := os.ReadFile(filePath)
 	checkErr(err, "openJSONMetadata")
 	metadata := make(map[string]map[string]string)
 	json.Unmarshal(jsonFile, &metadata)
@@ -316,7 +316,7 @@ func getJSONDocs(fileLocations []sortedFile, prefixString string, threads int) [
 		for _, fileLocation := range fileGroup {
 			go func(fileLocation sortedFile) {
 				defer wait.Done()
-				jsonFile, err := ioutil.ReadFile(fileLocation.docID)
+				jsonFile, err := os.ReadFile(fileLocation.docID)
 				checkErr(err, "getJSONDocs")
 				tempDoc := make(map[int32][][]int32)
 				json.Unmarshal(jsonFile, &tempDoc)
@@ -398,8 +398,9 @@ func loadNgramIndex(fileLocation string) map[int32]string {
 }
 
 func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, commonNgrams map[int32]bool, config *matchingParams, ngramIndex map[int32]string) int {
-	sourceAgainstSource := false
+	saveAlignmentConfig(config)
 
+	sourceAgainstSource := false
 	// Split source and target files into config.batchSize batches
 	if config.sourceBatch > len(sourceFiles) {
 		config.sourceBatch = len(sourceFiles)
@@ -502,10 +503,9 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					totalTexts += len(splitTargets)
 					start = end
 					end += increment
-					outputFileName := fmt.Sprintf("%s-%s-%s", sourceFile.DocID, splitTargets[0].DocID, splitTargets[len(splitTargets)-1].DocID)
-					resultOutput, _ := os.Create(filepath.Join(config.outputPath, "result_chunks", outputFileName))
+					outputFileName := filepath.Join(config.outputPath, "result_chunks", fmt.Sprintf("%s-%s-%s", sourceFile.DocID, splitTargets[0].DocID, splitTargets[len(splitTargets)-1].DocID))
 					localCount := 0
-					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, commonNgrams map[int32]bool, resultOutput *os.File) {
+					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, commonNgrams map[int32]bool, outputFileName string) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
 						for _, targetFile := range splitTargets {
@@ -553,27 +553,22 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							debugOutput.Sync()
 							debugOutput.Close()
 						}
-						writeAlignments(localAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, resultOutput, duplicateFilesOutput, config, &localCount)
-						resultOutput.Sync()
-						resultOutput.Close()
+						if len(localAlignments) > 0 {
+							writeAlignments(localAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, outputFileName, duplicateFilesOutput, config, &localCount)
+						}
 						c <- localCount
-					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, config, commonNgrams, resultOutput)
+					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, config, commonNgrams, outputFileName)
 				}
 				wait.Wait()
 				for i := 0; i < threadsNeeded; i++ {
 					localCount := <-c
 					counts += localCount
-					// if len(localCombinedAlignments) > 0 {
-					// 	writeAlignments(localCombinedAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, mergedOutput, duplicateFilesOutput, config, &counts)
-					// }
 				}
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
 			os.Stdout.Sync()
 		}
 	}
-	// mergedOutput.Sync()
-	// mergedOutput.Close()
 	fmt.Printf("%d pairwise alignments found...\n", counts)
 	return counts
 }
@@ -619,7 +614,7 @@ func getMostCommonNgrams(intersectionCount map[int32]int, banalNgrams *int, comm
 	return mostCommonNgrams
 }
 
-func createOutputFile(config *matchingParams) *os.File {
+func saveAlignmentConfig(config *matchingParams)  {
 	os.MkdirAll(config.outputPath, 0755)
 	configOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_config.ini"))
 	configOutput.WriteString("## Alignment Parameters ##\n\n")
@@ -653,9 +648,7 @@ func createOutputFile(config *matchingParams) *os.File {
 	configOutput.Sync()
 	configOutput.Close()
 
-	mergedOutput, err := os.Create(filepath.Join(config.outputPath, "alignments.jsonl"))
-	checkErr(err, "createOutputFile")
-	return mergedOutput
+	checkErr(err, "saveAlignmentConfig")
 }
 
 func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDocID string) *os.File {
@@ -876,8 +869,9 @@ func writeDebugOutput(m *matchValues, match bool, currentAnchor *ngramMatch, deb
 }
 
 func writeAlignments(localAlignments []alignmentsPerDoc, sourceDocID *string, sourceMetadata map[string]map[string]string,
-	targetMetadata map[string]map[string]string, f *os.File, duplicatesFile *os.File, config *matchingParams, counts *int) {
-	for _, alignments := range localAlignments {
+	targetMetadata map[string]map[string]string, outputFileName string, duplicatesFile *os.File, config *matchingParams, counts *int) {
+		f, _ := os.Create(outputFileName)
+		for _, alignments := range localAlignments {
 		fullAlignment := map[string]string{}
 		for key, value := range sourceMetadata[*sourceDocID] {
 			fullAlignment["source_"+key] = value
@@ -917,6 +911,11 @@ func writeAlignments(localAlignments []alignmentsPerDoc, sourceDocID *string, so
 			duplicatesFile.WriteString(fmt.Sprintf("%s\n", alignments.duplicates))
 		}
 	}
+	f.Sync()
+	f.Close()
+	compressedFileName := outputFileName + ".lz4"
+	cmd := exec.Command("bash", "-c", fmt.Sprintf("lz4 --rm -c -q -3 %s > %s", outputFileName, compressedFileName))
+	cmd.Run()
 }
 
 // Returns position of passage within document in percentages
@@ -1017,20 +1016,4 @@ func makeSliceOfSlices(sliceToSlice []sortedFile, batch int) [][]sortedFile {
 		sliceOfSlices = append(sliceOfSlices, sliceToSlice[i:end])
 	}
 	return sliceOfSlices
-}
-
-func mapToSliceOfKeys(metadata map[string]string) []string {
-	keys := []string{}
-	for k := range metadata {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-func mapToSliceOfValues(metadata map[string]string, fields []string) []string {
-	values := []string{}
-	for _, v := range fields {
-		values = append(values, metadata[v])
-	}
-	return values
 }
