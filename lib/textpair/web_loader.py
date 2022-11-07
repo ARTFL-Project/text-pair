@@ -9,6 +9,7 @@ from collections import OrderedDict
 
 from psycopg2.extras import execute_values
 from tqdm import tqdm
+import lz4.frame
 
 try:
     import psycopg2
@@ -126,10 +127,14 @@ class WebAppConfig:
 
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
-    with open(file, encoding="utf8", errors="ignore") as input_file:
-        for line in input_file:
-            fields = json.loads(line.rstrip("\n"))
-            yield fields
+    if file.endswith(".lz4"):
+        input_file = lz4.frame.open(file)
+    else:
+        input_file = open(file)
+    for line in input_file:
+        fields = json.loads(line.rstrip("\n"))
+        yield fields
+    input_file.close()
 
 
 def clean_text(text):
@@ -187,28 +192,27 @@ def load_db(file, table_name, field_types, searchable_fields):
     cursor = database.cursor()
     cursor2 = database.cursor()
 
-    alignments = parse_file(file)
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
     extra_fields = set()
     line_count = 0
-    with open(file, errors="ignore") as input_file:
-        for line in input_file:
-            extra_fields.update(json.loads(line).keys())
-            line_count += 1
-        field_names.extend([f for f in extra_fields if f not in FILTERED_FIELDS])
-        field_names.extend(["source_passage_length", "target_passage_length"])
-        if "source_year" not in field_names:
-            field_names.append("source_year")
-        if "target_year" not in field_names:
-            field_names.append("target_year")
-        fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
-        fields_in_table.extend(fields_and_types)
+    for result in parse_file(file):
+        extra_fields.update(result.keys())
+        line_count += 1
+    field_names.extend([f for f in extra_fields if f not in FILTERED_FIELDS])
+    field_names.extend(["source_passage_length", "target_passage_length"])
+    if "source_year" not in field_names:
+        field_names.append("source_year")
+    if "target_year" not in field_names:
+        field_names.append("target_year")
+    fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
+    fields_in_table.extend(fields_and_types)
     cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
     cursor.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
     lines = 0
     rows = []
     rowid = 0
+    alignments = parse_file(file)
     print("Populating main table...")
     for alignment_fields in tqdm(alignments, total=line_count, leave=False):
         rowid += 1

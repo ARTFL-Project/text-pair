@@ -37,6 +37,7 @@ setup(
         "namedlist",  # to remove
         "recordclass",
         "sentence-transformers",
+        "lz4",
         "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0-rc3#egg=text_preprocessing",
     ],
     extras_require={
