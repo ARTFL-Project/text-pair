@@ -87,8 +87,8 @@ def run_alignment(pair_params):
                 --passage_distance_multiplier={pair_params.matching_params["passage_distance_multiplier"]} \
                 --debug={str(pair_params.debug).lower()} \
                 --ngram_index={pair_params.matching_params["ngram_index"]}"""
-    if os.path.exists(f"{pair_params.output_path}/results/alignments.jsonl"):
-        os.system(f"rm {pair_params.output_path}/results/alignments.jsonl")
+    if os.path.exists(f"{pair_params.output_path}/results/alignments.jsonl.lz4"):
+        os.system(f"rm {pair_params.output_path}/results/alignments.jsonl.lz4")
     merge_command = f"find {results_chunks_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {pair_params.output_path}/results/alignments.jsonl.lz4; rm -rf {results_chunks_path}"
     if pair_params.debug:
         print(f"Running alignment with following arguments:\n{' '.join(command.split())} && {merge_command}")
@@ -97,7 +97,7 @@ def run_alignment(pair_params):
     os.system(merge_command)
     print("done.")
     if pair_params.web_app_config["skip_web_app"] is False:
-        output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl")
+        output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl.lz4")
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
             output_file,

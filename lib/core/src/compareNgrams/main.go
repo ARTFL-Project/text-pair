@@ -870,8 +870,8 @@ func writeDebugOutput(m *matchValues, match bool, currentAnchor *ngramMatch, deb
 
 func writeAlignments(localAlignments []alignmentsPerDoc, sourceDocID *string, sourceMetadata map[string]map[string]string,
 	targetMetadata map[string]map[string]string, outputFileName string, duplicatesFile *os.File, config *matchingParams, counts *int) {
-		f, _ := os.Create(outputFileName)
-		for _, alignments := range localAlignments {
+	f, _ := os.Create(outputFileName)
+	for _, alignments := range localAlignments {
 		fullAlignment := map[string]string{}
 		for key, value := range sourceMetadata[*sourceDocID] {
 			fullAlignment["source_"+key] = value
