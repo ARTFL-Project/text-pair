@@ -56,9 +56,11 @@ def run_alignment(pair_params):
     print("\n### Starting sequence alignment ###")
     if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         pair_params.paths["target"]["ngram_output_path"] = pair_params.paths["source"]["ngram_output_path"]
-    results_chunks_path = os.path.join(pair_params.output_path, "results/result_chunks")
-    if os.path.exists(results_chunks_path):
-        os.system(f"rm -rf {results_chunks_path}")
+    result_batch_path = os.path.join(pair_params.output_path, "results/batched_results")
+    if os.path.exists(result_batch_path):
+        os.system(
+            f"rm -rf {result_batch_path} && rm -rf {os.path.join(pair_params.output_path, 'results/result_chunks')}"
+        )
     command = f"""compareNgrams \
                 --output_path={pair_params.output_path}/results \
                 --threads={pair_params.workers} \
@@ -66,13 +68,9 @@ def run_alignment(pair_params):
                 --target_files={pair_params.paths["target"]["ngram_output_path"]}/ngrams \
                 --source_metadata={pair_params.paths["source"]["metadata_path"]} \
                 --target_metadata={pair_params.paths["target"]["metadata_path"]} \
-                --source_common_ngrams={pair_params.paths["source"]["common_ngrams"]} \
-                --target_common_ngrams={pair_params.paths["target"]["common_ngrams"]} \
                 --sort_by={pair_params.matching_params["sort_by"]} \
                 --source_batch={pair_params.matching_params["source_batch"]} \
                 --target_batch={pair_params.matching_params["target_batch"]} \
-                --most_common_ngram_threshold={pair_params.matching_params["most_common_ngram_threshold"]} \
-                --common_ngrams_limit={pair_params.matching_params["common_ngrams_limit"]} \
                 --matching_window_size={pair_params.matching_params["matching_window_size"]} \
                 --max_gap={pair_params.matching_params["max_gap"]} \
                 --flex_gap={pair_params.matching_params["flex_gap"]} \
@@ -80,7 +78,6 @@ def run_alignment(pair_params):
                 --minimum_matching_ngrams_in_window={pair_params.matching_params["minimum_matching_ngrams_in_window"]} \
                 --minimum_matching_ngrams_in_docs={pair_params.matching_params["minimum_matching_ngrams_in_docs"]} \
                 --context_size={pair_params.matching_params["context_size"]} \
-                --banal_ngrams={pair_params.matching_params["banal_ngrams"]} \
                 --duplicate_threshold={pair_params.matching_params["duplicate_threshold"]} \
                 --merge_passages_on_byte_distance={pair_params.matching_params["merge_passages_on_byte_distance"]} \
                 --merge_passages_on_ngram_distance={pair_params.matching_params["merge_passages_on_ngram_distance"]} \
@@ -89,12 +86,15 @@ def run_alignment(pair_params):
                 --ngram_index={pair_params.matching_params["ngram_index"]}"""
     if os.path.exists(f"{pair_params.output_path}/results/alignments.jsonl.lz4"):
         os.system(f"rm {pair_params.output_path}/results/alignments.jsonl.lz4")
-    merge_command = f"find {results_chunks_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {pair_params.output_path}/results/alignments.jsonl.lz4; rm -rf {results_chunks_path}"
     if pair_params.debug:
-        print(f"Running alignment with following arguments:\n{' '.join(command.split())} && {merge_command}")
+        print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
     os.system(command)
     print("Merging alignments into one file (this may take a while)... ", end="", flush=True)
+    merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {pair_params.output_path}/results/alignments.jsonl.lz4; rm -rf {result_batch_path}"
     os.system(merge_command)
+
+    if pair_params.matching_params["banality_auto_detection"] is True:
+        pass  # this function should run through the results and detect banalities
     print("done.")
     if pair_params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl.lz4")

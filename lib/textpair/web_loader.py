@@ -128,13 +128,13 @@ class WebAppConfig:
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
     if file.endswith(".lz4"):
-        input_file = lz4.frame.open(file)
+        with lz4.frame.open(file) as input_file:
+            for line in input_file:
+                yield json.loads(line.decode("utf-8").rstrip("\n"))
     else:
-        input_file = open(file)
-    for line in input_file:
-        fields = json.loads(line.rstrip("\n"))
-        yield fields
-    input_file.close()
+        with open(file, encoding="utf-8") as input_file:
+            for line in input_file:
+                yield json.loads(line.rstrip("\n"))
 
 
 def clean_text(text):
@@ -326,12 +326,15 @@ def create_web_app(
     source_database_link,
     target_database_link,
     algorithm,
+    store_banalities=True,
     load_only_db=False,
 ):
     """Main routine"""
     web_config = WebAppConfig(table, api_server, source_database_link, target_database_link, algorithm)
     print("\n### Storing results in database ###", flush=True)
-    fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
+    fields_in_table = load_db(
+        file, table, field_types, web_config.searchable_fields(), store_banalities=store_banalities
+    )
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)

@@ -16,7 +16,8 @@ class TextPairConfig:
         self.__file_paths: Dict[str, str] = {}
         self.tei_parsing: Dict[str, Union[bool, str]] = {}
         self.preprocessing_params: Dict[str, Any] = {"source": {}, "target": {}}
-        self.matching_params: Dict[str, Any] = {"matching_algorithm": "sa"}
+        self.matching_params: Dict[str, Any] = defaultdict(str)
+        self.matching_params["matching_algorithm"] = "sa"
         self.web_app_config: Dict[str, Any] = {"skip_web_app": self.__cli_args["skip_web_app"]}
         self.only_web_app = self.__cli_args["load_only_web_app"]
         self.paths: Dict[str, Dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
@@ -93,7 +94,7 @@ class TextPairConfig:
                     self.preprocessing_params["target"][key] = value
         for key, value in dict(config["MATCHING"]).items():
             if value or key not in self.matching_params:
-                if key == "flex_gap":
+                if key in ("flex_gap", "banality_auto_detection", "store_banalities"):
                     if value.lower() == "yes" or value.lower() == "true":
                         value = "true"
                     else:
