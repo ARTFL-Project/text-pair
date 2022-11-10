@@ -529,7 +529,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					duplicates = append(duplicates, localAlignmentOutput.duplicates...)
 				}
 				if addedCount > 0 {
-					mergeCommand := fmt.Sprintf("find %s/result_chunks -type f | sort -V | xargs lz4cat --rm | lz4 -q > %s/batched_results/batch_%d_doc_%s.lz4", config.outputPath, config.outputPath, sourceBatchNumber, sourceFile.DocID)
+					mergeCommand := fmt.Sprintf("find %s/result_chunks -type f | sort -V | xargs lz4cat --rm | lz4 -q > %s/batched_results/batch_%d-%d-%d.lz4", config.outputPath, config.outputPath, sourceBatchNumber, targetBatchNumber, pos)
 					cmd := exec.Command("bash", "-c", mergeCommand)
 					cmd.Run()
 				}
