@@ -326,15 +326,12 @@ def create_web_app(
     source_database_link,
     target_database_link,
     algorithm,
-    store_banalities=True,
     load_only_db=False,
 ):
     """Main routine"""
     web_config = WebAppConfig(table, api_server, source_database_link, target_database_link, algorithm)
     print("\n### Storing results in database ###", flush=True)
-    fields_in_table = load_db(
-        file, table, field_types, web_config.searchable_fields(), store_banalities=store_banalities
-    )
+    fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)

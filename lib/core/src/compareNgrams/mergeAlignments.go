@@ -274,7 +274,10 @@ func mergeAlignments(config *matchingParams, alignmentCount int) {
 				fields[field] = value
 			}
 		}
-		textPosition := position{int32(currentPassageGroup.startByte), int32(currentPassageGroup.endByte), 0, 0}
+		var zero int32 = 0
+		startByte := int32(currentPassageGroup.startByte)
+		endByte := int32(currentPassageGroup.endByte)
+		textPosition := position{&startByte, &endByte, &zero, &zero}
 		textPassages := alignmentToText(&textPosition, currentPassageGroup.filename, config)
 		fields["source_context_before"] = textPassages[0]
 		fields["source_passage"] = textPassages[1]
