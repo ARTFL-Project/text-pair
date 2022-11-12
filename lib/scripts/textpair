@@ -56,11 +56,9 @@ def run_alignment(pair_params):
     print("\n### Starting sequence alignment ###")
     if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         pair_params.paths["target"]["ngram_output_path"] = pair_params.paths["source"]["ngram_output_path"]
-    result_batch_path = os.path.join(pair_params.output_path, "results/batched_results")
+    result_batch_path = os.path.join(pair_params.output_path, "results/result_batches")
     if os.path.exists(result_batch_path):
-        os.system(
-            f"rm -rf {result_batch_path} && rm -rf {os.path.join(pair_params.output_path, 'results/result_chunks')}"
-        )
+        os.system(f"rm -rf {result_batch_path}")
     command = f"""compareNgrams \
                 --output_path={pair_params.output_path}/results \
                 --threads={pair_params.workers} \

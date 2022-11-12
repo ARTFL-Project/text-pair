@@ -27,8 +27,8 @@ type sortedFile struct {
 }
 
 type docIndex struct {
-	DocID       string
 	Ngrams      map[int32][]indexedNgram
+	DocID       string
 	NgramLength int
 	SortID      int
 }
@@ -66,7 +66,11 @@ type matchingParams struct {
 }
 
 type matchValues struct {
-	inAlignment               bool
+	currentAlignment          Alignment
+	previousAlignment         Alignment
+	firstMatch                []indexedNgram
+	lastMatch                 []indexedNgram
+	debug                     []string // the string is the original ngram
 	matchesInCurrentAlignment int32
 	matchesInCurrentWindow    int32
 	sourceAnchor              int32
@@ -78,11 +82,7 @@ type matchValues struct {
 	maxTargetGap              int32
 	sourceWindowBoundary      int32
 	targetWindowBoundary      int32
-	currentAlignment          Alignment
-	previousAlignment         Alignment
-	firstMatch                []indexedNgram
-	lastMatch                 []indexedNgram
-	debug                     []string // the string is the original ngram
+	inAlignment               bool
 }
 
 // Alignment is the matching representation
@@ -101,9 +101,8 @@ type position struct {
 }
 
 type alignmentsPerDoc struct {
-	docID      string
-	matches    []Alignment
-	duplicates string
+	matches *[]Alignment
+	docID   string
 }
 
 // Pair is a data structure to hold a key/value pair.
@@ -121,8 +120,8 @@ func (p PairList) Less(i, j int) bool { return p[i].Value > p[j].Value }
 
 // Coutains the local alignment count as well as possible duplicates
 type AlignmentOutput struct {
-	count      int
 	duplicates []string
+	count      int
 }
 
 var tags = regexp.MustCompile("<[^>]*?>")
@@ -168,7 +167,7 @@ func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map
 	debug, _ := strconv.ParseBool(*debugArg)
 	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), *flexGap, int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), *minimumMatchingNgramsInDocs,
 		int32(*contextSize), *mergeOnByteDistance, *mergeOnNgramDistance, float64(*passageDistance), float64(*duplicateThreshold), *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
-	ngramIndex := make(map[int32]string)
+	var ngramIndex map[int32]string
 	if config.debug && *ngramIndexLocation != "" {
 		ngramIndex = loadNgramIndex(*ngramIndexLocation)
 	} else {
@@ -315,7 +314,7 @@ func getJSONDocs(fileLocations []sortedFile, prefixString string, threads int) [
 					}
 				}
 				docID := path.Base(strings.Replace(fileLocation.docID, ".json", "", 1))
-				docObject := docIndex{docID, doc, len(doc), fileLocation.sortID}
+				docObject := docIndex{doc, docID, len(doc), fileLocation.sortID}
 				c <- docObject
 			}(fileLocation)
 		}
@@ -379,8 +378,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
 	duplicateFilesOutput := creatDuplicateFilesOutputFile(config)
-	os.MkdirAll(filepath.Join(config.outputPath, "batched_results"), 0755)
-	os.MkdirAll(filepath.Join(config.outputPath, "result_chunks"), 0755)
+	os.MkdirAll(filepath.Join(config.outputPath, "result_batches"), 0755)
 	counts := 0
 	duplicates := []string{}
 	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
@@ -436,7 +434,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 				if config.numThreads > 1 {
 					filesPerThread := localTargetLength / threadsNeeded
 					for filesPerThread < 10 {
-						threadsNeeded -= 1 // We reduce the number of Go routines to avoid starvation.
+						threadsNeeded /= 2 // We reduce the number of Go routines to avoid starvation.
 						if threadsNeeded < 2 {
 							threadsNeeded = 1
 							break
@@ -465,11 +463,11 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					totalTexts += len(splitTargets)
 					start = end
 					end += increment
-					outputFileName := filepath.Join(config.outputPath, "result_chunks", fmt.Sprintf("%s-%s-%s", sourceFile.DocID, splitTargets[0].DocID, splitTargets[len(splitTargets)-1].DocID))
-					f, _ := os.Create(outputFileName)
-					localAlignmentOutput := AlignmentOutput{0, []string{}}
-					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, outputFileName string) {
+					outputFileName := filepath.Join(config.outputPath, "result_batches", fmt.Sprintf("%s-%s-%s", sourceFile.DocID, splitTargets[0].DocID, splitTargets[len(splitTargets)-1].DocID))
+					localAlignmentOutput := AlignmentOutput{[]string{}, 0}
+					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, outputFileName string, localAlignmentOutput AlignmentOutput) {
 						defer wait.Done()
+						localAlignments := []alignmentsPerDoc{}
 						for _, targetFile := range splitTargets {
 							if sourceAgainstSource && sourceFile.SortID >= targetFile.SortID {
 								continue
@@ -478,16 +476,15 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							if config.debug {
 								debugOutput = createDebugOutputFile(config, sourceFile.DocID, targetFile.DocID)
 							}
-							sourceTargetIntersection := getIntersection(&sourceFile, &targetFile)
-							if len(sourceTargetIntersection) < config.minimumMatchingNgramsInDocs {
+							ngramIntersection := getIntersection(&sourceFile, &targetFile)
+							if len(ngramIntersection) < config.minimumMatchingNgramsInDocs {
 								continue
 							}
 							var matches = []ngramMatch{}
-							for ngram := range sourceTargetIntersection {
-								ngram := ngram
-								for sourceIndex := range sourceFile.Ngrams[ngram] {
-									for targetIndex := range targetFile.Ngrams[ngram] {
-										matches = append(matches, ngramMatch{&sourceFile.Ngrams[ngram][sourceIndex], &targetFile.Ngrams[ngram][targetIndex], &ngram})
+							for n := range ngramIntersection {
+								for sourceIndex := range sourceFile.Ngrams[ngramIntersection[n]] {
+									for targetIndex := range targetFile.Ngrams[ngramIntersection[n]] {
+										matches = append(matches, ngramMatch{&sourceFile.Ngrams[ngramIntersection[n]][sourceIndex], &targetFile.Ngrams[ngramIntersection[n]][targetIndex], &ngramIntersection[n]})
 									}
 								}
 							}
@@ -505,31 +502,22 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							}
 							if len(alignments) > 0 {
 								localAlignmentOutput.count += len(alignments)
-								writeAlignments(alignments, &sourceFile.DocID, &targetFile.DocID, sourceMetadata, targetMetadata, f, config)
+								localAlignments = append(localAlignments, alignmentsPerDoc{&alignments, targetFile.DocID})
 							}
 							debugOutput.Sync()
 							debugOutput.Close()
 						}
-						f.Sync()
-						f.Close()
-						compressedFileName := outputFileName + ".lz4"
-						cmd := exec.Command("bash", "-c", fmt.Sprintf("lz4 --rm -c -q -3 %s > %s", outputFileName, compressedFileName))
-						cmd.Run()
+						if len(localAlignments) > 0 {
+							writeAlignments(&localAlignments, &sourceFile.DocID, sourceMetadata, targetMetadata, outputFileName, config)
+						}
 						c <- localAlignmentOutput
-					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, config, outputFileName)
+					}(splitTargets, sourceAgainstSource, sourceMetadata, targetMetadata, config, outputFileName, localAlignmentOutput)
 				}
 				wait.Wait()
-				addedCount := 0
 				for i := 0; i < threadsNeeded; i++ {
 					localAlignmentOutput := <-c
 					counts += localAlignmentOutput.count
-					addedCount += localAlignmentOutput.count
 					duplicates = append(duplicates, localAlignmentOutput.duplicates...)
-				}
-				if addedCount > 0 {
-					mergeCommand := fmt.Sprintf("find %s/result_chunks -type f | sort -V | xargs lz4cat --rm | lz4 -q > %s/batched_results/batch_%d-%d-%d.lz4", config.outputPath, config.outputPath, sourceBatchNumber, targetBatchNumber, pos)
-					cmd := exec.Command("bash", "-c", mergeCommand)
-					cmd.Run()
 				}
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
@@ -543,18 +531,18 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 	return counts
 }
 
-func getIntersection(sourceFile *docIndex, targetFile *docIndex) map[int32]int {
-	intersectCount := make(map[int32]int)
+func getIntersection(sourceFile *docIndex, targetFile *docIndex) []int32 {
+	var intersectCount = []int32{}
 	if sourceFile.NgramLength < targetFile.NgramLength {
 		for ngram := range sourceFile.Ngrams {
 			if _, ok := targetFile.Ngrams[ngram]; ok {
-				intersectCount[ngram] = len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram])
+				intersectCount = append(intersectCount, ngram)
 			}
 		}
 	} else {
 		for ngram := range targetFile.Ngrams {
 			if _, ok := sourceFile.Ngrams[ngram]; ok {
-				intersectCount[ngram] = len(sourceFile.Ngrams[ngram]) + len(targetFile.Ngrams[ngram])
+				intersectCount = append(intersectCount, ngram)
 			}
 		}
 	}
@@ -598,7 +586,7 @@ func saveAlignmentConfig(config *matchingParams) {
 }
 
 func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDocID string) *os.File {
-	debugOutputPath := fmt.Sprintf(filepath.Join(config.outputPath, "debug_output"))
+	debugOutputPath := filepath.Join(config.outputPath, "debug_output")
 	if _, err := os.Stat(debugOutputPath); os.IsNotExist(err) {
 		os.MkdirAll(debugOutputPath, 0755)
 	}
@@ -609,7 +597,7 @@ func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDoc
 }
 
 func creatDuplicateFilesOutputFile(config *matchingParams) *os.File {
-	duplicateFiles, err := os.Create(fmt.Sprintf(filepath.Join(config.outputPath, "duplicate_files.tsv")))
+	duplicateFiles, err := os.Create(filepath.Join(config.outputPath, "duplicate_files.tsv"))
 	checkErr(err, "creatDuplicateFilesOutputFile")
 	duplicateFiles.WriteString("source_title\tsource_author\tsource_filename\tsource_philo_id\tsource_byte_offsets\ttarget_title\ttarget_author\ttarget_filename\target_philo_id\ttarget_byte_offsets\toverlap\n")
 	return duplicateFiles
@@ -807,50 +795,58 @@ func writeDebugOutput(m *matchValues, match bool, currentAnchor *ngramMatch, deb
 	debugOutput.Sync()
 }
 
-func writeAlignments(localAlignments []Alignment, sourceDocID *string, targetDocID *string, sourceMetadata map[string]map[string]string,
-	targetMetadata map[string]map[string]string, f *os.File, config *matchingParams) {
-	fullAlignment := map[string]string{}
-	for key, value := range sourceMetadata[*sourceDocID] {
-		fullAlignment["source_"+key] = value
+func writeAlignments(localAlignments *[]alignmentsPerDoc, sourceDocID *string, sourceMetadata map[string]map[string]string,
+	targetMetadata map[string]map[string]string, outputFileName string, config *matchingParams) {
+	f, _ := os.Create(outputFileName)
+	for _, alignments := range *localAlignments {
+		fullAlignment := map[string]string{}
+		for key, value := range sourceMetadata[*sourceDocID] {
+			fullAlignment["source_"+key] = value
+		}
+		for key, value := range targetMetadata[alignments.docID] {
+			fullAlignment["target_"+key] = value
+		}
+		fullAlignment["source_doc_id"] = *sourceDocID
+		fullAlignment["target_doc_id"] = alignments.docID
+		for _, alignment := range *alignments.matches {
+			localAlignment := fullAlignment
+			localAlignment["source_start_byte"] = strconv.Itoa(int(*alignment.source.startByte))
+			localAlignment["source_end_byte"] = strconv.Itoa(int(*alignment.source.endByte))
+			sourcePassages := alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)
+			localAlignment["source_context_before"] = sourcePassages[0]
+			localAlignment["source_passage"] = sourcePassages[1]
+			localAlignment["source_context_after"] = sourcePassages[2]
+			sourcePositions := getRelativePosition(alignment.source.startByte, alignment.source.endByte, sourceMetadata, sourceDocID)
+			localAlignment["source_start_position"] = sourcePositions[0]
+			localAlignment["source_end_position"] = sourcePositions[1]
+			localAlignment["target_start_byte"] = strconv.Itoa(int(*alignment.target.startByte))
+			localAlignment["target_end_byte"] = strconv.Itoa(int(*alignment.target.endByte))
+			targetPassages := alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)
+			localAlignment["target_context_before"] = targetPassages[0]
+			localAlignment["target_passage"] = targetPassages[1]
+			localAlignment["target_context_after"] = targetPassages[2]
+			targetPositions := getRelativePosition(alignment.target.startByte, alignment.target.endByte, targetMetadata, &alignments.docID)
+			localAlignment["target_start_position"] = targetPositions[0]
+			localAlignment["target_end_position"] = targetPositions[1]
+			jsonString, _ := json.Marshal(localAlignment)
+			jsonString = append(jsonString, "\n"...)
+			f.Write(jsonString)
+		}
 	}
-	for key, value := range targetMetadata[*targetDocID] {
-		fullAlignment["target_"+key] = value
-	}
-	fullAlignment["source_doc_id"] = *sourceDocID
-	fullAlignment["target_doc_id"] = *targetDocID
-	for _, alignment := range localAlignments {
-		localAlignment := fullAlignment
-		localAlignment["source_start_byte"] = strconv.Itoa(int(*alignment.source.startByte))
-		localAlignment["source_end_byte"] = strconv.Itoa(int(*alignment.source.endByte))
-		sourcePassages := alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)
-		localAlignment["source_context_before"] = sourcePassages[0]
-		localAlignment["source_passage"] = sourcePassages[1]
-		localAlignment["source_context_after"] = sourcePassages[2]
-		// sourcePositions := getRelativePosition(alignment.source.startByte, alignment.source.endByte, sourceMetadata, sourceDocID)
-		// localAlignment["source_start_position"] = sourcePositions[0]
-		// localAlignment["source_end_position"] = sourcePositions[1]
-		localAlignment["target_start_byte"] = strconv.Itoa(int(*alignment.target.startByte))
-		localAlignment["target_end_byte"] = strconv.Itoa(int(*alignment.target.endByte))
-		targetPassages := alignmentToText(&alignment.target, targetMetadata[*targetDocID]["filename"], config)
-		localAlignment["target_context_before"] = targetPassages[0]
-		localAlignment["target_passage"] = targetPassages[1]
-		localAlignment["target_context_after"] = targetPassages[2]
-		// targetPositions := getRelativePosition(alignment.target.startByte, alignment.target.endByte, targetMetadata, &alignments.docID)
-		// localAlignment["target_start_position"] = targetPositions[0]
-		// localAlignment["target_end_position"] = targetPositions[1]
-		jsonString, _ := json.Marshal(localAlignment)
-		jsonString = append(jsonString, "\n"...)
-		f.Write(jsonString)
-	}
+	f.Sync()
+	f.Close()
+	compressedFileName := outputFileName + ".lz4"
+	cmd := exec.Command("bash", "-c", fmt.Sprintf("lz4 --rm -c -q -3 %s > %s", outputFileName, compressedFileName))
+	cmd.Run()
 }
 
 // Returns position of passage within document in percentages
-func getRelativePosition(startByte int32, endByte int32, metadata map[string]map[string]string, docID *string) []string {
+func getRelativePosition(startByte *int32, endByte *int32, metadata map[string]map[string]string, docID *string) []string {
 	docStart, _ := strconv.Atoi(metadata[*docID]["start_byte"])
 	docEnd, _ := strconv.Atoi(metadata[*docID]["end_byte"])
 	coefficient := (float64(docEnd) - float64(docStart)) / 100
-	startPosition := fmt.Sprintf("%d", int(math.Round(float64(startByte)/coefficient)))
-	endPosition := fmt.Sprintf("%d", int(math.Round(float64(endByte)/coefficient)))
+	startPosition := fmt.Sprintf("%d", int(math.Round(float64(*startByte)/coefficient)))
+	endPosition := fmt.Sprintf("%d", int(math.Round(float64(*endByte)/coefficient)))
 	return []string{startPosition, endPosition}
 }
 
