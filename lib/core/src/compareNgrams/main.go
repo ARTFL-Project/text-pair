@@ -378,7 +378,10 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
 	duplicateFilesOutput := creatDuplicateFilesOutputFile(config)
-	os.MkdirAll(filepath.Join(config.outputPath, "result_batches"), 0755)
+	resultBatchPath := filepath.Join(config.outputPath, "result_batches")
+	resultChunksPath := filepath.Join(config.outputPath, "result_batches/result_chunks")
+	os.MkdirAll(resultBatchPath, 0755)
+	os.MkdirAll(resultChunksPath, 0755)
 	counts := 0
 	duplicates := []string{}
 	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
@@ -463,7 +466,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					totalTexts += len(splitTargets)
 					start = end
 					end += increment
-					outputFileName := filepath.Join(config.outputPath, "result_batches", fmt.Sprintf("%s-%s-%s", sourceFile.DocID, splitTargets[0].DocID, splitTargets[len(splitTargets)-1].DocID))
+					outputFileName := filepath.Join(resultChunksPath, fmt.Sprintf("%s-%s-%s", sourceFile.DocID, splitTargets[0].DocID, splitTargets[len(splitTargets)-1].DocID))
 					localAlignmentOutput := AlignmentOutput{[]string{}, 0}
 					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, outputFileName string, localAlignmentOutput AlignmentOutput) {
 						defer wait.Done()
@@ -522,12 +525,28 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
 			os.Stdout.Sync()
+			if config.sourceBatch > 1 || config.targetBatch > 1 {
+				fmt.Printf("Merging results from source batch %d to target batch %d... ", sourceBatchNumber+1, targetBatchNumber+1)
+				outputFile := filepath.Join(resultBatchPath, fmt.Sprintf("batch-%d-%d.lz4", sourceBatchNumber+1, targetBatchNumber+1))
+				cmd := exec.Command("bash", "-c", fmt.Sprintf("find %s -type f | sort -V | xargs lz4cat --rm | lz4 -q > %s", resultChunksPath, outputFile))
+				cmd.Run()
+			} else {
+				// No need to merge since just one batch. Just move to right location.
+				resultBatchPath2 := filepath.Join(config.outputPath, "result_batches2")
+				cmd := exec.Command("bash", "-c", fmt.Sprintf("mv %s %s && rm -rf %s && mv %s %s", resultChunksPath, resultBatchPath2, resultBatchPath, resultBatchPath2, resultBatchPath))
+				cmd.Run()
+			}
+			fmt.Println("done.")
 		}
 	}
 	duplicateFilesOutput.WriteString(strings.Join(duplicates[:], "\n"))
 	duplicateFilesOutput.Sync()
 	duplicateFilesOutput.Close()
 	fmt.Printf("%d pairwise alignments found...\n", counts)
+	countsOutput, _ := os.Create(filepath.Join(config.outputPath, "count.txt"))
+	countsOutput.WriteString(strconv.Itoa(counts))
+	countsOutput.Sync()
+	countsOutput.Close()
 	return counts
 }
 
@@ -845,8 +864,8 @@ func getRelativePosition(startByte *int32, endByte *int32, metadata map[string]m
 	docStart, _ := strconv.Atoi(metadata[*docID]["start_byte"])
 	docEnd, _ := strconv.Atoi(metadata[*docID]["end_byte"])
 	coefficient := (float64(docEnd) - float64(docStart)) / 100
-	startPosition := fmt.Sprintf("%d", int(math.Round(float64(*startByte)/coefficient)))
-	endPosition := fmt.Sprintf("%d", int(math.Round(float64(*endByte)/coefficient)))
+	startPosition := fmt.Sprintf("%.2f", float64(*startByte)/coefficient)
+	endPosition := fmt.Sprintf("%.2f", float64(*endByte)/coefficient)
 	return []string{startPosition, endPosition}
 }
 
