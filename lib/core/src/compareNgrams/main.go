@@ -383,7 +383,6 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 	os.MkdirAll(resultBatchPath, 0755)
 	os.MkdirAll(resultChunksPath, 0755)
 	counts := 0
-	duplicates := []string{}
 	for sourceBatchNumber := 0; sourceBatchNumber < config.sourceBatch; sourceBatchNumber++ {
 		prefixString := "Loading source files"
 		if config.sourceBatch > 1 {
@@ -408,6 +407,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 			percentSteps := buildPercentMap(len(sourceFileIndexes))
 			fmt.Printf("Comparing files... 0%%")
 			for pos, sourceFile := range sourceFileIndexes {
+				duplicates := []string{}
 				if config.debug {
 					if config.sourceBatch == 1 {
 						fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
@@ -479,8 +479,14 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							if config.debug {
 								debugOutput = createDebugOutputFile(config, sourceFile.DocID, targetFile.DocID)
 							}
-							ngramIntersection := getIntersection(&sourceFile, &targetFile)
+							ngramIntersection, totalCommonNgrams := getIntersection(&sourceFile, &targetFile)
 							if len(ngramIntersection) < config.minimumMatchingNgramsInDocs {
+								continue
+							} else if float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100 > config.duplicateThreshold {
+								sourceInfo := fmt.Sprintf("%s\t%s\t%s\t%s\t%s-%s", sourceMetadata[sourceFile.DocID]["title"], sourceMetadata[sourceFile.DocID]["author"], sourceMetadata[sourceFile.DocID]["filename"], sourceMetadata[sourceFile.DocID]["philo_id"], sourceMetadata[sourceFile.DocID]["start_byte"], sourceMetadata[sourceFile.DocID]["end_byte"])
+								targetInfo := fmt.Sprintf("%s\t%s\t%s\t%s\t%s-%s", targetMetadata[targetFile.DocID]["title"], targetMetadata[targetFile.DocID]["author"], targetMetadata[targetFile.DocID]["filename"], targetMetadata[targetFile.DocID]["philo_id"], targetMetadata[targetFile.DocID]["start_byte"], targetMetadata[targetFile.DocID]["end_byte"])
+								localAlignmentOutput.duplicates = append(localAlignmentOutput.duplicates, fmt.Sprintf("%s\t%s\t%f", sourceInfo, targetInfo, float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100))
+								localAlignments = append(localAlignments, alignmentsPerDoc{&[]Alignment{}, targetFile.DocID})
 								continue
 							}
 							var matches = []ngramMatch{}
@@ -522,14 +528,17 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					counts += localAlignmentOutput.count
 					duplicates = append(duplicates, localAlignmentOutput.duplicates...)
 				}
+				duplicateFilesOutput.WriteString(strings.Join(duplicates[:], "\n"))
+				duplicateFilesOutput.Sync()
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
 			os.Stdout.Sync()
 			if config.sourceBatch > 1 || config.targetBatch > 1 {
-				fmt.Printf("Merging results from source batch %d to target batch %d... ", sourceBatchNumber+1, targetBatchNumber+1)
+				fmt.Printf("Merging results... ")
 				outputFile := filepath.Join(resultBatchPath, fmt.Sprintf("batch-%d-%d.lz4", sourceBatchNumber+1, targetBatchNumber+1))
 				cmd := exec.Command("bash", "-c", fmt.Sprintf("find %s -type f | sort -V | xargs lz4cat --rm | lz4 -q > %s", resultChunksPath, outputFile))
 				cmd.Run()
+				fmt.Printf("done.")
 			} else {
 				// No need to merge since just one batch. Just move to right location.
 				resultBatchPath2 := filepath.Join(config.outputPath, "result_batches2")
@@ -539,7 +548,6 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 			fmt.Println("done.")
 		}
 	}
-	duplicateFilesOutput.WriteString(strings.Join(duplicates[:], "\n"))
 	duplicateFilesOutput.Sync()
 	duplicateFilesOutput.Close()
 	fmt.Printf("%d pairwise alignments found...\n", counts)
@@ -550,22 +558,25 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 	return counts
 }
 
-func getIntersection(sourceFile *docIndex, targetFile *docIndex) []int32 {
+func getIntersection(sourceFile *docIndex, targetFile *docIndex) ([]int32, int) {
 	var intersectCount = []int32{}
+	totalCommonNgrams := 0
 	if sourceFile.NgramLength < targetFile.NgramLength {
 		for ngram := range sourceFile.Ngrams {
 			if _, ok := targetFile.Ngrams[ngram]; ok {
 				intersectCount = append(intersectCount, ngram)
+				totalCommonNgrams++
 			}
 		}
 	} else {
 		for ngram := range targetFile.Ngrams {
 			if _, ok := sourceFile.Ngrams[ngram]; ok {
 				intersectCount = append(intersectCount, ngram)
+				totalCommonNgrams++
 			}
 		}
 	}
-	return intersectCount
+	return intersectCount, totalCommonNgrams
 }
 
 func saveAlignmentConfig(config *matchingParams) {
