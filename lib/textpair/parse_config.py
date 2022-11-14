@@ -64,9 +64,9 @@ class TextPairConfig:
                         value = False
                 if key.endswith("object_level"):
                     if key.startswith("source"):
-                        self.preprocessing_params["source"]["text_object_type"] = value
+                        self.preprocessing_params["source"]["text_object_level"] = value
                     else:
-                        self.preprocessing_params["target"]["text_object_type"] = value
+                        self.preprocessing_params["target"]["text_object_level"] = value
                 elif key in (
                     "ngram",
                     "gap",
