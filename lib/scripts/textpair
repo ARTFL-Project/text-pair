@@ -9,6 +9,15 @@ from textpair import TEIParser, Ngrams, create_web_app, web_loader, get_config, 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
 
 
+def get_count(path):
+    if os.path.exists(path):
+        with open(path, encoding="utf8") as input_file:
+            count = int(input_file.read().strip())
+    else:
+        count = None
+    return count
+
+
 def run_alignment(pair_params):
     """Main function to start sequence alignment"""
     if pair_params.only_align is False:
@@ -87,9 +96,15 @@ def run_alignment(pair_params):
     if pair_params.debug:
         print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
     os.system(command)
-    print("Merging alignments into one file (this may take a while)... ", end="", flush=True)
-    merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {pair_params.output_path}/results/alignments.jsonl.lz4; rm -rf {result_batch_path}"
-    os.system(merge_command)
+    if len(os.listdir(result_batch_path)) == 1:
+        filename = os.listdir(result_batch_path)[0]
+        os.system(
+            f"mv {result_batch_path}/{filename} {pair_params.output_path}/results/alignments.jsonl.lz4 && rm -rf {result_batch_path}"
+        )
+    else:
+        print("Merging alignments into one file (this may take a while)... ", end="", flush=True)
+        merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {pair_params.output_path}/results/alignments.jsonl.lz4; rm -rf {result_batch_path}"
+        os.system(merge_command)
 
     if pair_params.matching_params["banality_auto_detection"] is True:
         pass  # this function should run through the results and detect banalities
@@ -97,8 +112,10 @@ def run_alignment(pair_params):
     if pair_params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl.lz4")
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
+        count = get_count(os.path.join(pair_params.output_path, "results/counts.txt"))
         create_web_app(
             output_file,
+            count,
             pair_params.dbname,
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],
@@ -121,10 +138,12 @@ def run_vsa_similarity(pair_params) -> None:
         {**pair_params.preprocessing_params, **pair_params.matching_params},
     )
     if pair_params.web_app_config["skip_web_app"] is False:
-        output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl")
+        output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl.lz4")
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
+        count = get_count(os.path.join(pair_params.output_path, "results/counts.txt"))
         create_web_app(
             output_file,
+            count,
             pair_params.dbname,
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],
@@ -139,8 +158,10 @@ if __name__ == "__main__":
     pair_params = get_config()
     if pair_params.update_db is True:
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
+        count = get_count(os.path.join(pair_params.output_path, "results/counts.txt"))
         create_web_app(
             pair_params.file,
+            count,
             pair_params.dbname,
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],
@@ -152,8 +173,10 @@ if __name__ == "__main__":
         )
     elif pair_params.only_web_app is True:
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
+        count = get_count(os.path.join(pair_params.output_path, "results/counts.txt"))
         create_web_app(
             pair_params.file,
+            count,
             pair_params.dbname,
             FIELD_TYPES,
             pair_params.web_app_config["web_application_directory"],

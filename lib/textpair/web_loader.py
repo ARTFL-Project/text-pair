@@ -65,7 +65,7 @@ class WebAppConfig:
     """Web app config class"""
 
     def __init__(self, db_name, api_server, source_database_link, target_database_link, algorithm):
-        with open("/var/lib/text-pair/config/appConfig.json") as app_config:
+        with open("/var/lib/text-pair/config/appConfig.json", encoding="utf8") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
         self.options["appPath"] = os.path.join("/text-pair", db_name)
@@ -180,7 +180,7 @@ def get_metadata_fields(file):
     return fields
 
 
-def load_db(file, table_name, field_types, searchable_fields):
+def load_db(file, table_name, field_types, searchable_fields, line_count):
     """Load SQL table"""
     config = configparser.ConfigParser()
     config.read("/etc/text-pair/global_settings.ini")
@@ -195,20 +195,21 @@ def load_db(file, table_name, field_types, searchable_fields):
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
     extra_fields = set()
-    line_count = 0
-    for result in parse_file(file):
-        extra_fields.update(result.keys())
-        line_count += 1
+    if line_count is None:
+        line_count = 0
+        for result in parse_file(file):
+            extra_fields.update(result.keys())
+            line_count += 1
     field_names.extend([f for f in extra_fields if f not in FILTERED_FIELDS])
     field_names.extend(["source_passage_length", "target_passage_length"])
     if "source_year" not in field_names:
         field_names.append("source_year")
     if "target_year" not in field_names:
         field_names.append("target_year")
-    fields_and_types = ["{} {}".format(f, field_types.get(f, "TEXT")) for f in field_names if f != "rowid"]
+    fields_and_types = [f"{f} {field_types.get(f, 'TEXT')}" for f in field_names if f != "rowid"]
     fields_in_table.extend(fields_and_types)
-    cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
-    cursor.execute("CREATE TABLE {} ({})".format(table_name, ", ".join(fields_in_table)))
+    cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+    cursor.execute(f"CREATE TABLE {table_name} ({', '.join(fields_in_table)})")
     lines = 0
     rows = []
     rowid = 0
@@ -224,12 +225,12 @@ def load_db(file, table_name, field_types, searchable_fields):
         rows.append(row)
         lines += 1
         if lines == 100:
-            insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))
+            insert = f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES %s"
             execute_values(cursor, insert, rows)
             rows = []
             lines = 0
     if lines:
-        insert = "INSERT INTO {} ({}) VALUES %s".format(table_name, ", ".join(field_names))
+        insert = f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES %s"
         execute_values(cursor, insert, rows)
         rows = []
         lines = 0
@@ -247,20 +248,14 @@ def load_db(file, table_name, field_types, searchable_fields):
                 field_type = "TEXT"
         if field_type == "TEXT":
             cursor.execute(
-                "CREATE INDEX {}_{}_trigrams_idx ON {} USING GIN({} gin_trgm_ops)".format(
-                    field, table_name, table_name, field
-                )
+                f"CREATE INDEX {field}_{table_name}_trigrams_idx ON {table_name} USING GIN({field} gin_trgm_ops)"
             )
             if not field.endswith("passage"):
-                cursor.execute(
-                    "CREATE INDEX {}_{}_idx ON {} USING HASH({})".format(field, table_name, table_name, field)
-                )
+                cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})")
         elif not field.endswith("year") and field_type == "INTEGER":  # year is a special case used for results ordering
-            cursor.execute("CREATE INDEX {}_{}_idx ON {} USING BTREE({})".format(field, table_name, table_name, field))
+            cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
     cursor.execute(
-        "CREATE INDEX year_{}_idx ON {} USING BTREE(source_year, target_year, source_start_byte)".format(
-            table_name, table_name
-        )
+        f"CREATE INDEX year_{table_name}_idx ON {table_name} USING BTREE(source_year, target_year, source_start_byte)"
     )
     cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
     cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
@@ -268,16 +263,12 @@ def load_db(file, table_name, field_types, searchable_fields):
 
     print("Populating index table...")
     ordered_table = table_name + "_ordered"
-    cursor2.execute("DROP TABLE if exists {}".format(ordered_table))
+    cursor2.execute(f"DROP TABLE if exists {ordered_table}")
     cursor2.execute(
-        "CREATE TABLE {} ({})".format(
-            ordered_table, "rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER"
-        )
+        f"CREATE TABLE {ordered_table} (rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER)"
     )
     cursor.execute(
-        "SELECT rowid FROM {} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC".format(
-            table_name
-        )
+        f"SELECT rowid FROM {table_name} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC"
     )
     lines = 0
     rows = []
@@ -287,20 +278,18 @@ def load_db(file, table_name, field_types, searchable_fields):
         rowid += 1
         rows.append((rowid, row[0]))
         if lines == 100:
-            insert = "INSERT INTO {} ({}) VALUES %s".format(ordered_table, "rowid_ordered, source_year_target_year")
+            insert = f"INSERT INTO {ordered_table} (rowid_ordered, source_year_target_year) VALUES %s"
             execute_values(cursor2, insert, rows)
             rows = []
             lines = 0
     if lines:
-        insert = "INSERT INTO {} ({}) VALUES %s".format(ordered_table, "rowid_ordered, source_year_target_year")
+        insert = f"INSERT INTO {ordered_table} (rowid_ordered, source_year_target_year) VALUES %s"
         execute_values(cursor2, insert, rows)
         rows = []
         lines = 0
     print("Creating indexes...")
     cursor2.execute(
-        "CREATE INDEX {}_source_year_target_year_rowid_idx ON {} USING BTREE(rowid_ordered)".format(
-            ordered_table, ordered_table
-        )
+        f"CREATE INDEX {ordered_table}_source_year_target_year_rowid_idx ON {ordered_table} USING BTREE(rowid_ordered)"
     )
     database.commit()
     database.close()
@@ -309,16 +298,17 @@ def load_db(file, table_name, field_types, searchable_fields):
 
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
-    os.system("rm -rf {}".format(db_path))
+    os.system(f"rm -rf {db_path}")
     os.mkdir(db_path)
-    os.system("cp -R /var/lib/text-pair/web-app/. {}".format(db_path))
-    with open(os.path.join(db_path, "appConfig.json"), "w") as config_file:
+    os.system(f"cp -R /var/lib/text-pair/web-app/. {db_path}")
+    with open(os.path.join(db_path, "appConfig.json"), "w", encoding="utf8") as config_file:
         json.dump(web_config(), config_file, indent=4)
     os.system(f"""cd {db_path}; npm install --silent > "/dev/null" 2>&1; npm run build > "/dev/null" 2>&1;""")
 
 
 def create_web_app(
     file,
+    count,
     table,
     field_types,
     web_app_dir,
@@ -331,7 +321,7 @@ def create_web_app(
     """Main routine"""
     web_config = WebAppConfig(table, api_server, source_database_link, target_database_link, algorithm)
     print("\n### Storing results in database ###", flush=True)
-    fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
+    fields_in_table = load_db(file, table, field_types, web_config.searchable_fields(), count)
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)

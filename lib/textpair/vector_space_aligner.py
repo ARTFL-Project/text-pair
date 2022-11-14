@@ -15,6 +15,7 @@ from typing import Any, Callable, Deque, Dict, Iterable, Iterator, List, Optiona
 from xml.sax.saxutils import unescape as unescape_xml
 
 import dill as pickle
+import lz4.frame
 import numpy as np
 import spacy
 import torch
@@ -1054,7 +1055,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
 
-    with open("output/results/alignments.jsonl", "w", encoding="utf-8") as output:
+    with lz4.frame.open("output/results/alignments.jsonl", "w", compression_level=3) as output:
         for match in tqdm(matches, total=len(matches), leave=False):
             source_context_before = get_text(
                 match.source.start_byte - 300, match.source.start_byte, match.source.metadata["filename"]
@@ -1113,4 +1114,6 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, 
                     **{f"target_{field}": value for field, value in match.target.metadata.items()},
                 }
             )
-            print(result_object, file=output)
+            output.write(f"{result_object}\n")
+    with open("output/results/counts.txt", encoding="utf8") as output_file:
+        output_file.write(f"{len(matches)}")
