@@ -96,9 +96,9 @@ class TextPairConfig:
             if value or key not in self.matching_params:
                 if key in ("flex_gap", "banality_auto_detection", "store_banalities"):
                     if value.lower() == "yes" or value.lower() == "true":
-                        value = "true"
+                        value = True
                     else:
-                        value = "false"
+                        value = False
                 elif key == "min_similarity":
                     value = float(value)
                 elif key in ("min_matching_words", "source_batch", "target_batch"):

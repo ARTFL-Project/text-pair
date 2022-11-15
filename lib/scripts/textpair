@@ -3,7 +3,7 @@
 
 import os
 
-from textpair import TEIParser, Ngrams, create_web_app, web_loader, get_config, run_vsa
+from textpair import TEIParser, Ngrams, create_web_app, web_loader, get_config, run_vsa, banality_auto_detect
 
 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
@@ -91,28 +91,28 @@ def run_alignment(pair_params):
                 --passage_distance_multiplier={pair_params.matching_params["passage_distance_multiplier"]} \
                 --debug={str(pair_params.debug).lower()} \
                 --ngram_index={pair_params.matching_params["ngram_index"]}"""
-    if os.path.exists(f"{pair_params.output_path}/results/alignments.jsonl.lz4"):
-        os.system(f"rm {pair_params.output_path}/results/alignments.jsonl.lz4")
+    results_file = f"{pair_params.output_path}/results/alignments.jsonl.lz4"
+    if os.path.exists(results_file):
+        os.system(f"rm {results_file}")
     if pair_params.debug:
         print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
     os.system(command)
     if len(os.listdir(result_batch_path)) == 1:
         filename = os.listdir(result_batch_path)[0]
-        os.system(
-            f"mv {result_batch_path}/{filename} {pair_params.output_path}/results/alignments.jsonl.lz4 && rm -rf {result_batch_path}"
-        )
+        os.system(f"mv {result_batch_path}/{filename} {results_file} && rm -rf {result_batch_path}")
     else:
         print("Merging alignments into one file (this may take a while)... ", end="", flush=True)
-        merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {pair_params.output_path}/results/alignments.jsonl.lz4; rm -rf {result_batch_path}"
+        merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {results_file}; rm -rf {result_batch_path}"
         os.system(merge_command)
-
+    count = get_count(os.path.join(pair_params.output_path, "results/count.txt"))
     if pair_params.matching_params["banality_auto_detection"] is True:
-        pass  # this function should run through the results and detect banalities
+        banalities_found = banality_auto_detect(results_file, pair_params.paths["source"]["common_ngrams"], count)
+        print(f"{banalities_found} pairwise alignments identified as banalities.")
     print("done.")
     if pair_params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl.lz4")
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
-        count = get_count(os.path.join(pair_params.output_path, "results/counts.txt"))
+
         create_web_app(
             output_file,
             count,

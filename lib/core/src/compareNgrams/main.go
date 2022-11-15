@@ -178,13 +178,13 @@ func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map
 		fmt.Println("\nNo source metadata provided, stopping now...")
 		os.Exit(-1)
 	}
-	sourceMetadata := openJSONMetadata(sourceMetadataArg)
-	targetMetadata := openJSONMetadata(targetMetadataArg)
-	fmt.Println("done.")
-	sourceFiles := getFiles(*sourceFilesArg, sourceMetadata, *sortField)
+	sourceMetadata := openJSONMetadata(sourceMetadataArg, *sourceFilesArg)
 	if *targetFilesArg == *sourceFilesArg {
 		*targetFilesArg = ""
 	}
+	targetMetadata := openJSONMetadata(targetMetadataArg, *targetFilesArg)
+	fmt.Println("done.")
+	sourceFiles := getFiles(*sourceFilesArg, sourceMetadata, *sortField)
 	targetFiles := getFiles(*targetFilesArg, targetMetadata, *sortField)
 	if len(targetFiles) > 0 && *targetMetadataArg == "" {
 		fmt.Println("\nNo target metadata provided, stopping now...")
@@ -193,7 +193,7 @@ func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map
 	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, config, ngramIndex
 }
 
-func openJSONMetadata(fileLocation *string) map[string]map[string]string {
+func openJSONMetadata(fileLocation *string, ngramFilesLocation string) map[string]map[string]string {
 	if *fileLocation == "" {
 		return map[string]map[string]string{}
 	}
@@ -215,6 +215,7 @@ func openJSONMetadata(fileLocation *string) map[string]map[string]string {
 		for field, value := range fields {
 			metadata[doc][field] = spaceChars.ReplaceAllString(value, " ") // clean up metadata
 		}
+		metadata[doc]["ngrams"] = filepath.Join(ngramFilesLocation, fmt.Sprintf("%s.json", doc))
 	}
 	return metadata
 }
@@ -538,14 +539,13 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 				outputFile := filepath.Join(resultBatchPath, fmt.Sprintf("batch-%d-%d.lz4", sourceBatchNumber+1, targetBatchNumber+1))
 				cmd := exec.Command("bash", "-c", fmt.Sprintf("find %s -type f | sort -V | xargs lz4cat --rm | lz4 -q > %s", resultChunksPath, outputFile))
 				cmd.Run()
-				fmt.Printf("done.")
+				fmt.Printf("done.\n")
 			} else {
 				// No need to merge since just one batch. Just move to right location.
 				resultBatchPath2 := filepath.Join(config.outputPath, "result_batches2")
 				cmd := exec.Command("bash", "-c", fmt.Sprintf("mv %s %s && rm -rf %s && mv %s %s", resultChunksPath, resultBatchPath2, resultBatchPath, resultBatchPath2, resultBatchPath))
 				cmd.Run()
 			}
-			fmt.Println("done.")
 		}
 	}
 	duplicateFilesOutput.Sync()
