@@ -13,7 +13,7 @@ class NgramDoc:
     """Doc with various properties"""
 
     def __init__(self, filepath):
-        self.name = filepath
+        self.name = os.path.basename(filepath)
         with open(filepath, "rb") as input_file:
             ngram_doc: Dict[str, List[List[int]]] = orjson.loads(input_file.read())
         self.ngrams: List[Tuple[int, int, int]] = [

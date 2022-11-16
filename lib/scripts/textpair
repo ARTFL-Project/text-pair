@@ -104,6 +104,7 @@ def run_alignment(pair_params):
         print("Merging alignments into one file (this may take a while)... ", end="", flush=True)
         merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {results_file}; rm -rf {result_batch_path}"
         os.system(merge_command)
+        print("done.")
     count = get_count(os.path.join(pair_params.output_path, "results/count.txt"))
     if pair_params.matching_params["banality_auto_detection"] is True:
         banalities_found = banality_auto_detect(
@@ -113,7 +114,6 @@ def run_alignment(pair_params):
             count,
         )
         print(f"{banalities_found} pairwise alignments identified as banalities.")
-    print("done.")
     if pair_params.web_app_config["skip_web_app"] is False:
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
         create_web_app(
