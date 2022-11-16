@@ -15,7 +15,6 @@ class NgramDoc:
     def __init__(self, filepath):
         self.name = filepath
         with open(filepath, "rb") as input_file:
-            print(filepath)
             ngram_doc: Dict[str, List[List[int]]] = orjson.loads(input_file.read())
         self.ngrams: List[Tuple[int, int, int]] = [
             (start_byte, end_byte, int(ngram))
