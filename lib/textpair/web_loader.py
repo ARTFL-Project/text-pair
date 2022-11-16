@@ -36,6 +36,10 @@ DEFAULT_FIELD_TYPES = {
     "source_passage_length": "INTEGER",
     "target_passage_length": "INTEGER",
     "similarity": "FLOAT",
+    "source_start_position": "INTEGER",
+    "source_end_position": "INTEGER",
+    "target_start_position": "INTEGER",
+    "target_end_position": "INTEGER",
 }
 
 FILTERED_FIELDS = {
@@ -180,7 +184,7 @@ def get_metadata_fields(file):
     return fields
 
 
-def load_db(file, table_name, field_types, searchable_fields, line_count):
+def load_db(file, table_name, field_types, searchable_fields):
     """Load SQL table"""
     config = configparser.ConfigParser()
     config.read("/etc/text-pair/global_settings.ini")
@@ -195,11 +199,10 @@ def load_db(file, table_name, field_types, searchable_fields, line_count):
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = ["rowid"]
     extra_fields = set()
-    if line_count is None:
-        line_count = 0
-        for result in parse_file(file):
-            extra_fields.update(result.keys())
-            line_count += 1
+    line_count = 0
+    for result in parse_file(file):
+        extra_fields.update(result.keys())  # TODO: get extra fields from the metadata.json file.
+        line_count += 1
     field_names.extend([f for f in extra_fields if f not in FILTERED_FIELDS])
     field_names.extend(["source_passage_length", "target_passage_length"])
     if "source_year" not in field_names:
@@ -308,7 +311,7 @@ def set_up_app(web_config, db_path):
 
 def create_web_app(
     file,
-    count,
+    count,  # TODO: avoid count in load_db function
     table,
     field_types,
     web_app_dir,
@@ -321,7 +324,7 @@ def create_web_app(
     """Main routine"""
     web_config = WebAppConfig(table, api_server, source_database_link, target_database_link, algorithm)
     print("\n### Storing results in database ###", flush=True)
-    fields_in_table = load_db(file, table, field_types, web_config.searchable_fields(), count)
+    fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)

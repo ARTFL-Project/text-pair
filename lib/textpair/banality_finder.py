@@ -14,7 +14,8 @@ class NgramDoc:
 
     def __init__(self, filepath):
         self.name = filepath
-        with open(os.path.join("/shared/alignments/eccotcp/", filepath), "rb") as input_file:
+        with open(filepath, "rb") as input_file:
+            print(filepath)
             ngram_doc: Dict[str, List[List[int]]] = orjson.loads(input_file.read())
         self.ngrams: List[Tuple[int, int, int]] = [
             (start_byte, end_byte, int(ngram))
@@ -35,7 +36,7 @@ class NgramDoc:
         return ngrams
 
 
-def banality_auto_detect(filepath: str, common_ngrams_file: str, count: int):
+def banality_auto_detect(filepath: str, common_ngrams_file: str, ngram_doc_path: str, count: int):
     with open(common_ngrams_file, "rb") as input_file:
         total_ngrams = sum(1 for _ in input_file)
     top_ngrams = floor(total_ngrams / 10000)
@@ -45,10 +46,10 @@ def banality_auto_detect(filepath: str, common_ngrams_file: str, count: int):
     with lz4.frame.open(f"{filepath}.banal.lz4", mode="wb") as output_file:
         with lz4.frame.open(filepath) as input_file:
             source_ngram_doc = None
-            for line in tqdm(input_file, total=count, desc="Running banality auto-detection..."):
+            for line in tqdm(input_file, total=count, desc="Running banality auto-detection...", leave=True):
                 alignment: Dict[str, Any] = orjson.loads(line)
                 if source_ngram_doc is None or source_ngram_doc.name != alignment["source_ngrams"]:
-                    source_ngram_doc = NgramDoc(alignment["source_ngrams"])
+                    source_ngram_doc = NgramDoc(os.path.join(ngram_doc_path, alignment["source_ngrams"]))
                 ngrams_in_file = source_ngram_doc.get_ngrams(
                     int(alignment["source_start_byte"]), int(alignment["source_end_byte"])
                 )
@@ -63,3 +64,14 @@ def banality_auto_detect(filepath: str, common_ngrams_file: str, count: int):
                 output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
     os.system(f"rm {filepath} && mv {filepath}.banal.lz4 {filepath}")
     return banalities_found
+
+
+if __name__ == "__main__":
+    import sys
+
+    filepath = sys.argv[1]
+    ngrams_file = sys.argv[2]
+    ngram_doc_path = sys.argv[3]
+    with open(filepath.replace("alignments.jsonl.lz4", "count.txt"), "rb") as input_file:
+        count = int(input_file.read().strip())
+    banality_auto_detect(filepath, ngrams_file, ngram_doc_path, count)

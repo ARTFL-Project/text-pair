@@ -106,15 +106,18 @@ def run_alignment(pair_params):
         os.system(merge_command)
     count = get_count(os.path.join(pair_params.output_path, "results/count.txt"))
     if pair_params.matching_params["banality_auto_detection"] is True:
-        banalities_found = banality_auto_detect(results_file, pair_params.paths["source"]["common_ngrams"], count)
+        banalities_found = banality_auto_detect(
+            results_file,
+            pair_params.paths["source"]["common_ngrams"],
+            f'{pair_params.paths["source"]["ngram_output_path"]}/ngrams',
+            count,
+        )
         print(f"{banalities_found} pairwise alignments identified as banalities.")
     print("done.")
     if pair_params.web_app_config["skip_web_app"] is False:
-        output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl.lz4")
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
-
         create_web_app(
-            output_file,
+            results_file,
             count,
             pair_params.dbname,
             FIELD_TYPES,

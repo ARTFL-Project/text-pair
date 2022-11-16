@@ -215,7 +215,7 @@ func openJSONMetadata(fileLocation *string, ngramFilesLocation string) map[strin
 		for field, value := range fields {
 			metadata[doc][field] = spaceChars.ReplaceAllString(value, " ") // clean up metadata
 		}
-		metadata[doc]["ngrams"] = filepath.Join(ngramFilesLocation, fmt.Sprintf("%s.json", doc))
+		metadata[doc]["ngrams"] = fmt.Sprintf("%s.json", doc)
 	}
 	return metadata
 }
