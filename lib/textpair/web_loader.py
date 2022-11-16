@@ -36,10 +36,6 @@ DEFAULT_FIELD_TYPES = {
     "source_passage_length": "INTEGER",
     "target_passage_length": "INTEGER",
     "similarity": "FLOAT",
-    "source_start_position": "INTEGER",
-    "source_end_position": "INTEGER",
-    "target_start_position": "INTEGER",
-    "target_end_position": "INTEGER",
 }
 
 FILTERED_FIELDS = {

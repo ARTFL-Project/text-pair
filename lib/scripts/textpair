@@ -3,7 +3,16 @@
 
 import os
 
-from textpair import TEIParser, Ngrams, create_web_app, web_loader, get_config, run_vsa, banality_auto_detect
+from textpair import (
+    TEIParser,
+    Ngrams,
+    create_web_app,
+    web_loader,
+    get_config,
+    run_vsa,
+    banality_auto_detect,
+    banality_phrase_matcher,
+)
 
 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
@@ -106,13 +115,19 @@ def run_alignment(pair_params):
         os.system(merge_command)
         print("done.")
     count = get_count(os.path.join(pair_params.output_path, "results/count.txt"))
+    banalities_found = 0
     if pair_params.matching_params["banality_auto_detection"] is True:
-        banalities_found = banality_auto_detect(
+        banalities_found += banality_auto_detect(
             results_file,
             pair_params.paths["source"]["common_ngrams"],
             f'{pair_params.paths["source"]["ngram_output_path"]}/ngrams',
             count,
         )
+    if pair_params.matching_params["phrase_banality_file"]:
+        banalities_found += banality_phrase_matcher(
+            results_file, pair_params.matching_params["phrase_banality_file"], count
+        )
+    if banalities_found:
         print(f"{banalities_found} pairwise alignments identified as banalities.")
     if pair_params.web_app_config["skip_web_app"] is False:
         FIELD_TYPES.update(pair_params.web_app_config["field_types"])
