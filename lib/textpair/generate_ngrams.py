@@ -2,12 +2,12 @@
 """N-gram generator"""
 
 import configparser
-import json
+import orjson
 import os
 from collections import defaultdict
 from glob import glob
 from math import floor
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 from text_preprocessing import PreProcessor
 from text_preprocessing import Tokens
@@ -95,6 +95,7 @@ class Ngrams:
         else:
             files = glob(os.path.join(file_path, "*"))
         os.system(f"rm -rf {output_path}/ngrams")
+        os.system(f"rm -rf {output_path}/ngrams_in_order")
         os.system(f"mkdir -p {output_path}/ngrams")
         if self.debug:
             os.system(f"mkdir {output_path}/debug")
@@ -102,6 +103,7 @@ class Ngrams:
         os.system(f"mkdir -p {output_path}/index")
         os.system(f"mkdir -p {output_path}/config")
         os.system(f"mkdir -p {output_path}/temp")
+        os.system(f"mkdir -p {output_path}/ngrams_in_order")
         if db_path is None and is_philo_db is True:
             self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
         else:
@@ -157,8 +159,8 @@ class Ngrams:
         print("Saving metadata...")
 
         if self.metadata_done is False:
-            with open(f"{self.output_path}/metadata/metadata.json", "w", encoding="utf-8") as metadata_output:
-                json.dump(combined_metadata, metadata_output)
+            with open(f"{self.output_path}/metadata/metadata.json", "wb") as metadata_output:
+                metadata_output.write(orjson.dumps(combined_metadata))
         else:
             os.system(f"cp {metadata} {self.output_path}/metadata/metadata.json 2>/dev/null")
 
@@ -183,12 +185,16 @@ class Ngrams:
         else:
             text_object_id = text_object.metadata["filename"]
         text_index = defaultdict(list)
+        doc_ngrams_in_order: List[Tuple[int, int]] = []  # for banality filter
         for index_pos, ngram in enumerate(text_object):
             hashed_ngram = hash32(ngram)
             text_index[hashed_ngram].append((index_pos, ngram.ext["start_byte"], ngram.ext["end_byte"]))
+            doc_ngrams_in_order.append((ngram.ext["start_byte"], hashed_ngram))
             doc_ngrams.append("\t".join((ngram, str(hashed_ngram))))
-        with open(f"{self.output_path}/ngrams/{text_object_id}.json", "w", encoding="utf-8") as json_file:
-            json.dump(dict(text_index), json_file)
+        with open(f"{self.output_path}/ngrams/{text_object_id}.json", "wb") as json_file:
+            json_file.write(orjson.dumps(dict(text_index)))
         with open(f"{self.output_path}/temp/{text_object_id}", "w", encoding="utf-8") as output:
             output.write("\n".join(sorted(doc_ngrams)))
+        with open(f"{self.output_path}/ngrams_in_order/{text_object_id}.json", "wb") as json_file:
+            json_file.write(orjson.dumps(doc_ngrams_in_order))
         return metadata

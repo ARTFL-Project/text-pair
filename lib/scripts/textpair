@@ -120,7 +120,7 @@ def run_alignment(pair_params):
         banalities_found += banality_auto_detect(
             results_file,
             pair_params.paths["source"]["common_ngrams"],
-            f'{pair_params.paths["source"]["ngram_output_path"]}/ngrams',
+            f'{pair_params.paths["source"]["ngram_output_path"]}/ngrams_in_order',
             count,
         )
     if pair_params.matching_params["phrase_banality_file"]:
