@@ -1,14 +1,14 @@
 """Banality detection"""
 
+import bisect
 import os
 from math import floor
-from typing import Any, Dict, List, Tuple, Optional
-import bisect
+from typing import Any, Dict, List, Optional
+import subprocess
 
 import lz4.frame
 import orjson
 from tqdm import tqdm
-import bisect
 
 
 class NgramDoc:
@@ -20,7 +20,7 @@ class NgramDoc:
         self.name = os.path.basename(filepath)
         with open(filepath, "rb") as input_file:
             self.ngrams: List[List[int]] = orjson.loads(input_file.read())
-        self.ngram_pos = [ngram[0] for ngram in self.ngrams]
+        self.ngram_pos: List[int] = [ngram[0] for ngram in self.ngrams]
 
     def get_ngrams(self, start_byte, end_byte) -> List[int]:
         start_index = bisect.bisect_left(self.ngram_pos, start_byte)
@@ -33,9 +33,11 @@ def banality_auto_detect(
     filepath: str, common_ngrams_file: str, ngram_doc_path: str, count: Optional[int], percentage: float = 0.1
 ):
     """Detect banalities automatically based on frequent ngram over-representation"""
-    with open(common_ngrams_file, "rb") as input_file:
-        total_ngrams = sum(1 for _ in input_file)
+    # Count number of ngrams to keep
+    output = subprocess.check_output(["wc", "-l", common_ngrams_file]).decode("utf-8")
+    total_ngrams = int(output.split(" ")[0])
     top_ngrams = floor(total_ngrams * percentage / 100)
+
     common_ngrams = set()
     with open(common_ngrams_file, encoding="utf8") as input_file:
         for _ in range(top_ngrams):
@@ -57,7 +59,7 @@ def banality_auto_detect(
                 )
                 common_ngram_matches = sum(1 for ngram in ngrams_in_file if ngram in common_ngrams)
                 if (
-                    common_ngram_matches / len(ngrams_in_file) * 100 >= 90
+                    ngrams_in_file and common_ngram_matches / len(ngrams_in_file) * 100 >= 90
                 ):  # if 90 (or more) % of ngrams are common ngrams
                     alignment["banality"] = True
                     banalities_found += 1
@@ -70,6 +72,8 @@ def banality_auto_detect(
 
 def banality_phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[int]):
     """Detect banalities based on user provided phrases"""
+    # TODO: split results into banality and results we keep: the assumption being that alignments
+    # that match should be always dismissed.
     with open(banality_phrases_path, encoding="utf8") as input_file:
         banality_phrases = {phrase.strip().lower() for phrase in input_file}
     banalities_found = 0
@@ -92,27 +96,12 @@ if __name__ == "__main__":
     import sys
 
     filepath = sys.argv[1]
-    ngrams_file = sys.argv[2]
-    ngram_doc_path = sys.argv[3]
-    percentage = float(sys.argv[4])
-    with open(filepath.replace("alignments.jsonl.lz4", "count.txt"), "rb") as input_file:
-        count = int(input_file.read().strip())
-    total = banality_auto_detect(filepath, ngrams_file, ngram_doc_path, count, percentage=percentage)
+    # ngrams_file = sys.argv[2]
+    # ngram_doc_path = sys.argv[3]
+    # percentage = float(sys.argv[4])
+    # with open(filepath.replace("alignments.jsonl.lz4", "count.txt"), "rb") as input_file:
+    #     count = int(input_file.read().strip())
+    # total = banality_auto_detect(filepath, ngrams_file, ngram_doc_path, count, percentage=percentage)
+    phrase_path = sys.argv[2]
+    total = banality_phrase_matcher(filepath, phrase_path, 71228098)
     print(total, "banalities found.")
-
-    # os.mkdir("/shared/alignments/frantext_vs_encyc/output/source/ngrams_in_order/")
-    # for file in tqdm(
-    #     os.scandir("/shared/alignments/frantext_vs_encyc/output/source/ngrams/"),
-    #     total=len(os.listdir("/shared/alignments/frantext_vs_encyc/output/source/ngrams/")),
-    # ):
-    #     with open(file.path, "rb") as input_file:
-    #         ngram_doc: Dict[str, List[List[int]]] = orjson.loads(input_file.read())
-    #     ngrams: List[Tuple[int, int]] = [
-    #         (start_byte, int(ngram)) for ngram in ngram_doc for _, start_byte, _ in ngram_doc[ngram]
-    #     ]
-    #     ngrams.sort(key=lambda x: x[0])
-
-    #     with open(f"/shared/alignments/frantext_vs_encyc/output/source/ngrams_in_order/{file.name}", "wb") as output:
-    #         output.write(orjson.dumps(ngrams))
-    # for i in tqdm(range(1, 3000), total=2999):
-    #     NgramDoc(f"/shared/alignments/frantext_vs_encyc/output/source/ngrams/{i}.json")
