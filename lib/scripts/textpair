@@ -11,99 +11,107 @@ from textpair import (
     get_config,
     run_vsa,
     banality_auto_detect,
-    banality_phrase_matcher,
+    phrase_matcher,
 )
 
 
 FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
 
 
-def get_count(path):
+def get_count(path: str) -> int:
     if os.path.exists(path):
         with open(path, encoding="utf8") as input_file:
             count = int(input_file.read().strip())
     else:
-        count = None
+        count = 0  # TODO: handle this case by counting matches in results file
     return count
 
 
-def run_alignment(pair_params):
+def update_count(count: int, to_remove: int, path: str) -> int:
+    path = os.path.join(path, "results/count.txt")
+    count -= to_remove
+    with open(path, "w", encoding="utf8") as output_file:
+        output_file.write(str(count))
+    return count
+
+
+def run_alignment(params):
     """Main function to start sequence alignment"""
-    if pair_params.only_align is False:
-        if pair_params.tei_parsing["parse_source_files"] is True:
+    if params.only_align is False:
+        if params.tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")
             parser = TEIParser(
-                pair_params.paths["source"]["tei_input_files"],
-                output_path=pair_params.paths["source"]["parse_output"],
-                words_to_keep=pair_params.tei_parsing["source_words_to_keep"],
-                cores=pair_params.workers,
-                debug=pair_params.debug,
+                params.paths["source"]["tei_input_files"],
+                output_path=params.paths["source"]["parse_output"],
+                words_to_keep=params.tei_parsing["source_words_to_keep"],
+                cores=params.workers,
+                debug=params.debug,
             )
             parser.get_metadata()
             parser.get_text()
         print("\n### Generating source ngrams ###")
-        ngrams = Ngrams(debug=pair_params.debug, **pair_params.preprocessing_params["source"])
+        ngrams = Ngrams(debug=params.debug, **params.preprocessing_params["source"])
         ngrams.generate(
-            pair_params.paths["source"]["input_files_for_ngrams"],
-            pair_params.paths["source"]["ngram_output_path"],
-            pair_params.paths["source"]["metadata_path"],
-            pair_params.paths["source"]["is_philo_db"],
-            pair_params.workers,
+            params.paths["source"]["input_files_for_ngrams"],
+            params.paths["source"]["ngram_output_path"],
+            params.paths["source"]["metadata_path"],
+            params.paths["source"]["is_philo_db"],
+            params.workers,
         )
-        if pair_params.paths["target"]:
-            if pair_params.tei_parsing["parse_target_files"] is True:
+        if params.paths["target"]:
+            if params.tei_parsing["parse_target_files"] is True:
                 print("\n### Parsing target TEI files ###")
                 parser = TEIParser(
-                    pair_params.paths["target"]["tei_input_files"],
-                    output_path=pair_params.paths["target"]["parse_output"],
-                    cores=pair_params.workers,
-                    words_to_keep=pair_params.tei_parsing["target_words_to_keep"],
-                    debug=pair_params.debug,
+                    params.paths["target"]["tei_input_files"],
+                    output_path=params.paths["target"]["parse_output"],
+                    cores=params.workers,
+                    words_to_keep=params.tei_parsing["target_words_to_keep"],
+                    debug=params.debug,
                 )
                 parser.get_metadata()
                 parser.get_text()
             print("\n### Generating target ngrams ###")
-            ngrams = Ngrams(debug=pair_params.debug, **pair_params.preprocessing_params["target"])
+            ngrams = Ngrams(debug=params.debug, **params.preprocessing_params["target"])
             ngrams.generate(
-                pair_params.paths["target"]["input_files_for_ngrams"],
-                pair_params.paths["target"]["ngram_output_path"],
-                pair_params.paths["target"]["metadata_path"],
-                pair_params.paths["target"]["is_philo_db"],
-                pair_params.workers,
+                params.paths["target"]["input_files_for_ngrams"],
+                params.paths["target"]["ngram_output_path"],
+                params.paths["target"]["metadata_path"],
+                params.paths["target"]["is_philo_db"],
+                params.workers,
             )
     print("\n### Starting sequence alignment ###")
-    if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
-        pair_params.paths["target"]["ngram_output_path"] = pair_params.paths["source"]["ngram_output_path"]
-    result_batch_path = os.path.join(pair_params.output_path, "results/result_batches")
+    if params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
+        params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
+    result_batch_path = os.path.join(params.output_path, "results/result_batches")
     if os.path.exists(result_batch_path):
         os.system(f"rm -rf {result_batch_path}")
     command = f"""compareNgrams \
-                --output_path={pair_params.output_path}/results \
-                --threads={pair_params.workers} \
-                --source_files={pair_params.paths["source"]["ngram_output_path"]}/ngrams \
-                --target_files={pair_params.paths["target"]["ngram_output_path"]}/ngrams \
-                --source_metadata={pair_params.paths["source"]["metadata_path"]} \
-                --target_metadata={pair_params.paths["target"]["metadata_path"]} \
-                --sort_by={pair_params.matching_params["sort_by"]} \
-                --source_batch={pair_params.matching_params["source_batch"]} \
-                --target_batch={pair_params.matching_params["target_batch"]} \
-                --matching_window_size={pair_params.matching_params["matching_window_size"]} \
-                --max_gap={pair_params.matching_params["max_gap"]} \
-                --flex_gap={pair_params.matching_params["flex_gap"]} \
-                --minimum_matching_ngrams={pair_params.matching_params["minimum_matching_ngrams"]} \
-                --minimum_matching_ngrams_in_window={pair_params.matching_params["minimum_matching_ngrams_in_window"]} \
-                --minimum_matching_ngrams_in_docs={pair_params.matching_params["minimum_matching_ngrams_in_docs"]} \
-                --context_size={pair_params.matching_params["context_size"]} \
-                --duplicate_threshold={pair_params.matching_params["duplicate_threshold"]} \
-                --merge_passages_on_byte_distance={pair_params.matching_params["merge_passages_on_byte_distance"]} \
-                --merge_passages_on_ngram_distance={pair_params.matching_params["merge_passages_on_ngram_distance"]} \
-                --passage_distance_multiplier={pair_params.matching_params["passage_distance_multiplier"]} \
-                --debug={str(pair_params.debug).lower()} \
-                --ngram_index={pair_params.matching_params["ngram_index"]}"""
-    results_file = f"{pair_params.output_path}/results/alignments.jsonl.lz4"
+                --output_path={params.output_path}/results \
+                --threads={params.workers} \
+                --source_files={params.paths["source"]["ngram_output_path"]}/ngrams \
+                --target_files={params.paths["target"]["ngram_output_path"]}/ngrams \
+                --source_metadata={params.paths["source"]["metadata_path"]} \
+                --target_metadata={params.paths["target"]["metadata_path"]} \
+                --sort_by={params.matching_params["sort_by"]} \
+                --source_batch={params.matching_params["source_batch"]} \
+                --target_batch={params.matching_params["target_batch"]} \
+                --matching_window_size={params.matching_params["matching_window_size"]} \
+                --max_gap={params.matching_params["max_gap"]} \
+                --flex_gap={params.matching_params["flex_gap"]} \
+                --minimum_matching_ngrams={params.matching_params["minimum_matching_ngrams"]} \
+                --minimum_matching_ngrams_in_window={params.matching_params["minimum_matching_ngrams_in_window"]} \
+                --minimum_matching_ngrams_in_docs={params.matching_params["minimum_matching_ngrams_in_docs"]} \
+                --context_size={params.matching_params["context_size"]} \
+                --duplicate_threshold={params.matching_params["duplicate_threshold"]} \
+                --merge_passages_on_byte_distance={params.matching_params["merge_passages_on_byte_distance"]} \
+                --merge_passages_on_ngram_distance={params.matching_params["merge_passages_on_ngram_distance"]} \
+                --passage_distance_multiplier={params.matching_params["passage_distance_multiplier"]} \
+                --debug={str(params.debug).lower()} \
+                --ngram_index={params.matching_params["ngram_index"]}"""
+    results_file = f"{params.output_path}/results/alignments.jsonl.lz4"
     if os.path.exists(results_file):
         os.system(f"rm {results_file}")
-    if pair_params.debug:
+    if params.debug:
         print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
     os.system(command)
     if len(os.listdir(result_batch_path)) == 1:
@@ -114,96 +122,107 @@ def run_alignment(pair_params):
         merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {results_file}; rm -rf {result_batch_path}"
         os.system(merge_command)
         print("done.")
-    count = get_count(os.path.join(pair_params.output_path, "results/count.txt"))
-    banalities_found = 0
-    if pair_params.matching_params["banality_auto_detection"] is True:
-        banalities_found += banality_auto_detect(
-            results_file,
-            pair_params.paths["source"]["common_ngrams"],
-            f'{pair_params.paths["source"]["ngram_output_path"]}/ngrams_in_order',
-            count,
-        )
-    if pair_params.matching_params["phrase_banality_file"]:
-        banalities_found += banality_phrase_matcher(
-            results_file, pair_params.matching_params["phrase_banality_file"], count
-        )
-    if banalities_found:
-        print(f"{banalities_found} pairwise alignments identified as banalities.")
-    if pair_params.web_app_config["skip_web_app"] is False:
-        FIELD_TYPES.update(pair_params.web_app_config["field_types"])
+    count = get_count(os.path.join(params.output_path, "results/count.txt"))
+
+    # Postprocessing steps
+    if params.matching_params["phrase_filter"] or params.matching_params["banality_auto_detection"] is True:
+        print(f"\n### Postprocessing {count} pairwise alignments ###")
+        if params.matching_params["phrase_filter"]:
+            filtered_passages = phrase_matcher(results_file, params.matching_params["phrase_filter"], count)
+            print(f"{filtered_passages} pairwise alignments have been filtered based on the phrase filter provided.")
+            count = update_count(count, filtered_passages, params.output_path)
+            print(f"{count} pairwise alignments remaining.")
+        if params.matching_params["banality_auto_detection"] is True:
+            banalities_found = banality_auto_detect(
+                results_file,
+                params.paths["source"]["common_ngrams"],
+                f'{params.paths["source"]["ngram_output_path"]}/ngrams_in_order',
+                params.matching_params["store_banalities"],
+                count,
+            )
+            if params.matching_params["store_banalities"] is False:
+                print(
+                    f"{banalities_found} pairwise alignments have been identified as formulaic and have been removed from matches."
+                )
+                count = update_count(count, banalities_found, params.output_path)
+                print(f"{count} pairwise alignments remaining.")
+            else:
+                print(f"{banalities_found} pairwise alignments identified as formulaic.")
+    if params.web_app_config["skip_web_app"] is False:
+        FIELD_TYPES.update(params.web_app_config["field_types"])
         create_web_app(
             results_file,
             count,
-            pair_params.dbname,
+            params.dbname,
             FIELD_TYPES,
-            pair_params.web_app_config["web_application_directory"],
-            pair_params.web_app_config["api_server"],
-            pair_params.web_app_config["source_philo_db_link"],
-            pair_params.web_app_config["target_philo_db_link"],
-            pair_params.matching_params["matching_algorithm"],
+            params.web_app_config["web_application_directory"],
+            params.web_app_config["api_server"],
+            params.web_app_config["source_philo_db_link"],
+            params.web_app_config["target_philo_db_link"],
+            params.matching_params["matching_algorithm"],
         )
 
 
-def run_vsa_similarity(pair_params) -> None:
+def run_vsa_similarity(params) -> None:
     """Run vsa similarity"""
     print("\n### Starting vector space alignment ###")
-    if pair_params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
-        pair_params.paths["target"]["ngram_output_path"] = pair_params.paths["source"]["ngram_output_path"]
+    if params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
+        params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
     run_vsa(
-        pair_params.paths["source"]["input_files_for_ngrams"],
-        pair_params.paths["target"]["input_files_for_ngrams"],
-        pair_params.workers,
-        {**pair_params.preprocessing_params, **pair_params.matching_params},
+        params.paths["source"]["input_files_for_ngrams"],
+        params.paths["target"]["input_files_for_ngrams"],
+        params.workers,
+        {**params.preprocessing_params, **params.matching_params},
     )
-    if pair_params.web_app_config["skip_web_app"] is False:
-        output_file = os.path.join(pair_params.output_path, "results/alignments.jsonl.lz4")
-        FIELD_TYPES.update(pair_params.web_app_config["field_types"])
-        count = get_count(os.path.join(pair_params.output_path, "results/counts.txt"))
+    if params.web_app_config["skip_web_app"] is False:
+        output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
+        FIELD_TYPES.update(params.web_app_config["field_types"])
+        count = get_count(os.path.join(params.output_path, "results/counts.txt"))
         create_web_app(
             output_file,
             count,
-            pair_params.dbname,
+            params.dbname,
             FIELD_TYPES,
-            pair_params.web_app_config["web_application_directory"],
-            pair_params.web_app_config["api_server"],
-            pair_params.web_app_config["source_philo_db_link"],
-            pair_params.web_app_config["target_philo_db_link"],
-            pair_params.matching_params["matching_algorithm"],
+            params.web_app_config["web_application_directory"],
+            params.web_app_config["api_server"],
+            params.web_app_config["source_philo_db_link"],
+            params.web_app_config["target_philo_db_link"],
+            params.matching_params["matching_algorithm"],
         )
 
 
 if __name__ == "__main__":
-    pair_params = get_config()
-    if pair_params.update_db is True:
-        FIELD_TYPES.update(pair_params.web_app_config["field_types"])
-        count = get_count(os.path.join(pair_params.output_path, "results/counts.txt"))
+    params = get_config()
+    if params.update_db is True:
+        FIELD_TYPES.update(params.web_app_config["field_types"])
+        count = get_count(os.path.join(params.output_path, "results/counts.txt"))
         create_web_app(
-            pair_params.file,
+            params.file,
             count,
-            pair_params.dbname,
+            params.dbname,
             FIELD_TYPES,
-            pair_params.web_app_config["web_application_directory"],
-            pair_params.web_app_config["api_server"],
-            pair_params.web_app_config["source_philo_db_link"],
-            pair_params.web_app_config["target_philo_db_link"],
-            pair_params.matching_params["matching_algorithm"],
+            params.web_app_config["web_application_directory"],
+            params.web_app_config["api_server"],
+            params.web_app_config["source_philo_db_link"],
+            params.web_app_config["target_philo_db_link"],
+            params.matching_params["matching_algorithm"],
             load_only_db=True,
         )
-    elif pair_params.only_web_app is True:
-        FIELD_TYPES.update(pair_params.web_app_config["field_types"])
-        count = get_count(os.path.join(pair_params.output_path, "results/counts.txt"))
+    elif params.only_web_app is True:
+        FIELD_TYPES.update(params.web_app_config["field_types"])
+        count = get_count(os.path.join(params.output_path, "results/counts.txt"))
         create_web_app(
-            pair_params.file,
+            params.file,
             count,
-            pair_params.dbname,
+            params.dbname,
             FIELD_TYPES,
-            pair_params.web_app_config["web_application_directory"],
-            pair_params.web_app_config["api_server"],
-            pair_params.web_app_config["source_philo_db_link"],
-            pair_params.web_app_config["target_philo_db_link"],
-            pair_params.matching_params["matching_algorithm"],
+            params.web_app_config["web_application_directory"],
+            params.web_app_config["api_server"],
+            params.web_app_config["source_philo_db_link"],
+            params.web_app_config["target_philo_db_link"],
+            params.matching_params["matching_algorithm"],
         )
-    elif pair_params.matching_params["matching_algorithm"] == "sa":
-        run_alignment(pair_params)
-    elif pair_params.matching_params["matching_algorithm"] == "vsa":
-        run_vsa_similarity(pair_params)
+    elif params.matching_params["matching_algorithm"] == "sa":
+        run_alignment(params)
+    elif params.matching_params["matching_algorithm"] == "vsa":
+        run_vsa_similarity(params)

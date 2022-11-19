@@ -30,7 +30,12 @@ class NgramDoc:
 
 
 def banality_auto_detect(
-    filepath: str, common_ngrams_file: str, ngram_doc_path: str, count: Optional[int], percentage: float = 0.1
+    filepath: str,
+    common_ngrams_file: str,
+    ngram_doc_path: str,
+    store_banalities: bool,
+    count: Optional[int],
+    percentage: float = 0.1,
 ):
     """Detect banalities automatically based on frequent ngram over-representation"""
     # Count number of ngrams to keep
@@ -63,33 +68,35 @@ def banality_auto_detect(
                 ):  # if 90 (or more) % of ngrams are common ngrams
                     alignment["banality"] = True
                     banalities_found += 1
-                else:
-                    alignment["banality"] = False
-                output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+                    if store_banalities is True:
+                        output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
     os.system(f"rm {filepath} && mv {filepath}.banal.lz4 {filepath}")
     return banalities_found
 
 
-def banality_phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[int]):
+def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[int]):
     """Detect banalities based on user provided phrases"""
     # TODO: split results into banality and results we keep: the assumption being that alignments
     # that match should be always dismissed.
     with open(banality_phrases_path, encoding="utf8") as input_file:
         banality_phrases = {phrase.strip().lower() for phrase in input_file}
-    banalities_found = 0
-    with lz4.frame.open(f"{filepath}.banal.lz4", mode="wb") as output_file:
-        with lz4.frame.open(filepath) as input_file:
-            for line in tqdm(input_file, total=count, desc="Running phrase-based banality detection...", leave=True):
-                alignment: Dict[str, Any] = orjson.loads(line)
-                for phrase in banality_phrases:
-                    if phrase in alignment["source_passage"].lower():
-                        alignment["banality"] = True
-                        banalities_found += 1
-                    else:
-                        alignment["banality"] = False
-                output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
-    os.system(f"rm {filepath} && mv {filepath}.banal.lz4 {filepath}")
-    return banalities_found
+    passages_filtered = 0
+    filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages")
+    with lz4.frame.open(filtered_file_name) as filtered_passages:
+        with lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file:
+            with lz4.frame.open(filepath) as input_file:
+                for line in tqdm(
+                    input_file, total=count, desc="Running phrase-based banality detection...", leave=True
+                ):
+                    alignment: Dict[str, Any] = orjson.loads(line)
+                    for phrase in banality_phrases:
+                        if phrase in alignment["source_passage"].lower():
+                            filtered_passages.write(alignment["source_passage"])
+                            passages_filtered += 1
+                            break
+                    output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+    os.system(f"rm {filepath} && mv {filepath}.keep.lz4 {filepath}")
+    return passages_filtered
 
 
 if __name__ == "__main__":
@@ -103,5 +110,5 @@ if __name__ == "__main__":
     #     count = int(input_file.read().strip())
     # total = banality_auto_detect(filepath, ngrams_file, ngram_doc_path, count, percentage=percentage)
     phrase_path = sys.argv[2]
-    total = banality_phrase_matcher(filepath, phrase_path, 71228098)
+    total = phrase_matcher(filepath, phrase_path, 71228098)
     print(total, "banalities found.")
