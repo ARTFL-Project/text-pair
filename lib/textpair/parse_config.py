@@ -194,31 +194,14 @@ def get_config() -> TextPairConfig:
     parser.add_argument(
         "--config", help="configuration file used to override defaults", type=str, default="", required=True
     )
-    parser.add_argument("--source_files", help="path to source files from which to compare", type=str)
-    parser.add_argument("--target_files", help="path to target files to compared to source files", type=str, default="")
     parser.add_argument(
         "--is_philo_db", help="define if files are from a PhiloLogic instance", action="store_true", default=False
-    )
-    parser.add_argument(
-        "--source_metadata", help="path to source metadata if not from PhiloLogic instance", type=str, default=""
-    )
-    parser.add_argument(
-        "--target_metadata", help="path to target metadata if not from PhiloLogic instance", type=str, default=""
     )
     parser.add_argument(
         "--only_align",
         help="skip parsing or ngram generation phase to go straight to the aligner",
         action="store_true",
         default=False,
-    )
-    parser.add_argument(
-        "--source_common_ngrams", help="path to source common ngrams when using --only_align", type=str, default=""
-    )
-    parser.add_argument(
-        "--target_common_ngrams", help="path to target common ngrams when using --only_align", type=str, default=""
-    )
-    parser.add_argument(
-        "--ngram_index", help="path to ngram index when using --only_align with debug", type=str, default=""
     )
     parser.add_argument(
         "--skip_web_app",

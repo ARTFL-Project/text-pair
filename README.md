@@ -24,10 +24,9 @@ We do offer a Docker image for TextPAIR (or you can build the image from the Doc
 
 #### Dependencies
 
--   Python 3.7 and up
+-   Python 3.8 and up
 -   Node and NPM
 -   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database by running the following command in the PostgreSQL shell: `CREATE EXTENSION pg_trgm;` run as a superuser.
--   A running instance of Apache with mod_wsgi configured
 
 #### Install script
 
@@ -37,7 +36,7 @@ See <a href="docs/ubuntu_installation.md">Ubuntu install instructions</a>
 -   Make sure you include `/etc/text-pair/apache_wsgi.conf` in your main Apache configuration file to enable searching
 -   Edit `/etc/text-pair/global_settings.ini` to provide your PostgreSQL user, database, and password.
 
-## Docker setup
+## Docker setup (EXPERIMENTAL)
 
 You can also install the artfl/textpair Docker image from Dockerhub. Note that it also comes with PhiloLogic preinstalled.
 
@@ -63,26 +62,22 @@ Before running any alignment, make sure you edit your copy of `config.ini`. See 
 
 #### NOTE: source designates the source database from which reuses are deemed to originate, and target is the collection borrowing from source. In practice, the number of alignments won't vary significantly if you swap source and target
 
-The sequence aligner is executed via the `textpair` command.
+The sequence aligner is executed via the `textpair` command. The basic command is:
+`textpair --config=/path/to/config [OPTIONS] [database_name`]
 
 `textpair` takes the following command-line arguments:
 
--   `--config`: path to the configuration file where preprocessing, matching, and web application settings are set
--   `--source_files`: path to source files
--   `--source_metadata`: path to source metadata. Only define if not using a PhiloLogic database.
--   `--target_files`: path to target files. Only define if not using a PhiloLogic database.
--   `--target_metadata`: path to target metadata
+-   `--config`: This argument is required. It defines the path to the configuration file where preprocessing, matching, and web application settings are set
 -   `--is_philo_db`: Define if files are from a PhiloLogic database. If set to `True` metadata will be fetched using the PhiloLogic metadata index. Set to False by default.
 -   `--output_path`: path to results
 -   `--debug`: turn on debugging
 -   `--workers`: Set number of workers/threads to use for parsing, ngram generation, and alignment.
--   `--load_web_app`: Define whether to load results into a database viewable via a web application. Set to True by default.
+-   `--load_only_web_app`: Define whether to load results into a database viewable via a web application. Set to True by default.
+-   `--update_db`: update database without rebuilding web_app. Should be used in conjunction with the --file argument
+-   `--file`: alignment results file to load into database. Only used with the --update_db argument.
+-   `--only_align`: Skip parsing or ngram generation phase to go straight to the aligner. This is when you want to run a new alignment without having to go through preprocessing.
+-   `--skip_web_app`: define whether to load results into a database and build a corresponding web app
 
-Example:
-
-```console
-textpair --source_files=/path/to/source/files --target_files=/path/to/target/files --config=config.ini --workers=6 --output_path=/path/to/output
-```
 
 ## Configuring the alignment
 
@@ -92,6 +87,10 @@ You should copy this file to the directory from which you are starting the align
 Then you can start editing this file. Note that all parameters have comments explaining their role.
 
 While most values are reasonable defaults and don't require any edits, here are the most important settings you will want to checkout:
+
+#### In the FILE_PATHS section
+This is where you should define the paths for your source and target files. Note that if you define no target, files from source will be compared to one another. In this case, files will be compared only when the source file is older or of the same year as the target file. This is to avoid considering a source a document which was written after the target.
+To leverage a PhiloLogic database to extract text and relevant metadata, point to the directory of the PhiloLogic DB used. You should then use the `--is_philo_db` flag.
 
 #### In the TEI Parsing section
 
@@ -108,29 +107,17 @@ While most values are reasonable defaults and don't require any edits, here are 
 -   `language`: This determines the language used by the Porter Stemmer as well as by Spacy (if using more advanced POS filtering features and lemmatization).
     Note that you should use language codes from the <a href="https://spacy.io/models/">Spacy
     documentation</a>.
+Note that there is a section on Vector Space Alignment preprocessing. These options are for the `vsa` matcher (see next section) only. It is not recommended that you use these at this time.
 
 #### In the Matching section
-
--   `source_batch` and `target_batch`: You can batch your alignments if your system is limited in RAM or if you are dealing with a very large corpus.
--   `minimum_matching_ngrams`: this setting determines how many matching ngrams are needed for TextPAIR to consider the target passage a match. Lower the number if you
-    are looking for short matches (at the risk of finding more uninteresting matches) or increase the number to only find longer matches.
+Note that there are two different types of matching algorithms, with different parameters. The current recommended one is `sa` (for sequence alignment). The `vsa` algorith is HIGHLY experimental, still under heavy development, and is not guaranteed to work.
 
 #### In the Web Application section
 
--   `table_name`: **Make sure you provide a value** or the alignment will not run
-    in the Web Application section at the bottom of the file.
+-   `api_server`: This should point to the server where the TextPAIR is running.
 -   `source_philo_db_link` and `target_philo_db_link`: Provide a URL for the source and target PhiloLogic databases if you want to
     link back to the original PhiloLogic instance to contextualize your results.
 
-## Alignments using PhiloLogic databases
-
-To leverage a PhiloLogic database to extract text and relevant metadata, use the `--is_philo_db` flag, and point to the `data/words_and_philo_ids` directory of the PhiloLogic DB used.
-For instance, if the source DB is in `/var/www/html/philologic/source_db` and the target DB is in `/var/www/html/philologic/target_db`, make sure you actually point to the `data/words_and_philo_ids`
-folder inside these databases, such as:
-
-```console
-textpair --is_philo_db --source_files=/var/www/html/philologic/source_db/data/words_and_philo_ids/ --target_files=/var/www/html/philologic/target_db/data/words_and_philo_ids/ --workers=8 --config=config.ini
-```
 
 Note that the `--is_philo_db` flag assumes both source and target DBs are PhiloLogic databases.
 
