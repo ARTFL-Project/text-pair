@@ -70,6 +70,9 @@ def banality_auto_detect(
                     banalities_found += 1
                     if store_banalities is True:
                         output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+                else:
+                    alignment["banality"] = False
+                    output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
     os.system(f"rm {filepath} && mv {filepath}.banal.lz4 {filepath}")
     return banalities_found
 

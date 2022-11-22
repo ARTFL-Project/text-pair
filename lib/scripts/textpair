@@ -4,7 +4,6 @@
 import os
 
 from textpair import (
-    TEIParser,
     Ngrams,
     create_web_app,
     web_loader,
@@ -12,6 +11,7 @@ from textpair import (
     run_vsa,
     banality_auto_detect,
     phrase_matcher,
+    parse_tei,
 )
 
 
@@ -40,43 +40,37 @@ def run_alignment(params):
     if params.only_align is False:
         if params.tei_parsing["parse_source_files"] is True:
             print("\n### Parsing source TEI files ###")
-            parser = TEIParser(
+            parse_tei(
                 params.paths["source"]["tei_input_files"],
-                output_path=params.paths["source"]["parse_output"],
-                words_to_keep=params.tei_parsing["source_words_to_keep"],
-                cores=params.workers,
-                debug=params.debug,
+                params.paths["source"]["parse_output"],
+                params.tei_parsing["source_words_to_keep"],
+                params.preprocessing_params["source"]["text_object_level"],
+                params.workers,
+                params.debug,
             )
-            parser.get_metadata()
-            parser.get_text()
         print("\n### Generating source ngrams ###")
         ngrams = Ngrams(debug=params.debug, **params.preprocessing_params["source"])
         ngrams.generate(
             params.paths["source"]["input_files_for_ngrams"],
             params.paths["source"]["ngram_output_path"],
-            params.paths["source"]["metadata_path"],
-            params.paths["source"]["is_philo_db"],
             params.workers,
         )
         if params.paths["target"]:
             if params.tei_parsing["parse_target_files"] is True:
                 print("\n### Parsing target TEI files ###")
-                parser = TEIParser(
+                parse_tei(
                     params.paths["target"]["tei_input_files"],
-                    output_path=params.paths["target"]["parse_output"],
-                    cores=params.workers,
-                    words_to_keep=params.tei_parsing["target_words_to_keep"],
-                    debug=params.debug,
+                    params.paths["target"]["parse_output"],
+                    params.tei_parsing["target_words_to_keep"],
+                    params.preprocessing_params["target"]["text_object_level"],
+                    params.workers,
+                    params.debug,
                 )
-                parser.get_metadata()
-                parser.get_text()
             print("\n### Generating target ngrams ###")
             ngrams = Ngrams(debug=params.debug, **params.preprocessing_params["target"])
             ngrams.generate(
                 params.paths["target"]["input_files_for_ngrams"],
                 params.paths["target"]["ngram_output_path"],
-                params.paths["target"]["metadata_path"],
-                params.paths["target"]["is_philo_db"],
                 params.workers,
             )
     print("\n### Starting sequence alignment ###")

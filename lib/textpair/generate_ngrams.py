@@ -62,7 +62,6 @@ class Ngrams:
         self.debug = debug
         self.input_path = ""
         self.output_path = ""
-        self.metadata_done = False
         self.db_name = ""
         self.db_path = ""
         self.is_philo_db = False
@@ -83,11 +82,7 @@ class Ngrams:
         self,
         file_path: str,
         output_path: str,
-        metadata: str,
-        is_philo_db: bool,
         workers: int,
-        db_path: Optional[str] = None,
-        ram: str = "50%",
     ):
         """Generate n-grams."""
         if os.path.isfile(file_path):
@@ -104,21 +99,10 @@ class Ngrams:
         os.system(f"mkdir -p {output_path}/config")
         os.system(f"mkdir -p {output_path}/temp")
         os.system(f"mkdir -p {output_path}/ngrams_in_order")
-        if db_path is None and is_philo_db is True:
-            self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
-        else:
-            self.input_path = db_path
-            self.db_path = db_path
+        self.input_path = os.path.abspath(os.path.join(files[0], "../../../"))
+        # self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
         self.output_path = output_path
         combined_metadata: Dict[str, Any] = {}
-        if is_philo_db:
-            combined_metadata = {}
-        elif os.path.isfile(metadata):
-            self.metadata_done = True
-            combined_metadata = metadata
-        else:
-            print("No metadata provided: exiting...")
-            exit()
 
         print("Generating ngrams...", flush=True)
         preprocessor = PreProcessor(
@@ -142,28 +126,19 @@ class Ngrams:
         )
         with tqdm(total=len(files), leave=False) as pbar:
             for local_metadata in preprocessor.process_texts(files, progress=False):
-                if self.metadata_done is False:
-                    combined_metadata.update(local_metadata)  # type: ignore
+                combined_metadata.update(local_metadata)  # type: ignore
                 pbar.update()
 
-        mem_usage = floor(int(ram.replace("%", "")) / 2)
-        if mem_usage >= 50:
-            mem_usage = 45
         print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
         os.system(
-            rf"""for i in {output_path}/temp/*; do cat $i; done | sort -T {output_path} -S {mem_usage}% | uniq -c |
-            sort -rn -T {output_path} -S {mem_usage}% | awk '{{print $2"\t"$3}}' | tee {output_path}/index/index.tab |
+            rf"""for i in {output_path}/temp/*; do cat $i; done | sort -T {output_path} -S 25% | uniq -c |
+            sort -rn -T {output_path} -S 25% | awk '{{print $2"\t"$3}}' | tee {output_path}/index/index.tab |
             awk '{{print $2}}' > {output_path}/index/most_common_ngrams.txt"""
         )
 
         print("Saving metadata...")
-
-        if self.metadata_done is False:
-            with open(f"{self.output_path}/metadata/metadata.json", "wb") as metadata_output:
-                metadata_output.write(orjson.dumps(combined_metadata))
-        else:
-            os.system(f"cp {metadata} {self.output_path}/metadata/metadata.json 2>/dev/null")
-
+        with open(f"{self.output_path}/metadata/metadata.json", "wb") as metadata_output:
+            metadata_output.write(orjson.dumps(combined_metadata))
         self.__dump_config(output_path)
 
         print("Cleaning up...")
@@ -177,13 +152,10 @@ class Ngrams:
         for k, v in text_object.metadata.items():
             if not isinstance(v, str):
                 text_object.metadata[k] = str(v)
-        if self.metadata_done is False:
-            text_object_id = "_".join(
-                text_object.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]]
-            )
-            metadata[text_object_id] = text_object.metadata
-        else:
-            text_object_id = text_object.metadata["filename"]
+        text_object_id = "_".join(
+            text_object.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]]
+        )
+        metadata[text_object_id] = text_object.metadata
         text_index = defaultdict(list)
         doc_ngrams_in_order: List[Tuple[int, int]] = []  # for banality filter
         for index_pos, ngram in enumerate(text_object):

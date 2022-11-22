@@ -122,7 +122,9 @@ class TextPairConfig:
             if self.tei_parsing["parse_source_files"] is True:
                 self.paths["source"]["tei_input_files"] = self.__file_paths["source_files"]
                 self.paths["source"]["parse_output"] = os.path.join(self.output_path, "source")
-                self.paths["source"]["input_files_for_ngrams"] = os.path.join(self.output_path, "source/texts")
+                self.paths["source"]["input_files_for_ngrams"] = os.path.join(
+                    self.output_path, "source/words_and_philo_ids/"
+                )
                 self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source/")
                 self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
                 self.paths["source"]["is_philo_db"] = False
@@ -134,9 +136,7 @@ class TextPairConfig:
                 else:
                     self.paths["source"]["input_files_for_ngrams"] = self.__file_paths["source_files"]
                 self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source/")
-                self.paths["source"]["metadata_path"] = self.__cli_args["source_metadata"] or os.path.join(
-                    self.output_path, "source/metadata/metadata.json"
-                )
+                self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
                 self.paths["source"]["is_philo_db"] = self.__cli_args["is_philo_db"]
             self.paths["source"]["common_ngrams"] = os.path.join(
                 self.output_path, "source/index/most_common_ngrams.txt"
@@ -146,7 +146,9 @@ class TextPairConfig:
                 if self.tei_parsing["parse_target_files"] is True:
                     self.paths["target"]["tei_input_files"] = self.__file_paths["target_files"]
                     self.paths["target"]["parse_output"] = os.path.join(self.output_path, "target")
-                    self.paths["target"]["input_files_for_ngrams"] = os.path.join(self.output_path, "target/texts")
+                    self.paths["target"]["input_files_for_ngrams"] = os.path.join(
+                        self.output_path, "target/words_and_philo_ids/"
+                    )
                     self.paths["target"]["ngram_output_path"] = os.path.join(self.output_path, "target/")
                     self.paths["target"]["metadata_path"] = os.path.join(
                         self.output_path, "target/metadata/metadata.json"
@@ -160,7 +162,7 @@ class TextPairConfig:
                     else:
                         self.paths["target"]["input_files_for_ngrams"] = self.__file_paths["target_files"]
                     self.paths["target"]["ngram_output_path"] = os.path.join(self.output_path, "target/")
-                    self.paths["target"]["metadata_path"] = self.__cli_args["target_metadata"] or os.path.join(
+                    self.paths["target"]["metadata_path"] = os.path.join(
                         self.output_path, "target/metadata/metadata.json"
                     )
                     self.paths["target"]["is_philo_db"] = self.__cli_args["is_philo_db"]

@@ -18,6 +18,32 @@ else:
     print("Only 64 bit linux and MacOS are supported at this time.")
     exit()
 
+
+dependencies = [
+    "multiprocess",
+    "mmh3",
+    "unidecode",
+    "tqdm",
+    "cython",
+    "pystemmer",
+    "lxml",
+    "gensim",
+    "namedlist",  # to remove
+    "recordclass",
+    "sentence-transformers",
+    "lz4",
+    "orjson",
+    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0-rc3#egg=text_preprocessing",
+    "fastapi",
+    "psycopg2",
+    "gunicorn",
+    "uvicorn",
+    "uvloop",
+    "httptools",
+    "philologic",
+]
+
+
 setup(
     name="textpair",
     version="2.0-beta.8",
@@ -25,30 +51,5 @@ setup(
     author_email="clovisgladstone@gmail.com",
     packages=["textpair"],
     scripts=["scripts/textpair"],
-    install_requires=[
-        "multiprocess",
-        "mmh3",
-        "unidecode",
-        "tqdm",
-        "cython",
-        "pystemmer",
-        "lxml",
-        "gensim",
-        "namedlist",  # to remove
-        "recordclass",
-        "sentence-transformers",
-        "lz4",
-        "orjson",
-        "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0-rc3#egg=text_preprocessing",
-    ],
-    extras_require={
-        "web": [
-            "fastapi",
-            "psycopg2",
-            "gunicorn",
-            "uvicorn",
-            "uvloop",
-            "httptools",
-        ]
-    },
+    install_requires=dependencies,
 )
