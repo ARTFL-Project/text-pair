@@ -14,7 +14,7 @@ class TextPairConfig:
     def __init__(self, cli_args: Dict[str, Any]):
         self.__cli_args: Dict[str, Any] = cli_args
         self.__file_paths: Dict[str, str] = {}
-        self.tei_parsing: Dict[str, Union[bool, str]] = {}
+        self.text_parsing: Dict[str, Union[bool, str]] = {}
         self.preprocessing_params: Dict[str, Any] = {"source": {}, "target": {}}
         self.matching_params: Dict[str, Any] = defaultdict(str)
         self.matching_params["matching_algorithm"] = "sa"
@@ -34,7 +34,9 @@ class TextPairConfig:
         if self.only_align is False:
             self.__file_paths = {
                 "source_files": config["FILE_PATHS"]["source_file_path"] or "",
+                "input_source_metadata": config["FILE_PATHS"]["source_metadata"] or "",
                 "target_files": config["FILE_PATHS"]["target_file_path"] or "",
+                "input_target_metadata": config["FILE_PATHS"]["target_metadata"] or "",
             }
         else:
             self.__file_paths["source_files"] = os.path.join(self.output_path, "source")
@@ -42,19 +44,19 @@ class TextPairConfig:
                 self.__file_paths["target_files"] = os.path.join(self.output_path, "target")
             else:
                 self.__file_paths["target_files"] = ""
-        for key, value in dict(config["TEI_PARSING"]).items():
+        for key, value in dict(config["TEXT_PARSING"]).items():
             if key.startswith("parse"):
                 if value.lower() == "yes" or value.lower() == "true":
-                    self.tei_parsing[key] = True
+                    self.text_parsing[key] = True
                 else:
-                    self.tei_parsing[key] = False
+                    self.text_parsing[key] = False
             else:
                 if not value:
                     if key.startswith("output_source"):
                         value = os.path.join(self.output_path, "source")
                     else:
                         value = os.path.join(self.output_path, "target")
-                self.tei_parsing[key] = value
+                self.text_parsing[key] = value
         for key, value in dict(config["PREPROCESSING"]).items():
             if value:
                 if key in ("skipgram", "numbers", "word_order", "modernize", "ascii", "stemmer"):
@@ -119,8 +121,9 @@ class TextPairConfig:
         """Set parameters for alignment"""
         self.web_app_config["skip_web_app"] = self.__cli_args["skip_web_app"]
         if self.__cli_args["only_align"] is False:
-            if self.tei_parsing["parse_source_files"] is True:
-                self.paths["source"]["tei_input_files"] = self.__file_paths["source_files"]
+            if self.text_parsing["parse_source_files"] is True:
+                self.paths["source"]["input_files"] = self.__file_paths["source_files"]
+                self.paths["source"]["input_source_metadata"] = self.__file_paths["input_source_metadata"]
                 self.paths["source"]["parse_output"] = os.path.join(self.output_path, "source")
                 self.paths["source"]["input_files_for_ngrams"] = os.path.join(
                     self.output_path, "source/words_and_philo_ids/"
@@ -143,8 +146,9 @@ class TextPairConfig:
             )
             self.matching_params["ngram_index"] = os.path.join(self.output_path, "source/index/index.tab")
             if self.__file_paths["target_files"]:
-                if self.tei_parsing["parse_target_files"] is True:
-                    self.paths["target"]["tei_input_files"] = self.__file_paths["target_files"]
+                if self.text_parsing["parse_target_files"] is True:
+                    self.paths["target"]["input_files"] = self.__file_paths["target_files"]
+                    self.paths["target"]["input_target_metadata"] = self.__file_paths["input_target_metadata"]
                     self.paths["target"]["parse_output"] = os.path.join(self.output_path, "target")
                     self.paths["target"]["input_files_for_ngrams"] = os.path.join(
                         self.output_path, "target/words_and_philo_ids/"

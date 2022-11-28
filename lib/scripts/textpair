@@ -11,7 +11,7 @@ from textpair import (
     run_vsa,
     banality_auto_detect,
     phrase_matcher,
-    parse_tei,
+    parse_files,
 )
 
 
@@ -38,12 +38,14 @@ def update_count(count: int, to_remove: int, path: str) -> int:
 def run_alignment(params):
     """Main function to start sequence alignment"""
     if params.only_align is False:
-        if params.tei_parsing["parse_source_files"] is True:
-            print("\n### Parsing source TEI files ###")
-            parse_tei(
-                params.paths["source"]["tei_input_files"],
+        if params.text_parsing["parse_source_files"] is True:
+            print("\n### Parsing source files ###")
+            parse_files(
+                params.paths["source"]["input_files"],
+                params.text_parsing["source_file_type"],
+                params.paths["source"]["input_source_metadata"],
                 params.paths["source"]["parse_output"],
-                params.tei_parsing["source_words_to_keep"],
+                params.text_parsing["source_words_to_keep"],
                 params.preprocessing_params["source"]["text_object_level"],
                 params.workers,
                 params.debug,
@@ -56,12 +58,14 @@ def run_alignment(params):
             params.workers,
         )
         if params.paths["target"]:
-            if params.tei_parsing["parse_target_files"] is True:
-                print("\n### Parsing target TEI files ###")
-                parse_tei(
-                    params.paths["target"]["tei_input_files"],
+            if params.text_parsing["parse_target_files"] is True:
+                print("\n### Parsing target files ###")
+                parse_files(
+                    params.paths["target"]["input_files"],
+                    params.text_parsing["target_file_type"],
+                    params.paths["target"]["input_target_metadata"],
                     params.paths["target"]["parse_output"],
-                    params.tei_parsing["target_words_to_keep"],
+                    params.text_parsing["target_words_to_keep"],
                     params.preprocessing_params["target"]["text_object_level"],
                     params.workers,
                     params.debug,
