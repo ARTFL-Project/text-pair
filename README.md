@@ -24,7 +24,7 @@ We do offer a Docker image for TextPAIR (or you can build the image from the Doc
 
 #### Dependencies
 
--   Python 3.8 and up
+-   Python 3.10 and up
 -   Node and NPM
 -   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database by running the following command in the PostgreSQL shell: `CREATE EXTENSION pg_trgm;` run as a superuser.
 

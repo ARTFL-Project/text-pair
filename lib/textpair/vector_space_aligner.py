@@ -11,7 +11,7 @@ from collections import deque
 from html import unescape as unescape_html
 from math import floor
 from shutil import rmtree
-from typing import Any, Callable, Deque, Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Iterable, Iterator, Optional
 from xml.sax.saxutils import unescape as unescape_xml
 
 import dill as pickle
@@ -43,7 +43,7 @@ class PassageGroup(dataobject, fast_new=True):
     start_byte: int = 0
     end_byte: int = 0
     filename: str = ""
-    metadata: Dict = {}
+    metadata: dict = {}
 
 
 class MergedGroup(dataobject, fast_new=True):
@@ -57,9 +57,9 @@ class MergedGroup(dataobject, fast_new=True):
 class DocumentChunks:
     """A generator with caching"""
 
-    def __init__(self, docs: Iterator[List[str]], save_path: str, transform_function: Callable):
+    def __init__(self, docs: Iterator[list[str]], save_path: str, transform_function: Callable):
         self.docs = docs
-        self.doc_list: List[List[str]] = []
+        self.doc_list: list[list[str]] = []
         self.doc_count = 0
         self.generator_exhausted = False
         self.transform_function = transform_function
@@ -69,7 +69,7 @@ class DocumentChunks:
             rmtree(self.path)
         os.makedirs(self.path, exist_ok=True)
 
-    def __iter__(self) -> Iterator[Union[str, List[str], torch.Tensor, np.ndarray]]:
+    def __iter__(self) -> Iterator[str | list[str] | torch.Tensor | np.ndarray]:
         if self.generator_exhausted is False:
             if self.doc_count == 0:
                 for doc in self.docs:
@@ -90,7 +90,7 @@ class DocumentChunks:
             for doc_name in self.doc_list:
                 yield self.__load(doc_name)
 
-    def __save(self, doc: Union[List[str], str]):
+    def __save(self, doc: list[str] | str):
         filename = os.path.join(self.path, str(self.doc_count))
         if self.transform_function is None:
             with open(filename, "wb") as output_file:
@@ -102,7 +102,7 @@ class DocumentChunks:
             transformed_doc = self.transform_function([doc])
             np.save(f"{filename}.npy", transformed_doc)
 
-    def __load(self, doc_name) -> Union[List[str], torch.Tensor, np.ndarray]:
+    def __load(self, doc_name) -> list[str] | torch.Tensor | np.ndarray:
         filename = os.path.join(self.path, str(doc_name))
         if self.transform_function is None:
             with open(filename, "rb") as input_file:
@@ -112,7 +112,7 @@ class DocumentChunks:
             return torch.load(f"{filename}.pt")
         return np.load(f"{filename}.npy")[0]
 
-    def __get_doc(self, index: int) -> Union[List[str], torch.Tensor, np.ndarray]:
+    def __get_doc(self, index: int) -> list[str] | torch.Tensor | np.ndarray:
         doc = None
         while index > self.doc_count:
             try:
@@ -126,9 +126,7 @@ class DocumentChunks:
             return self.__load(index)
         return doc
 
-    def __getitem__(
-        self, item: Union[int, slice]
-    ) -> Union[Union[List[str], str], Union[List[Union[List[str], str]], np.ndarray, torch.Tensor]]:
+    def __getitem__(self, item: int | slice) -> list[str] | str | list[list[str] | str] | np.ndarray | torch.Tensor:
         if isinstance(item, slice):
             end = item.stop
             if item.stop > len(self):  # avoid index out of range
@@ -138,7 +136,7 @@ class DocumentChunks:
             return torch.cat([self.__get_doc(index) for index in range(item.start, end)])  # type:ignore
         return self.__get_doc(item)
 
-    def __format_doc(self, doc: List[str]) -> str:
+    def __format_doc(self, doc: list[str]) -> str:
         return " ".join(doc)
 
     def __len__(self):
@@ -211,7 +209,7 @@ class Corpus(ABC):
         self.texts: Iterable[Tokens] = texts
         self.min_text_obj_length: int = min_text_obj_length
         self.n_chunk: int = n_chunk
-        self.metadata: List[Dict[str, Any]] = []
+        self.metadata: list[dict[str, Any]] = []
         self.text_object_level_split = text_object_level_split
         self.text_object_definition: str = text_object_definition
         self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/output/")
@@ -229,9 +227,9 @@ class Corpus(ABC):
     def __getitem__(self, _):
         pass
 
-    def get_text_chunks(self) -> Iterator[List[str]]:
+    def get_text_chunks(self) -> Iterator[list[str]]:
         """Process all texts into smaller text chunks"""
-        chunk_group: Deque[Tokens] = deque(maxlen=self.n_chunk)
+        chunk_group: deque[Tokens] = deque(maxlen=self.n_chunk)
         min_chunk_length: int = self.n_chunk * self.min_text_obj_length
         current_text_level_id: str = "0"
         full_doc = Tokens([], {})
@@ -281,7 +279,7 @@ class Corpus(ABC):
                         chunks_done += 1
                         yield [t.text for t in chunk]
             else:
-                chunks_to_return: List[List[Token]] = []
+                chunks_to_return: list[list[Token]] = []
                 for chunk in text.split_tokens(self.min_text_obj_length):
                     if not chunk:
                         continue
@@ -310,15 +308,15 @@ class Corpus(ABC):
 
     def __save_doc(self, doc: Tokens):
         """Save doc to tmp dir for later retrieval"""
-        start_bytes: Dict[int, int] = {}
-        end_bytes: Dict[int, int] = {}
+        start_bytes: dict[int, int] = {}
+        end_bytes: dict[int, int] = {}
         for pos, token in enumerate(doc):
             start_bytes[token.ext["start_byte"]] = pos
             end_bytes[token.ext["end_byte"]] = pos
         with open(doc.metadata["parsed_filename"], "wb") as output:
             dump((doc, start_bytes, end_bytes), output)
 
-    def __store_metadata(self, metadata: Dict[str, Any], tokens: List[Token]):
+    def __store_metadata(self, metadata: dict[str, Any], tokens: list[Token]):
         """Store Metadata for each chunk"""
         self.metadata.append(
             {
@@ -328,7 +326,7 @@ class Corpus(ABC):
             }
         )
 
-    def create_batch(self) -> Iterable[Union[np.ndarray, torch.Tensor]]:
+    def create_batch(self) -> Iterable[np.ndarray | torch.Tensor]:
         for i in range(0, self.length, self.chunk_size):
             yield self.docs[i : i + self.chunk_size]  # type: ignore
 
@@ -431,7 +429,7 @@ class TfIdfCorpus(Corpus):
         n_chunk: int = 3,
         text_object_level_split: str = "doc",
         vectorizer: Optional[TfidfVectorizer] = None,
-        min_freq: Union[int, float] = 1,
+        min_freq: int | float = 1,
         max_freq: float = 1.0,
         direction="source",
     ):
@@ -479,7 +477,7 @@ class Word2VecEmbeddingCorpus(Corpus):
     def __init__(
         self,
         texts: Iterable[Tokens],
-        model: Union[str, spacy.Language],
+        model: str | spacy.Language,
         batch_size: int,
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
@@ -514,7 +512,7 @@ class Word2VecEmbeddingCorpus(Corpus):
         doc: Doc = self.model(" ".join(text_chunk))
         return (doc.vector / doc.vector_norm).reshape(1, -1)  # type: ignore
 
-    def __getitem__(self, item: int) -> List[str]:
+    def __getitem__(self, item: int) -> list[str]:
         return self.docs[item]  # type: ignore
 
     def __len__(self):
@@ -561,7 +559,7 @@ class TransformerCorpus(Corpus):
         self.length = len(self.docs)
         self.chunk_size = floor((self.length + self.batch_size - 1) / self.batch_size)
 
-    def __getitem__(self, item: int) -> List[str]:
+    def __getitem__(self, item: int) -> list[str]:
         return self.docs[item]  # type: ignore
 
     def __len__(self):
@@ -619,10 +617,10 @@ def evaluate_score(start_score: float, new_score: float, min_score: float) -> bo
 
 
 def get_docs_with_matches(
-    matches: Union[Matches, List[MergedGroup]]
-) -> Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]]:
+    matches: Matches | list[MergedGroup],
+) -> dict[str, tuple[Tokens, dict[int, int], dict[int, int]]]:
     """Fetch all documents with matches"""
-    docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = {}
+    docs_with_matches: dict[str, tuple[Tokens, dict[int, int], dict[int, int]]] = {}
     for match in matches:
         if match.source.metadata["parsed_filename"] not in docs_with_matches:
             with open(match.source.metadata["parsed_filename"], "rb") as input_doc:
@@ -633,7 +631,7 @@ def get_docs_with_matches(
     return docs_with_matches
 
 
-def get_passage(doc: Tuple[Tokens, Dict[int, int], Dict[int, int]], start_byte: int, end_byte: int) -> Iterable[Token]:
+def get_passage(doc: tuple[Tokens, dict[int, int], dict[int, int]], start_byte: int, end_byte: int) -> Iterable[Token]:
     """Get passage within Tokens object"""
     text, start_bytes, end_bytes = doc
     start_index = start_bytes[start_byte]
@@ -643,17 +641,16 @@ def get_passage(doc: Tuple[Tokens, Dict[int, int], Dict[int, int]], start_byte: 
 
 def merge_passages(
     matches: Matches,
-    corpus: Union[TfIdfCorpus, TransformerCorpus, Word2VecEmbeddingCorpus],
+    corpus: TfIdfCorpus | TransformerCorpus | Word2VecEmbeddingCorpus,
     min_score: float,
-) -> List[MergedGroup]:
+) -> list[MergedGroup]:
     """Merge all passages into bigger passages"""
-    # pylint: disable=E1101
     # TODO: should merging be done using Jaccard sim metric: to avoid sparsity
-    docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
+    docs_with_matches: dict[str, tuple[Tokens, dict[int, int], dict[int, int]]] = get_docs_with_matches(matches)
     last_count = len(matches)
     current_count = last_count + 1
     iteration = 1
-    merged_matches: List[MergedGroup] = Matches.load().matches  # type:ignore
+    merged_matches: list[MergedGroup] = Matches.load().matches  # type:ignore
     print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
     while last_count / current_count <= 1.0:  # we stop iterating if there are minimal change between iterations
         last_count = current_count
@@ -669,7 +666,7 @@ def merge_passages(
             ),
         )  # sort by smaller start byte and bigger end_byte
         merged_group: MergedGroup = MergedGroup()
-        saved_groups: List[MergedGroup] = []
+        saved_groups: list[MergedGroup] = []
         total_matches: int = len(matches)
         start_score: float = min_score
 
@@ -754,9 +751,9 @@ def merge_passages(
 
 def optimize_match(
     tokens: Iterable[Token],
-    intersection: Set[str],
+    intersection: set[str],
     passage_group: PassageGroup,
-    corpus: Union[TfIdfCorpus, Word2VecEmbeddingCorpus],
+    corpus: TfIdfCorpus | Word2VecEmbeddingCorpus,
 ) -> PassageGroup:
     """Optimize a single match by trimming non-matching words on left and right side"""
     start = None
@@ -784,12 +781,12 @@ def optimize_match(
 
 
 def optimize_matches(
-    matches: List[MergedGroup], corpus: Union[TfIdfCorpus, Word2VecEmbeddingCorpus], min_matching_words: int
-) -> Tuple[List[MergedGroup], Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]]]:
+    matches: list[MergedGroup], corpus: TfIdfCorpus | Word2VecEmbeddingCorpus, min_matching_words: int
+) -> tuple[list[MergedGroup], dict[str, tuple[Tokens, dict[int, int], dict[int, int]]]]:
     """Optimize matches to get highest sim score"""
     print("Optimizing matches...")
-    docs_with_matches: Dict[str, Tuple[Tokens, Dict[int, int], Dict[int, int]]] = get_docs_with_matches(matches)
-    optimized_matches: List[MergedGroup] = []
+    docs_with_matches: dict[str, tuple[Tokens, dict[int, int], dict[int, int]]] = get_docs_with_matches(matches)
+    optimized_matches: list[MergedGroup] = []
     match_count = 0
     for match in tqdm(matches, total=len(matches), leave=False):
         source_tokens = get_passage(
@@ -814,8 +811,8 @@ def optimize_matches(
 
 
 def get_tokens(
-    passage: PassageGroup, preproc: PreProcessor, doc: Tuple[Tokens, Dict[int, int], Dict[int, int]]
-) -> List[Token]:
+    passage: PassageGroup, preproc: PreProcessor, doc: tuple[Tokens, dict[int, int], dict[int, int]]
+) -> list[Token]:
     """Get tokens"""
     text: str = " "
     start_byte: int = passage.start_byte
@@ -823,7 +820,7 @@ def get_tokens(
     with open(passage.filename, "rb") as text_file:
         text_file.seek(start_byte)
         text = text_file.read(end_byte - start_byte).decode("utf8", "ignore")
-    tokens: List[Token] = []
+    tokens: list[Token] = []
     full_tokens, start_bytes, _ = doc
     pos = 0
     for token in preproc.process_string(text):
@@ -848,9 +845,9 @@ def post_process_passages(
     target: PassageGroup,
     source_preproc: PreProcessor,
     target_preproc: PreProcessor,
-    source_doc: Tuple[Tokens, Dict[int, int], Dict[int, int]],
-    target_doc: Tuple[Tokens, Dict[int, int], Dict[int, int]],
-) -> Tuple[str, str]:
+    source_doc: tuple[Tokens, dict[int, int], dict[int, int]],
+    target_doc: tuple[Tokens, dict[int, int], dict[int, int]],
+) -> tuple[str, str]:
     """Post process function to highlight matching words in HTML tags"""
     source_tokens = get_tokens(source, source_preproc, source_doc)
     target_tokens = get_tokens(target, target_preproc, target_doc)
@@ -880,11 +877,11 @@ def post_process_passages(
 
 def simple_similarity(
     source_texts: Iterable[Tokens],
-    source_config: Dict[str, Any],
-    target_config: Dict[str, Any],
+    source_config: dict[str, Any],
+    target_config: dict[str, Any],
     min_similarity: float,
     target_texts: Optional[Iterable[Tokens]] = None,
-) -> Tuple[TfIdfCorpus, Matches]:
+) -> tuple[TfIdfCorpus, Matches]:
     """Cosine similarity of TF-IDF vectors"""
     source_corpus: TfIdfCorpus = TfIdfCorpus(
         source_texts,
@@ -914,13 +911,13 @@ def simple_similarity(
 
 def transformer_similarity(
     source_texts: Iterable[Tokens],
-    source_config: Dict[str, Any],
-    target_config: Dict[str, Any],
+    source_config: dict[str, Any],
+    target_config: dict[str, Any],
     min_similarity: float,
     source_batch: int,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
-) -> Tuple[TransformerCorpus, Matches]:
+) -> tuple[TransformerCorpus, Matches]:
     """Cosine similarity of sentence embeddings from transformer models"""
     source_corpus: TransformerCorpus = TransformerCorpus(
         source_texts,
@@ -952,13 +949,13 @@ def transformer_similarity(
 
 def word2vec_embed_similarity(
     source_texts: Iterable[Tokens],
-    source_config: Dict[str, Any],
-    target_config: Dict[str, Any],
+    source_config: dict[str, Any],
+    target_config: dict[str, Any],
     min_similarity: float,
     source_batch: int,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
-) -> Tuple[Word2VecEmbeddingCorpus, Matches]:
+) -> tuple[Word2VecEmbeddingCorpus, Matches]:
     """Cosine similarity of sentence embeddings using mean w2v vectors"""
     source_corpus: Word2VecEmbeddingCorpus = Word2VecEmbeddingCorpus(
         source_texts,
@@ -987,7 +984,7 @@ def word2vec_embed_similarity(
     return source_corpus, matching_docs
 
 
-def run_vsa(source_path: str, target_path: str, workers: int, config: Dict[str, Any]):
+def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, Any]):
     """Main function"""
     if os.path.exists(os.path.join(TEMP_DIR, "output")):
         rmtree(os.path.join(TEMP_DIR, "output"))

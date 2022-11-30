@@ -4,23 +4,23 @@
 import configparser
 import argparse
 import os
-from typing import Dict, Any, Union
+from typing import Any
 from collections import defaultdict
 
 
 class TextPairConfig:
     """TextPAIR parameters returned from parsing CLI arguments"""
 
-    def __init__(self, cli_args: Dict[str, Any]):
-        self.__cli_args: Dict[str, Any] = cli_args
-        self.__file_paths: Dict[str, str] = {}
-        self.text_parsing: Dict[str, Union[bool, str]] = {}
-        self.preprocessing_params: Dict[str, Any] = {"source": {}, "target": {}}
-        self.matching_params: Dict[str, Any] = defaultdict(str)
+    def __init__(self, cli_args: dict[str, Any]):
+        self.__cli_args: dict[str, Any] = cli_args
+        self.__file_paths: dict[str, str] = {}
+        self.text_parsing: dict[str, bool | str] = {}
+        self.preprocessing_params: dict[str, Any] = {"source": {}, "target": {}}
+        self.matching_params: defaultdict[str, Any] = defaultdict(str)
         self.matching_params["matching_algorithm"] = "sa"
-        self.web_app_config: Dict[str, Any] = {"skip_web_app": self.__cli_args["skip_web_app"]}
+        self.web_app_config: dict[str, Any] = {"skip_web_app": self.__cli_args["skip_web_app"]}
         self.only_web_app = self.__cli_args["load_only_web_app"]
-        self.paths: Dict[str, Dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
+        self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
         self.__parse_config()
         self.__set_params()
 
@@ -58,53 +58,49 @@ class TextPairConfig:
                         value = os.path.join(self.output_path, "target")
                 self.text_parsing[key] = value
         for key, value in dict(config["PREPROCESSING"]).items():
-            if value:
-                if key in ("skipgram", "numbers", "word_order", "modernize", "ascii", "stemmer"):
+            if not value:
+                continue
+            match key:
+                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer":
                     if value.lower() == "yes" or value.lower() == "true":
                         value = True
                     else:
                         value = False
-                if key.endswith("object_level"):
-                    if key.startswith("source"):
-                        self.preprocessing_params["source"]["text_object_level"] = value
-                    else:
-                        self.preprocessing_params["target"]["text_object_level"] = value
-                elif key in (
-                    "ngram",
-                    "gap",
-                    "minimum_word_length",
-                    "n_chunk",
-                    "min_text_object_length",
-                ):
+                case "source_text_object_level":
+                    self.preprocessing_params["source"]["text_object_level"] = value
+                case "target_text_object_level":
+                    self.preprocessing_params["target"]["text_object_level"] = value
+                case "ngram" | "gap" | "minimum_word_length" | "n_chunk" | "min_text_object_length":
                     self.preprocessing_params["source"][key] = int(value)
                     self.preprocessing_params["target"][key] = int(value)
-                elif key == "pos_to_keep":
+                case "pos_to_keep":
                     self.preprocessing_params["source"][key] = [i.strip() for i in value.split(",")]
                     self.preprocessing_params["target"][key] = self.preprocessing_params["source"][key]
-                elif key in ("min_freq", "max_freq"):
+                case "min_freq" | "max_freq":
                     self.preprocessing_params["source"][key] = float(value)
                     self.preprocessing_params["target"][key] = float(value)
-                elif key == "target_language":
+                case "target_language":
                     if value:
                         self.preprocessing_params["target"]["language"] = value
                     else:  # assumes the language key comes before the target_language key...
                         self.preprocessing_params["target"]["language"] = self.preprocessing_params["source"][
                             "language"
                         ]
-                else:
+                case _:
                     self.preprocessing_params["source"][key] = value
                     self.preprocessing_params["target"][key] = value
         for key, value in dict(config["MATCHING"]).items():
             if value or key not in self.matching_params:
-                if key in ("flex_gap", "banality_auto_detection", "store_banalities"):
-                    if value.lower() == "yes" or value.lower() == "true":
-                        value = True
-                    else:
-                        value = False
-                elif key == "min_similarity":
-                    value = float(value)
-                elif key in ("min_matching_words", "source_batch", "target_batch"):
-                    value = int(value)
+                match key:
+                    case "flex_gap" | "banality_auto_detection" | "store_banalities":
+                        if value.lower() == "yes" or value.lower() == "true":
+                            value = True
+                        else:
+                            value = False
+                    case "min_similarity" | "most_common_ngram_proportion" | "common_ngram_threshold":
+                        value = float(value)
+                    case "min_matching_words" | "source_batch" | "target_batch":
+                        value = int(value)
                 self.matching_params[key] = value
         if self.__cli_args["skip_web_app"] is False:
             self.web_app_config["field_types"] = {}
