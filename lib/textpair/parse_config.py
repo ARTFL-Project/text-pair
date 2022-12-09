@@ -166,6 +166,9 @@ class TextPairConfig:
                 self.paths["target"]["common_ngrams"] = os.path.join(
                     self.output_path, "target/index/most_common_ngrams.txt"
                 )
+        elif self.__cli_args["update_db"] is True:
+            self.paths["source"]["input_source_metadata"] = self.__file_paths["input_source_metadata"]
+            self.paths["target"]["input_source_metadata"] = self.__file_paths["input_target_metadata"]
         else:
             self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source")
             self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
