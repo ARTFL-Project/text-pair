@@ -2,18 +2,15 @@
 """N-gram generator"""
 
 import configparser
-import orjson
 import os
 from collections import defaultdict
 from glob import glob
-from math import floor
-from typing import List, Dict, Optional, Any, Tuple
+from typing import Any, Dict, List, Tuple
 
-from text_preprocessing import PreProcessor
-from text_preprocessing import Tokens
-from tqdm import tqdm
-
+import orjson
 from mmh3 import hash as hash32
+from text_preprocessing import PreProcessor, Tokens
+from tqdm import tqdm
 
 # https://github.com/tqdm/tqdm/issues/481
 tqdm.monitor_interval = 0

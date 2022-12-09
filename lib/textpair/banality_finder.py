@@ -35,8 +35,8 @@ def banality_auto_detect(
     ngram_doc_path: str,
     store_banalities: bool,
     count: Optional[int],
-    proportion: float = 0.1,
-    threshold: float = 90.0,
+    proportion: float,
+    threshold: float,
 ):
     """Detect banalities automatically based on frequent ngram over-representation"""
     # Count number of ngrams to keep

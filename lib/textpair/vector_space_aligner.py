@@ -565,9 +565,22 @@ class TransformerCorpus(Corpus):
     def __len__(self):
         return self.length
 
-    def create_embeddings(self, text_chunks) -> torch.Tensor:
+    def create_embeddings(self, text_chunks, mean=False) -> torch.Tensor:
         """Create document embedding"""
-        embeddings: torch.Tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)  # type: ignore
+        if mean is False:
+            embeddings: torch.Tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)  # type: ignore
+        else:  # To avoid clipping texts that are larger than the max sequence length of the model, we compute the mean embeddings of individual sentence embeddings
+            current_sentence_id = 0
+            sentence = []
+            embeddings_list: list[np.ndarray] = []
+            for token in text_chunks[0]:
+                sentence_id = token.ext["position"].split()[-2]  # get sentence ID from PhiloLogic parse output
+                if sentence_id != current_sentence_id and current_sentence_id != 0:
+                    embeddings_list.append(self.model.encode([" ".join(sentence)], convert_to_numpy=True))  # type: ignore
+                    sentence = []
+                sentence.append(token)
+            embeddings_list.append(self.model.encode([" ".join(sentence)], convert_to_numpy=True))  # type: ignore
+            embeddings = torch.from_numpy(np.mean(embeddings_list))
         return embeddings
 
 
@@ -697,7 +710,7 @@ def merge_passages(
                         score_array: np.ndarray = jaccard_sim(source_vector, merged_group.target.vector)  # type: ignore
                         new_score: float = score_array[0, 0]
                     elif isinstance(corpus, TransformerCorpus):
-                        source_vector = corpus.create_embeddings([" ".join(source_tokens)])
+                        source_vector = corpus.create_embeddings([" ".join(source_tokens)], mean=True)
                         new_score = util.cos_sim(source_vector, merged_group.target.vector).cpu().numpy()[0, 0]
                     elif isinstance(corpus, Word2VecEmbeddingCorpus):
                         source_vector = corpus.create_embeddings([" ".join(source_tokens)])[0]

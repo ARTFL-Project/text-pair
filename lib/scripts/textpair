@@ -6,16 +6,12 @@ import os
 from textpair import (
     Ngrams,
     create_web_app,
-    web_loader,
     get_config,
     run_vsa,
     banality_auto_detect,
     phrase_matcher,
     parse_files,
 )
-
-
-FIELD_TYPES = web_loader.DEFAULT_FIELD_TYPES
 
 
 def get_count(path: str) -> int:
@@ -108,7 +104,7 @@ def run_alignment(params):
                 --ngram_index={params.matching_params["ngram_index"]}"""
     results_file = f"{params.output_path}/results/alignments.jsonl.lz4"
     if os.path.exists(results_file):
-        os.system(f"rm {results_file}")
+        os.system(f"rm -rf {results_file}")
     if params.debug:
         print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
     os.system(command)
@@ -137,26 +133,28 @@ def run_alignment(params):
                 f'{params.paths["source"]["ngram_output_path"]}/ngrams_in_order',
                 params.matching_params["store_banalities"],
                 count,
+                params.matching_params["most_common_ngram_proportion"],
+                params.matching_params["common_ngram_threshold"],
             )
             if params.matching_params["store_banalities"] is False:
                 print(
-                    f"{banalities_found} pairwise alignments have been identified as formulaic and have been removed from matches."
+                    f"{banalities_found} pairwise alignment(s) have been identified as formulaic and have been removed from matches."
                 )
                 count = update_count(count, banalities_found, params.output_path)
                 print(f"{count} pairwise alignments remaining.")
             else:
                 print(f"{banalities_found} pairwise alignments identified as formulaic.")
     if params.web_app_config["skip_web_app"] is False:
-        FIELD_TYPES.update(params.web_app_config["field_types"])
         create_web_app(
             results_file,
+            params.paths["source"]["metadata_path"],
+            params.paths["target"]["metadata_path"],
             count,
             params.dbname,
-            FIELD_TYPES,
             params.web_app_config["web_application_directory"],
             params.web_app_config["api_server"],
-            params.web_app_config["source_philo_db_link"],
-            params.web_app_config["target_philo_db_link"],
+            params.web_app_config["source_url"],
+            params.web_app_config["target_url"],
             params.matching_params["matching_algorithm"],
         )
 
@@ -174,17 +172,17 @@ def run_vsa_similarity(params) -> None:
     )
     if params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
-        FIELD_TYPES.update(params.web_app_config["field_types"])
         count = get_count(os.path.join(params.output_path, "results/counts.txt"))
         create_web_app(
             output_file,
+            params.paths["source"]["metadata_path"],
+            params.paths["target"]["metadata_path"],
             count,
             params.dbname,
-            FIELD_TYPES,
             params.web_app_config["web_application_directory"],
             params.web_app_config["api_server"],
-            params.web_app_config["source_philo_db_link"],
-            params.web_app_config["target_philo_db_link"],
+            params.web_app_config["source_url"],
+            params.web_app_config["target_url"],
             params.matching_params["matching_algorithm"],
         )
 
@@ -192,32 +190,32 @@ def run_vsa_similarity(params) -> None:
 if __name__ == "__main__":
     params = get_config()
     if params.update_db is True:
-        FIELD_TYPES.update(params.web_app_config["field_types"])
-        count = get_count(os.path.join(params.output_path, "results/counts.txt"))
+        count = get_count(os.path.join(params.output_path, "results/count.txt"))
         create_web_app(
             params.file,
+            params.paths["source"]["metadata_path"],
+            params.paths["target"]["metadata_path"],
             count,
             params.dbname,
-            FIELD_TYPES,
             params.web_app_config["web_application_directory"],
             params.web_app_config["api_server"],
-            params.web_app_config["source_philo_db_link"],
-            params.web_app_config["target_philo_db_link"],
+            params.web_app_config["source_url"],
+            params.web_app_config["target_url"],
             params.matching_params["matching_algorithm"],
             load_only_db=True,
         )
     elif params.only_web_app is True:
-        FIELD_TYPES.update(params.web_app_config["field_types"])
-        count = get_count(os.path.join(params.output_path, "results/counts.txt"))
+        count = get_count(os.path.join(params.output_path, "results/count.txt"))
         create_web_app(
             params.file,
+            params.paths["source"]["metadata_path"],
+            params.paths["target"]["metadata_path"],
             count,
             params.dbname,
-            FIELD_TYPES,
             params.web_app_config["web_application_directory"],
             params.web_app_config["api_server"],
-            params.web_app_config["source_philo_db_link"],
-            params.web_app_config["target_philo_db_link"],
+            params.web_app_config["source_url"],
+            params.web_app_config["target_url"],
             params.matching_params["matching_algorithm"],
         )
     elif params.matching_params["matching_algorithm"] == "sa":

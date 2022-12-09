@@ -20,6 +20,30 @@ except ImportError:
     or run the textpair command with --disable_web_app"
     )
 
+DEFAULT_FIELDS = {
+    "rowid",
+    "source_doc_id",
+    "target_doc_id",
+    "source_passage",
+    "source_start_byte",
+    "source_end_byte",
+    "source_context_before",
+    "source_context_after",
+    "source_start_position",
+    "source_end_position",
+    "source_passage_length",
+    "target_passage",
+    "target_start_byte",
+    "target_end_byte",
+    "target_context_before",
+    "target_context_after",
+    "target_start_position",
+    "target_end_position",
+    "target_passage_length",
+    "source_year",
+    "target_year",
+}
+
 DEFAULT_FIELD_TYPES = {
     "source_year": "INTEGER",
     "source_pub_date": "INTEGER",
@@ -172,15 +196,18 @@ def validate_field_type(fields, field_types, field_names):
     return values
 
 
-def get_metadata_fields(file):
-    fields = set()
-    with open(file, errors="ignore") as input_file:
-        for line in input_file:
-            fields.update(json.loads(line).keys())
+def get_metadata_fields(source_metadata, direction):
+    fields: set[str] = set()
+    with open(source_metadata, encoding="utf8") as input_file:
+        metadata: dict[str, dict[str, str]] = json.load(input_file)
+    for values in metadata.values():
+        fields.update(f"{direction}_{field}" for field in values.keys())
+    for field in FILTERED_FIELDS:
+        fields.discard(field)
     return fields
 
 
-def load_db(file, table_name, field_types, searchable_fields):
+def load_db(file, source_metadata, target_metadata, table_name, searchable_fields, count):
     """Load SQL table"""
     config = configparser.ConfigParser()
     config.read("/etc/text-pair/global_settings.ini")
@@ -193,19 +220,10 @@ def load_db(file, table_name, field_types, searchable_fields):
     cursor2 = database.cursor()
 
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
-    field_names = ["rowid"]
-    extra_fields = set()
-    line_count = 0
-    for result in parse_file(file):
-        extra_fields.update(result.keys())  # TODO: get extra fields from the metadata.json file.
-        line_count += 1
-    field_names.extend([f for f in extra_fields if f not in FILTERED_FIELDS])
-    field_names.extend(["source_passage_length", "target_passage_length"])
-    if "source_year" not in field_names:
-        field_names.append("source_year")
-    if "target_year" not in field_names:
-        field_names.append("target_year")
-    fields_and_types = [f"{f} {field_types.get(f, 'TEXT')}" for f in field_names if f != "rowid"]
+    field_names = DEFAULT_FIELDS
+    field_names.update(get_metadata_fields(source_metadata, "source"))
+    field_names.update(get_metadata_fields(target_metadata, "target"))
+    fields_and_types = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f != "rowid"]
     fields_in_table.extend(fields_and_types)
     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
     cursor.execute(f"CREATE TABLE {table_name} ({', '.join(fields_in_table)})")
@@ -214,13 +232,13 @@ def load_db(file, table_name, field_types, searchable_fields):
     rowid = 0
     alignments = parse_file(file)
     print("Populating main table...")
-    for alignment_fields in tqdm(alignments, total=line_count, leave=False):
+    for alignment_fields in tqdm(alignments, total=count, leave=False):
         rowid += 1
         alignment_fields["rowid"] = rowid
         alignment_fields["passage_id"] = rowid
         alignment_fields["source_passage_length"] = len(TOKENIZER.findall(alignment_fields["source_passage"]))
         alignment_fields["target_passage_length"] = len(TOKENIZER.findall(alignment_fields["target_passage"]))
-        row = validate_field_type(alignment_fields, field_types, field_names)
+        row = validate_field_type(alignment_fields, DEFAULT_FIELD_TYPES, field_names)
         rows.append(row)
         lines += 1
         if lines == 100:
@@ -239,7 +257,7 @@ def load_db(file, table_name, field_types, searchable_fields):
         if field not in field_names:
             continue
         try:
-            field_type = field_types[field].upper()
+            field_type = DEFAULT_FIELD_TYPES[field].upper()
         except KeyError:
             if field == "source_passage_length" or field == "target_passage_length":
                 field_type = "INTEGER"
@@ -272,7 +290,7 @@ def load_db(file, table_name, field_types, searchable_fields):
     lines = 0
     rows = []
     rowid = 0
-    for row in tqdm(cursor, total=line_count, leave=False):
+    for row in tqdm(cursor, total=count, leave=False):
         lines += 1
         rowid += 1
         rows.append((rowid, row[0]))
@@ -307,9 +325,10 @@ def set_up_app(web_config, db_path):
 
 def create_web_app(
     file,
-    count,  # TODO: avoid count in load_db function
+    source_metadata,
+    target_metadata,
+    count,
     table,
-    field_types,
     web_app_dir,
     api_server,
     source_database_link,
@@ -320,7 +339,7 @@ def create_web_app(
     """Main routine"""
     web_config = WebAppConfig(table, api_server, source_database_link, target_database_link, algorithm)
     print("\n### Storing results in database ###", flush=True)
-    fields_in_table = load_db(file, table, field_types, web_config.searchable_fields())
+    fields_in_table = load_db(file, source_metadata, target_metadata, table, web_config.searchable_fields(), count)
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)

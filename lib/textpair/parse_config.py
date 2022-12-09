@@ -29,21 +29,28 @@ class TextPairConfig:
 
     def __parse_config(self):
         """Read config file and store into 4 dicts for each phase of the alignment"""
+        global_config = configparser.ConfigParser()
+        global_config.read("/etc/text-pair/global_settings.ini")
+        self.web_app_config["web_application_directory"] = global_config["WEB_APP"]["web_app_path"]
+        self.web_app_config["api_server"] = global_config["WEB_APP"]["api_server"]
         config = configparser.ConfigParser()
         config.read(self.__cli_args["config"])
+        self.web_app_config["source_url"] = config["TEXT_SOURCES"]["source_url"]
+        self.web_app_config["target_url"] = config["TEXT_SOURCES"]["target_url"]
         if self.only_align is False:
             self.__file_paths = {
-                "source_files": config["FILE_PATHS"]["source_file_path"] or "",
-                "input_source_metadata": config["FILE_PATHS"]["source_metadata"] or "",
-                "target_files": config["FILE_PATHS"]["target_file_path"] or "",
-                "input_target_metadata": config["FILE_PATHS"]["target_metadata"] or "",
+                "source_files": config["TEXT_SOURCES"]["source_file_path"] or "",
+                "input_source_metadata": config["TEXT_SOURCES"]["source_metadata"] or "",
+                "target_files": config["TEXT_SOURCES"]["target_file_path"] or "",
+                "input_target_metadata": config["TEXT_SOURCES"]["target_metadata"] or "",
             }
         else:
             self.__file_paths["source_files"] = os.path.join(self.output_path, "source")
-            if config["FILE_PATHS"]["target_file_path"]:
+            if config["TEXT_SOURCES"]["target_file_path"]:
                 self.__file_paths["target_files"] = os.path.join(self.output_path, "target")
             else:
                 self.__file_paths["target_files"] = ""
+
         for key, value in dict(config["TEXT_PARSING"]).items():
             if key.startswith("parse"):
                 if value.lower() == "yes" or value.lower() == "true":
@@ -102,16 +109,6 @@ class TextPairConfig:
                     case "min_matching_words" | "source_batch" | "target_batch":
                         value = int(value)
                 self.matching_params[key] = value
-        if self.__cli_args["skip_web_app"] is False:
-            self.web_app_config["field_types"] = {}
-            for key, value in dict(config["WEB_APPLICATION"]).items():
-                if key == "api_server" or key == "source_philo_db_link" or key == "target_philo_db_link":
-                    self.web_app_config[key] = value
-                else:
-                    self.web_app_config["field_types"][key] = value
-        global_config = configparser.ConfigParser()
-        global_config.read("/etc/text-pair/global_settings.ini")
-        self.web_app_config["web_application_directory"] = global_config["WEB_APP"]["web_app_path"]
 
     def __set_params(self):
         """Set parameters for alignment"""
