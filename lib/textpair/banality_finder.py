@@ -53,7 +53,11 @@ def banality_auto_detect(
                 pass
 
     banalities_found = 0
-    with (lz4.frame.open(f"{filepath}.banal.lz4", mode="wb") as output_file, lz4.frame.open(filepath) as input_file):
+    with (
+        lz4.frame.open(f"{filepath}.temp.lz4", mode="wb") as output_file,
+        lz4.frame.open(f"{filepath}.banal.lz4", mode="wb") as banal_output_file,
+        lz4.frame.open(filepath) as input_file,
+    ):
         source_ngram_doc = None
         for line in tqdm(input_file, total=count, desc="Running banality auto-detection...", leave=False):
             alignment: dict[str, Any] = orjson.loads(line)
@@ -70,10 +74,14 @@ def banality_auto_detect(
                 banalities_found += 1
                 if store_banalities is True:
                     output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+                else:
+                    banal_output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
             else:
                 alignment["banality"] = False
                 output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
-    os.system(f"rm {filepath} && mv {filepath}.banal.lz4 {filepath}")
+    os.system(f"rm {filepath} && mv {filepath}.temp.lz4 {filepath}")
+    if store_banalities is True:
+        os.system(f"rm {filepath}.banal.lz4")
     return banalities_found
 
 

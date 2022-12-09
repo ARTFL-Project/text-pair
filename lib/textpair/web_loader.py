@@ -88,7 +88,7 @@ CONTROL_CHARS = dict.fromkeys(range(32))
 class WebAppConfig:
     """Web app config class"""
 
-    def __init__(self, db_name, api_server, source_database_link, target_database_link, algorithm):
+    def __init__(self, db_name, api_server, source_database_link, target_database_link, algorithm, store_banalities):
         with open("/var/lib/text-pair/config/appConfig.json", encoding="utf8") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
@@ -97,6 +97,7 @@ class WebAppConfig:
         self.options["matchingAlgorithm"] = algorithm
         self.options["sourcePhiloDBLink"] = source_database_link
         self.options["targetPhiloDBLink"] = target_database_link
+        self.options["banalities_stored"] = store_banalities
 
     def __call__(self):
         return self.options
@@ -335,9 +336,12 @@ def create_web_app(
     target_database_link,
     algorithm,
     load_only_db=False,
+    store_banalities=False,
 ):
     """Main routine"""
-    web_config = WebAppConfig(table, api_server, source_database_link, target_database_link, algorithm)
+    web_config = WebAppConfig(
+        table, api_server, source_database_link, target_database_link, algorithm, store_banalities
+    )
     print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(file, source_metadata, target_metadata, table, web_config.searchable_fields(), count)
     if load_only_db is False:

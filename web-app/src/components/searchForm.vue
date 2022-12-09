@@ -51,7 +51,7 @@
                 </div>
 
                 <!-- Banality filter -->
-                <div id="banality-filter" class="my-dropdown mb-3">
+                <div id="banality-filter" class="my-dropdown mb-3" v-if="banalitiesStored">
                     <button type="button" class="btn btn-outline-secondary rounded-0" @click="toggleDropdown()">
                         {{ banalitySelected }}&nbsp;&nbsp;&#9662;
                     </button>
@@ -187,6 +187,7 @@ export default {
             searchSelected: this.search,
             searchActive: true,
             timeActive: false,
+            banalitiesStored: this.$globalConfig.banalitiesStored,
         };
     },
     created() {
