@@ -113,7 +113,7 @@ class TextPairConfig:
     def __set_params(self):
         """Set parameters for alignment"""
         self.web_app_config["skip_web_app"] = self.__cli_args["skip_web_app"]
-        if self.__cli_args["only_align"] is False:
+        if self.__cli_args["only_align"] is False and self.__cli_args["update_db"] is False:
             if self.text_parsing["parse_source_files"] is True:
                 self.paths["source"]["input_files"] = self.__file_paths["source_files"]
                 self.paths["source"]["input_source_metadata"] = self.__file_paths["input_source_metadata"]
@@ -167,8 +167,8 @@ class TextPairConfig:
                     self.output_path, "target/index/most_common_ngrams.txt"
                 )
         elif self.__cli_args["update_db"] is True:
-            self.paths["source"]["input_source_metadata"] = self.__file_paths["input_source_metadata"]
-            self.paths["target"]["input_source_metadata"] = self.__file_paths["input_target_metadata"]
+            self.paths["source"]["metadata_path"] = self.__file_paths["input_source_metadata"]
+            self.paths["target"]["metadata_path"] = self.__file_paths["input_target_metadata"]
         else:
             self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source")
             self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
