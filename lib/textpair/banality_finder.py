@@ -5,6 +5,7 @@ import os
 from math import floor
 from typing import Any, Optional
 import subprocess
+import re
 
 import lz4.frame
 import orjson
@@ -92,7 +93,7 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
     # TODO: split results into banality and results we keep: the assumption being that alignments
     # that match should be always dismissed.
     with open(banality_phrases_path, encoding="utf8") as input_file:
-        banality_phrases = {phrase.strip().lower() for phrase in input_file}
+        banality_phrases = {phrase.strip().lower() for phrase in input_file if re.search(r"\w", phrase)}
     passages_filtered = 0
     filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages")
     with (
@@ -104,8 +105,13 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
             alignment: dict[str, Any] = orjson.loads(line)
             banality = False
             for phrase in banality_phrases:
-                if phrase in alignment["source_passage"].lower():
-                    passage = f"{alignment['source_passage']}\n"
+                if (
+                    phrase in alignment["source_passage"].lower()
+                    and len(phrase)
+                    > len(alignment["source_passage"].lower())
+                    / 2  # make sure we don't filter out matches which contain more than just the matching phrase
+                ):
+                    passage = f"{phrase}\nFOUND IN:\n{alignment['source_passage']}\n\n"
                     filtered_passages.write(passage.encode("utf8"))
                     passages_filtered += 1
                     banality = True
