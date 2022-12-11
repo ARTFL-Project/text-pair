@@ -55,7 +55,9 @@ def banality_auto_detect(
     banalities_found = 0
     with (
         lz4.frame.open(f"{filepath}.temp.lz4", mode="wb") as output_file,
-        lz4.frame.open(f"{filepath}.banal.lz4", mode="wb") as banal_output_file,
+        lz4.frame.open(
+            f"{filepath.replace('alignments.jsonl', 'banal_alignments.jsonl')}", mode="wb"
+        ) as banal_output_file,
         lz4.frame.open(filepath) as input_file,
     ):
         source_ngram_doc = None
@@ -94,18 +96,22 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
     passages_filtered = 0
     filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages")
     with (
-        lz4.frame.open(filtered_file_name) as filtered_passages,
+        lz4.frame.open(filtered_file_name, mode="wb") as filtered_passages,
         lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
         lz4.frame.open(filepath) as input_file,
     ):
         for line in tqdm(input_file, total=count, desc="Running phrase-based banality detection...", leave=True):
             alignment: dict[str, Any] = orjson.loads(line)
+            banality = False
             for phrase in banality_phrases:
                 if phrase in alignment["source_passage"].lower():
-                    filtered_passages.write(alignment["source_passage"])
+                    passage = f"{alignment['source_passage']}\n"
+                    filtered_passages.write(passage.encode("utf8"))
                     passages_filtered += 1
+                    banality = True
                     break
-            output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+            if banality is False:
+                output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
     os.system(f"rm {filepath} && mv {filepath}.keep.lz4 {filepath}")
     return passages_filtered
 
@@ -121,5 +127,5 @@ if __name__ == "__main__":
     #     count = int(input_file.read().strip())
     # total = banality_auto_detect(filepath, ngrams_file, ngram_doc_path, count, percentage=percentage)
     phrase_path = sys.argv[2]
-    total = phrase_matcher(filepath, phrase_path, 71228098)
+    total = phrase_matcher(filepath, phrase_path, int(sys.argv[3]))
     print(total, "banalities found.")
