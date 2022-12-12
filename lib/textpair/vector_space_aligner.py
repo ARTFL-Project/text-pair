@@ -898,7 +898,7 @@ def simple_similarity(
     target_config: dict[str, Any],
     min_similarity: float,
     target_texts: Optional[Iterable[Tokens]] = None,
-) -> tuple[TfIdfCorpus, Matches]:
+) -> tuple[TfIdfCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of TF-IDF vectors"""
     source_corpus: TfIdfCorpus = TfIdfCorpus(
         source_texts,
@@ -923,7 +923,7 @@ def simple_similarity(
     else:
         matching_docs = source_corpus.inner_compare(min_similarity)
         target_corpus = source_corpus
-    return source_corpus, matching_docs
+    return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
 
 
 def transformer_similarity(
@@ -934,7 +934,7 @@ def transformer_similarity(
     source_batch: int,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
-) -> tuple[TransformerCorpus, Matches]:
+) -> tuple[TransformerCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of sentence embeddings from transformer models"""
     source_corpus: TransformerCorpus = TransformerCorpus(
         source_texts,
@@ -961,7 +961,7 @@ def transformer_similarity(
     else:
         matching_docs = source_corpus.inner_compare(min_similarity)
         target_corpus = source_corpus
-    return source_corpus, matching_docs
+    return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
 
 
 def word2vec_embed_similarity(
@@ -972,7 +972,7 @@ def word2vec_embed_similarity(
     source_batch: int,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
-) -> tuple[Word2VecEmbeddingCorpus, Matches]:
+) -> tuple[Word2VecEmbeddingCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of sentence embeddings using mean w2v vectors"""
     source_corpus: Word2VecEmbeddingCorpus = Word2VecEmbeddingCorpus(
         source_texts,
@@ -998,7 +998,7 @@ def word2vec_embed_similarity(
     else:
         matching_docs = source_corpus.inner_compare(min_similarity)
         target_corpus = source_corpus
-    return source_corpus, matching_docs
+    return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
 
 
 def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, Any]):
@@ -1026,7 +1026,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
         (file.path for file in os.scandir(target_path)), keep_all=True, progress=False
     )
     if config["source"]["vectorization"] == "tfidf":
-        source_corpus, matches = simple_similarity(
+        source_corpus, matches, source_metadata, target_metadata = simple_similarity(
             source_texts,
             config["source"],
             config["target"],
@@ -1034,7 +1034,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             target_texts=target_texts,
         )
     elif config["source"]["vectorization"] == "transformer":
-        source_corpus, matches = transformer_similarity(
+        source_corpus, matches, source_metadata, target_metadata = transformer_similarity(
             source_texts,
             config["source"],
             config["target"],
@@ -1044,7 +1044,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             target_batch=config["target_batch"],
         )
     else:
-        source_corpus, matches = word2vec_embed_similarity(
+        source_corpus, matches, source_metadata, target_metadata = word2vec_embed_similarity(
             source_texts,
             config["source"],
             config["target"],
@@ -1068,7 +1068,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
 
-    with lz4.frame.open("output/results/alignments.jsonl", "w", compression_level=3) as output:
+    with lz4.frame.open("output/results/alignments.jsonl.lz4", mode="wb", compression_level=3) as output:
         for match in tqdm(matches, total=len(matches), leave=False):
             source_context_before = get_text(
                 match.source.start_byte - 300, match.source.start_byte, match.source.metadata["filename"]
@@ -1127,6 +1127,15 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
                     **{f"target_{field}": value for field, value in match.target.metadata.items()},
                 }
             )
-            output.write(f"{result_object}\n")
-    with open("output/results/counts.txt", encoding="utf8") as output_file:
+            output.write(f"{result_object}\n".encode("utf8"))  # type: ignore
+    with open("output/results/count.txt", "w", encoding="utf8") as output_file:
         output_file.write(f"{len(matches)}")
+
+    # Generating metadata files to mimic output of generate_ngrams
+    os.makedirs("output/source/metadata/", exist_ok=True)
+    with open("output/source/metadata/metadata.json", "w", encoding="utf8") as output_file:
+        output_file.write(json.dumps(dict(enumerate(source_metadata))))
+
+    os.makedirs("output/target/metadata/", exist_ok=True)
+    with open("output/target/metadata/metadata.json", "w", encoding="utf8") as output_file:
+        output_file.write(json.dumps(dict(enumerate(target_metadata))))

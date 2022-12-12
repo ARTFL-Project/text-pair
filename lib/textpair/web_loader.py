@@ -208,7 +208,7 @@ def get_metadata_fields(source_metadata, direction):
     return fields
 
 
-def load_db(file, source_metadata, target_metadata, table_name, searchable_fields, count):
+def load_db(file, source_metadata, target_metadata, table_name, searchable_fields, count, algorithm):
     """Load SQL table"""
     config = configparser.ConfigParser()
     config.read("/etc/text-pair/global_settings.ini")
@@ -222,6 +222,8 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
 
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = DEFAULT_FIELDS
+    if algorithm == "vsa":
+        field_names.add("similarity")
     field_names.update(get_metadata_fields(source_metadata, "source"))
     field_names.update(get_metadata_fields(target_metadata, "target"))
     fields_and_types = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f != "rowid"]
@@ -343,7 +345,9 @@ def create_web_app(
         table, api_server, source_database_link, target_database_link, algorithm, store_banalities
     )
     print("\n### Storing results in database ###", flush=True)
-    fields_in_table = load_db(file, source_metadata, target_metadata, table, web_config.searchable_fields(), count)
+    fields_in_table = load_db(
+        file, source_metadata, target_metadata, table, web_config.searchable_fields(), count, algorithm
+    )
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)
