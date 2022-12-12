@@ -73,10 +73,10 @@ class TextPairConfig:
                         value = True
                     else:
                         value = False
-                case "source_text_object_level":
-                    self.preprocessing_params["source"]["text_object_level"] = value
-                case "target_text_object_level":
-                    self.preprocessing_params["target"]["text_object_level"] = value
+                case "source_text_object_type":
+                    self.preprocessing_params["source"]["text_object_type"] = value
+                case "target_text_object_type":
+                    self.preprocessing_params["target"]["text_object_type"] = value
                 case "ngram" | "gap" | "minimum_word_length" | "n_chunk" | "min_text_object_length":
                     self.preprocessing_params["source"][key] = int(value)
                     self.preprocessing_params["target"][key] = int(value)

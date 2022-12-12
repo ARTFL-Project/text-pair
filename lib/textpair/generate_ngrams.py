@@ -22,7 +22,7 @@ class Ngrams:
 
     def __init__(
         self,
-        text_object_level="doc",
+        text_object_type="doc",
         ngram=3,
         gap=0,
         stemmer=True,
@@ -52,7 +52,7 @@ class Ngrams:
             "minimum_word_length": minimum_word_length,
             "lemmatizer": lemmatizer,
             "stopwords": stopwords,  # TODO: generate error if file not found
-            "text_object_level": text_object_level,
+            "text_object_type": text_object_type,
             "pos_to_keep": pos_to_keep,
             "ascii": ascii,
         }
@@ -113,7 +113,7 @@ class Ngrams:
             pos_to_keep=self.config["pos_to_keep"],
             ngrams=self.config["ngram"],
             ngram_gap=self.config["gap"],
-            text_object_type=self.config["text_object_level"],
+            text_object_type=self.config["text_object_type"],
             min_word_length=self.config["minimum_word_length"],
             ascii=self.config["ascii"],
             post_processing_function=self.text_to_ngram,
@@ -150,7 +150,7 @@ class Ngrams:
             if not isinstance(v, str):
                 text_object.metadata[k] = str(v)
         text_object_id = "_".join(
-            text_object.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_level"]]]
+            text_object.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_type"]]]
         )
         metadata[text_object_id] = text_object.metadata
         text_index = defaultdict(list)

@@ -1,4 +1,3 @@
-#! /usr/bin/env python3
 """Passage similarity detection"""
 
 from __future__ import annotations
@@ -201,7 +200,7 @@ class Corpus(ABC):
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
-        text_object_level_split: str = "doc",
+        text_object_type_split: str = "doc",
         direction="source",
         batch_size=1,
     ):
@@ -210,7 +209,7 @@ class Corpus(ABC):
         self.min_text_obj_length: int = min_text_obj_length
         self.n_chunk: int = n_chunk
         self.metadata: list[dict[str, Any]] = []
-        self.text_object_level_split = text_object_level_split
+        self.text_object_type_split = text_object_type_split
         self.text_object_definition: str = text_object_definition
         self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/output/")
         self.direction: str = direction
@@ -249,7 +248,7 @@ class Corpus(ABC):
             full_doc.extend(text)
             text.purge()
             text_level_id: str = " ".join(
-                text.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.text_object_level_split]]
+                text.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.text_object_type_split]]
             )
             if text_level_id != current_text_level_id:
                 chunk_group_length: int = sum([len(t) for t in chunk_group])
@@ -427,7 +426,7 @@ class TfIdfCorpus(Corpus):
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
-        text_object_level_split: str = "doc",
+        text_object_type_split: str = "doc",
         vectorizer: Optional[TfidfVectorizer] = None,
         min_freq: int | float = 1,
         max_freq: float = 1.0,
@@ -439,7 +438,7 @@ class TfIdfCorpus(Corpus):
             text_object_definition=text_object_definition,
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
-            text_object_level_split=text_object_level_split,
+            text_object_type_split=text_object_type_split,
             direction=direction,
         )
         if vectorizer is None:
@@ -482,7 +481,7 @@ class Word2VecEmbeddingCorpus(Corpus):
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
-        text_object_level_split: str = "doc",
+        text_object_type_split: str = "doc",
         direction: str = "source",
     ):
         super().__init__(
@@ -491,7 +490,7 @@ class Word2VecEmbeddingCorpus(Corpus):
             text_object_definition=text_object_definition,
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
-            text_object_level_split=text_object_level_split,
+            text_object_type_split=text_object_type_split,
             direction=direction,
             batch_size=batch_size,
         )
@@ -530,7 +529,7 @@ class TransformerCorpus(Corpus):
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
-        text_object_level_split: str = "sent",
+        text_object_type_split: str = "sent",
         model=None,
         direction="source",
     ):
@@ -541,7 +540,7 @@ class TransformerCorpus(Corpus):
             text_object_definition=text_object_definition,
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
-            text_object_level_split=text_object_level_split,
+            text_object_type_split=text_object_type_split,
             direction=direction,
             batch_size=batch_size,
         )
@@ -558,6 +557,7 @@ class TransformerCorpus(Corpus):
         )
         self.length = len(self.docs)
         self.chunk_size = floor((self.length + self.batch_size - 1) / self.batch_size)
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def __getitem__(self, item: int) -> list[str]:
         return self.docs[item]  # type: ignore
@@ -573,14 +573,18 @@ class TransformerCorpus(Corpus):
             current_sentence_id = 0
             sentence = []
             embeddings_list: list[np.ndarray] = []
-            for token in text_chunks[0]:
-                sentence_id = token.ext["position"].split()[-2]  # get sentence ID from PhiloLogic parse output
+            for token in text_chunks:
+                sentence_id = token.ext["position"].split()[5]  # get sentence ID from PhiloLogic parse output
                 if sentence_id != current_sentence_id and current_sentence_id != 0:
-                    embeddings_list.append(self.model.encode([" ".join(sentence)], convert_to_numpy=True))  # type: ignore
+                    embedding = self.model.encode([" ".join(sentence)], convert_to_numpy=True)
+                    embeddings_list.append(embedding)  # type: ignore
                     sentence = []
                 sentence.append(token)
+                current_sentence_id = sentence_id
             embeddings_list.append(self.model.encode([" ".join(sentence)], convert_to_numpy=True))  # type: ignore
-            embeddings = torch.from_numpy(np.mean(embeddings_list))
+            embeddings = torch.from_numpy(np.mean(embeddings_list, axis=0))
+            if self.device.type == "cuda":
+                embeddings = embeddings.to(self.device)
         return embeddings
 
 
@@ -710,7 +714,7 @@ def merge_passages(
                         score_array: np.ndarray = jaccard_sim(source_vector, merged_group.target.vector)  # type: ignore
                         new_score: float = score_array[0, 0]
                     elif isinstance(corpus, TransformerCorpus):
-                        source_vector = corpus.create_embeddings([" ".join(source_tokens)], mean=True)
+                        source_vector = corpus.create_embeddings(source_tokens, mean=True)
                         new_score = util.cos_sim(source_vector, merged_group.target.vector).cpu().numpy()[0, 0]
                     elif isinstance(corpus, Word2VecEmbeddingCorpus):
                         source_vector = corpus.create_embeddings([" ".join(source_tokens)])[0]
@@ -735,7 +739,7 @@ def merge_passages(
                         score_array: np.ndarray = jaccard_sim(merged_group.source.vector, target_vector)  # type: ignore
                         new_score: float = score_array[0, 0]
                     elif isinstance(corpus, TransformerCorpus):
-                        target_vector = corpus.create_embeddings([" ".join(target_tokens)])
+                        target_vector = corpus.create_embeddings(target_tokens, mean=True)
                         new_score = util.cos_sim(target_vector, merged_group.source.vector).cpu().numpy()[0, 0]
                     elif isinstance(corpus, Word2VecEmbeddingCorpus):
                         target_vector = corpus.create_embeddings([" ".join(target_tokens)])[0]
@@ -901,7 +905,7 @@ def simple_similarity(
         text_object_definition=source_config["text_object_definition"],
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
-        text_object_level_split=source_config["text_object_level_split"],
+        text_object_type_split=source_config["text_object_type_split"],
         min_freq=source_config["min_freq"],
         max_freq=source_config["max_freq"],
     )
@@ -912,7 +916,7 @@ def simple_similarity(
             vectorizer=source_corpus.vectorizer,
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
-            text_object_level_split=target_config["text_object_level_split"],
+            text_object_type_split=target_config["text_object_type_split"],
         )
 
         matching_docs = source_corpus.outer_compare(target_corpus, min_similarity)
@@ -939,7 +943,7 @@ def transformer_similarity(
         text_object_definition=source_config["text_object_definition"],
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
-        text_object_level_split=source_config["text_object_level_split"],
+        text_object_type_split=source_config["text_object_type_split"],
     )
     if target_texts is not None:
         target_corpus: TransformerCorpus = TransformerCorpus(
@@ -950,7 +954,7 @@ def transformer_similarity(
             text_object_definition=target_config["text_object_definition"],
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
-            text_object_level_split=target_config["text_object_level_split"],
+            text_object_type_split=target_config["text_object_type_split"],
             model=source_corpus.model,
         )
         matching_docs = source_corpus.outer_compare(target_corpus, min_similarity)
@@ -977,7 +981,7 @@ def word2vec_embed_similarity(
         text_object_definition=source_config["text_object_definition"],
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
-        text_object_level_split=source_config["text_object_level_split"],
+        text_object_type_split=source_config["text_object_type_split"],
     )
     if target_texts is not None:
         target_corpus: Word2VecEmbeddingCorpus = Word2VecEmbeddingCorpus(
@@ -988,7 +992,7 @@ def word2vec_embed_similarity(
             text_object_definition=target_config["text_object_definition"],
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
-            text_object_level_split=target_config["text_object_level_split"],
+            text_object_type_split=target_config["text_object_type_split"],
         )
         matching_docs = source_corpus.outer_compare(target_corpus, min_similarity)
     else:
@@ -1008,9 +1012,9 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
         print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
         exit()
     if config["source"]["text_object_definition"] == "n_token":
-        config["source"]["text_object_type"] = config["source"]["text_object_level_split"]
+        config["source"]["text_object_type"] = config["source"]["text_object_type_split"]
     if config["target"]["text_object_definition"] == "n_token":
-        config["target"]["text_object_type"] = config["target"]["text_object_level_split"]
+        config["target"]["text_object_type"] = config["target"]["text_object_type_split"]
     config["source"]["strip_tags"] = True  # this is useful for post-processing passages where we have tags included.
     config["target"]["strip_tags"] = True
     source_preproc: PreProcessor = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
@@ -1021,7 +1025,6 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
     target_texts: Iterable[Tokens] = target_preproc.process_texts(
         (file.path for file in os.scandir(target_path)), keep_all=True, progress=False
     )
-
     if config["source"]["vectorization"] == "tfidf":
         source_corpus, matches = simple_similarity(
             source_texts,
