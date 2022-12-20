@@ -197,9 +197,9 @@ def validate_field_type(fields, field_types, field_names):
     return values
 
 
-def get_metadata_fields(source_metadata, direction):
+def get_metadata_fields(metadata_file, direction):
     fields: set[str] = set()
-    with open(source_metadata, encoding="utf8") as input_file:
+    with open(metadata_file, encoding="utf8") as input_file:
         metadata: dict[str, dict[str, str]] = json.load(input_file)
     for values in metadata.values():
         fields.update(f"{direction}_{field}" for field in values.keys())
@@ -225,7 +225,8 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     if algorithm == "vsa":
         field_names.add("similarity")
     field_names.update(get_metadata_fields(source_metadata, "source"))
-    field_names.update(get_metadata_fields(target_metadata, "target"))
+    if target_metadata:
+        field_names.update(get_metadata_fields(target_metadata, "target"))
     fields_and_types = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f != "rowid"]
     fields_in_table.extend(fields_and_types)
     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")

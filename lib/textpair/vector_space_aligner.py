@@ -573,6 +573,7 @@ class TransformerCorpus(Corpus):
             current_sentence_id = 0
             sentence = []
             embeddings_list: list[np.ndarray] = []
+            current_chunk = 0
             for token in text_chunks:
                 sentence_id = token.ext["position"].split()[5]  # get sentence ID from PhiloLogic parse output
                 if sentence_id != current_sentence_id and current_sentence_id != 0:
