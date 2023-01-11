@@ -227,6 +227,8 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     field_names.update(get_metadata_fields(source_metadata, "source"))
     if target_metadata:
         field_names.update(get_metadata_fields(target_metadata, "target"))
+    else:
+        field_names.update(get_metadata_fields(source_metadata, "target"))  # add the fields in source as target fields
     fields_and_types = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f != "rowid"]
     fields_in_table.extend(fields_and_types)
     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
