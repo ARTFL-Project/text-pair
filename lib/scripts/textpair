@@ -143,7 +143,9 @@ def run_alignment(params):
                 count = update_count(count, banalities_found, params.output_path)
                 print(f"{count} pairwise alignments remaining.")
             else:
-                print(f"{banalities_found} pairwise alignments identified as formulaic.")
+                print(
+                    f"{banalities_found} pairwise alignments identified as formulaic and will be flagged as banalities in the database."
+                )
     if params.web_app_config["skip_web_app"] is False:
         create_web_app(
             results_file,

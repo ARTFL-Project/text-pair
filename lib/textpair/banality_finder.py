@@ -105,12 +105,7 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
             alignment: dict[str, Any] = orjson.loads(line)
             banality = False
             for phrase in banality_phrases:
-                if (
-                    phrase in alignment["source_passage"].lower()
-                    and len(phrase)
-                    > len(alignment["source_passage"].lower())
-                    / 2  # make sure we don't filter out matches which contain more than just the matching phrase
-                ):
+                if phrase in alignment["source_passage"].lower():
                     passage = f"{phrase}\nFOUND IN:\n{alignment['source_passage']}\n\n"
                     filtered_passages.write(passage.encode("utf8"))
                     passages_filtered += 1

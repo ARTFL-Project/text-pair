@@ -67,7 +67,6 @@ FILTERED_FIELDS = {
     "source_parent",
     "source_prev",
     "source_next",
-    "source_parent",
     "source_philo_name",
     "source_philo_type",
     "source_word_count",
@@ -75,7 +74,6 @@ FILTERED_FIELDS = {
     "target_parent",
     "target_prev",
     "target_next",
-    "target_parent",
     "target_philo_name",
     "target_philo_type",
 }
@@ -97,7 +95,7 @@ class WebAppConfig:
         self.options["matchingAlgorithm"] = algorithm
         self.options["sourcePhiloDBLink"] = source_database_link
         self.options["targetPhiloDBLink"] = target_database_link
-        self.options["banalities_stored"] = store_banalities
+        self.options["banalitiesStored"] = store_banalities
 
     def __call__(self):
         return self.options
@@ -208,7 +206,7 @@ def get_metadata_fields(metadata_file, direction):
     return fields
 
 
-def load_db(file, source_metadata, target_metadata, table_name, searchable_fields, count, algorithm):
+def load_db(file, source_metadata, target_metadata, table_name, searchable_fields, count, algorithm, banalities_stored):
     """Load SQL table"""
     config = configparser.ConfigParser()
     config.read("/etc/text-pair/global_settings.ini")
@@ -222,6 +220,8 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
 
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = DEFAULT_FIELDS
+    if banalities_stored is True:
+        field_names.add("banality")
     if algorithm == "vsa":
         field_names.add("similarity")
     field_names.update(get_metadata_fields(source_metadata, "source"))
@@ -349,7 +349,14 @@ def create_web_app(
     )
     print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(
-        file, source_metadata, target_metadata, table, web_config.searchable_fields(), count, algorithm
+        file,
+        source_metadata,
+        target_metadata,
+        table,
+        web_config.searchable_fields(),
+        count,
+        algorithm,
+        web_config.banalitiesStored,
     )
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)

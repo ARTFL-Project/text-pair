@@ -572,18 +572,17 @@ class TransformerCorpus(Corpus):
         else:  # To avoid clipping texts that are larger than the max sequence length of the model, we compute the mean embeddings of individual sentence embeddings
             current_sentence_id = 0
             sentence = []
-            embeddings_list: list[np.ndarray] = []
-            current_chunk = 0
+            embeddings_list: list[torch.Tensor] = []
             for token in text_chunks:
                 sentence_id = token.ext["position"].split()[5]  # get sentence ID from PhiloLogic parse output
                 if sentence_id != current_sentence_id and current_sentence_id != 0:
-                    embedding = self.model.encode([" ".join(sentence)], convert_to_numpy=True)
+                    embedding = self.model.encode([" ".join(sentence)], convert_to_tensor=True)
                     embeddings_list.append(embedding)  # type: ignore
                     sentence = []
                 sentence.append(token)
                 current_sentence_id = sentence_id
-            embeddings_list.append(self.model.encode([" ".join(sentence)], convert_to_numpy=True))  # type: ignore
-            embeddings = torch.from_numpy(np.mean(embeddings_list, axis=0))
+            embeddings_list.append(self.model.encode([" ".join(sentence)], convert_to_tensor=True))
+            embeddings = torch.mean(torch.stack(embeddings_list), axis=0)  # type: ignore
             if self.device.type == "cuda":
                 embeddings = embeddings.to(self.device)
         return embeddings
