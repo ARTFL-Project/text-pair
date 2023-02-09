@@ -2,14 +2,14 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt update && apt install -y postgresql postgresql-contrib curl git locales libpq-dev python3-pip sudo
+RUN apt update && apt install -y postgresql postgresql-contrib curl git locales libpq-dev python3-pip sudo golang
 
-RUN curl -sL https://deb.nodesource.com/setup_14.x | sudo -E bash && apt-get install -y nodejs
+RUN curl -sL https://deb.nodesource.com/setup_16.x | sudo -E bash && apt-get install -y nodejs
 
 RUN apt-get clean && rm -rf /var/lib/apt
 
-RUN mkdir textpair && curl -L  https://github.com/ARTFL-Project/text-pair/archive/v2.0-beta.7.tar.gz | tar xz -C textpair --strip-components 1 &&\
-    cd textpair && sh install.sh
+RUN mkdir textpair && curl -L  https://github.com/ARTFL-Project/text-pair/archive/v2.0-beta.10.tar.gz | tar xz -C textpair --strip-components 1 &&\
+    cd textpair && sh install.sh && mkdir -p /var/www/html/text-pair
 
 RUN echo "[WEB_APP]\nweb_app_path = /var/www/html/text-pair\n[DATABASE]\ndatabase_name = textpair\ndatabase_user = textpair\ndatabase_password = textpair" > /etc/text-pair/global_settings.ini
 
