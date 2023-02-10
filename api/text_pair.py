@@ -5,7 +5,6 @@ import configparser
 import os
 import re
 from collections import Counter, OrderedDict
-from typing import Dict
 from pathlib import Path
 import time
 
@@ -208,6 +207,7 @@ def query_builder(query_args, other_args, field_types):
 
 
 @app.get("/")
+@app.get("/text-pair")
 def list_dir():
     """List Text-PAIR databases"""
     textpair_dbs = sorted(Path(APP_PATH).iterdir(), key=os.path.getmtime, reverse=True)
@@ -221,6 +221,7 @@ def list_dir():
 
 
 @app.get("/{db_path}/css/{resource}")
+@app.get("/text-pair/{db_path}/css/{resource}")
 def get_css_resource(db_path: str, resource: str):
     """Retrieve CSS resources"""
     with open(os.path.join(APP_PATH, db_path, "dist/css", resource)) as resource_file:
@@ -229,6 +230,7 @@ def get_css_resource(db_path: str, resource: str):
 
 
 @app.get("/{db_path}/js/{resource}")
+@app.get("/text-pair/{db_path}/js/{resource}")
 def get_js_resource(db_path: str, resource: str):
     """Retrieve JS resources"""
     with open(os.path.join(APP_PATH, db_path, "dist/js", resource)) as resource_file:
@@ -237,8 +239,11 @@ def get_js_resource(db_path: str, resource: str):
 
 
 @app.get("/{db_path}/search")
+@app.get("/text-pair/{db_path}/search")
 @app.get("/{db_path}/time")
+@app.get("/text-pair/{db_path}/time")
 @app.get("/{db_path}")
+@app.get("/text-pair/{db_path}")
 def index(db_path: str):
     """Return index.html which lists available POOLs"""
     with open(os.path.join(APP_PATH, db_path, "dist/index.html")) as html:
@@ -247,6 +252,7 @@ def index(db_path: str):
 
 
 @app.get("/search_alignments/")
+@app.get("/text-pair-api/search_alignments/")
 def search_alignments(request: Request):
     """Search alignments according to URL params"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
@@ -303,6 +309,7 @@ def search_alignments(request: Request):
 
 
 @app.get("/{db_path}/retrieve_all_docs/")
+@app.get("/text-pair/{db_path}/retrieve_all_docs/")
 def retrieve_all(request: Request):
     """Retrieve all docs and only return metadata"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
@@ -352,6 +359,7 @@ def retrieve_all(request: Request):
 
 
 @app.get("/retrieve_all_passage_pairs/")
+@app.get("/text-pair-api/retrieve_all_passage_pairs/")
 def retrieve_all_passage_pairs(request: Request):
     """Retrieve all passage pair metadata matching a particular query
     NOTE that this does not retrieve passages themselves"""
@@ -380,6 +388,7 @@ def retrieve_all_passage_pairs(request: Request):
 
 
 @app.get("/count_results/")
+@app.get("/text-pair-api/count_results/")
 def count_results(request: Request):
     """Search alignments according to URL params"""
     sql_fields, sql_values, other_args, _ = parse_args(request)
@@ -399,6 +408,7 @@ def count_results(request: Request):
 
 
 @app.post("/generate_time_series/")
+@app.post("/text-pair-api/generate_time_series/")
 def generate_time_series(request: Request):
     """Generate a time series from search results"""
     # TODO: don't assume year is the field to use
@@ -437,6 +447,7 @@ def generate_time_series(request: Request):
 
 
 @app.post("/facets/")
+@app.post("/text-pair-api/facets/")
 def facets(request: Request):
     """Retrieve facet result"""
     sql_fields, sql_values, other_args, _ = parse_args(request)
@@ -486,6 +497,7 @@ def facets(request: Request):
 
 
 @app.get("/metadata/")
+@app.get("/text-pair-api/metadata/")
 def metadata(request: Request):
     """Retrieve all searchable metadata fields"""
     _, _, _, metadata_fields = parse_args(request)
