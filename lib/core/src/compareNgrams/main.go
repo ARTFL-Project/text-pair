@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -120,7 +121,7 @@ func (p PairList) Less(i, j int) bool { return p[i].Value > p[j].Value }
 
 // Coutains the local alignment count as well as possible duplicates
 type AlignmentOutput struct {
-	duplicates []string
+	duplicates [][]string
 	count      int
 }
 
@@ -137,7 +138,6 @@ func main() {
 	sourceFiles, targetFiles, sourceMetadata, targetMetadata, config, ngramIndex := parseFlags()
 	saveAlignmentConfig(config)
 	_ = alignPassages(sourceFiles, targetFiles, sourceMetadata, targetMetadata, config, ngramIndex)
-	// mergeAlignments(config, counts)
 }
 
 func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map[string]map[string]string, *matchingParams, map[int32]string) {
@@ -408,7 +408,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 			percentSteps := buildPercentMap(len(sourceFileIndexes))
 			fmt.Printf("Comparing files... 0%%")
 			for pos, sourceFile := range sourceFileIndexes {
-				duplicates := []string{}
+				duplicates := [][]string{}
 				if config.debug {
 					if config.sourceBatch == 1 {
 						fmt.Printf("Comparing source file %s to all...\n", sourceFile.DocID)
@@ -468,7 +468,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					start = end
 					end += increment
 					outputFileName := filepath.Join(resultChunksPath, fmt.Sprintf("%s-%s-%s", sourceFile.DocID, splitTargets[0].DocID, splitTargets[len(splitTargets)-1].DocID))
-					localAlignmentOutput := AlignmentOutput{[]string{}, 0}
+					localAlignmentOutput := AlignmentOutput{[][]string{}, 0}
 					go func(splitTargets []docIndex, sourceAgainstSource bool, sourceMetadata map[string]map[string]string, targetMetadata map[string]map[string]string, config *matchingParams, outputFileName string, localAlignmentOutput AlignmentOutput) {
 						defer wait.Done()
 						localAlignments := []alignmentsPerDoc{}
@@ -486,7 +486,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							} else if float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100 > config.duplicateThreshold {
 								sourceInfo := fmt.Sprintf("%s\t%s\t%s\t%s\t%s-%s", sourceMetadata[sourceFile.DocID]["title"], sourceMetadata[sourceFile.DocID]["author"], sourceMetadata[sourceFile.DocID]["filename"], sourceMetadata[sourceFile.DocID]["philo_id"], sourceMetadata[sourceFile.DocID]["start_byte"], sourceMetadata[sourceFile.DocID]["end_byte"])
 								targetInfo := fmt.Sprintf("%s\t%s\t%s\t%s\t%s-%s", targetMetadata[targetFile.DocID]["title"], targetMetadata[targetFile.DocID]["author"], targetMetadata[targetFile.DocID]["filename"], targetMetadata[targetFile.DocID]["philo_id"], targetMetadata[targetFile.DocID]["start_byte"], targetMetadata[targetFile.DocID]["end_byte"])
-								localAlignmentOutput.duplicates = append(localAlignmentOutput.duplicates, fmt.Sprintf("%s\t%s\t%f", sourceInfo, targetInfo, float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100))
+								localAlignmentOutput.duplicates = append(localAlignmentOutput.duplicates, []string{sourceInfo, targetInfo, fmt.Sprintf("%f", float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100)})
 								localAlignments = append(localAlignments, alignmentsPerDoc{&[]Alignment{}, targetFile.DocID})
 								continue
 							}
@@ -529,8 +529,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					counts += localAlignmentOutput.count
 					duplicates = append(duplicates, localAlignmentOutput.duplicates...)
 				}
-				duplicateFilesOutput.WriteString(strings.Join(duplicates[:], "\n"))
-				duplicateFilesOutput.Sync()
+				duplicateFilesOutput.WriteAll(duplicates)
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
 			os.Stdout.Sync()
@@ -548,8 +547,6 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 			}
 		}
 	}
-	duplicateFilesOutput.Sync()
-	duplicateFilesOutput.Close()
 	fmt.Printf("%d pairwise alignments found...\n", counts)
 	countsOutput, _ := os.Create(filepath.Join(config.outputPath, "count.txt"))
 	countsOutput.WriteString(strconv.Itoa(counts))
@@ -626,11 +623,14 @@ func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDoc
 	return debugOutput
 }
 
-func creatDuplicateFilesOutputFile(config *matchingParams) *os.File {
-	duplicateFiles, err := os.Create(filepath.Join(config.outputPath, "duplicate_files.tsv"))
+func creatDuplicateFilesOutputFile(config *matchingParams) *csv.Writer {
+	duplicateFiles, err := os.Create(filepath.Join(config.outputPath, "duplicate_files.csv"))
 	checkErr(err, "creatDuplicateFilesOutputFile")
-	duplicateFiles.WriteString("source_title\tsource_author\tsource_filename\tsource_philo_id\tsource_byte_offsets\ttarget_title\ttarget_author\ttarget_filename\target_philo_id\ttarget_byte_offsets\toverlap\n")
-	return duplicateFiles
+	defer duplicateFiles.Close()
+	w := csv.NewWriter(duplicateFiles)
+	defer w.Flush()
+	w.Write([]string{"source_title", "source_author", "source_filename", "source_philo_id", "source_byte_offsets", "target_title", "target_author", "target_filename", "target_philo_id", "target_byte_offsets", "overlap"})
+	return w
 }
 
 func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMatch, config *matchingParams, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
@@ -638,6 +638,7 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 	m := &matchValues{}
 	m.lastSourcePosition = 0
 	m.inAlignment = false
+
 	for matchIndex, currentAnchor := range matches {
 		if currentAnchor.source.index < m.lastSourcePosition {
 			continue
@@ -662,6 +663,7 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 		currentMatchesLength := len(matches)
 		maxGap := config.maxGap
 		matchingWindowSize := config.matchingWindowSize
+
 	innerMatchingLoop:
 		for pos, match := range matches[matchIndex+1:] {
 			source, target := match.source, match.target
