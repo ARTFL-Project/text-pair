@@ -9,11 +9,11 @@ from setuptools import setup
 arch = platform.uname().machine
 if arch == "x86_64":
     os.system("rm /usr/local/bin/compareNgrams")
-    os.system("cp core/binary/linux_x64/compareNgrams /usr/local/bin/")
+    os.system("cp core/binary/x86_64/compareNgrams /usr/local/bin/")
     os.system("chmod +x /usr/local/bin/compareNgrams")
 elif arch == "aarch64":
     os.system("rm /usr/local/bin/compareNgrams")
-    os.system("cp core/binary/arm/compareNgrams /usr/local/bin/")
+    os.system("cp core/binary/aarch64/compareNgrams /usr/local/bin/")
     os.system("chmod +x /usr/local/bin/compareNgrams")
 else:
     print("Only x86_64 and ARM are supported at this time.")
