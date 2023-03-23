@@ -11,6 +11,7 @@ from textpair import (
     banality_auto_detect,
     phrase_matcher,
     parse_files,
+    merge_alignments,
 )
 
 
@@ -117,6 +118,11 @@ def run_alignment(params):
         os.system(merge_command)
         print("done.")
     count = get_count(os.path.join(params.output_path, "results/count.txt"))
+
+    # Passage merger
+    print("Grouping passages by source...", end="", flush=True)
+    merge_alignments(params.output_path, count)
+    print("done.")
 
     # Postprocessing steps
     if params.matching_params["phrase_filter"] or params.matching_params["banality_auto_detection"] is True:
