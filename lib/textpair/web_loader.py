@@ -7,9 +7,10 @@ import os
 import re
 from collections import OrderedDict
 
+import lz4.frame
+import orjson
 from psycopg2.extras import execute_values
 from tqdm import tqdm
-import lz4.frame
 
 try:
     import psycopg2
@@ -60,6 +61,7 @@ DEFAULT_FIELD_TYPES = {
     "source_passage_length": "INTEGER",
     "target_passage_length": "INTEGER",
     "similarity": "FLOAT",
+    "group_id": "INTEGER",
 }
 
 FILTERED_FIELDS = {
@@ -150,14 +152,9 @@ class WebAppConfig:
 
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
-    if file.endswith(".lz4"):
-        with lz4.frame.open(file) as input_file:
-            for line in input_file:
-                yield json.loads(line.decode("utf-8").rstrip("\n"))
-    else:
-        with open(file, encoding="utf-8") as input_file:
-            for line in input_file:
-                yield json.loads(line.rstrip("\n"))
+    with lz4.frame.open(file) as input_file:
+        for line in input_file:
+            yield orjson.loads(line)
 
 
 def clean_text(text):
@@ -319,6 +316,55 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     return field_names
 
 
+def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[str]):
+    config = configparser.ConfigParser()
+    config.read("/etc/text-pair/global_settings.ini")
+    table_name = f"{table_name}_groups"
+
+    with open(groups_file, encoding="utf8") as input_file:
+        line = input_file.readline()
+        field_names = orjson.loads(line).keys()
+        field_names = [f for f in field_names if f not in FILTERED_FIELDS]
+        row_count = 1 + sum(1 for _ in input_file)
+    fields_in_table = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f != "group_id"]
+    fields_in_table.append(f"group_id INTEGER PRIMARY KEY")
+    searchable_fields = [f for f in searchable_fields if f in field_names and f != "group_id"]
+
+    database = psycopg2.connect(
+        user=config["DATABASE"]["database_user"],
+        password=config["DATABASE"]["database_password"],
+        database=config["DATABASE"]["database_name"],
+    )
+    cursor = database.cursor()
+    cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+    cursor.execute(f"CREATE TABLE {table_name} ({', '.join(fields_in_table)})")
+
+    with open(groups_file, encoding="utf8") as input_file:
+        for line in tqdm(input_file, total=row_count, desc="Storing alignment groups...", leave=False):
+            group = orjson.loads(line)
+            row = validate_field_type(group, DEFAULT_FIELD_TYPES, field_names)
+            print(row, len(row), field_names, len(field_names))
+            insert = f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES %s"
+            cursor.execute(insert, row)
+
+    for field in searchable_fields:
+        try:
+            field_type = DEFAULT_FIELD_TYPES[field].upper()
+        except KeyError:
+            if field == "source_passage_length" or field == "target_passage_length":
+                field_type = "INTEGER"
+            else:
+                field_type = "TEXT"
+        if field_type == "TEXT":
+            cursor.execute(
+                f"CREATE INDEX {field}_{table_name}_trigrams_idx ON {table_name} USING GIN({field} gin_trgm_ops)"
+            )
+            if not field.endswith("passage"):
+                cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})")
+        elif field_type == "INTEGER":
+            cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
+
+
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
     os.system(f"rm -rf {db_path}")
@@ -341,6 +387,7 @@ def create_web_app(
     target_database_link,
     algorithm,
     load_only_db=False,
+    groups_file=None,
     store_banalities=False,
 ):
     """Main routine"""
@@ -358,6 +405,12 @@ def create_web_app(
         algorithm,
         web_config.banalitiesStored,
     )
+    if groups_file is not None:
+        load_groups_file(
+            groups_file,
+            table,
+            web_config.searchable_fields(),
+        )
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)

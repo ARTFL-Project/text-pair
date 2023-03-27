@@ -4,6 +4,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 import os
+from collections import Counter
 
 import lz4.frame
 import orjson
@@ -64,7 +65,10 @@ class AlignmentGroups:
         self.merged_target_passages[passage["target_doc_id"]].append(current_target)
         self.group_map[passage["passage_id"]] = self.group_id
         self.group_to_bytes[self.group_id] = SourcePassageGroup(
-            passage["source_filename"], passage["source_start_byte"], passage["source_end_byte"], passage
+            passage["source_filename"],
+            passage["source_start_byte"],
+            passage["source_end_byte"],
+            {k: v for k, v in passage.items() if not k.startswith("target")},
         )
         return PassageGroup(
             passage["source_filename"],
@@ -137,13 +141,15 @@ def read_alignment(line: str, passage_id: int):
     return alignment
 
 
-def merge_alignments(output_path: str, count: int):
+def merge_alignments(output_path: str, count: int) -> str:
     results_file = os.path.join(output_path, "results/alignments.jsonl.lz4")
     passages: list[dict[str, str]] = []
     alignment_groups = AlignmentGroups()
     doc_id = None
     with lz4.frame.open(results_file) as input_file:
-        for passage_id, line in tqdm(enumerate(input_file), total=count, desc="Identifying passages groups..."):
+        for passage_id, line in tqdm(
+            enumerate(input_file), total=count, desc="Identifying passages groups...", leave=False
+        ):
             new_pair = read_alignment(line, passage_id)
             source_doc_id: int = new_pair["source_doc_id"]
             match = False
@@ -163,22 +169,28 @@ def merge_alignments(output_path: str, count: int):
             alignment_groups.merge_passages(passages)
             passages = []
 
+    group_id_count = Counter()
     with (
         lz4.frame.open(f"{results_file}.groups.lz4", mode="wb") as output_file,
         lz4.frame.open(results_file) as input_file,
     ):
-        for passage_id, line in tqdm(enumerate(input_file), total=count, desc="Inserting group ids into alignments..."):
+        for passage_id, line in tqdm(
+            enumerate(input_file), total=count, desc="Inserting group ids into alignments...", leave=False
+        ):
             fields = read_alignment(line, passage_id)
             fields["group_id"] = alignment_groups.group_map[fields["passage_id"]]
+            group_id_count[fields["group_id"]] += 1
             output_file.write(orjson.dumps(fields) + b"\n")
     os.remove(results_file)
     os.rename(f"{results_file}.groups.lz4", f"{results_file}")
 
-    with open(os.path.join(output_path, "results/passage_group_source.jsonl"), "wb") as output_file:
+    groups_file = os.path.join(output_path, "results/passage_group_source.jsonl")
+    with open(groups_file, "wb") as output_file:
         for group_id, source in tqdm(
             alignment_groups.group_to_bytes.items(),
             total=alignment_groups.group_id + 1,
             desc="Saving passage group sources...",
+            leave=False,
         ):
             source_passage = get_text(source.start_byte, source.end_byte, source.filename)
             output_file.write(
@@ -189,9 +201,13 @@ def merge_alignments(output_path: str, count: int):
                         "group_id": group_id,
                         "source_start_byte": source.start_byte,
                         "source_end_byte": source.end_byte,
+                        "count": group_id_count[group_id],
                     }
                 )
+                + b"\n"
             )
+    print("Grouping alignments... done.")
+    return groups_file
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import re
 from collections import Counter, OrderedDict
 from pathlib import Path
 import time
+from typing import Any
 
 import psycopg2
 import psycopg2.extras
@@ -502,3 +503,97 @@ def metadata(request: Request):
     """Retrieve all searchable metadata fields"""
     _, _, _, metadata_fields = parse_args(request)
     return metadata_fields
+
+
+@app.get("/group/{group_id}")
+@app.get("/text-pair-api/group/{group_id}")
+def get_passage_group(request: Request, group_id: int):
+    table = request.query_params["group_table"]
+    alignment_table = request.query_params["db_table"]
+    filtered_authors: dict[str, dict[str, Any]] = {}
+    filtered_titles: dict[str, dict[str, Any]] = {}
+    original_passage: dict[str, Any] = {}
+    with psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    ) as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(f"""SELECT * FROM {table} WHERE group_id=%s""", (group_id,))
+        original_passage = cursor.fetchone()
+
+        cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s", (group_id,))
+        for row in cursor:
+            source_author = row["source_author"]
+            source_title = row["source_title"]
+            source_data = {k: v for k, v in row.items() if not row.startswith("target_")}
+            if source_author not in filtered_authors:
+                filtered_authors[source_author] = {
+                    **source_data,
+                    "year": row["source_year"],
+                }
+            else:
+                if (
+                    filtered_authors[source_author]["source_year"] > row["source_year"]
+                    or filtered_authors[source_author]["source_year"] == row["source_year"]
+                    and len(filtered_authors[source_author]["source_passage"]) < len(row["source_passage"])
+                ):
+                    filtered_authors[source_author] = {
+                        **source_data,
+                        "year": row["source_year"],
+                    }
+            if source_title not in filtered_titles:
+                filtered_titles[source_title] = {
+                    **source_data,
+                    "year": row["source_year"],
+                }
+            else:
+                if filtered_titles[source_title]["date"] > row["sourcedate"]:
+                    filtered_titles[source_title] = {
+                        **source_data,
+                        "year": row["source_year"],
+                    }
+            # Process target results
+            target_author = row["target_author"]
+            target_title = row["target_title"]
+            target_data = {k: v for k, v in row.items() if not row.startswith("source_")}
+            if target_author not in filtered_authors:
+                filtered_authors[target_author] = {
+                    **target_data,
+                    "year": row["target_year"],
+                }
+            else:
+                if (
+                    filtered_authors[target_author]["date"] > row["targetdate"]
+                    or filtered_authors[target_author]["date"] == row["targetdate"]
+                    and len(filtered_authors[target_author]["matchContext"]) < len(row["targetmatchcontext"])
+                ):
+                    filtered_authors[target_author] = {
+                        **target_data,
+                        "year": row["target_year"],
+                    }
+            if target_title not in filtered_titles:
+                filtered_titles[target_title] = {
+                    **target_data,
+                    "year": row["target_year"],
+                }
+            else:
+                if filtered_titles[target_title]["date"] > row["targetdate"]:
+                    filtered_titles[target_title] = {
+                        **target_data,
+                        "year": row["target_year"],
+                    }
+        unique_titles = [value for value in filtered_titles.values()]
+        unique_titles.sort(key=lambda x: x["year"])
+        unique_authors = []
+        results = {}
+        for value in filtered_authors.values():
+            if value["year"] not in results:
+                results[value["year"]] = [value]
+            else:
+                results[value["year"]].append(value)
+        for key, value in results.items():
+            unique_authors.append({"year": key, "result": value})
+        unique_authors.sort(key=lambda x: x["year"])
+        full_results = {"passageList": unique_titles, "titleList": unique_authors}
+    return full_results

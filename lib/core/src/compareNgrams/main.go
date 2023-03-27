@@ -831,7 +831,7 @@ func writeAlignments(localAlignments *[]alignmentsPerDoc, sourceDocID *string, s
 	targetMetadata map[string]map[string]string, outputFileName string, config *matchingParams) {
 	f, _ := os.Create(outputFileName)
 	for _, alignments := range *localAlignments {
-		fullAlignment := map[string]string{}
+		fullAlignment := map[string]interface{}{}
 		for key, value := range sourceMetadata[*sourceDocID] {
 			fullAlignment["source_"+key] = value
 		}
@@ -842,8 +842,8 @@ func writeAlignments(localAlignments *[]alignmentsPerDoc, sourceDocID *string, s
 		fullAlignment["target_doc_id"] = alignments.docID
 		for _, alignment := range *alignments.matches {
 			localAlignment := fullAlignment
-			localAlignment["source_start_byte"] = strconv.Itoa(int(*alignment.source.startByte))
-			localAlignment["source_end_byte"] = strconv.Itoa(int(*alignment.source.endByte))
+			localAlignment["source_start_byte"] = *alignment.source.startByte
+			localAlignment["source_end_byte"] = *alignment.source.endByte
 			sourcePassages := alignmentToText(&alignment.source, sourceMetadata[*sourceDocID]["filename"], config)
 			localAlignment["source_context_before"] = sourcePassages[0]
 			localAlignment["source_passage"] = sourcePassages[1]
@@ -851,8 +851,8 @@ func writeAlignments(localAlignments *[]alignmentsPerDoc, sourceDocID *string, s
 			sourcePositions := getRelativePosition(alignment.source.startByte, alignment.source.endByte, sourceMetadata, sourceDocID)
 			localAlignment["source_start_position"] = sourcePositions[0]
 			localAlignment["source_end_position"] = sourcePositions[1]
-			localAlignment["target_start_byte"] = strconv.Itoa(int(*alignment.target.startByte))
-			localAlignment["target_end_byte"] = strconv.Itoa(int(*alignment.target.endByte))
+			localAlignment["target_start_byte"] = *alignment.target.startByte
+			localAlignment["target_end_byte"] = *alignment.target.endByte
 			targetPassages := alignmentToText(&alignment.target, targetMetadata[alignments.docID]["filename"], config)
 			localAlignment["target_context_before"] = targetPassages[0]
 			localAlignment["target_passage"] = targetPassages[1]

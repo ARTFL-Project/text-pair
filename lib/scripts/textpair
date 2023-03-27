@@ -119,11 +119,6 @@ def run_alignment(params):
         print("done.")
     count = get_count(os.path.join(params.output_path, "results/count.txt"))
 
-    # Passage merger
-    print("Grouping passages by source...", end="", flush=True)
-    merge_alignments(params.output_path, count)
-    print("done.")
-
     # Postprocessing steps
     if params.matching_params["phrase_filter"] or params.matching_params["banality_auto_detection"] is True:
         print(f"\n### Postprocessing {count} pairwise alignments ###")
@@ -152,6 +147,11 @@ def run_alignment(params):
                 print(
                     f"{banalities_found} pairwise alignments identified as formulaic and will be flagged as banalities in the database."
                 )
+
+    # Passage merger
+    print("Grouping passages by source...", end="", flush=True)
+    groups_file = merge_alignments(params.output_path, count)
+
     if params.web_app_config["skip_web_app"] is False:
         create_web_app(
             results_file,
@@ -164,6 +164,7 @@ def run_alignment(params):
             params.web_app_config["source_url"],
             params.web_app_config["target_url"],
             params.matching_params["matching_algorithm"],
+            groups_file=groups_file,
             store_banalities=params.matching_params["store_banalities"],
         )
 
