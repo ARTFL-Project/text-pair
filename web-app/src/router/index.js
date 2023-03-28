@@ -5,6 +5,8 @@ const searchResults = () =>
     import ('../components/searchResults');
 const timeSeries = () =>
     import ('../components/timeSeries');
+const alignmentGroup = () =>
+    import ("../components/alignmentGroup")
 
 
 
@@ -19,6 +21,11 @@ const router = createRouter({
             path: "/time",
             name: "timeSeries",
             component: timeSeries
+        },
+        {
+            path:"/group/:groupId",
+            name: "alignmentGroup",
+            component: alignmentGroup
         }
     ],
     scrollBehavior(to, from, savedPosition) {

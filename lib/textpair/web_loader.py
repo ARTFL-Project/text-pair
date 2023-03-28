@@ -23,6 +23,7 @@ except ImportError:
 
 DEFAULT_FIELDS = {
     "rowid",
+    "group_id",
     "source_doc_id",
     "target_doc_id",
     "source_passage",
@@ -279,6 +280,7 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     )
     cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
     cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
+    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
     database.commit()
 
     print("Populating index table...")
@@ -366,6 +368,9 @@ def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[
         elif field_type == "INTEGER":
             cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
     cursor.execute(f"CREATE INDEX count_{table_name}_idx ON {table_name} USING BTREE(count)")
+    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
+    database.commit()
+    database.close()
 
 
 def set_up_app(web_config, db_path):

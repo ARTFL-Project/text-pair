@@ -520,13 +520,15 @@ def get_passage_group(request: Request, group_id: int):
     ) as conn:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
-        original_passage = cursor.fetchone()
-
+        original_passage = {k.replace("source_", ""): v for k, v in cursor.fetchone().items()}
         cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s", (group_id,))
+
         for row in cursor:
             source_author = row["source_author"]
             source_title = row["source_title"]
-            source_data = {k: v for k, v in row.items() if not row.startswith("target_")}
+            if source_author == original_passage["author"] or source_title == original_passage["title"]:
+                continue
+            source_data = {k.replace("source_", ""): v for k, v in row.items() if not k.startswith("target_")}
             if source_author not in filtered_authors:
                 filtered_authors[source_author] = {
                     **source_data,
@@ -534,9 +536,9 @@ def get_passage_group(request: Request, group_id: int):
                 }
             else:
                 if (
-                    filtered_authors[source_author]["source_year"] > row["source_year"]
-                    or filtered_authors[source_author]["source_year"] == row["source_year"]
-                    and len(filtered_authors[source_author]["source_passage"]) < len(row["source_passage"])
+                    filtered_authors[source_author]["year"] > row["source_year"]
+                    or filtered_authors[source_author]["year"] == row["source_year"]
+                    and len(filtered_authors[source_author]["passage"]) < len(row["source_passage"])
                 ):
                     filtered_authors[source_author] = {
                         **source_data,
@@ -548,7 +550,7 @@ def get_passage_group(request: Request, group_id: int):
                     "year": row["source_year"],
                 }
             else:
-                if filtered_titles[source_title]["date"] > row["sourcedate"]:
+                if filtered_titles[source_title]["year"] > row["source_year"]:
                     filtered_titles[source_title] = {
                         **source_data,
                         "year": row["source_year"],
@@ -556,7 +558,7 @@ def get_passage_group(request: Request, group_id: int):
             # Process target results
             target_author = row["target_author"]
             target_title = row["target_title"]
-            target_data = {k: v for k, v in row.items() if not row.startswith("source_")}
+            target_data = {k.replace("target_", ""): v for k, v in row.items() if not k.startswith("source_")}
             if target_author not in filtered_authors:
                 filtered_authors[target_author] = {
                     **target_data,
@@ -564,9 +566,9 @@ def get_passage_group(request: Request, group_id: int):
                 }
             else:
                 if (
-                    filtered_authors[target_author]["date"] > row["targetdate"]
-                    or filtered_authors[target_author]["date"] == row["targetdate"]
-                    and len(filtered_authors[target_author]["matchContext"]) < len(row["targetmatchcontext"])
+                    filtered_authors[target_author]["year"] > row["target_year"]
+                    or filtered_authors[target_author]["year"] == row["target_year"]
+                    and len(filtered_authors[target_author]["passage"]) < len(row["target_passage"])
                 ):
                     filtered_authors[target_author] = {
                         **target_data,
@@ -578,7 +580,7 @@ def get_passage_group(request: Request, group_id: int):
                     "year": row["target_year"],
                 }
             else:
-                if filtered_titles[target_title]["date"] > row["targetdate"]:
+                if filtered_titles[target_title]["year"] > row["target_year"]:
                     filtered_titles[target_title] = {
                         **target_data,
                         "year": row["target_year"],

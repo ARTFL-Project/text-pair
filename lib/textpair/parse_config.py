@@ -167,8 +167,8 @@ class TextPairConfig:
                     self.output_path, "target/index/most_common_ngrams.txt"
                 )
         elif self.__cli_args["update_db"] is True:
-            self.paths["source"]["metadata_path"] = self.__file_paths["input_source_metadata"]
-            self.paths["target"]["metadata_path"] = self.__file_paths["input_target_metadata"]
+            self.paths["source"]["metadata_path"] = self.__cli_args["source_metadata"]
+            self.paths["target"]["metadata_path"] = self.__cli_args["target_metadata"]
         else:
             self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source")
             self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
@@ -221,6 +221,18 @@ def get_config() -> TextPairConfig:
         "--update_db", help="update database without rebuilding web_app", action="store_true", default=False
     )
     parser.add_argument("--file", help="alignment file to load", type=str, default=None)
+    parser.add_argument(
+        "--source_metadata",
+        help="source metadata needed for loading database. Used only with --update_db.",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        "--target_metadata",
+        help="target metadata needed for loading database. Used only with --update_db.",
+        type=str,
+        default=None,
+    )
     parser.add_argument(
         "--output_path", help="output path for ngrams and sequence alignment", type=str, default="output"
     )
