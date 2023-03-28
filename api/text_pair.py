@@ -508,8 +508,8 @@ def metadata(request: Request):
 @app.get("/group/{group_id}")
 @app.get("/text-pair-api/group/{group_id}")
 def get_passage_group(request: Request, group_id: int):
-    table = request.query_params["group_table"]
     alignment_table = request.query_params["db_table"]
+    groups_table = f"{alignment_table}_groups"
     filtered_authors: dict[str, dict[str, Any]] = {}
     filtered_titles: dict[str, dict[str, Any]] = {}
     original_passage: dict[str, Any] = {}
@@ -519,7 +519,7 @@ def get_passage_group(request: Request, group_id: int):
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     ) as conn:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(f"""SELECT * FROM {table} WHERE group_id=%s""", (group_id,))
+        cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
         original_passage = cursor.fetchone()
 
         cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s", (group_id,))
@@ -595,5 +595,5 @@ def get_passage_group(request: Request, group_id: int):
         for key, value in results.items():
             unique_authors.append({"year": key, "result": value})
         unique_authors.sort(key=lambda x: x["year"])
-        full_results = {"passageList": unique_titles, "titleList": unique_authors}
+        full_results = {"passageList": unique_titles, "titleList": unique_authors, "original_passage": original_passage}
     return full_results

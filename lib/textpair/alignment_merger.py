@@ -177,8 +177,8 @@ def merge_alignments(output_path: str, count: int) -> str:
         for passage_id, line in tqdm(
             enumerate(input_file), total=count, desc="Inserting group ids into alignments...", leave=False
         ):
-            fields = read_alignment(line, passage_id)
-            fields["group_id"] = alignment_groups.group_map[fields["passage_id"]]
+            fields = orjson.loads(line)
+            fields["group_id"] = alignment_groups.group_map[passage_id]
             group_id_count[fields["group_id"]] += 1
             output_file.write(orjson.dumps(fields) + b"\n")
     os.remove(results_file)

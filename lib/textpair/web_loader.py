@@ -327,7 +327,7 @@ def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[
         field_names = [f for f in field_names if f not in FILTERED_FIELDS]
         row_count = 1 + sum(1 for _ in input_file)
     fields_in_table = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f != "group_id"]
-    fields_in_table.append(f"group_id INTEGER PRIMARY KEY")
+    fields_in_table.append("group_id INTEGER PRIMARY KEY")
     searchable_fields = [f for f in searchable_fields if f in field_names and f != "group_id"]
 
     database = psycopg2.connect(
@@ -343,8 +343,10 @@ def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[
         for line in tqdm(input_file, total=row_count, desc="Storing alignment groups...", leave=False):
             group = orjson.loads(line)
             row = validate_field_type(group, DEFAULT_FIELD_TYPES, field_names)
-            print(row, len(row), field_names, len(field_names))
-            insert = f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES %s"
+            # print(row, len(row), field_names, len(field_names))
+            insert = (
+                f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES (" + ", ".join("%s" for _ in row) + ")"
+            )
             cursor.execute(insert, row)
 
     for field in searchable_fields:
@@ -363,6 +365,7 @@ def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[
                 cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})")
         elif field_type == "INTEGER":
             cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
+    cursor.execute(f"CREATE INDEX count_{table_name}_idx ON {table_name} USING BTREE(count)")
 
 
 def set_up_app(web_config, db_path):
@@ -423,3 +426,11 @@ def create_web_app(
         print(
             f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
         )
+
+
+if __name__ == "__main__":
+    load_groups_file(
+        "/shared/alignments/eccotcp/output/results/passage_group_source.jsonl",
+        "eccotcp",
+        ["source_author", "source_title", "source_year", "source_passage"],
+    )
