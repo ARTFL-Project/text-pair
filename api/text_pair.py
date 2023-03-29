@@ -39,7 +39,7 @@ class formArguments:
     def __init__(self):
         self.dict = OrderedDict()
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> str | int:
         if item in self.dict:
             return self.dict[item]
         elif item == "page":
@@ -55,7 +55,7 @@ class formArguments:
         else:
             return ""
 
-    def __getattr__(self, attr):
+    def __getattr__(self, attr) -> str | int:
         return self.__getitem__(attr)
 
     def __setitem__(self, item, value):
@@ -145,12 +145,12 @@ def parse_args(request):
     return sql_fields, sql_values, other_args, list(metadata_field_types.keys())
 
 
-def query_builder(query_args, other_args, field_types):
+def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
     """Takes query arguments and returns an SQL WHERE clause"""
-    sql_fields = []
-    sql_values = []
+    sql_fields: list[str] = []
+    sql_values: list[str] = []
     for field, value in query_args.items():
-        value = value.strip()
+        value: str = value.strip()
         field_type = field_types.get(field, "TEXT").upper()
         query = ""
         if field_type == "TEXT":
@@ -245,9 +245,11 @@ def get_js_resource(db_path: str, resource: str):
 @app.get("/text-pair/{db_path}/time")
 @app.get("/{db_path}")
 @app.get("/text-pair/{db_path}")
+@app.get("/text-pair/{db_path}/group/{id}")
+@app.get("/{db_path}/group/{id}")
 def index(db_path: str):
     """Return index.html which lists available POOLs"""
-    with open(os.path.join(APP_PATH, db_path, "dist/index.html")) as html:
+    with open(os.path.join(APP_PATH, db_path, "dist/index.html"), encoding="utf8") as html:
         index_html = html.read()
     return HTMLResponse(index_html)
 
@@ -279,27 +281,34 @@ def search_alignments(request: Request):
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute(query, sql_values)
         alignments = []
+        group_ids = []
         for row in cursor:
             metadata = {key: row[key] for key in column_names}
             metadata["rowid_ordered"] = row["rowid_ordered"]
+            metadata["group_id"] = row["group_id"]
             alignments.append(metadata)
-    if other_args.direction == "previous":
-        alignments.reverse()
+            group_ids.append(metadata["group_id"])
+        if other_args.direction == "previous":
+            alignments.reverse()
+            group_ids.reverse()
+        cursor.execute(
+            f"SELECT group_id, count FROM {other_args.db_table}_groups WHERE group_id IN ({', '.join(map(str, group_ids))})"
+        )
+        counts = {group_id: count for group_id, count in cursor}
+        for index, _ in enumerate(alignments):
+            alignments[index]["count"] = counts[alignments[index]["group_id"]]
+
     previous_url = ""
     current_path = re.sub(r"&(page|id_anchor|direction)=(previous|next|\d*)", "", request.url.path)
-    if other_args.page > 1:
-        previous_url = (
-            f"{current_path}&page={other_args.page - 1}&id_anchor={alignments[0]['rowid_ordered']}&direction=previous"
-        )
+    if other_args.page > 1:  # type: ignore
+        previous_url = f"{current_path}&page={other_args.page - 1}&id_anchor={alignments[0]['rowid_ordered']}&direction=previous"  # type: ignore
     try:
-        next_url = (
-            f"{current_path}&page={other_args.page + 1}&id_anchor={alignments[-1]['rowid_ordered']}&direction=next"
-        )
+        next_url = f"{current_path}&page={other_args.page + 1}&id_anchor={alignments[-1]['rowid_ordered']}&direction=next"  # type: ignore
     except IndexError:
         next_url = ""
     start_position = 0
-    if other_args.page > 1:
-        start_position = 50 * (other_args.page - 1)
+    if other_args.page > 1:  # type: ignore
+        start_position = 50 * (other_args.page - 1)  # type: ignore
     return {
         "alignments": alignments,
         "page": other_args.page,
@@ -526,54 +535,22 @@ def get_passage_group(request: Request, group_id: int):
         for row in cursor:
             source_author = row["source_author"]
             source_title = row["source_title"]
-            if source_author == original_passage["author"] or source_title == original_passage["title"]:
-                continue
-            source_data = {k.replace("source_", ""): v for k, v in row.items() if not k.startswith("target_")}
-            if source_author not in filtered_authors:
-                filtered_authors[source_author] = {
-                    **source_data,
-                    "year": row["source_year"],
-                }
-            else:
-                if (
-                    filtered_authors[source_author]["year"] > row["source_year"]
-                    or filtered_authors[source_author]["year"] == row["source_year"]
-                    and len(filtered_authors[source_author]["passage"]) < len(row["source_passage"])
-                ):
-                    filtered_authors[source_author] = {
-                        **source_data,
-                        "year": row["source_year"],
-                    }
-            if source_title not in filtered_titles:
-                filtered_titles[source_title] = {
-                    **source_data,
-                    "year": row["source_year"],
-                }
-            else:
-                if filtered_titles[source_title]["year"] > row["source_year"]:
+            if source_author != original_passage["author"] and source_title != original_passage["title"]:
+                source_data = {k.replace("source_", ""): v for k, v in row.items() if not k.startswith("target_")}
+                if source_title not in filtered_titles:
                     filtered_titles[source_title] = {
                         **source_data,
                         "year": row["source_year"],
                     }
+                else:
+                    if filtered_titles[source_title]["year"] > row["source_year"]:
+                        filtered_titles[source_title] = {
+                            **source_data,
+                            "year": row["source_year"],
+                        }
             # Process target results
-            target_author = row["target_author"]
             target_title = row["target_title"]
             target_data = {k.replace("target_", ""): v for k, v in row.items() if not k.startswith("source_")}
-            if target_author not in filtered_authors:
-                filtered_authors[target_author] = {
-                    **target_data,
-                    "year": row["target_year"],
-                }
-            else:
-                if (
-                    filtered_authors[target_author]["year"] > row["target_year"]
-                    or filtered_authors[target_author]["year"] == row["target_year"]
-                    and len(filtered_authors[target_author]["passage"]) < len(row["target_passage"])
-                ):
-                    filtered_authors[target_author] = {
-                        **target_data,
-                        "year": row["target_year"],
-                    }
             if target_title not in filtered_titles:
                 filtered_titles[target_title] = {
                     **target_data,
@@ -585,17 +562,16 @@ def get_passage_group(request: Request, group_id: int):
                         **target_data,
                         "year": row["target_year"],
                     }
-        unique_titles = [value for value in filtered_titles.values()]
-        unique_titles.sort(key=lambda x: x["year"])
-        unique_authors = []
+        passage_list = []
         results = {}
-        for value in filtered_authors.values():
+        for value in filtered_titles.values():
             if value["year"] not in results:
                 results[value["year"]] = [value]
             else:
                 results[value["year"]].append(value)
         for key, value in results.items():
-            unique_authors.append({"year": key, "result": value})
-        unique_authors.sort(key=lambda x: x["year"])
-        full_results = {"passageList": unique_titles, "titleList": unique_authors, "original_passage": original_passage}
+            value.sort(key=lambda x: x["title"])
+            passage_list.append({"year": key, "result": value})
+        passage_list.sort(key=lambda x: x["year"])
+        full_results = {"passageList": passage_list, "original_passage": original_passage}
     return full_results

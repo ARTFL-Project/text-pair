@@ -7,71 +7,47 @@
         <div class="row">
             <div class="col position-relative">
                 <div class="d-flex justify-content-center position-relative" v-if="loading">
-                    <div
-                        class="spinner-border"
-                        style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px"
-                        role="status"
-                    >
+                    <div class="spinner-border"
+                        style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
                 </div>
-                <transition-group
-                    name="staggered-fade"
-                    tag="div"
-                    v-bind:css="false"
-                    v-on:before-enter="beforeEnter"
-                    v-on:enter="enter"
-                >
-                    <div
-                        class="card mb-3 rounded-0 shadow-1"
-                        style="position: relative"
-                        v-for="(alignment, index) in results.alignments"
-                        :key="results.start_position + index + 1"
-                        v-bind:data-index="index"
-                    >
+                <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter"
+                    v-on:enter="enter">
+                    <div class="card mb-3 rounded-0 shadow-1" style="position: relative"
+                        v-for="(alignment, index) in results.alignments" :key="results.start_position + index + 1"
+                        v-bind:data-index="index">
                         <div class="corner-btn left">{{ results.start_position + index + 1 }}</div>
                         <div class="row">
                             <div class="col mt-4">
                                 <h6 class="passage-label text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
                                 <p class="pt-3 px-3">
-                                    <span
-                                        v-for="(citation, citationIndex) in globalConfig.sourceCitation"
-                                        :key="citation.field"
-                                    >
+                                    <span v-for="(citation, citationIndex) in globalConfig.sourceCitation"
+                                        :key="citation.field">
                                         <span v-if="alignment[citation.field]">
                                             <span :style="citation.style">{{ alignment[citation.field] }}</span>
-                                            <span
-                                                class="separator"
-                                                v-if="citationIndex != globalConfig.sourceCitation.length - 1"
-                                                >&#9679;&nbsp;</span
-                                            >
+                                            <span class="separator"
+                                                v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
                                         </span>
                                     </span>
                                 </p>
                             </div>
                             <div
                                 class="
-                                    col
-                                    mt-4
-                                    border border-top-0 border-right-0 border-bottom-0
-                                    target-passage-container
-                                "
-                            >
+                                                                                                                                                                                                                                                                col
+                                                                                                                                                                                                                                                                mt-4
+                                                                                                                                                                                                                                                                border border-top-0 border-right-0 border-bottom-0
+                                                                                                                                                                                                                                                                target-passage-container
+                                                                                                                                                                                                                                                            ">
                                 <h6 class="passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
                                 <p class="pt-3 px-3">
-                                    <span
-                                        v-for="(citation, citationIndex) in globalConfig.targetCitation"
-                                        :key="citation.field"
-                                    >
+                                    <span v-for="(citation, citationIndex) in globalConfig.targetCitation"
+                                        :key="citation.field">
                                         <span v-if="alignment[citation.field]">
                                             <span :style="citation.style">{{ alignment[citation.field] }}</span>
-                                            <span
-                                                class="separator"
-                                                v-if="citationIndex != globalConfig.targetCitation.length - 1"
-                                                >&#9679;&nbsp;</span
-                                            >
-                                        </span></span
-                                    >
+                                            <span class="separator"
+                                                v-if="citationIndex != globalConfig.targetCitation.length - 1">&#9679;&nbsp;</span>
+                                        </span></span>
                                 </p>
                             </div>
                         </div>
@@ -82,89 +58,68 @@
                                     <span class="source-passage">{{ alignment.source_passage }}</span>
                                     {{ alignment.source_context_after }}
                                 </p>
-                                <button
-                                    type="button"
-                                    class="btn btn-outline-secondary position-absolute rounded-0"
-                                    style="bottom: 0; left: 0"
-                                    v-if="globalConfig.sourcePhiloDBLink"
-                                    @click="goToContext(alignment, 'source')"
-                                >
+                                <button type="button" class="btn btn-outline-secondary position-absolute rounded-0"
+                                    style="bottom: 0; left: 0" v-if="globalConfig.sourcePhiloDBLink"
+                                    @click="goToContext(alignment, 'source')">
                                     View passage in context
                                 </button>
                             </div>
                             <div
-                                class="
-                                    col
-                                    mb-2
-                                    border border-top-0 border-right-0 border-bottom-0
-                                    target-passage-container
-                                "
-                            >
+                                class="col mb-2 border border-top-0 border-right-0 border-bottom-0 target-passage-container">
                                 <p class="card-text text-justify px-3 mb-2">
                                     {{ alignment.target_context_before }}
                                     <span class="target-passage">{{ alignment.target_passage }}</span>
                                     {{ alignment.target_context_after }}
                                 </p>
-                                <button
-                                    type="button"
-                                    class="btn btn-outline-secondary position-absolute rounded-0"
-                                    style="bottom: 0; right: 0"
-                                    v-if="globalConfig.targetPhiloDBLink"
-                                    @click="goToContext(alignment, 'target')"
-                                >
+                                <button type="button" class="btn btn-outline-secondary position-absolute rounded-0"
+                                    style="bottom: 0; right: 0" v-if="globalConfig.targetPhiloDBLink"
+                                    @click="goToContext(alignment, 'target')">
                                     View passage in context
                                 </button>
                             </div>
                         </div>
+                        <div class="mb-2 ms-3" style="margin-top: -0.5rem"
+                            v-if="globalConfig.matchingAlgorithm == 'sa' && alignment.count > 1">
+                            &rarr;
+                            <router-link class="" :to="`group/${alignment.group_id}`">
+                                View all reuses of this passage
+                            </router-link>
+                        </div>
+
                         <div class="text-muted text-center mb-2">
                             <div v-if="globalConfig.matchingAlgorithm == 'vsa'">
                                 <div>{{ alignment.similarity.toFixed(2) * 100 }} % similar</div>
-                                <a class="diff-btn" diffed="false" @click="showMatches(alignment)"
-                                    >Show matching words</a
-                                >
-                                <div
-                                    class="loading position-absolute"
-                                    style="display: none; left: 50%; transform: translateX(-50%)"
-                                >
-                                    <div
-                                        class="spinner-border"
+                                <a class="diff-btn" diffed="false" @click="showMatches(alignment)">Show matching words</a>
+                                <div class="loading position-absolute"
+                                    style="display: none; left: 50%; transform: translateX(-50%)">
+                                    <div class="spinner-border"
                                         style="width: 4rem; height: 4rem; position: absolute; z-index: 50; top: 30px"
-                                        role="status"
-                                    >
+                                        role="status">
                                         <span class="visually-hidden">Loading...</span>
                                     </div>
                                 </div>
                             </div>
                             <div v-if="globalConfig.matchingAlgorithm == 'sa'">
-                                <a
-                                    class="diff-btn"
-                                    diffed="false"
-                                    @click="
-                                        showDifferences(
-                                            alignment.source_passage,
-                                            alignment.target_passage,
-                                            alignment.source_passage_length,
-                                            alignment.target_passage.length
-                                        )
-                                    "
-                                    >Show differences</a
-                                >
-                                <div
-                                    class="loading position-absolute"
-                                    style="display: none; left: 50%; transform: translateX(-50%)"
-                                >
-                                    <div
-                                        class="spinner-border"
+                                <a class="diff-btn" diffed="false" @click="
+                                    showDifferences(
+                                        alignment.source_passage,
+                                        alignment.target_passage,
+                                        alignment.source_passage_length,
+                                        alignment.target_passage.length
+                                    )
+                                ">Show differences</a>
+                                <div class="loading position-absolute"
+                                    style="display: none; left: 50%; transform: translateX(-50%)">
+                                    <div class="spinner-border"
                                         style="
-                                            width: 1.4rem;
-                                            height: 1.4rem;
-                                            position: absolute;
-                                            z-index: 50;
-                                            top: 5px;
-                                            left: -10px;
-                                        "
-                                        role="status"
-                                    >
+                                                                                                                                                                                                                                                                        width: 1.4rem;
+                                                                                                                                                                                                                                                                        height: 1.4rem;
+                                                                                                                                                                                                                                                                        position: absolute;
+                                                                                                                                                                                                                                                                        z-index: 50;
+                                                                                                                                                                                                                                                                        top: 5px;
+                                                                                                                                                                                                                                                                        left: -10px;
+                                                                                                                                                                                                                                                                    "
+                                        role="status">
                                         <span class="visually-hidden">Loading...</span>
                                     </div>
                                 </div>
@@ -199,13 +154,9 @@
                     <div class="mt-2 mb-3 pr-3 pl-3 facet-list">
                         <span class="dropdown-header text-center" v-html="globalConfig.sourceLabel"></span>
                         <div class="list-group">
-                            <button
-                                type="button"
-                                class="list-group-item list-group-item-action"
-                                v-for="(field, index) in globalConfig.facetsFields.source"
-                                :key="index"
-                                v-on:click="facetSearch(field.value)"
-                            >
+                            <button type="button" class="list-group-item list-group-item-action"
+                                v-for="(field, index) in globalConfig.facetsFields.source" :key="index"
+                                v-on:click="facetSearch(field.value)">
                                 {{ field.label }}
                             </button>
                         </div>
@@ -213,29 +164,18 @@
                     <div class="mb-3 pr-3 pl-3 facet-list">
                         <h6 class="dropdown-header text-center" v-html="globalConfig.targetLabel"></h6>
                         <div class="list-group">
-                            <button
-                                type="button"
-                                class="list-group-item list-group-item-action"
-                                v-for="(field, index) in globalConfig.facetsFields.target"
-                                :key="index"
-                                v-on:click="facetSearch(field.value)"
-                            >
+                            <button type="button" class="list-group-item list-group-item-action"
+                                v-for="(field, index) in globalConfig.facetsFields.target" :key="index"
+                                v-on:click="facetSearch(field.value)">
                                 {{ field.label }}
                             </button>
                         </div>
                     </div>
                 </div>
-                <div
-                    class="loading position-absolute"
-                    style="left: 50%; transform: translateX(-50%)"
-                    v-if="facetLoading"
-                >
+                <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="facetLoading">
                     <div class="d-flex justify-content-center position-relative">
-                        <div
-                            class="spinner-border"
-                            style="width: 4rem; height: 4rem; position: absolute; z-index: 50; top: 30px"
-                            role="status"
-                        >
+                        <div class="spinner-border"
+                            style="width: 4rem; height: 4rem; position: absolute; z-index: 50; top: 30px" role="status">
                             <span class="visually-hidden">Loading...</span>
                         </div>
                     </div>
@@ -250,12 +190,9 @@
                     <div class="mt-1 p-2">
                         <div class="pb-2 text-center" style="opacity: 0.5">Showing top 100 results</div>
                         <div class="list-group">
-                            <div
-                                class="list-group-item list-group-item-action facet-result"
-                                v-for="(field, index) in facetResults.results.slice(0, 100)"
-                                :key="index"
-                                v-on:click="filteredSearch(facetResults.facet, field.field)"
-                            >
+                            <div class="list-group-item list-group-item-action facet-result"
+                                v-for="(field, index) in facetResults.results.slice(0, 100)" :key="index"
+                                v-on:click="filteredSearch(facetResults.facet, field.field)">
                                 <div class="row">
                                     <div class="col pr-1 pl-1">{{ field.field || "N/A" }}</div>
                                     <div class="col-4 pr-1 pl-1 facet-count">{{ field.count.toLocaleString() }}</div>
@@ -437,11 +374,11 @@ export default {
             if (sourcePassageLength > 10000 || targetPassageLength > 10000) {
                 alert("Passage of 10000 words or more may take up a long time to compare");
             }
-            let parent = event.srcElement.parentNode.parentNode.parentNode;
+            let parent = event.target.parentNode.parentNode.parentNode;
             let loading = parent.querySelector(".loading");
             let sourceElement = parent.querySelector(".source-passage");
             let targetElement = parent.querySelector(".target-passage");
-            if (event.srcElement.getAttribute("diffed") == "false") {
+            if (event.target.getAttribute("diffed") == "false") {
                 loading.style.display = "initial";
                 let outerEvent = event;
                 this.worker = new Worker();
@@ -463,33 +400,33 @@ export default {
                     }
                     sourceElement.innerHTML = newSourceString;
                     targetElement.innerHTML = newTargetString;
-                    outerEvent.srcElement.setAttribute("diffed", "true");
+                    outerEvent.target.setAttribute("diffed", "true");
                     loading.style.display = "none";
-                    outerEvent.srcElement.textContent = "Hide differences";
+                    outerEvent.target.textContent = "Hide differences";
                 };
             } else {
                 sourceElement.innerHTML = sourceText;
                 targetElement.innerHTML = targetText;
-                event.srcElement.setAttribute("diffed", "false");
-                event.srcElement.textContent = "Show differences";
+                event.target.setAttribute("diffed", "false");
+                event.target.textContent = "Show differences";
             }
         },
         showMatches: function (alignment) {
-            let parent = event.srcElement.parentNode.parentNode.parentNode;
+            let parent = event.target.parentNode.parentNode.parentNode;
             let sourceElement = parent.querySelector(".source-passage");
             let targetElement = parent.querySelector(".target-passage");
-            if (event.srcElement.getAttribute("diffed") == "false") {
+            if (event.target.getAttribute("diffed") == "false") {
                 let source = alignment.source_passage_with_matches.replace(/&gt;/g, ">").replace(/&lt;/g, "<");
                 sourceElement.innerHTML = source;
                 let target = alignment.target_passage_with_matches.replace(/&gt;/g, ">").replace(/&lt;/g, "<");
                 targetElement.innerHTML = target;
-                event.srcElement.setAttribute("diffed", "true");
-                event.srcElement.textContent = "Hide matching words";
+                event.target.setAttribute("diffed", "true");
+                event.target.textContent = "Hide matching words";
             } else {
                 sourceElement.innerHTML = alignment.source_passage;
                 targetElement.innerHTML = alignment.target_passage;
-                event.srcElement.setAttribute("diffed", "false");
-                event.srcElement.textContent = "Show matching words";
+                event.target.setAttribute("diffed", "false");
+                event.target.textContent = "Show matching words";
             }
         },
         beforeEnter: function (el) {
@@ -516,9 +453,11 @@ export default {
 .corner-btn {
     font-family: "Open-Sans", sans-serif;
 }
+
 .passage-label {
     font-family: "Open-Sans", sans-serif;
 }
+
 .card-link {
     color: #007bff !important;
 }

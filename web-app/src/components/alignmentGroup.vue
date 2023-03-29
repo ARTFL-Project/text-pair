@@ -5,21 +5,24 @@
 
         </h5>
         <h6 style="text-align: center">
-            <div><a href=""><span v-if="sourcePassage.author">{{
-                sourcePassage.author }}, </span><i>{{
-        sourcePassage.title }}</i></a></div>
+            <div>
+                <a href="">
+                    <span v-if="sourcePassage.author">{{ sourcePassage.author }}, </span>
+                    <i>{{ sourcePassage.title }}</i>
+                </a>
+            </div>
         </h6>
-        <div id="timeline-container" class="p-2">
+        <div id="timeline-container" class="px-2 pb-2">
             <div id="vertical-line"></div>
             <div class="timeline-dates" v-for="(date, index) in timeline" :key="index">
                 <div class="year btn btn-secondary">{{ date.year }}</div>
-                <div class="timeline-events card shadow-1 px-2 pt-2" v-for="(reuse, reuseIndex) in date.result"
+                <div class="timeline-events card shadow-1 px-2 pt-2 mt-3" v-for="(reuse, reuseIndex) in date.result"
                     :key="reuseIndex">
                     <h5 class="reuse-title" @click="showPassage">
                         <span v-if="reuse.author">{{ reuse.author }}<br /></span><i>{{
                             formatTitle(reuse.title) }}</i>
                     </h5>
-                    <p class="timeline-text-content m-0 pb-2">
+                    <p class="timeline-text-content m-0">
                         <span class="text-content">
                             {{ reuse.context_before }}
                             <span class="highlight">{{ reuse.passage }}</span> {{ reuse.context_after }}
@@ -46,12 +49,9 @@ export default {
         };
     },
     created() {
-        // fetch the data when the view is created and the data is
-        // already being observed
         this.fetchData();
     },
     watch: {
-        // call again the method if the route changes
         $route: "fetchData",
     },
     methods: {
@@ -66,8 +66,7 @@ export default {
                 .then((response) => {
                     this.loading = false;
                     this.done = true;
-                    this.emitter.emit("searchArgsUpdate", {});
-                    this.timeline = response.data.titleList
+                    this.timeline = response.data.passageList
                     this.sourcePassage = response.data.original_passage
                 })
                 .catch((error) => {
@@ -111,8 +110,8 @@ export default {
     left: 50%;
     border-left: 2px dotted $button-color;
     top: 0;
-    height: 100%;
-    z-index: 0;
+    height: 105%;
+    z-index: -2;
 }
 
 .year,
@@ -135,21 +134,27 @@ export default {
 }
 
 .timeline-text-content {
-    height: 0;
-    transform: translateY(-10%);
+    overflow: hidden;
+    z-index: -1;
+    position: relative;
+    line-height: 0;
+    padding: 0;
+    transform: translateY(-50%);
     opacity: 0;
-    transition: all 300ms ease-out;
+    transition: all 200ms ease-out;
 }
 
 .timeline-text-content.show {
-    height: 100%;
     opacity: 1;
+    padding-top: 0.25rem;
+    padding-bottom: 0.5rem;
+    line-height: initial;
     transform: translateY(0);
 }
 
 .year {
-    margin-top: 2.5rem;
-    margin-bottom: 1rem;
+    margin-top: 2rem;
+    margin-bottom: .25rem;
     cursor: initial;
 }
 </style>

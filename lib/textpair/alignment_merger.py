@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Merge Overlapping Alignments"""
 
 from dataclasses import dataclass, field
