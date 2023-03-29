@@ -130,16 +130,20 @@ export default {
 .highlight,
 .reuse-title {
     color: $passage-color;
+}
+
+.reuse-title {
     cursor: pointer;
 }
 
 .timeline-text-content {
+    font-size: 1rem;
     overflow: hidden;
     z-index: -1;
     position: relative;
     line-height: 0;
     padding: 0;
-    transform: translateY(-50%);
+    transform: translateY(-25%);
     opacity: 0;
     transition: all 200ms ease-out;
 }
@@ -148,7 +152,7 @@ export default {
     opacity: 1;
     padding-top: 0.25rem;
     padding-bottom: 0.5rem;
-    line-height: initial;
+    line-height: 1.5;
     transform: translateY(0);
 }
 
