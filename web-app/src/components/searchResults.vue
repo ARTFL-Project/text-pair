@@ -33,12 +33,7 @@
                                 </p>
                             </div>
                             <div
-                                class="
-                                                                                                                                                                                                                                                                col
-                                                                                                                                                                                                                                                                mt-4
-                                                                                                                                                                                                                                                                border border-top-0 border-right-0 border-bottom-0
-                                                                                                                                                                                                                                                                target-passage-container
-                                                                                                                                                                                                                                                            ">
+                                class="col mt-4 border border-top-0 border-right-0 border-bottom-0 target-passage-container">
                                 <h6 class="passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
                                 <p class="pt-3 px-3">
                                     <span v-for="(citation, citationIndex) in globalConfig.targetCitation"
@@ -111,14 +106,7 @@
                                 <div class="loading position-absolute"
                                     style="display: none; left: 50%; transform: translateX(-50%)">
                                     <div class="spinner-border"
-                                        style="
-                                                                                                                                                                                                                                                                        width: 1.4rem;
-                                                                                                                                                                                                                                                                        height: 1.4rem;
-                                                                                                                                                                                                                                                                        position: absolute;
-                                                                                                                                                                                                                                                                        z-index: 50;
-                                                                                                                                                                                                                                                                        top: 5px;
-                                                                                                                                                                                                                                                                        left: -10px;
-                                                                                                                                                                                                                                                                    "
+                                        style="width: 1.4rem; height: 1.4rem; position: absolute; z-index: 50; top: 5px; left: -10px;"
                                         role="status">
                                         <span class="visually-hidden">Loading...</span>
                                     </div>

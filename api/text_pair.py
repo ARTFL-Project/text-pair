@@ -285,18 +285,22 @@ def search_alignments(request: Request):
         for row in cursor:
             metadata = {key: row[key] for key in column_names}
             metadata["rowid_ordered"] = row["rowid_ordered"]
-            metadata["group_id"] = row["group_id"]
+            try:
+                metadata["group_id"] = row["group_id"]
+                group_ids.append(metadata["group_id"])
+            except KeyError:
+                pass
             alignments.append(metadata)
-            group_ids.append(metadata["group_id"])
         if other_args.direction == "previous":
             alignments.reverse()
             group_ids.reverse()
-        cursor.execute(
-            f"SELECT group_id, count FROM {other_args.db_table}_groups WHERE group_id IN ({', '.join(map(str, group_ids))})"
-        )
-        counts = {group_id: count for group_id, count in cursor}
-        for index, _ in enumerate(alignments):
-            alignments[index]["count"] = counts[alignments[index]["group_id"]]
+        if group_ids:
+            cursor.execute(
+                f"SELECT group_id, count FROM {other_args.db_table}_groups WHERE group_id IN ({', '.join(map(str, group_ids))})"
+            )
+            counts = {group_id: count for group_id, count in cursor}
+            for index, _ in enumerate(alignments):
+                alignments[index]["count"] = counts[alignments[index]["group_id"]]
 
     previous_url = ""
     current_path = re.sub(r"&(page|id_anchor|direction)=(previous|next|\d*)", "", request.url.path)
@@ -519,7 +523,6 @@ def metadata(request: Request):
 def get_passage_group(request: Request, group_id: int):
     alignment_table = request.query_params["db_table"]
     groups_table = f"{alignment_table}_groups"
-    filtered_authors: dict[str, dict[str, Any]] = {}
     filtered_titles: dict[str, dict[str, Any]] = {}
     original_passage: dict[str, Any] = {}
     with psycopg2.connect(
