@@ -201,6 +201,7 @@ if __name__ == "__main__":
     params = get_config()
     if params.update_db is True:
         count = get_count(os.path.join(params.output_path, "results/count.txt"))
+        groups_file = None
         if params.matching_params["matching_algorithm"] == "sa":  # we merge alignments prior to loading
             print("Grouping passages by source...", end="", flush=True)
             groups_file = merge_alignments(params.file, count)
@@ -216,6 +217,7 @@ if __name__ == "__main__":
             params.web_app_config["target_url"],
             params.matching_params["matching_algorithm"],
             load_only_db=True,
+            groups_file=groups_file,
             store_banalities=params.matching_params["store_banalities"],
         )
     elif params.only_web_app is True:

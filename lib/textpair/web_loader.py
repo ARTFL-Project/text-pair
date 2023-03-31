@@ -342,6 +342,7 @@ def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[
     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
     cursor.execute(f"CREATE TABLE {table_name} ({', '.join(fields_in_table)})")
 
+    print("Populating groups table...")
     with open(groups_file, encoding="utf8") as input_file:
         for line in tqdm(input_file, total=row_count, desc="Storing alignment groups...", leave=False):
             group = orjson.loads(line)
