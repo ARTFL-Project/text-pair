@@ -120,7 +120,6 @@
                         <li class="page-item" v-if="results.page > 1">
                             <a class="page-link" v-on:click="previousPage()" aria-label="Previous">
                                 <span aria-hidden="true">&laquo;</span>
-                                <span class="sr-only">Previous</span>
                             </a>
                         </li>
                         <li class="page-item">
@@ -129,7 +128,6 @@
                         <li class="page-item" v-if="this.resultsLeft > 0">
                             <a class="page-link" v-on:click="nextPage()" aria-label="Next">
                                 <span aria-hidden="true">&raquo;</span>
-                                <span class="sr-only">Next</span>
                             </a>
                         </li>
                     </ul>

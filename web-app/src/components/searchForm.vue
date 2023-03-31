@@ -15,37 +15,23 @@
                 <!-- Metadata Fields -->
                 <div class="row">
                     <div class="col">
-                        <div
-                            class="input-group pb-3"
-                            v-for="field in globalConfig.metadataFields.source"
-                            :key="field.label"
-                        >
+                        <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.source"
+                            :key="field.label">
                             <span class="input-group-prepend">
                                 <span class="input-group-text rounded-0">{{ field.label }}</span>
                             </span>
-                            <input
-                                type="text"
-                                class="form-control rounded-0"
-                                :name="field.value"
-                                v-model="formValues[field.value]"
-                            />
+                            <input type="text" class="form-control rounded-0" :name="field.value"
+                                v-model="formValues[field.value]" />
                         </div>
                     </div>
                     <div class="col border border-top-0 border-right-0 border-bottom-0">
-                        <div
-                            class="input-group pb-3"
-                            v-for="field in globalConfig.metadataFields.target"
-                            :key="field.label"
-                        >
+                        <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.target"
+                            :key="field.label">
                             <span class="input-group-prepend">
                                 <span class="input-group-text rounded-0">{{ field.label }}</span>
                             </span>
-                            <input
-                                type="text"
-                                class="form-control rounded-0"
-                                :name="field.value"
-                                v-model="formValues[field.value]"
-                            />
+                            <input type="text" class="form-control rounded-0" :name="field.value"
+                                v-model="formValues[field.value]" />
                         </div>
                     </div>
                 </div>
@@ -56,12 +42,8 @@
                         {{ banalitySelected }}&nbsp;&nbsp;&#9662;
                     </button>
                     <ul class="my-dropdown-menu shadow-1">
-                        <li
-                            class="my-dropdown-item"
-                            v-for="(option, optionIndex) in formBanalityValues"
-                            :key="optionIndex"
-                            @click="banalitySelect(optionIndex)"
-                        >
+                        <li class="my-dropdown-item" v-for="(option, optionIndex) in formBanalityValues" :key="optionIndex"
+                            @click="banalitySelect(optionIndex)">
                             {{ option.label }}
                         </li>
                     </ul>
@@ -69,24 +51,15 @@
 
                 <!-- Search reports -->
                 <div class="position-relative mb-3" style="width: 100%" aria-label="Search reports">
-                    <button
-                        class="report btn rounded-0 d-inline"
+                    <button class="report btn rounded-0 d-inline"
                         :class="{ 'btn-secondary': timeActive, 'btn-outline-secondary selected': searchActive }"
-                        type="button"
-                        @click="changeReport('search')"
-                    >
+                        type="button" @click="changeReport('search')">
                         Search Alignments
                     </button>
-                    <button
-                        class="report btn rounded-0 d-inline"
-                        :class="{
-                            'btn-secondary selected': searchActive,
-                            'btn-outline-secondary selected': timeActive,
-                        }"
-                        style="border-left-width: 0"
-                        type="button"
-                        @click="changeReport('time-series')"
-                    >
+                    <button class="report btn rounded-0 d-inline" :class="{
+                        'btn-secondary selected': searchActive,
+                        'btn-outline-secondary selected': timeActive,
+                    }" style="border-left-width: 0" type="button" @click="changeReport('time-series')">
                         Display Time Series
                     </button>
                     <hr class="tab-line" />
@@ -105,12 +78,8 @@
                             {{ directionSelected.label }} &#9662;
                         </button>
                         <ul class="my-dropdown-menu shadow-1">
-                            <li
-                                class="my-dropdown-item"
-                                v-for="direction in directions"
-                                :key="direction.label"
-                                @click="selectItem('directionSelected', direction)"
-                            >
+                            <li class="my-dropdown-item" v-for="direction in directions" :key="direction.label"
+                                @click="selectItem('directionSelected', direction)">
                                 {{ direction.label }}
                             </li>
                         </ul>
@@ -121,12 +90,8 @@
                             {{ timeSeriesInterval.label }} &#9662;
                         </button>
                         <ul class="my-dropdown-menu shadow-1">
-                            <li
-                                class="my-dropdown-item text-nowrap"
-                                v-for="interval in globalConfig.timeSeriesIntervals"
-                                :key="interval.label"
-                                @click="selectItem('timeSeriesInterval', interval)"
-                            >
+                            <li class="my-dropdown-item text-nowrap" v-for="interval in globalConfig.timeSeriesIntervals"
+                                :key="interval.label" @click="selectItem('timeSeriesInterval', interval)">
                                 {{ interval.label }}
                             </li>
                         </ul>
@@ -212,7 +177,7 @@ export default {
             this.banalitySelected = "Don't filter banalities";
         }
         if (this.$route.path != "/") {
-            if (this.$route.path == "/search") {
+            if (this.$route.path == "/search" || this.$route.path.startsWith("/group")) {
                 this.searchActive = true;
                 this.timeActive = false;
                 this.toggleSearchForm();
@@ -343,12 +308,12 @@ export default {
 #search-form {
     font-family: "Open-Sans", sans-serif;
 }
-.input-group > span {
+
+.input-group>span {
     font-size: 0.85rem !important;
 }
 
-.input-group
-    > :not(:first-child):not(.dropdown-menu):not(.valid-tooltip):not(.valid-feedback):not(.invalid-tooltip):not(.invalid-feedback) {
+.input-group> :not(:first-child):not(.dropdown-menu):not(.valid-tooltip):not(.valid-feedback):not(.invalid-tooltip):not(.invalid-feedback) {
     border-top-left-radius: 0 !important;
     border-bottom-left-radius: 0 !important;
     border-left-color: $link-color;
@@ -411,10 +376,11 @@ my-dropdown .btn:active {
     color: #565656;
 }
 
-#search-form > div > form > div:nth-child(1) > div.col.border.border-top-0.border-right-0.border-bottom-0,
-#search-form > div > form > div:nth-child(2) > div.col.border.border-top-0.border-right-0.border-bottom-0 {
+#search-form>div>form>div:nth-child(1)>div.col.border.border-top-0.border-right-0.border-bottom-0,
+#search-form>div>form>div:nth-child(2)>div.col.border.border-top-0.border-right-0.border-bottom-0 {
     border-right-width: 0 !important;
 }
+
 .tab-line {
     position: relative;
     width: 100%;
@@ -423,10 +389,12 @@ my-dropdown .btn:active {
     opacity: 0.4;
     z-index: 0;
 }
+
 .report {
     position: relative;
     z-index: 1;
 }
+
 .selected {
     border-bottom-color: #fff;
 }

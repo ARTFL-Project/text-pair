@@ -532,38 +532,46 @@ def get_passage_group(request: Request, group_id: int):
     ) as conn:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
-        original_passage = {k.replace("source_", ""): v for k, v in cursor.fetchone().items()}
+        original_passage = {k: v for k, v in cursor.fetchone().items()}
         cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s", (group_id,))
 
         for row in cursor:
             source_author = row["source_author"]
             source_title = row["source_title"]
-            if source_author != original_passage["author"] and source_title != original_passage["title"]:
-                source_data = {k.replace("source_", ""): v for k, v in row.items() if not k.startswith("target_")}
+            if source_author != original_passage["source_author"] and source_title != original_passage["source_title"]:
+                source_data = {k: v for k, v in row.items() if not k.startswith("target_")}
                 if source_title not in filtered_titles:
                     filtered_titles[source_title] = {
                         **source_data,
                         "year": row["source_year"],
+                        "title": row["source_title"],
+                        "direction": "source",
                     }
                 else:
                     if filtered_titles[source_title]["year"] > row["source_year"]:
                         filtered_titles[source_title] = {
                             **source_data,
                             "year": row["source_year"],
+                            "title": row["source_title"],
+                            "direction": "source",
                         }
             # Process target results
             target_title = row["target_title"]
-            target_data = {k.replace("target_", ""): v for k, v in row.items() if not k.startswith("source_")}
+            target_data = {k: v for k, v in row.items() if not k.startswith("source_")}
             if target_title not in filtered_titles:
                 filtered_titles[target_title] = {
                     **target_data,
                     "year": row["target_year"],
+                    "title": row["target_title"],
+                    "direction": "target",
                 }
             else:
                 if filtered_titles[target_title]["year"] > row["target_year"]:
                     filtered_titles[target_title] = {
                         **target_data,
                         "year": row["target_year"],
+                        "title": row["target_title"],
+                        "direction": "target",
                     }
         passage_list = []
         results = {}
@@ -573,7 +581,7 @@ def get_passage_group(request: Request, group_id: int):
             else:
                 results[value["year"]].append(value)
         for key, value in results.items():
-            value.sort(key=lambda x: x["title"])
+            value.sort(key=lambda x: x["title"], reverse=True)
             passage_list.append({"year": key, "result": value})
         passage_list.sort(key=lambda x: x["year"])
         full_results = {"passageList": passage_list, "original_passage": original_passage}

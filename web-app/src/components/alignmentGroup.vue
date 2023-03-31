@@ -1,17 +1,17 @@
 <template>
     <div id="alignment-group" class="mt-4">
         <h5 style="text-align: center">
-            <i>"{{ sourcePassage.passage }}"</i>
-
-        </h5>
-        <h6 style="text-align: center">
-            <div>
-                <a href="">
-                    <span v-if="sourcePassage.author">{{ sourcePassage.author }}, </span>
-                    <i>{{ sourcePassage.title }}</i>
-                </a>
+            <i>"{{ sourcePassage.source_passage }}"</i>
+            <div class="reuse-title mt-1">
+                <span v-for="(citation, citationIndex) in globalConfig.sourceCitation" :key="citation.field">
+                    <span v-if="sourcePassage[citation.field]">
+                        <span :style="citation.style">{{ sourcePassage[citation.field] }}</span>
+                        <span class="separator"
+                            v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
+                    </span>
+                </span>
             </div>
-        </h6>
+        </h5>
         <div id="timeline-container" class="px-2 pb-2">
             <div id="vertical-line"></div>
             <div class="timeline-dates" v-for="(date, index) in timeline" :key="index">
@@ -19,13 +19,20 @@
                 <div class="timeline-events card shadow-1 px-2 pt-2 mt-3" v-for="(reuse, reuseIndex) in date.result"
                     :key="reuseIndex">
                     <h5 class="reuse-title" @click="showPassage">
-                        <span v-if="reuse.author">{{ reuse.author }}<br /></span><i>{{
-                            formatTitle(reuse.title) }}</i>
+                        <span v-for="(citation, citationIndex) in globalConfig[`${reuse.direction}Citation`]"
+                            :key="citation.field">
+                            <span v-if="reuse[citation.field]">
+                                <span :style="citation.style">{{ reuse[citation.field] }}</span>
+                                <span class="separator"
+                                    v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
+                            </span>
+                        </span>
                     </h5>
                     <p class="timeline-text-content m-0">
                         <span class="text-content">
-                            {{ reuse.context_before }}
-                            <span class="highlight">{{ reuse.passage }}</span> {{ reuse.context_after }}
+                            {{ reuse[`${reuse.direction}_context_before`] }}
+                            <span class="highlight">{{ reuse[`${reuse.direction}_passage`] }}</span> {{
+                                reuse[`${reuse.direction}_context_after`] }}
                         </span>
                     </p>
                 </div>
@@ -42,6 +49,7 @@ export default {
     data() {
         return {
             loading: true,
+            globalConfig: this.$globalConfig,
             done: false,
             timeline: {},
             sourcePassage: {},
@@ -83,7 +91,7 @@ export default {
             return title;
         },
         showPassage(event) {
-            let textPassage = event.srcElement.parentNode.parentNode.querySelector(".timeline-text-content")
+            let textPassage = event.srcElement.closest(".timeline-events").querySelector(".timeline-text-content")
             if (!textPassage.classList.contains("show")) {
                 textPassage.classList.add("show")
             } else {
@@ -160,5 +168,10 @@ export default {
     margin-top: 2rem;
     margin-bottom: .25rem;
     cursor: initial;
+}
+
+.separator {
+    color: black;
+    padding: 5px;
 }
 </style>
