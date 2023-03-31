@@ -63,6 +63,7 @@ DEFAULT_FIELD_TYPES = {
     "target_passage_length": "INTEGER",
     "similarity": "FLOAT",
     "group_id": "INTEGER",
+    "count": "INTEGER",
 }
 
 FILTERED_FIELDS = {
@@ -345,7 +346,6 @@ def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[
         for line in tqdm(input_file, total=row_count, desc="Storing alignment groups...", leave=False):
             group = orjson.loads(line)
             row = validate_field_type(group, DEFAULT_FIELD_TYPES, field_names)
-            # print(row, len(row), field_names, len(field_names))
             insert = (
                 f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES (" + ", ".join("%s" for _ in row) + ")"
             )
@@ -436,6 +436,6 @@ def create_web_app(
 if __name__ == "__main__":
     load_groups_file(
         "/shared/alignments/eccotcp/output/results/passage_group_source.jsonl",
-        "eccotcp",
+        "ecootcp",
         ["source_author", "source_title", "source_year", "source_passage"],
     )

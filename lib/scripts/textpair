@@ -150,7 +150,7 @@ def run_alignment(params):
 
     # Passage merger
     print("Grouping passages by source...", end="", flush=True)
-    groups_file = merge_alignments(params.output_path, count)
+    groups_file = merge_alignments(results_file, count)
 
     if params.web_app_config["skip_web_app"] is False:
         create_web_app(
@@ -201,6 +201,9 @@ if __name__ == "__main__":
     params = get_config()
     if params.update_db is True:
         count = get_count(os.path.join(params.output_path, "results/count.txt"))
+        if params.matching_params["matching_algorithm"] == "sa":  # we merge alignments prior to loading
+            print("Grouping passages by source...", end="", flush=True)
+            groups_file = merge_alignments(params.file, count)
         create_web_app(
             params.file,
             params.paths["source"]["metadata_path"],

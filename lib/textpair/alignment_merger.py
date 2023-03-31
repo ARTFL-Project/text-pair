@@ -67,7 +67,7 @@ class AlignmentGroups:
             passage["source_filename"],
             passage["source_start_byte"],
             passage["source_end_byte"],
-            {k: v for k, v in passage.items() if not k.startswith("target")},
+            {k: v for k, v in passage.items() if not k.startswith("target_")},
         )
         return PassageGroup(
             passage["source_filename"],
@@ -111,26 +111,22 @@ class AlignmentGroups:
                 current_group = self.passage_group_init(passage)
 
     def find_group(self, new_pair: dict[str, Any]) -> bool:
-        local_merged_target_passages: list[PassagePosition] = []
         match = False
+        index = 0
         for local_target in self.merged_target_passages[new_pair["source_doc_id"]]:
-            if (  # new passage starts before and ends before
-                local_target.start_byte >= new_pair["source_start_byte"]
-                and local_target.start_byte < new_pair["source_end_byte"]
-            ) or (  # new passage starts before and ends before
-                local_target.start_byte < new_pair["source_start_byte"]
-                and local_target.end_byte > new_pair["source_start_byte"]
+            index += 1
+            if (  # new passage is within
+                local_target.start_byte <= new_pair["source_start_byte"]
+                and local_target.end_byte >= new_pair["source_end_byte"]
             ):
-                local_merged_target_passages.append(
-                    PassagePosition(new_pair["source_start_byte"], new_pair["source_end_byte"], local_target.group_id)
-                )
-                local_merged_target_passages.append(
+                if new_pair["target_doc_id"] not in self.merged_target_passages:
+                    self.merged_target_passages[new_pair["target_doc_id"]] = []
+                self.merged_target_passages[new_pair["target_doc_id"]].append(
                     PassagePosition(new_pair["target_start_byte"], new_pair["target_end_byte"], local_target.group_id)
                 )
                 self.group_map[new_pair["passage_id"]] = local_target.group_id
                 match = True
                 break
-        self.merged_target_passages[new_pair["source_doc_id"]].extend(local_merged_target_passages)
         return match
 
 
@@ -140,8 +136,7 @@ def read_alignment(line: str, passage_id: int):
     return alignment
 
 
-def merge_alignments(output_path: str, count: int) -> str:
-    results_file = os.path.join(output_path, "results/alignments.jsonl.lz4")
+def merge_alignments(results_file: str, count: int) -> str:
     passages: list[dict[str, str]] = []
     alignment_groups = AlignmentGroups()
     doc_id = None
@@ -150,7 +145,7 @@ def merge_alignments(output_path: str, count: int) -> str:
             enumerate(input_file), total=count, desc="Identifying passages groups...", leave=False
         ):
             new_pair = read_alignment(line, passage_id)
-            source_doc_id: int = new_pair["source_doc_id"]
+            source_doc_id: str = new_pair["source_doc_id"]
             match = False
             if source_doc_id in alignment_groups.merged_target_passages:
                 match = alignment_groups.find_group(new_pair)
@@ -183,7 +178,7 @@ def merge_alignments(output_path: str, count: int) -> str:
     os.remove(results_file)
     os.rename(f"{results_file}.groups.lz4", f"{results_file}")
 
-    groups_file = os.path.join(output_path, "results/passage_group_source.jsonl")
+    groups_file = os.path.join(os.path.dirname(results_file), "passage_group_source.jsonl")
     with open(groups_file, "wb") as output_file:
         for group_id, source in tqdm(
             alignment_groups.group_to_bytes.items(),
