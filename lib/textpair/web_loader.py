@@ -411,6 +411,7 @@ def update_alignment_table(
         passage_count = len(filtered_titles)
         if passage_count > 1:
             cursor.execute(f"UPDATE {alignment_table} SET count=%s WHERE group_id=%s", (passage_count, group_id))
+            cursor.execute(f"UPDATE {groups_table} SET count=%s WHERE group_id=%s", (passage_count, group_id))
             conn.commit()
     conn.close()
 

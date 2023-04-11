@@ -181,7 +181,7 @@ def merge_alignments(results_file: str, count: int) -> str:
             fields["group_id"] = alignment_groups.group_map[passage_id]
             fields["count"] = 1
             group_id_count[fields["group_id"]] += 1
-            output_file.write(orjson.dumps(fields) + b"\n")
+            output_file.write(orjson.dumps(fields) + b"\n")  # type: ignore
     os.remove(results_file)
     os.rename(f"{results_file}.groups.lz4", f"{results_file}")
 
@@ -217,4 +217,4 @@ if __name__ == "__main__":
     output_path = sys.argv[1]
     with open(os.path.join(output_path, "results/count.txt"), encoding="utf8") as input_file:
         count = int(input_file.read().strip())
-    merge_alignments(output_path, count)
+    merge_alignments(os.path.join(output_path, "results/alignments.jsonl.lz4"), count)

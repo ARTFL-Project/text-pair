@@ -294,13 +294,6 @@ def search_alignments(request: Request):
     if other_args.direction == "previous":
         alignments.reverse()
         group_ids.reverse()
-    if group_ids:
-        cursor.execute(
-            f"SELECT group_id, count FROM {other_args.db_table}_groups WHERE group_id IN ({', '.join(map(str, group_ids))})"
-        )
-        counts = {group_id: count for group_id, count in cursor}
-        for index, _ in enumerate(alignments):
-            alignments[index]["count"] = counts[alignments[index]["group_id"]]
     conn.close()
 
     previous_url = ""
