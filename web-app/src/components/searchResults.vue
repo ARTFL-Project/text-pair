@@ -77,7 +77,7 @@
                             v-if="globalConfig.matchingAlgorithm == 'sa' && alignment.count > 1">
                             &rarr;
                             <router-link class="" :to="`group/${alignment.group_id}`">
-                                View all reuses of this passage
+                                View all {{ alignment.count }} reuses of this passage
                             </router-link>
                         </div>
 

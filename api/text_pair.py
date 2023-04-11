@@ -33,7 +33,7 @@ APP_PATH = GLOBAL_CONFIG["WEB_APP"]["web_app_path"]
 BOOLEAN_ARGS = re.compile(r"""(NOT \w+)|(OR \w+)|(\w+)|("")""")
 
 
-class formArguments:
+class FormArguments:
     """Special dict to handle form arguments"""
 
     def __init__(self):
@@ -107,8 +107,8 @@ def get_pg_type(table_name):
 
 def parse_args(request):
     """Parse URL args"""
-    query_args = formArguments()
-    other_args = formArguments()
+    query_args = FormArguments()
+    other_args = FormArguments()
     other_args_keys = [
         "facet",
         "direction",
@@ -234,7 +234,7 @@ def get_css_resource(db_path: str, resource: str):
 @app.get("/text-pair/{db_path}/js/{resource}")
 def get_js_resource(db_path: str, resource: str):
     """Retrieve JS resources"""
-    with open(os.path.join(APP_PATH, db_path, "dist/js", resource)) as resource_file:
+    with open(os.path.join(APP_PATH, db_path, "dist/js", resource), encoding="utf8") as resource_file:
         resource = resource_file.read()
     return Response(resource, media_type="application/javascript")
 
@@ -273,34 +273,35 @@ def search_alignments(request: Request):
         else:
             query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {other_args.id_anchor} ORDER BY o.rowid_ordered desc LIMIT 50"
-    with psycopg2.connect(
+    conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute(query, sql_values)
-        alignments = []
-        group_ids = []
-        for row in cursor:
-            metadata = {key: row[key] for key in column_names}
-            metadata["rowid_ordered"] = row["rowid_ordered"]
-            try:
-                metadata["group_id"] = row["group_id"]
-                group_ids.append(metadata["group_id"])
-            except KeyError:
-                pass
-            alignments.append(metadata)
-        if other_args.direction == "previous":
-            alignments.reverse()
-            group_ids.reverse()
-        if group_ids:
-            cursor.execute(
-                f"SELECT group_id, count FROM {other_args.db_table}_groups WHERE group_id IN ({', '.join(map(str, group_ids))})"
-            )
-            counts = {group_id: count for group_id, count in cursor}
-            for index, _ in enumerate(alignments):
-                alignments[index]["count"] = counts[alignments[index]["group_id"]]
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute(query, sql_values)
+    alignments = []
+    group_ids = []
+    for row in cursor:
+        metadata = {key: row[key] for key in column_names}
+        metadata["rowid_ordered"] = row["rowid_ordered"]
+        try:
+            metadata["group_id"] = row["group_id"]
+            group_ids.append(metadata["group_id"])
+        except KeyError:
+            pass
+        alignments.append(metadata)
+    if other_args.direction == "previous":
+        alignments.reverse()
+        group_ids.reverse()
+    if group_ids:
+        cursor.execute(
+            f"SELECT group_id, count FROM {other_args.db_table}_groups WHERE group_id IN ({', '.join(map(str, group_ids))})"
+        )
+        counts = {group_id: count for group_id, count in cursor}
+        for index, _ in enumerate(alignments):
+            alignments[index]["count"] = counts[alignments[index]["group_id"]]
+    conn.close()
 
     previous_url = ""
     current_path = re.sub(r"&(page|id_anchor|direction)=(previous|next|\d*)", "", request.url.path)
@@ -327,7 +328,7 @@ def search_alignments(request: Request):
 def retrieve_all(request: Request):
     """Retrieve all docs and only return metadata"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
-    if other_args.field.startswith("source_"):
+    if other_args.field.startswith("source_"):  # type: ignore
         direction = "source_"
     else:
         direction = "target_"
@@ -353,22 +354,25 @@ def retrieve_all(request: Request):
     ]
     docs_found = {}
     doc_id = f"{direction}doc_id"
-    with psycopg2.connect(
+    conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        if sql_values:
-            query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
-            cursor.execute(query, sql_values)
-        else:
-            query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}'"""
-            cursor.execute(query)
-        for row in cursor:
-            if row[doc_id] not in docs_found:
-                docs_found[row[doc_id]] = {"count": 0, **{key: row[key] for key in column_names}}
-            docs_found[row[doc_id]]["count"] += 1
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    if sql_values:
+        query = (
+            f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
+        )
+        cursor.execute(query, sql_values)
+    else:
+        query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}'"""
+        cursor.execute(query)
+    for row in cursor:
+        if row[doc_id] not in docs_found:
+            docs_found[row[doc_id]] = {"count": 0, **{key: row[key] for key in column_names}}
+        docs_found[row[doc_id]]["count"] += 1
+    conn.close()
     return list(docs_found.values())
 
 
@@ -390,14 +394,15 @@ def retrieve_all_passage_pairs(request: Request):
     }
     column_names = [column_name for column_name in column_names if column_name not in filtered_columns]
     query = f"SELECT * FROM {other_args.db_table} WHERE {sql_fields}"
-    with psycopg2.connect(
+    conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute(query, sql_values)
-        results = [{key: row[key] for key in column_names} for row in cursor]
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute(query, sql_values)
+    results = [{key: row[key] for key in column_names} for row in cursor]
+    conn.close()
     return results
 
 
@@ -410,14 +415,15 @@ def count_results(request: Request):
         query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE {sql_fields}"
     else:
         query = f"SELECT COUNT(*) FROM {other_args.db_table}"
-    with psycopg2.connect(
+    conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute(query, sql_values)
-        result_object = {"counts": cursor.fetchone()[0]}
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute(query, sql_values)
+    result_object = {"counts": cursor.fetchone()[0]}
+    conn.close()
     return result_object
 
 
@@ -440,23 +446,24 @@ def generate_time_series(request: Request):
     results = []
     total_results = 0
     next_year = None
-    with psycopg2.connect(
+    conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute(query, sql_values)
-        for year, count in cursor:
-            if year is None:
-                continue
-            if next_year is not None:
-                while year > next_year:
-                    results.append({"year": next_year, "count": 0})
-                    next_year += other_args.timeSeriesInterval
-            results.append({"year": year, "count": count})
-            next_year = year + other_args.timeSeriesInterval
-            total_results += count
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute(query, sql_values)
+    for year, count in cursor:
+        if year is None:
+            continue
+        if next_year is not None:
+            while year > next_year:
+                results.append({"year": next_year, "count": 0})
+                next_year += other_args.timeSeriesInterval
+        results.append({"year": year, "count": count})
+        next_year = year + other_args.timeSeriesInterval
+        total_results += count
+    conn.close()
     return {"counts": total_results, "results": results}
 
 
@@ -467,46 +474,47 @@ def facets(request: Request):
     sql_fields, sql_values, other_args, _ = parse_args(request)
     results = []
     total_count = 0
-    with psycopg2.connect(
+    conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        if sql_fields:
-            query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
-                WHERE {sql_fields} GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
-        else:
-            query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
-                GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
-        cursor.execute(query, sql_values)
-        if not other_args.facet.endswith("passage_length"):
-            for result in cursor:
-                field_name, count = result
-                results.append({"field": field_name, "count": count})
-                total_count += count
-        else:
-            counts = Counter()
-            for length, count in cursor:
-                if length < 26:
-                    counts["1-25"] += count
-                if 25 < length < 101:
-                    counts["26-100"] += count
-                elif 100 < length < 251:
-                    counts["101-250"] += count
-                elif 250 < length < 501:
-                    counts["251-500"] += count
-                elif 500 < length < 1001:
-                    counts["501-1000"] += count
-                elif 1000 < length < 3001:
-                    counts["1001-3000"] += count
-                elif length > 3000:
-                    counts["3001-"] += count
-                total_count += count
-            results = [
-                {"field": interval, "count": count}
-                for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
-            ]
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    if sql_fields:
+        query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
+            WHERE {sql_fields} GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
+    else:
+        query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
+            GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
+    cursor.execute(query, sql_values)
+    if not other_args.facet.endswith("passage_length"):  # type: ignore
+        for result in cursor:
+            field_name, count = result
+            results.append({"field": field_name, "count": count})
+            total_count += count
+    else:
+        counts = Counter()
+        for length, count in cursor:
+            if length < 26:
+                counts["1-25"] += count
+            if 25 < length < 101:
+                counts["26-100"] += count
+            elif 100 < length < 251:
+                counts["101-250"] += count
+            elif 250 < length < 501:
+                counts["251-500"] += count
+            elif 500 < length < 1001:
+                counts["501-1000"] += count
+            elif 1000 < length < 3001:
+                counts["1001-3000"] += count
+            elif length > 3000:
+                counts["3001-"] += count
+            total_count += count
+        results = [
+            {"field": interval, "count": count}
+            for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
+        ]
+    conn.close()
     return {"facet": other_args.facet, "results": results, "total_count": total_count}
 
 
@@ -521,68 +529,70 @@ def metadata(request: Request):
 @app.get("/group/{group_id}")
 @app.get("/text-pair-api/group/{group_id}")
 def get_passage_group(request: Request, group_id: int):
+    """Retrieve a passage group"""
     alignment_table = request.query_params["db_table"]
     groups_table = f"{alignment_table}_groups"
     filtered_titles: dict[str, dict[str, Any]] = {}
     original_passage: dict[str, Any] = {}
-    with psycopg2.connect(
+    conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
-        original_passage = {k: v for k, v in cursor.fetchone().items()}
-        cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s", (group_id,))
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
+    original_passage = {k: v for k, v in cursor.fetchone().items()}
+    cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s", (group_id,))
 
-        for row in cursor:
-            source_author = row["source_author"]
-            source_title = row["source_title"]
-            if source_author != original_passage["source_author"] and source_title != original_passage["source_title"]:
-                source_data = {k: v for k, v in row.items() if not k.startswith("target_")}
-                if source_title not in filtered_titles:
+    for row in cursor:
+        source_author = row["source_author"]
+        source_title = row["source_title"]
+        if source_author != original_passage["source_author"] and source_title != original_passage["source_title"]:
+            source_data = {k: v for k, v in row.items() if not k.startswith("target_")}
+            if source_title not in filtered_titles:
+                filtered_titles[source_title] = {
+                    **source_data,
+                    "year": row["source_year"],
+                    "title": row["source_title"],
+                    "direction": "source",
+                }
+            else:
+                if filtered_titles[source_title]["year"] > row["source_year"]:
                     filtered_titles[source_title] = {
                         **source_data,
                         "year": row["source_year"],
                         "title": row["source_title"],
                         "direction": "source",
                     }
-                else:
-                    if filtered_titles[source_title]["year"] > row["source_year"]:
-                        filtered_titles[source_title] = {
-                            **source_data,
-                            "year": row["source_year"],
-                            "title": row["source_title"],
-                            "direction": "source",
-                        }
-            # Process target results
-            target_title = row["target_title"]
-            target_data = {k: v for k, v in row.items() if not k.startswith("source_")}
-            if target_title not in filtered_titles:
+        # Process target results
+        target_title = row["target_title"]
+        target_data = {k: v for k, v in row.items() if not k.startswith("source_")}
+        if target_title not in filtered_titles:
+            filtered_titles[target_title] = {
+                **target_data,
+                "year": row["target_year"],
+                "title": row["target_title"],
+                "direction": "target",
+            }
+        else:
+            if filtered_titles[target_title]["year"] > row["target_year"]:
                 filtered_titles[target_title] = {
                     **target_data,
                     "year": row["target_year"],
                     "title": row["target_title"],
                     "direction": "target",
                 }
-            else:
-                if filtered_titles[target_title]["year"] > row["target_year"]:
-                    filtered_titles[target_title] = {
-                        **target_data,
-                        "year": row["target_year"],
-                        "title": row["target_title"],
-                        "direction": "target",
-                    }
-        passage_list = []
-        results = {}
-        for value in filtered_titles.values():
-            if value["year"] not in results:
-                results[value["year"]] = [value]
-            else:
-                results[value["year"]].append(value)
-        for key, value in results.items():
-            value.sort(key=lambda x: x["title"], reverse=True)
-            passage_list.append({"year": key, "result": value})
-        passage_list.sort(key=lambda x: x["year"])
-        full_results = {"passageList": passage_list, "original_passage": original_passage}
+    conn.close()
+    passage_list = []
+    results = {}
+    for value in filtered_titles.values():
+        if value["year"] not in results:
+            results[value["year"]] = [value]
+        else:
+            results[value["year"]].append(value)
+    for key, value in results.items():
+        value.sort(key=lambda x: x["title"], reverse=True)
+        passage_list.append({"year": key, "result": value})
+    passage_list.sort(key=lambda x: x["year"])
+    full_results = {"passageList": passage_list, "original_passage": original_passage}
     return full_results

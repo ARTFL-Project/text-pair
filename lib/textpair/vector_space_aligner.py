@@ -326,6 +326,7 @@ class Corpus(ABC):
         )
 
     def create_batch(self) -> Iterable[np.ndarray | torch.Tensor]:
+        """Create batches of embeddings"""
         for i in range(0, self.length, self.chunk_size):
             yield self.docs[i : i + self.chunk_size]  # type: ignore
 

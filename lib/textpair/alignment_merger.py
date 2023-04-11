@@ -57,6 +57,7 @@ class AlignmentGroups:
         self,
         passage: dict[str, Any],
     ) -> PassageGroup:
+        """Initialize new group"""
         self.group_id += 1
         current_target = PassagePosition(passage["target_start_byte"], passage["target_end_byte"], self.group_id)
         if passage["target_doc_id"] not in self.merged_target_passages:
@@ -83,6 +84,7 @@ class AlignmentGroups:
         current_group: PassageGroup,
         passage: dict[str, Any],
     ):
+        """Update current group"""
         if passage["source_end_byte"] > current_group.end_byte:
             current_group.end_byte = passage["source_end_byte"]
             self.group_to_bytes[self.group_id].end_byte = passage["source_end_byte"]
@@ -97,6 +99,7 @@ class AlignmentGroups:
         self,
         passages: list[dict[str, Any]],
     ):
+        """Merge passages that are aligned to the same source passage"""
         passages.sort(
             key=lambda x: (x["source_start_byte"], x["source_start_byte"] - x["source_end_byte"])
         )  # sort by smaller start byte and bigger end_byte
@@ -111,6 +114,7 @@ class AlignmentGroups:
                 current_group = self.passage_group_init(passage)
 
     def find_group(self, new_pair: dict[str, Any]) -> bool:
+        """Find group for new pair"""
         match = False
         index = 0
         for local_target in self.merged_target_passages[new_pair["source_doc_id"]]:
@@ -131,12 +135,14 @@ class AlignmentGroups:
 
 
 def read_alignment(line: str, passage_id: int):
+    """Read alignment from line"""
     alignment: dict[str, Any] = orjson.loads(line)
     alignment["passage_id"] = passage_id
     return alignment
 
 
 def merge_alignments(results_file: str, count: int) -> str:
+    """Merge passages that are aligned to the same source passage"""
     passages: list[dict[str, str]] = []
     alignment_groups = AlignmentGroups()
     doc_id = None
@@ -173,6 +179,7 @@ def merge_alignments(results_file: str, count: int) -> str:
         ):
             fields = orjson.loads(line)
             fields["group_id"] = alignment_groups.group_map[passage_id]
+            fields["count"] = 1
             group_id_count[fields["group_id"]] += 1
             output_file.write(orjson.dumps(fields) + b"\n")
     os.remove(results_file)

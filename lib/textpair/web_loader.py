@@ -6,6 +6,7 @@ import json
 import os
 import re
 from collections import OrderedDict
+from typing import Any
 
 import lz4.frame
 import orjson
@@ -195,6 +196,7 @@ def validate_field_type(fields, field_types, field_names):
 
 
 def get_metadata_fields(metadata_file, direction):
+    """Get all metadata fields from metadata file"""
     fields: set[str] = set()
     with open(metadata_file, encoding="utf8") as input_file:
         metadata: dict[str, dict[str, str]] = json.load(input_file)
@@ -319,10 +321,11 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     return field_names
 
 
-def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[str]):
+def load_groups_file(groups_file: str, alignments_table: str, searchable_fields: list[str]):
+    """Load the groups file into the database."""
     config = configparser.ConfigParser()
     config.read("/etc/text-pair/global_settings.ini")
-    table_name = f"{table_name}_groups"
+    table_name = f"{alignments_table}_groups"
 
     with open(groups_file, encoding="utf8") as input_file:
         line = input_file.readline()
@@ -372,6 +375,55 @@ def load_groups_file(groups_file: str, table_name: str, searchable_fields: list[
     cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
     database.commit()
     database.close()
+    update_alignment_table(alignments_table, config["DATABASE"])  # type: ignore
+
+
+def update_alignment_table(
+    alignment_table: str,
+    database_config: dict[str, str],
+):
+    """Update alignment table: this is a simplified version of the get_passage_group function in the FastAPI app."""
+    conn = psycopg2.connect(
+        user=database_config["database_user"],
+        password=database_config["database_password"],
+        database=database_config["database_name"],
+    )
+    groups_table = f"{alignment_table}_groups"
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute(f"SELECT distinct group_id FROM {alignment_table}")
+    group_ids = [row["group_id"] for row in cursor]
+    cursor.execute(f"ALTER TABLE {alignment_table} ADD COLUMN count INTEGER")
+    for group_id in tqdm(group_ids, desc="Updating alignment table...", leave=False):
+        cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
+        original_passage = {k: v for k, v in cursor.fetchone().items()}
+        cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s", (group_id,))
+        filtered_titles: set[str] = set()
+        for row in cursor:
+            source_author = row["source_author"]
+            source_title = row["source_title"]
+            if source_author != original_passage["source_author"] and source_title != original_passage["source_title"]:
+                filtered_titles.add(source_title)
+            target_title = row["target_title"]
+            if target_title not in filtered_titles:
+                filtered_titles.add(target_title)
+
+        # Update alignment table with passage_count
+        passage_count = len(filtered_titles)
+        if passage_count > 1:
+            cursor.execute(f"UPDATE {alignment_table} SET count=%s WHERE group_id=%s", (passage_count, group_id))
+            conn.commit()
+    conn.close()
+
+    print("Vacuuming alignment table...")
+    conn = psycopg2.connect(
+        user=database_config["database_user"],
+        password=database_config["database_password"],
+        database=database_config["database_name"],
+    )
+    conn.autocommit = True
+    cursor = conn.cursor()
+    cursor.execute(f"VACUUM ANALYZE {alignment_table}")
+    conn.close()
 
 
 def set_up_app(web_config, db_path):
