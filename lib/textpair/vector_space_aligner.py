@@ -8,7 +8,6 @@ import re
 from abc import ABC
 from collections import deque
 from html import unescape as unescape_html
-from math import floor
 from shutil import rmtree
 from typing import Any, Callable, Iterable, Iterator, Optional
 from xml.sax.saxutils import unescape as unescape_xml
@@ -202,7 +201,7 @@ class Corpus(ABC):
         n_chunk: int = 3,
         text_object_type_split: str = "doc",
         direction="source",
-        batch_size=1,
+        n_batches=1,
     ):
         """Initialize Corpus Object"""
         self.texts: Iterable[Tokens] = texts
@@ -215,9 +214,8 @@ class Corpus(ABC):
         self.direction: str = direction
         os.makedirs(os.path.join(self.tmp_dir, self.direction), exist_ok=True)
         self.length = 0
-        self.batch_size = batch_size
+        self.n_batches = n_batches
         self.similarity = similarity_function
-        self.chunk_size: int = 0  # placeholder value overwritten by child class
         self.docs: DocumentChunks
 
     def __len__(self) -> int:
@@ -325,33 +323,29 @@ class Corpus(ABC):
             }
         )
 
-    def create_batch(self) -> Iterable[np.ndarray | torch.Tensor]:
-        """Create batches of embeddings"""
-        for i in range(0, self.length, self.chunk_size):
-            yield self.docs[i : i + self.chunk_size]  # type: ignore
-
     def __compare(self, target_corpus=None) -> np.ndarray:
+        """Compare the corpus to another corpus"""
         results: np.ndarray
         if target_corpus is None:
             target_corpus = self
-        if self.batch_size == 1 and target_corpus.batch_size == 1:
+        if self.n_batches == 1 and target_corpus.n_batches == 1:
             results = self.similarity(self.docs[0 : self.length], target_corpus.docs[0 : target_corpus.length])  # type: ignore
-        else:  # TODO: fix batching which is currently broken
-            results = np.zeros((self.length, len(target_corpus)))
-            target_len = target_corpus.length
-            start_pos = 0
-            with tqdm(total=self.length * target_len, leave=False) as pbar:
-                for source_embeddings in self.create_batch():
-                    end_pos = start_pos + source_embeddings.shape[0]
-                    target_start_pos = 0
-                    source_torch_embeddings = source_embeddings
-                    for target_embeddings in target_corpus.create_batch():
-                        target_end_pos = target_start_pos + target_embeddings.shape[0]
-                        partial_results: np.ndarray = self.similarity(source_torch_embeddings, target_embeddings)  # type: ignore
-                        results[start_pos:end_pos, target_start_pos:target_end_pos] = partial_results
-                        target_start_pos = target_end_pos
-                        pbar.update(self.length * target_embeddings.shape[0])  # type: ignore
-                    start_pos = end_pos
+        else:  # Reconstruct a similarity matrix from batches
+            results = np.empty((self.length, target_corpus.length))
+            source_batch_size = int(np.ceil(self.length / self.n_batches))
+            target_batch_size = int(np.ceil(target_corpus.length / target_corpus.n_batches))
+            with tqdm(total=source_batch_size * target_batch_size, leave=False) as pbar:
+                for i in range(source_batch_size):
+                    start_index1 = i * source_batch_size
+                    end_index1 = min((i + 1) * source_batch_size, self.length)
+                    source_embeddings = self.docs[start_index1:end_index1]
+                    for j in range(target_batch_size):
+                        start_index2 = j * target_batch_size
+                        end_index2 = min((j + 1) * target_batch_size, target_corpus.length)
+                        target_embeddings = target_corpus.docs[start_index2:end_index2]
+                        partial_results: np.ndarray = self.similarity(source_embeddings, target_embeddings)
+                        results[start_index1:end_index1, start_index2:end_index2] = partial_results
+                        pbar.update(1)
         return results
 
     def inner_compare(self, min_similarity: float) -> Matches:
@@ -478,7 +472,7 @@ class Word2VecEmbeddingCorpus(Corpus):
         self,
         texts: Iterable[Tokens],
         model: str | spacy.Language,
-        batch_size: int,
+        n_batches: int,
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
@@ -493,7 +487,7 @@ class Word2VecEmbeddingCorpus(Corpus):
             n_chunk=n_chunk,
             text_object_type_split=text_object_type_split,
             direction=direction,
-            batch_size=batch_size,
+            n_batches=n_batches,
         )
         if isinstance(model, str):
             self.model = spacy.load(model)
@@ -505,7 +499,6 @@ class Word2VecEmbeddingCorpus(Corpus):
             self.create_embeddings,
         )
         self.length = len(self.docs)
-        self.chunk_size = floor((self.length + self.batch_size - 1) / self.batch_size)
 
     def create_embeddings(self, text_chunk) -> np.ndarray:
         """Create document embeddings"""
@@ -526,7 +519,7 @@ class TransformerCorpus(Corpus):
         self,
         texts: Iterable[Tokens],
         model_name: str,
-        batch_size: int,
+        n_batches: int,
         text_object_definition: str = "n_token",
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
@@ -534,7 +527,6 @@ class TransformerCorpus(Corpus):
         model=None,
         direction="source",
     ):
-
         super().__init__(
             texts,
             similarity_function=lambda x, y: util.cos_sim(x, y).cpu().numpy(),
@@ -543,7 +535,7 @@ class TransformerCorpus(Corpus):
             n_chunk=n_chunk,
             text_object_type_split=text_object_type_split,
             direction=direction,
-            batch_size=batch_size,
+            n_batches=n_batches,
         )
 
         if model is None:
@@ -557,7 +549,6 @@ class TransformerCorpus(Corpus):
             self.create_embeddings,
         )
         self.length = len(self.docs)
-        self.chunk_size = floor((self.length + self.batch_size - 1) / self.batch_size)
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def __getitem__(self, item: int) -> list[str]:
