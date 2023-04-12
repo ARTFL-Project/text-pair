@@ -29,6 +29,7 @@ export default {
 <style lang="scss">
 @import "./assets/theme.module.scss";
 @import "../node_modules/bootstrap/scss/bootstrap.scss";
+
 body,
 .btn {
     font-size: 0.9rem;
@@ -79,5 +80,21 @@ a {
     background-color: #565656;
     color: #f8f8f8;
     cursor: pointer;
+}
+
+.diff-btn,
+.group-diff-btn {
+    display: inline-block;
+    padding: 0.2rem;
+    margin-bottom: 2px;
+    border: solid 1px #ddd;
+    cursor: pointer;
+    font-family: "Open-Sans", sans-serif;
+}
+
+.diff-btn:hover,
+.group-diff-btn:hover {
+    color: #565656 !important;
+    background-color: #f8f8f8;
 }
 </style>

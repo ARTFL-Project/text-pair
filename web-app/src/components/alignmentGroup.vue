@@ -34,7 +34,23 @@
                             <span class="highlight">{{ reuse[`${reuse.direction}_passage`] }}</span> {{
                                 reuse[`${reuse.direction}_context_after`] }}
                         </span>
+                        <span class="text-muted text-center d-block mt-1">
+                            <button class="group-diff-btn" @click="showDifferences(reuse)">Show differences</button>
+                        </span>
                     </p>
+                </div>
+            </div>
+        </div>
+        <div id="passage-diff" class="modal fade" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content" style="min-width: 1024px">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Modal title</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <passage-pair v-if="showPair" :alignment="localAlignment" :diffed="true" :index="0"></passage-pair>
+                    </div>
                 </div>
             </div>
         </div>
@@ -42,9 +58,12 @@
 </template>
 
 <script>
+import passagePair from "./passagePair.vue";
+import { Modal } from "bootstrap";
 
 export default {
     name: "alignmentGroup",
+    components: { passagePair },
     inject: ["$http"],
     data() {
         return {
@@ -53,11 +72,20 @@ export default {
             done: false,
             timeline: {},
             sourcePassage: {},
-            passages: []
+            passages: [],
+            showPair: false,
+            localAlignment: {},
+            modal: null
         };
     },
     created() {
         this.fetchData();
+    },
+    mounted() {
+        this.modal = new Modal(document.getElementById("passage-diff"), {
+            keyboard: false,
+            backdrop: "static",
+        });
     },
     watch: {
         $route: "fetchData",
@@ -98,7 +126,17 @@ export default {
                 textPassage.classList.remove("show")
             }
 
-        }
+        },
+        showDifferences(reuse) {
+            let localReuse = {}
+            for (let key in reuse) {
+                let newKey = key.replace(/source_/, "target_")
+                localReuse[newKey] = reuse[key]
+            }
+            this.localAlignment = { ...this.sourcePassage, ...localReuse, count: 1 };
+            this.showPair = true;
+            this.modal.show()
+        },
     },
 };
 </script>
@@ -173,5 +211,9 @@ export default {
 .separator {
     color: black;
     padding: 5px;
+}
+
+.group-diff-btn {
+    font-size: smaller;
 }
 </style>
