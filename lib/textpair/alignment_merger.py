@@ -70,6 +70,7 @@ class AlignmentGroups:
             passage["source_end_byte"],
             {k: v for k, v in passage.items() if not k.startswith("target_")},
         )
+
         return PassageGroup(
             passage["source_filename"],
             passage["source_start_byte"],

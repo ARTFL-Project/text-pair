@@ -45,11 +45,12 @@
             <div class="modal-dialog" style="min-width: 1024px">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title">Modal title</h5>
+                        <h5 class="modal-title">Passage Pair</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
-                        <passage-pair v-if="showPair" :alignment="localAlignment" :diffed="true" :index="0"></passage-pair>
+                        <passage-pair v-if="showPair" :alignment="localAlignment" :diffed="true" :index="0"
+                            :key="render"></passage-pair>
                     </div>
                 </div>
             </div>
@@ -75,7 +76,8 @@ export default {
             passages: [],
             showPair: false,
             localAlignment: {},
-            modal: null
+            modal: null,
+            render: 0, // used to force re-rendering of passagePair
         };
     },
     created() {
@@ -128,12 +130,16 @@ export default {
 
         },
         showDifferences(reuse) {
-            let localReuse = {}
+            this.showPair = false;
+            this.localAlignment = { ...this.sourcePassage }
             for (let key in reuse) {
                 let newKey = key.replace(/source_/, "target_")
-                localReuse[newKey] = reuse[key]
+                if (newKey.startsWith("target_")) {
+                    this.localAlignment[newKey] = reuse[key]
+                }
             }
-            this.localAlignment = { ...this.sourcePassage, ...localReuse, count: 1 };
+            this.localAlignment.count = 1;
+            this.render += 1;
             this.showPair = true;
             this.modal.show()
         },
