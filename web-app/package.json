@@ -1,34 +1,31 @@
 {
     "name": "text-pair",
-    "version": "0.1.0",
+    "version": "2.0",
     "private": true,
     "description": "text-pair web app build with Vue.js",
     "author": "Clovis <clovisgladstone@gmail.com>",
     "scripts": {
-        "serve": "vue-cli-service serve",
-        "build": "npm i && vue-cli-service build --modern && rm -rf node_modules",
-        "lint": "vue-cli-service lint"
+        "serve": "npm i && vite preview",
+        "build": "npm i && vite build && rm -rf node_modules",
+        "host": "npm i && vite --host"
     },
     "dependencies": {
         "axios": "^0.21.1",
         "bootstrap": "^5.2.1",
         "chart.js": "^2.9.3",
+        "diff-match-patch": "^1.0.5",
         "tiny-emitter": "^2.1.0",
         "velocity-animate": "^1.5.2",
         "vue": "^3.2.0",
         "vue-router": "^4.0.13"
     },
     "devDependencies": {
-        "@babel/core": "^7.12.16",
-        "@babel/eslint-parser": "^7.19.1",
-        "@vue/cli-plugin-babel": "~5.0.1",
-        "@vue/cli-plugin-eslint": "~5.0.0",
-        "@vue/cli-service": "^5.0.8",
+        "@vitejs/plugin-vue": "^4.1.0",
         "@vue/compiler-sfc": "^3.1.0",
         "eslint": "^7.32.0",
         "eslint-plugin-vue": "^8.5.0",
         "sass": "^1.54.9",
-        "sass-loader": "^10.1.0",
+        "vite": "^4.2.1",
         "worker-loader": "^3.0.2"
     },
     "eslintConfig": {
@@ -38,17 +35,12 @@
         },
         "extends": [
             "plugin:vue/essential",
-            "eslint:recommended",
-            "plugin:vue/vue3-essential"
+            "eslint:recommended"
         ],
         "rules": {},
         "parserOptions": {
-            "parser": "@babel/eslint-parser"
-        }
-    },
-    "postcss": {
-        "plugins": {
-            "autoprefixer": {}
+            "ecmaVersion": 12,
+            "sourceType": "module"
         }
     },
     "browserslist": [

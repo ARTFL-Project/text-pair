@@ -93,7 +93,7 @@
 </template>
 
 <script>
-import Worker from "worker-loader!./diffStrings";
+import Worker from "./diffStrings?worker";
 
 
 export default {
@@ -111,7 +111,7 @@ export default {
             done: false,
             timeline: {},
             sourcePassage: {},
-            passages: []
+            passages: [],
         };
     },
     mounted() {
@@ -140,9 +140,9 @@ export default {
             let targetElement = parent.querySelector(".target-passage");
             if (diffBtn.getAttribute("diffed") == "false") {
                 loading.style.display = "initial";
-                this.worker = new Worker();
-                this.worker.postMessage([sourceText, targetText]);
-                this.worker.onmessage = function (response) {
+                const worker = new Worker();
+                worker.postMessage([sourceText, targetText]);
+                worker.onmessage = function (response) {
                     let differences = response.data;
                     let newSourceString = "";
                     let newTargetString = "";

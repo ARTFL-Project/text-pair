@@ -239,6 +239,18 @@ def get_js_resource(db_path: str, resource: str):
         resource = resource_file.read()
     return Response(resource, media_type="application/javascript")
 
+@app.get("/{db_path}/assets/{resource}")
+@app.get("/text-pair/{db_path}/assets/{resource}")
+def get_ressource(db_path: str, resource: str):
+    """Retrieve JS resources"""
+    with open(os.path.join(APP_PATH, db_path, "dist/assets", resource), encoding="utf8") as resource_file:
+        resource_content = resource_file.read()
+    if resource.endswith(".js"):
+        return Response(resource_content, media_type="application/javascript")
+    elif resource.endswith(".css"):
+        return Response(resource_content, media_type="text/css")
+
+
 
 @app.get("/{db_path}/search")
 @app.get("/text-pair/{db_path}/search")
