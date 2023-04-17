@@ -50,7 +50,7 @@
                     </div>
                     <div class="modal-body">
                         <passage-pair v-if="showPair" :alignment="localAlignment" :diffed="true" :index="0"
-                            :key="render"></passage-pair>
+                            :startByteIndex="startByteIndex" :endByteIndex="this.endByteIndex" :key="render"></passage-pair>
                     </div>
                 </div>
             </div>
@@ -77,6 +77,8 @@ export default {
             showPair: false,
             localAlignment: {},
             modal: null,
+            startByteIndex: 0,
+            endByteIndex: 0,
             render: 0, // used to force re-rendering of passagePair
         };
     },
@@ -139,6 +141,14 @@ export default {
                 }
             }
             this.localAlignment.count = 1;
+            this.startByteIndex = this.sourcePassage.source_passage.indexOf(reuse.source_passage)
+            let remove = reuse.source_passage.length
+            while (this.startByteIndex == -1) { // if the passage is not found, remove one character from the end and try again
+                this.startByteIndex = this.sourcePassage.source_passage.indexOf(reuse.source_passage.slice(0, remove))
+                remove -= 1
+            }
+            this.endByteIndex = this.startByteIndex + reuse.source_passage.length
+            console.log(this.startByteIndex)
             this.render += 1;
             this.showPair = true;
             this.modal.show()

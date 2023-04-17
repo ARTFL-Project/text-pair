@@ -56,7 +56,7 @@
             v-if="globalConfig.matchingAlgorithm == 'sa' && alignment.count > 1">
             &rarr;
             <router-link class="" :to="`group/${alignment.group_id}`">
-                View all {{ alignment.count }} reuses of this passage
+                Passage reused in {{ alignment.count }} different authors
             </router-link>
         </div>
 
@@ -103,6 +103,8 @@ export default {
         alignment: Object,
         index: Number,
         diffed: Boolean,
+        startByteIndex: Number,
+        endByteIndex: Number,
     },
     data() {
         return {
@@ -141,10 +143,18 @@ export default {
             if (diffBtn.getAttribute("diffed") == "false") {
                 loading.style.display = "initial";
                 const worker = new Worker();
-                worker.postMessage([sourceText, targetText]);
+                let slicing = false;
+                if (this.startByteIndex != undefined && this.startByteIndex > 0) {
+                    // works around issue with diff-match-patch where no matches are found if the match is far after the beginning of the string
+                    slicing = true
+                    worker.postMessage([sourceText.slice(this.startByteIndex, this.endByteIndex), targetText]);
+                } else {
+                    worker.postMessage([sourceText, targetText]);
+                }
                 worker.onmessage = function (response) {
                     let differences = response.data;
                     let newSourceString = "";
+
                     let newTargetString = "";
                     for (let diffObj of differences) {
                         let [diffCode, text] = diffObj;
@@ -156,6 +166,9 @@ export default {
                         } else if (diffCode === 1) {
                             newTargetString += `<span class="added">${text}</span>`;
                         }
+                    }
+                    if (slicing) {
+                        newSourceString = `<span class="removed">${sourceText.slice(0, this.startByteIndex)} </span>${newSourceString}<span class="removed"> ${sourceText.slice(this.endByteIndex)}</span>`;
                     }
                     sourceElement.innerHTML = newSourceString;
                     targetElement.innerHTML = newTargetString;
@@ -255,5 +268,9 @@ export default {
 
 .separator {
     padding: 5px;
+}
+
+.target-passage-container {
+    border-right-width: 0 !important;
 }
 </style>

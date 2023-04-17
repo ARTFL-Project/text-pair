@@ -70,7 +70,6 @@ class AlignmentGroups:
             passage["source_end_byte"],
             {k: v for k, v in passage.items() if not k.startswith("target_")},
         )
-
         return PassageGroup(
             passage["source_filename"],
             passage["source_start_byte"],
@@ -84,7 +83,7 @@ class AlignmentGroups:
         self,
         current_group: PassageGroup,
         passage: dict[str, Any],
-    ):
+    ) -> PassageGroup:
         """Update current group"""
         if passage["source_end_byte"] > current_group.end_byte:
             current_group.end_byte = passage["source_end_byte"]
@@ -95,6 +94,7 @@ class AlignmentGroups:
         self.merged_target_passages[passage["target_doc_id"]].append(current_target)
         current_group.matches += 2
         self.group_map[passage["passage_id"]] = self.group_id
+        return current_group
 
     def merge_passages(
         self,
@@ -110,7 +110,7 @@ class AlignmentGroups:
                 current_group = self.passage_group_init(passage)
                 continue
             if passage["source_start_byte"] < current_group.end_byte:
-                self.passage_group_update(current_group, passage)
+                current_group = self.passage_group_update(current_group, passage)
             else:
                 current_group = self.passage_group_init(passage)
 

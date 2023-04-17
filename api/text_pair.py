@@ -4,7 +4,7 @@
 import configparser
 import os
 import re
-from collections import Counter, OrderedDict
+from collections import Counter, OrderedDict, defaultdict
 from pathlib import Path
 import time
 from typing import Any
@@ -239,6 +239,7 @@ def get_js_resource(db_path: str, resource: str):
         resource = resource_file.read()
     return Response(resource, media_type="application/javascript")
 
+
 @app.get("/{db_path}/assets/{resource}")
 @app.get("/text-pair/{db_path}/assets/{resource}")
 def get_ressource(db_path: str, resource: str):
@@ -249,7 +250,6 @@ def get_ressource(db_path: str, resource: str):
         return Response(resource_content, media_type="application/javascript")
     elif resource.endswith(".css"):
         return Response(resource_content, media_type="text/css")
-
 
 
 @app.get("/{db_path}/search")
@@ -538,7 +538,7 @@ def get_passage_group(request: Request, group_id: int):
     """Retrieve a passage group"""
     alignment_table = request.query_params["db_table"]
     groups_table = f"{alignment_table}_groups"
-    filtered_passages: dict[str, dict[str, Any]] = {}
+    filtered_passages: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     original_passage: dict[str, Any] = {}
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
@@ -548,107 +548,20 @@ def get_passage_group(request: Request, group_id: int):
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
     original_passage = {k: v for k, v in cursor.fetchone().items()}
-    cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s", (group_id,))
-
-    filename_match: dict[str, dict[str, int]] = {
-        original_passage["source_filename"]: {
-            "start_byte": original_passage["source_start_byte"],
-            "end_byte": original_passage["source_end_byte"],
-        }
-    }
+    cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, original_passage["source_doc_id"]))
     for row in cursor:
-        if row["source_filename"] not in filename_match:
-            filename_match[row["source_filename"]] = {
-                "start_byte": row["source_start_byte"],
-                "end_byte": row["source_end_byte"],
-            }
-            source_data = {k: v for k, v in row.items() if not k.startswith("target_")}
-            filtered_passages[row["source_filename"]] = {
-                **source_data,
-                "year": row["source_year"],
-                "title": row["source_title"],
-                "direction": "source",
-            }
-        else:
-            changed = False
-            if row["source_start_byte"] < filename_match[row["source_filename"]]["start_byte"]:
-                filename_match[row["source_filename"]]["start_byte"] = row["source_start_byte"]
-                filtered_passages[row["source_filename"]]["source_start_byte"] = row["source_start_byte"]
-                changed = True
-            if row["source_end_byte"] > filename_match[row["source_filename"]]["end_byte"]:
-                filename_match[row["source_filename"]]["end_byte"] = row["source_end_byte"]
-                filtered_passages[row["source_filename"]]["source_end_byte"] = row["source_end_byte"]
-                changed = True
-            if changed:
-                filtered_passages[row["source_filename"]]["source_passage"] = get_text(
-                    filename_match[row["source_filename"]]["start_byte"],
-                    filename_match[row["source_filename"]]["end_byte"],
-                    row["source_filename"],
-                )
-                filtered_passages[row["source_filename"]]["source_context_before"] = get_text(
-                    filename_match[row["source_filename"]]["start_byte"] - 300,
-                    filename_match[row["source_filename"]]["start_byte"],
-                    row["source_filename"],
-                )
-                filtered_passages[row["source_filename"]]["source_context_after"] = get_text(
-                    filename_match[row["source_filename"]]["end_byte"],
-                    filename_match[row["source_filename"]]["end_byte"] + 300,
-                    row["source_filename"],
-                )
-        # Process target results
-        target_data = {k: v for k, v in row.items() if not k.startswith("source_")}
-        if row["target_filename"] not in filename_match:
-            filename_match[row["target_filename"]] = {
-                "start_byte": row["target_start_byte"],
-                "end_byte": row["target_end_byte"],
-            }
-            filtered_passages[row["target_filename"]] = {
-                **target_data,
-                "year": row["target_year"],
-                "title": row["target_title"],
+        filtered_passages[row["target_filename"]].append({
+                **row,
                 "direction": "target",
-            }
-        else:
-            changed = False
-            if row["target_start_byte"] < filename_match[row["target_filename"]]["start_byte"]:
-                filename_match[row["target_filename"]]["start_byte"] = row["target_start_byte"]
-                filtered_passages[row["target_filename"]]["start_byte"] = row["target_start_byte"]
-                filtered_passages[row["target_filename"]]["target_passage"] = get_text(
-                    filename_match[row["target_filename"]]["start_byte"],
-                    filename_match[row["target_filename"]]["end_byte"],
-                    row["target_filename"],
-                )
-                changed = True
-            if row["target_end_byte"] > filename_match[row["target_filename"]]["end_byte"]:
-                filename_match[row["target_filename"]]["end_byte"] = row["target_end_byte"]
-                filtered_passages[row["target_filename"]]["end_byte"] = row["target_end_byte"]
-                filtered_passages[row["target_filename"]]["target_passage"] = get_text(
-                    filename_match[row["target_filename"]]["start_byte"],
-                    filename_match[row["target_filename"]]["end_byte"],
-                    row["target_filename"],
-                )
-                changed = True
-            if changed:
-                filtered_passages[row["target_filename"]]["target_context_before"] = get_text(
-                    filename_match[row["target_filename"]]["start_byte"] - 300,
-                    filename_match[row["target_filename"]]["start_byte"],
-                    row["target_filename"],
-                )
-                filtered_passages[row["target_filename"]]["target_context_after"] = get_text(
-                    filename_match[row["target_filename"]]["end_byte"],
-                    filename_match[row["target_filename"]]["end_byte"] + 300,
-                    row["target_filename"],
-                )
+            })
     conn.close()
     passage_list = []
-    results = {}
-    for value in filtered_passages.values():
-        if value["year"] not in results:
-            results[value["year"]] = [value]
-        else:
-            results[value["year"]].append(value)
+    results = defaultdict(list)
+    for passages in filtered_passages.values():
+        for passage in passages:
+            results[passage["target_year"]].append(passage)
     for key, value in results.items():
-        value.sort(key=lambda x: x["title"], reverse=True)
+        value.sort(key=lambda x: (x["target_title"], x["target_start_byte"]), reverse=True)
         passage_list.append({"year": key, "result": value})
     passage_list.sort(key=lambda x: x["year"])
     full_results = {"passageList": passage_list, "original_passage": original_passage}
