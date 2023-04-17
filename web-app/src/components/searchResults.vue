@@ -317,9 +317,7 @@ export default {
     color: #565656;
 }
 
-.target-passage-container {
-    border-right-width: 0 !important;
-}
+
 
 .dropdown-header {
     display: block;

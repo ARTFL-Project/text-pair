@@ -141,6 +141,8 @@ export default {
                 }
             }
             this.localAlignment.count = 1;
+            reuse.source_passage = reuse.source_passage.replace(/\s\s+/g, ' ')
+            this.sourcePassage.source_passage = this.sourcePassage.source_passage.replace(/\s\s+/g, ' ')
             this.startByteIndex = this.sourcePassage.source_passage.indexOf(reuse.source_passage)
             let remove = reuse.source_passage.length
             while (this.startByteIndex == -1) { // if the passage is not found, remove one character from the end and try again
@@ -148,7 +150,6 @@ export default {
                 remove -= 1
             }
             this.endByteIndex = this.startByteIndex + reuse.source_passage.length
-            console.log(this.startByteIndex)
             this.render += 1;
             this.showPair = true;
             this.modal.show()

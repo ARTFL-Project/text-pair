@@ -130,6 +130,8 @@ export default {
     },
     methods: {
         showDifferences(sourceText, targetText, sourcePassageLength, targetPassageLength, diffBtn) {
+            sourceText = sourceText.replace(/\s\s+/g, ' ')
+            targetText = targetText.replace(/\s\s+/g, ' ')
             if (sourcePassageLength > 10000 || targetPassageLength > 10000) {
                 alert("Passage of 10000 words or more may take up a long time to compare");
             }
@@ -144,9 +146,12 @@ export default {
                 loading.style.display = "initial";
                 const worker = new Worker();
                 let slicing = false;
+                let startByteIndex = this.startByteIndex
+                let endByteIndex = this.endByteIndex
                 if (this.startByteIndex != undefined && this.startByteIndex > 0) {
                     // works around issue with diff-match-patch where no matches are found if the match is far after the beginning of the string
                     slicing = true
+
                     worker.postMessage([sourceText.slice(this.startByteIndex, this.endByteIndex), targetText]);
                 } else {
                     worker.postMessage([sourceText, targetText]);
@@ -168,7 +173,7 @@ export default {
                         }
                     }
                     if (slicing) {
-                        newSourceString = `<span class="removed">${sourceText.slice(0, this.startByteIndex)} </span>${newSourceString}<span class="removed"> ${sourceText.slice(this.endByteIndex)}</span>`;
+                        newSourceString = `<span class="removed">${sourceText.slice(0, startByteIndex)}</span>${newSourceString}<span class="removed">${sourceText.slice(endByteIndex)}</span>`;
                     }
                     sourceElement.innerHTML = newSourceString;
                     targetElement.innerHTML = newTargetString;
