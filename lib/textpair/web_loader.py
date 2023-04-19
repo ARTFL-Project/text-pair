@@ -396,7 +396,7 @@ def update_alignment_table(
     for group_id in tqdm(group_ids, desc="Updating alignment table...", leave=False):
         cursor.execute(f"""SELECT source_doc_id FROM {groups_table} WHERE group_id=%s""", (group_id,))
         source_doc_id = cursor.fetchone()[0]
-        cursor.execute(f"SELECT COUNT(distinct target_author) FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, source_doc_id))
+        cursor.execute(f"SELECT COUNT(distinct target_filename) FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, source_doc_id))
         passage_count = cursor.fetchone()[0]
         if passage_count > 1:
             cursor.execute(f"UPDATE {alignment_table} SET count=%s WHERE group_id=%s", (passage_count, group_id))

@@ -41,7 +41,7 @@
             </div>
             <div id="facets" class="col-3 pl-0 position-relative">
                 <div class="card shadow-1">
-                    <h6 class="card-header text-center">Browse by Metadata Counts</h6>
+                    <h6 class="card-header text-center">Browse by Counts</h6>
                     <div id="metadata-list" class="mx-auto p-2" @click="toggleFacetList()">Show options</div>
                     <div class="mt-2 mb-3 pr-3 pl-3 facet-list">
                         <span class="dropdown-header text-center" v-html="globalConfig.sourceLabel"></span>

@@ -1,9 +1,6 @@
 <template>
-    <div
-        id="search-arguments"
-        class="mt-2 mb-4 pt-2 shadow-1"
-        style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125)"
-    >
+    <div id="search-arguments" class="mt-2 mb-4 pt-2 shadow-1"
+        style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125)">
         <div class="mb-1 p-2" style="font-size: 1rem" v-if="counts && !error">
             {{ counts }} results for the following query:
         </div>
@@ -13,15 +10,12 @@
                 <span class="metadata-value">
                     {{ banality }}
                 </span>
-                <span class="remove-metadata" @click="removeMetadata({ fieldName: 'banality' })">x </span>
+                <span class="remove-metadata" @click="removeMetadata({ fieldName: 'banality' }, $event)">x </span>
             </div>
         </div>
         <div class="row pl-2" v-if="!error">
-            <div
-                class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group"
-                v-for="(paramGroup, groupIndex) in searchParams"
-                :key="groupIndex"
-            >
+            <div class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams"
+                :key="groupIndex">
                 <h6 class="text-center text-capitalize">
                     <span v-html="paramGroup.direction"></span>
                     Parameters:
@@ -34,11 +28,15 @@
                         <span class="metadata-value">
                             {{ checkValue(metadata.value) }}
                         </span>
-                        <span class="remove-metadata" @click="removeMetadata(metadata)">x</span>
+                        <span class="remove-metadata" @click="removeMetadata(metadata, $event)">x</span>
                     </div>
                 </div>
                 <div class="metadata-args none" v-if="paramGroup.params == null">None</div>
             </div>
+        </div>
+        <div class="row" style="width: fit-content">
+            <button type="button" class="btn btn-outline-secondary" @click="sortResults">Sort results by frequency of
+                reuse</button>
         </div>
     </div>
 </template>
@@ -97,8 +95,8 @@ export default {
             }
             return searchParams;
         },
-        removeMetadata(metadata) {
-            event.srcElement.parentNode.parentNode.style.display = "none";
+        removeMetadata(metadata, event) {
+            event.target.parentNode.parentNode.style.display = "none";
             let queryParams = { ...this.$route.query };
             delete queryParams.page;
             delete queryParams.id_anchor;
@@ -117,6 +115,13 @@ export default {
                 return value;
             }
         },
+        sortResults() {
+            let queryParams = { ...this.$route.query };
+            delete queryParams.page;
+            delete queryParams.id_anchor;
+            queryParams.db_table = this.$globalConfig.databaseName;
+            this.$router.push(`/sorted-results/?${this.paramsToUrl(queryParams)}`);
+        },
     },
 };
 </script>
@@ -124,6 +129,7 @@ export default {
 #search-arguments {
     font-family: "Open-Sans", sans-serif;
 }
+
 .metadata-args {
     border: 1px solid #ddd;
     display: -webkit-inline-box !important;

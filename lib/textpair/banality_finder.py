@@ -5,12 +5,22 @@ import os
 from math import floor
 from typing import Any, Optional
 import subprocess
-import re
+import regex as re
 
 import lz4.frame
 import orjson
 from tqdm import tqdm
 
+
+PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
+SPACES = re.compile(r"\p{Z}+")
+
+def clean_text(text: str) -> str:
+    """Clean text for banality detection"""
+    text = text.lower().strip()
+    text = PUNCTUATION.sub("", text)
+    text = SPACES.sub(" ", text)
+    return text
 
 class NgramDoc:
     """Doc with various properties"""
@@ -24,6 +34,7 @@ class NgramDoc:
         self.ngram_pos: list[int] = [ngram[0] for ngram in self.ngrams]
 
     def get_ngrams(self, start_byte, end_byte) -> list[int]:
+        """Get ngrams in a given range"""
         start_index = bisect.bisect_left(self.ngram_pos, start_byte)
         end_index = bisect.bisect_left(self.ngram_pos, end_byte)
         ngrams = [ngram for _, ngram in self.ngrams[start_index:end_index]]
@@ -83,17 +94,13 @@ def banality_auto_detect(
                 alignment["banality"] = False
                 output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
     os.system(f"rm {filepath} && mv {filepath}.temp.lz4 {filepath}")
-    if store_banalities is True:
-        os.system(f"rm {filepath}.banal.lz4")
     return banalities_found
 
 
 def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[int]):
     """Detect banalities based on user provided phrases"""
-    # TODO: split results into banality and results we keep: the assumption being that alignments
-    # that match should be always dismissed.
     with open(banality_phrases_path, encoding="utf8") as input_file:
-        banality_phrases = {phrase.strip().lower() for phrase in input_file if re.search(r"\w", phrase)}
+        banality_phrases = {clean_text(phrase) for phrase in input_file if re.search(r"\w", phrase)}
     passages_filtered = 0
     filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages")
     with (
@@ -101,11 +108,11 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
         lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
         lz4.frame.open(filepath) as input_file,
     ):
-        for line in tqdm(input_file, total=count, desc="Running phrase-based banality detection...", leave=True):
+        for line in tqdm(input_file, total=count, desc="Running phrase-based banality detection...", leave=False):
             alignment: dict[str, Any] = orjson.loads(line)
             banality = False
             for phrase in banality_phrases:
-                if phrase in alignment["source_passage"].lower():
+                if phrase in clean_text(alignment["source_passage"]):
                     passage = f"{phrase}\nFOUND IN:\n{alignment['source_passage']}\n\n"
                     filtered_passages.write(passage.encode("utf8"))
                     passages_filtered += 1

@@ -56,7 +56,7 @@
             v-if="globalConfig.matchingAlgorithm == 'sa' && alignment.count > 1">
             &rarr;
             <router-link class="" :to="`group/${alignment.group_id}`">
-                Passage reused in {{ alignment.count }} different authors
+                Passage reused in {{ alignment.count }} different titles
             </router-link>
         </div>
 

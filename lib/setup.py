@@ -43,6 +43,7 @@ dependencies = [
     "uvloop",
     "httptools",
     "philologic>=4.7.3.2",
+    "regex"
 ]
 
 
