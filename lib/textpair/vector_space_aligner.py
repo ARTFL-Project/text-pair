@@ -872,8 +872,6 @@ def post_process_passages(
             source_passage_with_matches.append(token.surface_form)
     target_passage_with_matches = []
     for token in target_tokens:
-        if token.text:
-            print(token.text, token.text in source_set)
         if token.text and token.text in source_set:
             target_passage_with_matches.append(f'&lt;span class="token-match"&gt;{token.surface_form}&lt;/span&gt;')
         elif not token.text:
