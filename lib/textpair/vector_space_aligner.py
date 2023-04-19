@@ -835,16 +835,14 @@ def get_tokens(
     for token in preproc.process_string(text):
         pos += 1
         end_byte = start_byte + len(token.surface_form.encode("utf8"))
-        # if start_byte >= passage.start_byte and end_byte <= passage.end_byte:
         surface_form = token.surface_form.replace("\n", " ")
         try:
-            token = full_tokens[start_bytes[start_byte]]
+            if token.text:
+                token = full_tokens[start_bytes[start_byte]]
         except KeyError:  # Token was not indexed at parse time
             pass
         token.surface_form = surface_form
         tokens.append(token)
-        # if end_byte > passage.end_byte:
-        #     break
         start_byte = end_byte
     return tokens
 
@@ -874,13 +872,14 @@ def post_process_passages(
             source_passage_with_matches.append(token.surface_form)
     target_passage_with_matches = []
     for token in target_tokens:
+        if token.text:
+            print(token.text, token.text in source_set)
         if token.text and token.text in source_set:
             target_passage_with_matches.append(f'&lt;span class="token-match"&gt;{token.surface_form}&lt;/span&gt;')
         elif not token.text:
             target_passage_with_matches.append(f'&lt;span class="filtered-token"&gt;{token.surface_form}&lt;/span&gt;')
         else:
             target_passage_with_matches.append(token.surface_form)
-
     return clean_text("".join(source_passage_with_matches)), clean_text("".join(target_passage_with_matches))
 
 

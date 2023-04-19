@@ -96,7 +96,7 @@ class WebAppConfig:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
         self.options["appPath"] = os.path.join("/text-pair", db_name)
-        self.options["databaseName"] = db_name
+        self.options["databaseName"] = db_name.lower()
         self.options["matchingAlgorithm"] = algorithm
         self.options["sourcePhiloDBLink"] = source_database_link
         self.options["targetPhiloDBLink"] = target_database_link
@@ -224,7 +224,7 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     if banalities_stored is True:
         field_names.add("banality")
     if algorithm == "vsa":
-        field_names.add("similarity")
+        field_names.update(("similarity", "source_passage_with_matches", "target_passage_with_matches"))
     field_names.update(get_metadata_fields(source_metadata, "source"))
     if target_metadata:
         field_names.update(get_metadata_fields(target_metadata, "target"))

@@ -73,6 +73,8 @@ class TextPairConfig:
                         value = True
                     else:
                         value = False
+                    self.preprocessing_params["source"][key] = value
+                    self.preprocessing_params["target"][key] = value
                 case "source_text_object_type":
                     self.preprocessing_params["source"]["text_object_type"] = value
                 case "target_text_object_type":

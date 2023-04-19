@@ -195,6 +195,7 @@ export default {
             let parent = diffBtn.parentNode.parentNode.parentNode;
             let sourceElement = parent.querySelector(".source-passage");
             let targetElement = parent.querySelector(".target-passage");
+            console.log(alignment);
             if (diffBtn.getAttribute("diffed") == "false") {
                 let source = alignment.source_passage_with_matches.replace(/&gt;/g, ">").replace(/&lt;/g, "<");
                 sourceElement.innerHTML = source;
