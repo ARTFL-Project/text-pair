@@ -72,14 +72,13 @@
                 </div>
             </div>
             <div v-if="globalConfig.matchingAlgorithm == 'sa'">
-                <a class="diff-btn" diffed="false" @click="
-                    showDifferences(
+                <a class="diff-btn" diffed="false" @click="showDifferences(
                         alignment.source_passage,
                         alignment.target_passage,
                         alignment.source_passage_length,
                         alignment.target_passage.length
                     )
-                ">Show differences</a>
+                    ">Show differences</a>
                 <div class="loading position-absolute" style="display: none; left: 50%; transform: translateX(-50%)">
                     <div class="spinner-border"
                         style="width: 1.4rem; height: 1.4rem; position: absolute; z-index: 50; top: 5px; left: -10px;"

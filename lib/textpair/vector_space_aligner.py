@@ -557,27 +557,9 @@ class TransformerCorpus(Corpus):
     def __len__(self):
         return self.length
 
-    def create_embeddings(self, text_chunks, mean=False) -> torch.Tensor:
+    def create_embeddings(self, text_chunks) -> torch.Tensor:
         """Create document embedding"""
-        if mean is False:
-            embeddings: torch.Tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)  # type: ignore
-        else:  # To avoid clipping texts that are larger than the max sequence length of the model, we compute the mean embeddings of individual sentence embeddings
-            current_sentence_id = 0
-            sentence = []
-            embeddings_list: list[torch.Tensor] = []
-            for token in text_chunks:
-                sentence_id = token.ext["position"].split()[5]  # get sentence ID from PhiloLogic parse output
-                if sentence_id != current_sentence_id and current_sentence_id != 0:
-                    embedding = self.model.encode([" ".join(sentence)], convert_to_tensor=True)
-                    embeddings_list.append(embedding)  # type: ignore
-                    sentence = []
-                sentence.append(token)
-                current_sentence_id = sentence_id
-            embeddings_list.append(self.model.encode([" ".join(sentence)], convert_to_tensor=True))
-            embeddings = torch.mean(torch.stack(embeddings_list), axis=0)  # type: ignore
-            if self.device.type == "cuda":
-                embeddings = embeddings.to(self.device)
-        return embeddings
+        return self.model.encode(list(text_chunks), convert_to_tensor=True)  # type: ignore
 
 
 def clean_text(text: str) -> str:
@@ -647,13 +629,12 @@ def get_passage(doc: tuple[Tokens, dict[int, int], dict[int, int]], start_byte: 
     end_index = end_bytes[end_byte] + 1
     return text[start_index:end_index]
 
-
 def merge_passages(
     matches: Matches,
     corpus: TfIdfCorpus | TransformerCorpus | Word2VecEmbeddingCorpus,
     min_score: float,
 ) -> list[MergedGroup]:
-    """Merge all passages into bigger passages"""
+    """Merge all passages into bigger passages. Similarity is computed as the mean similarity of all passages in the group."""
     # TODO: should merging be done using Jaccard sim metric: to avoid sparsity
     docs_with_matches: dict[str, tuple[Tokens, dict[int, int], dict[int, int]]] = get_docs_with_matches(matches)
     last_count = len(matches)
@@ -678,77 +659,47 @@ def merge_passages(
         saved_groups: list[MergedGroup] = []
         total_matches: int = len(matches)
         start_score: float = min_score
+        merged_pairs: list[float] = []
 
         for pos, match in enumerate(merged_matches):
             merged_source: bool = False
             merged_target: bool = False
             if merged_group.source.filename == "":
-                start_score = match.similarity
+                merged_pairs.append(match.similarity)
                 merged_group = MergedGroup(match.source, match.target, start_score)
                 continue
             if (
                 match.source.filename != merged_group.source.filename
                 or match.target.filename != merged_group.target.filename
             ):
+                merged_group.similarity = sum(merged_pairs) / len(merged_pairs)
                 saved_groups.append(merged_group)
-                start_score = match.similarity
+                merged_pairs = [match.similarity]
                 merged_group = MergedGroup(match.source, match.target, start_score)
                 continue
             if match.source.start_byte <= merged_group.source.end_byte:
                 if match.source.end_byte > merged_group.source.end_byte:
-                    source_tokens = get_passage(
-                        docs_with_matches[match.source.metadata["parsed_filename"]],
-                        merged_group.source.start_byte,
-                        match.source.end_byte,
-                    )
-                    if isinstance(corpus, TfIdfCorpus):
-                        source_vector = corpus.vectorizer.transform([" ".join(source_tokens)])  # type: ignore
-                        score_array: np.ndarray = jaccard_sim(source_vector, merged_group.target.vector)  # type: ignore
-                        new_score: float = score_array[0, 0]
-                    elif isinstance(corpus, TransformerCorpus):
-                        source_vector = corpus.create_embeddings(source_tokens, mean=True)
-                        new_score = util.cos_sim(source_vector, merged_group.target.vector).cpu().numpy()[0, 0]
-                    elif isinstance(corpus, Word2VecEmbeddingCorpus):
-                        source_vector = corpus.create_embeddings([" ".join(source_tokens)])[0]
-                        new_score = linear_kernel([source_vector], [merged_group.target.vector])[0, 0]
-                    if evaluate_score(start_score or min_score, new_score, min_score) is True:
-                        merged_group.source.end_byte = match.source.end_byte
-                        merged_group.source.metadata["end_byte"] = match.source.end_byte
-                        merged_group.source.vector = source_vector
-                        merged_group.similarity = new_score
-                        merged_source = True
+                    merged_group.source.end_byte = match.source.end_byte
+                    merged_group.source.metadata["end_byte"] = match.source.end_byte
+                    merged_source = True
                 elif match.source.end_byte == merged_group.source.end_byte:
                     merged_source = True
             if match.target.start_byte <= merged_group.target.end_byte:
                 if match.target.end_byte > merged_group.target.end_byte:
-                    target_tokens = get_passage(
-                        docs_with_matches[match.target.metadata["parsed_filename"]],
-                        merged_group.target.start_byte,
-                        match.target.end_byte,
-                    )
-                    if isinstance(corpus, TfIdfCorpus):
-                        target_vector = corpus.vectorizer.transform([" ".join(target_tokens)])  # type: ignore
-                        score_array: np.ndarray = jaccard_sim(merged_group.source.vector, target_vector)  # type: ignore
-                        new_score: float = score_array[0, 0]
-                    elif isinstance(corpus, TransformerCorpus):
-                        target_vector = corpus.create_embeddings(target_tokens, mean=True)
-                        new_score = util.cos_sim(target_vector, merged_group.source.vector).cpu().numpy()[0, 0]
-                    elif isinstance(corpus, Word2VecEmbeddingCorpus):
-                        target_vector = corpus.create_embeddings([" ".join(target_tokens)])[0]
-                        new_score = linear_kernel([target_vector], [merged_group.source.vector])[0, 0]
-                    if evaluate_score(start_score or min_score, new_score, min_score) is True:
-                        merged_group.target.end_byte = match.target.end_byte
-                        merged_group.target.metadata["end_byte"] = match.target.end_byte
-                        merged_group.target.vector = target_vector  # type: ignore
-                        merged_group.similarity = new_score
-                        merged_target = True
+                    merged_group.target.end_byte = match.target.end_byte
+                    merged_group.target.metadata["end_byte"] = match.target.end_byte
+                    merged_target = True
                 elif match.target.end_byte == merged_group.target.end_byte:
                     merged_target = True
+            if any((merged_source, merged_target)):
+                merged_pairs.append(match.similarity)
             if merged_source is False and merged_target is False:
+                merged_group.similarity = sum(merged_pairs) / len(merged_pairs)
                 saved_groups.append(merged_group)
-                start_score = match.similarity
-                merged_group = MergedGroup(match.source, match.target, start_score)
+                merged_pairs = [match.similarity]
+                merged_group = MergedGroup(match.source, match.target, match.similarity)
             if pos + 1 == total_matches:
+                merged_group.similarity = sum(merged_pairs) / len(merged_pairs)
                 saved_groups.append(merged_group)
         merged_matches = saved_groups
         iteration += 1
@@ -756,7 +707,6 @@ def merge_passages(
         print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
     print(flush=True)
     return merged_matches
-
 
 def optimize_match(
     tokens: Iterable[Token],
@@ -1043,7 +993,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             target_batch=config["target_batch"],
         )
     print(f"{len(matches)} matches found.")
-    matches = merge_passages(
+    matches = merge_passages2(
         matches,
         source_corpus,
         config["min_similarity"],

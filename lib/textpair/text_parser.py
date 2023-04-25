@@ -21,6 +21,7 @@ def parse_files(
     workers: int,
     debug: bool,
 ):
+    """Parse files using Philologic parser"""
     output_path = os.path.abspath(output_path)
     os.makedirs(output_path, exist_ok=True)
     setup_db_dir(output_path, False, force_delete=True)

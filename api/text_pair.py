@@ -15,7 +15,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
-from textpair import get_text
 
 app = FastAPI()
 app.add_middleware(
@@ -307,6 +306,16 @@ def search_alignments(request: Request):
     if other_args.direction == "previous":
         alignments.reverse()
         group_ids.reverse()
+
+    if group_ids:
+        counts_per_group: dict[int, int] = {}
+        for group_id in set(group_ids):
+            cursor.execute(f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
+            source_doc_id = cursor.fetchone()[0]
+            cursor.execute(f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, source_doc_id))
+            counts_per_group[group_id] = cursor.fetchone()[0]
+        for alignment in alignments:
+            alignment["count"] = counts_per_group[alignment["group_id"]]
     conn.close()
 
     previous_url = ""

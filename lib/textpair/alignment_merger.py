@@ -135,13 +135,13 @@ class AlignmentGroups:
         return match
 
 
-def read_alignment(line: str, passage_id: int):
+def read_alignment(line: bytes, passage_id: int):
     """Read alignment from line"""
     alignment: dict[str, Any] = orjson.loads(line)
     alignment["passage_id"] = passage_id
     return alignment
 
-
+# @profile
 def merge_alignments(results_file: str, count: int) -> str:
     """Merge passages that are aligned to the same source passage"""
     passages: list[dict[str, str]] = []
