@@ -1,42 +1,40 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory } from "vue-router";
 import globalConfig from "../../appConfig.json";
+import home from "../components/home";
 
-const searchResults = () =>
-    import ('../components/searchResults');
-const timeSeries = () =>
-    import ('../components/timeSeries');
-const alignmentGroup = () =>
-    import ("../components/alignmentGroup")
-
-
+const searchResults = () => import("../components/searchResults");
+const timeSeries = () => import("../components/timeSeries");
+const alignmentGroup = () => import("../components/alignmentGroup");
 
 const router = createRouter({
     history: createWebHistory(globalConfig.appPath),
-    routes: [{
+    routes: [
+        { path: "/", name: "home", component: home },
+        {
             path: "/search",
             name: "searchResults",
-            component: searchResults
+            component: searchResults,
         },
         {
             path: "/time",
             name: "timeSeries",
-            component: timeSeries
+            component: timeSeries,
         },
         {
-            path:"/group/:groupId",
+            path: "/group/:groupId",
             name: "alignmentGroup",
-            component: alignmentGroup
-        }
+            component: alignmentGroup,
+        },
     ],
     scrollBehavior(to, from, savedPosition) {
         if (savedPosition) {
-            return savedPosition
+            return savedPosition;
         } else {
             return {
                 left: 0,
-                top: 0
-            }
+                top: 0,
+            };
         }
-    }
-})
-export default router
+    },
+});
+export default router;

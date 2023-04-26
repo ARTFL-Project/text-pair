@@ -376,6 +376,30 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
     database.commit()
     database.close()
 
+def generate_database_stats(table_name, config, algorithm):
+    """Generate statistics for the database"""
+    print("Generating database statistics (this could take a while)...")
+    database = psycopg2.connect(
+        user=config["DATABASE"]["database_user"],
+        password=config["DATABASE"]["database_password"],
+        database=config["DATABASE"]["database_name"],
+    )
+    cursor = database.cursor()
+    stats = {}
+    if algorithm == "sa":
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}_groups")
+        stats["group_count"] = cursor.fetchone()[0]
+        cursor.execute(f"SELECT COUNT(DISTINCT source_author) FROM {table_name}_groups")
+        stats["author_group_count"] = cursor.fetchone()[0]
+        cursor.execute(f"SELECT COUNT(DISTINCT source_title) FROM {table_name}_groups")
+        stats["title_group_count"] = cursor.fetchone()[0]
+    else:
+        # TODO: Add stats for other algorithms
+        pass
+    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+    stats["pairs_count"] = cursor.fetchone()[0]
+    return stats
+
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
     os.system(f"rm -rf {db_path}")
@@ -416,16 +440,19 @@ def create_web_app(
         algorithm,
         web_config.banalitiesStored,
     )
+    db_dir = os.path.join(web_app_dir, table)
     if groups_file is not None:
         load_groups_file(
             groups_file,
             table,
             web_config.searchable_fields(),
         )
+    stats = generate_database_stats(table, web_config, algorithm)
+    with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
+        json.dump(stats, stats_file)
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)
-        db_dir = os.path.join(web_app_dir, table)
         print("Building web application...", flush=True)
         set_up_app(web_config, db_dir)
         db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)

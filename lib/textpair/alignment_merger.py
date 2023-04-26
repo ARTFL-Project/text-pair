@@ -8,7 +8,7 @@ from collections import Counter
 import lz4.frame
 import orjson
 from tqdm import tqdm
-from textpair import get_text
+from .utils import get_text
 
 
 @dataclass(slots=True)
@@ -117,9 +117,7 @@ class AlignmentGroups:
     def find_group(self, new_pair: dict[str, Any]) -> bool:
         """Find group for new pair"""
         match = False
-        index = 0
         for local_target in self.merged_target_passages[new_pair["source_doc_id"]]:
-            index += 1
             if (  # new passage is within
                 local_target.start_byte <= new_pair["source_start_byte"]
                 and local_target.end_byte >= new_pair["source_end_byte"]
@@ -141,7 +139,6 @@ def read_alignment(line: bytes, passage_id: int):
     alignment["passage_id"] = passage_id
     return alignment
 
-# @profile
 def merge_alignments(results_file: str, count: int) -> str:
     """Merge passages that are aligned to the same source passage"""
     passages: list[dict[str, str]] = []
