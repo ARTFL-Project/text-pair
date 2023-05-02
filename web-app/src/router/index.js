@@ -4,6 +4,7 @@ import home from "../components/home";
 
 const searchResults = () => import("../components/searchResults");
 const timeSeries = () => import("../components/timeSeries");
+const sortedResults = () => import("../components/sortedResults");
 const alignmentGroup = () => import("../components/alignmentGroup");
 
 const router = createRouter({
@@ -19,6 +20,11 @@ const router = createRouter({
             path: "/time",
             name: "timeSeries",
             component: timeSeries,
+        },
+        {
+            path: "/sorted-results",
+            name: "sortedResults",
+            component: sortedResults,
         },
         {
             path: "/group/:groupId",

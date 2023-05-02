@@ -56,54 +56,12 @@
                         type="button" @click="changeReport('search')">
                         Search Alignments
                     </button>
-                    <button class="report btn rounded-0 d-inline" :class="{
-                        'btn-secondary selected': searchActive,
-                        'btn-outline-secondary selected': timeActive,
-                    }" style="border-left-width: 0" type="button" @click="changeReport('time-series')">
-                        Display Time Series
-                    </button>
-                    <hr class="tab-line" />
                 </div>
-
                 <div id="search-alignments" v-if="searchActive">
                     <button class="btn btn-secondary rounded-0" type="button" @click="search()">Search</button>
                     <button type="button" class="btn btn-outline-secondary rounded-0" @click="clearForm()">
                         Reset
                     </button>
-                </div>
-                <div id="time-series" v-if="timeActive">
-                    Group
-                    <div class="my-dropdown" style="display: inline-block">
-                        <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">
-                            {{ directionSelected.label }} &#9662;
-                        </button>
-                        <ul class="my-dropdown-menu shadow-1">
-                            <li class="my-dropdown-item" v-for="direction in directions" :key="direction.label"
-                                @click="selectItem('directionSelected', direction)">
-                                {{ direction.label }}
-                            </li>
-                        </ul>
-                    </div>
-                    results by
-                    <div class="my-dropdown" style="display: inline-block">
-                        <button type="button" class="btn btn-light rounded-0" @click="toggleDropdown()">
-                            {{ timeSeriesInterval.label }} &#9662;
-                        </button>
-                        <ul class="my-dropdown-menu shadow-1">
-                            <li class="my-dropdown-item text-nowrap" v-for="interval in globalConfig.timeSeriesIntervals"
-                                :key="interval.label" @click="selectItem('timeSeriesInterval', interval)">
-                                {{ interval.label }}
-                            </li>
-                        </ul>
-                    </div>
-                    <div class="mt-3">
-                        <button class="btn btn-secondary rounded-0" type="button" @click="displayTimeSeries()">
-                            Display Time Series
-                        </button>
-                        <button type="button" class="btn btn-outline-secondary rounded-0" @click="clearForm()">
-                            Reset
-                        </button>
-                    </div>
                 </div>
             </form>
         </div>
@@ -119,7 +77,6 @@ export default {
         return {
             globalConfig: this.$globalConfig,
             formValues: this.populateSearchForm(),
-            timeSeriesInterval: this.$globalConfig.timeSeriesIntervals[0],
             formBanalityValues: [
                 {
                     label: "Don't filter banalities",
@@ -135,16 +92,6 @@ export default {
                 },
             ],
             banalitySelected: "Don't filter banalities",
-            directions: [
-                {
-                    label: this.$globalConfig.sourceLabel,
-                    value: "source",
-                },
-                {
-                    label: this.$globalConfig.targetLabel,
-                    value: "target",
-                },
-            ],
             directionSelected: {
                 label: this.$globalConfig.sourceLabel,
                 value: "source",
@@ -247,27 +194,10 @@ export default {
             this.toggleSearchForm();
             this.$router.push(`/search?${this.paramsToUrl(this.formValues)}`);
         },
-        displayTimeSeries() {
-            this.toggleSearchForm();
-            this.$router.push(`/time?${this.paramsToUrl(this.formValues)}`);
-        },
         clearForm() {
             for (const key in this.formValues) {
                 this.formValues[key] = "";
             }
-        },
-        toggleDropdown() {
-            let element = event.srcElement.closest(".my-dropdown").querySelector("ul");
-            if (element.style.display != "inline-block") {
-                element.style.display = "inline-block";
-            } else {
-                element.style.display = "none";
-            }
-        },
-        selectItem(key, item) {
-            this[key] = item;
-            this.formValues[key] = item.value;
-            this.toggleDropdown();
         },
         toggleSearchForm() {
             this.$nextTick(() => {
@@ -289,13 +219,12 @@ export default {
                 }
             });
         },
-        changeReport(report) {
-            if (report == "search") {
-                this.searchActive = true;
-                this.timeActive = false;
+        toggleDropdown() {
+            let element = event.srcElement.closest(".my-dropdown").querySelector("ul");
+            if (element.style.display != "inline-block") {
+                element.style.display = "inline-block";
             } else {
-                this.searchActive = false;
-                this.timeActive = true;
+                element.style.display = "none";
             }
         },
     },
@@ -319,37 +248,7 @@ export default {
     border-left-color: $link-color;
 }
 
-.my-dropdown {
-    position: relative;
-}
 
-.my-dropdown .btn:focus,
-my-dropdown .btn:active {
-    outline: none !important;
-}
-
-.my-dropdown-menu {
-    position: absolute;
-    display: none;
-    left: 0;
-    top: 38px;
-    background-color: #fff;
-    width: auto;
-    line-height: 200%;
-    z-index: 5;
-    list-style-type: none;
-    margin: 0;
-    padding: 0;
-}
-
-.my-dropdown-item {
-    cursor: pointer;
-    padding: 0 0.75rem;
-}
-
-.my-dropdown-item:hover {
-    background: #ddd;
-}
 
 .input-group-text,
 .form-control {

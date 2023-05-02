@@ -34,10 +34,6 @@
                 <div class="metadata-args none" v-if="paramGroup.params == null">None</div>
             </div>
         </div>
-        <div class="row" style="width: fit-content">
-            <button type="button" class="btn btn-outline-secondary" @click="sortResults">Sort results by frequency of
-                reuse</button>
-        </div>
     </div>
 </template>
 <script>
@@ -61,7 +57,7 @@ export default {
     data() {
         return {
             globalConfig: this.$globalConfig,
-            counts: null,
+            counts: "...",
             error: null,
             searchParams: [
                 { direction: this.$globalConfig.sourceLabel, params: null },
@@ -114,13 +110,6 @@ export default {
             } else {
                 return value;
             }
-        },
-        sortResults() {
-            let queryParams = { ...this.$route.query };
-            delete queryParams.page;
-            delete queryParams.id_anchor;
-            queryParams.db_table = this.$globalConfig.databaseName;
-            this.$router.push(`/sorted-results/?${this.paramsToUrl(queryParams)}`);
         },
     },
 };

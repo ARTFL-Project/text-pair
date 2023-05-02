@@ -376,9 +376,11 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
     database.commit()
     database.close()
 
-def generate_database_stats(table_name, config, algorithm):
+def generate_database_stats(table_name, algorithm):
     """Generate statistics for the database"""
     print("Generating database statistics (this could take a while)...")
+    config = configparser.ConfigParser()
+    config.read("/etc/text-pair/global_settings.ini")
     database = psycopg2.connect(
         user=config["DATABASE"]["database_user"],
         password=config["DATABASE"]["database_password"],
@@ -447,7 +449,7 @@ def create_web_app(
             table,
             web_config.searchable_fields(),
         )
-    stats = generate_database_stats(table, web_config, algorithm)
+    stats = generate_database_stats(table, algorithm)
     with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
         json.dump(stats, stats_file)
     if load_only_db is False:

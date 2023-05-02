@@ -1,13 +1,13 @@
 <template>
-    <div class="btn-group mb-2" role="group" aria-label="alt-results">
+    <div class="btn-group" role="group" aria-label="alt-results">
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'searchResults' }"
-            @click="viewAllResults">View all
+            style="border-bottom-left-radius: 0;" @click="viewAllResults">View all
             passage pairs</button>
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'sortedResults' }"
             @click="sortResults">Sort passages by frequency of
             reuse</button>
-        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'time' }"
-            @click="viewPassageInTimeline">View passages in
+        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'timeSeries' }"
+            style="border-bottom-right-radius: 0;" @click="viewPassageInTimeline">View passages in
             timeline</button>
     </div>
 </template>
@@ -44,3 +44,8 @@ export default {
     }
 }
 </script>
+<style scoped>
+.btn-group .btn {
+    border-bottom-width: 0;
+}
+</style>

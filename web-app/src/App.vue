@@ -97,4 +97,36 @@ a {
     color: #565656 !important;
     background-color: #f8f8f8;
 }
+
+.my-dropdown {
+    position: relative;
+}
+
+.my-dropdown .btn:focus,
+my-dropdown .btn:active {
+    outline: none !important;
+}
+
+.my-dropdown-menu {
+    position: absolute;
+    display: none;
+    left: 0;
+    top: 38px;
+    background-color: #fff;
+    width: auto;
+    line-height: 200%;
+    z-index: 5;
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+}
+
+.my-dropdown-item {
+    cursor: pointer;
+    padding: 0 0.75rem;
+}
+
+.my-dropdown-item:hover {
+    background: #ddd;
+}
 </style>

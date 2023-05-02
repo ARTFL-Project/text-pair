@@ -27,8 +27,8 @@
                                 </span>
                             </span>
                         </p>
-                        <span class="px-3 pb-2" v-if="sourcePassage.count">The following passage is reused in whole or in
-                            part {{
+                        <span class="px-3 pb-2" v-if="sourcePassage.count">The following passage is reused (in whole or in
+                            part) {{
                                 sourcePassage.count.toLocaleString() }}
                             times:</span>
                         <i class="passages px-3 pb-3">"{{ sourcePassage.source_passage }}"</i>

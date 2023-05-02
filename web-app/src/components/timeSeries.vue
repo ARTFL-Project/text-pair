@@ -1,23 +1,52 @@
 <template>
     <div id="time-series-chart" class="mt-3">
-        <div class="row">
-            <div class="m-4" style="font-size: 120%" v-if="error">No results for your query</div>
+        <div class="row" style="padding: 0 0.75rem">
+            <div class="m-4" style="font-size: 120%;" v-if="error">No results for your query</div>
             <search-arguments></search-arguments>
         </div>
-        <div class="row mt-3">
+        <report-switcher></report-switcher>
+        <div>
             <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="loading">
                 <div class="d-flex justify-content-center position-relative">
-                    <div
-                        class="spinner-border"
-                        style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px"
-                        role="status"
-                    >
+                    <div class="spinner-border"
+                        style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
                 </div>
             </div>
-            <div class="col">
-                <canvas id="myChart" height="800"></canvas>
+            <div class="card p-4">
+                <div id="time-series-options">
+                    Group
+                    <div class="my-dropdown" style="display: inline-block">
+                        <button type="button" class="btn btn-sm btn-light rounded-0" @click="toggleDropdown()">
+                            {{ directionSelected.label }} &#9662;
+                        </button>
+                        <ul class="my-dropdown-menu shadow-1">
+                            <li class="my-dropdown-item" v-for="direction in directions" :key="direction.label"
+                                @click="selectItem('directionSelected', direction)">
+                                {{ direction.label }}
+                            </li>
+                        </ul>
+                    </div>
+                    &nbsp;results by
+                    <div class="my-dropdown" style="display: inline-block">
+                        <button type="button" class="btn btn-sm btn-light rounded-0" @click="toggleDropdown()">
+                            {{ timeSeriesInterval.label }} &#9662;
+                        </button>
+                        <ul class="my-dropdown-menu shadow-1">
+                            <li class="my-dropdown-item text-nowrap" v-for="interval in globalConfig.timeSeriesIntervals"
+                                :key="interval.label" @click="selectItem('timeSeriesInterval', interval)">
+                                {{ interval.label }}
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="d-inline-block ms-2">
+                        <button class="btn btn-sm btn-secondary rounded-0" type="button" @click="displayTimeSeries()">
+                            Reload Time Series
+                        </button>
+                    </div>
+                </div>
+                <canvas id="myChart" style="margin-left: -2rem" height="800"></canvas>
             </div>
         </div>
     </div>
@@ -26,16 +55,33 @@
 <script>
 import Chart from "chart.js/dist/Chart.js";
 import searchArguments from "./searchArguments";
+import reportSwitcher from "./reportSwitcher";
 import cssVariables from "../assets/theme.module.scss";
 
 export default {
     name: "timeSeries",
     components: {
-        searchArguments,
+        searchArguments, reportSwitcher
     },
     inject: ["$http"],
     data() {
         return {
+            formValues: this.getFormValues(),
+            timeSeriesInterval: this.getTimeSeriesInterval(),
+            directions: [
+                {
+                    label: this.$globalConfig.sourceLabel,
+                    value: "source",
+                },
+                {
+                    label: this.$globalConfig.targetLabel,
+                    value: "target",
+                },
+            ],
+            directionSelected: {
+                label: this.$globalConfig.sourceLabel,
+                value: "source",
+            },
             loading: true,
             done: false,
             results: { alignments: [] },
@@ -50,8 +96,6 @@ export default {
         };
     },
     created() {
-        // fetch the data when the view is created and the data is
-        // already being observed
         this.fetchData();
     },
     watch: {
@@ -59,6 +103,34 @@ export default {
         $route: "fetchData",
     },
     methods: {
+        getTimeSeriesInterval() {
+            for (const interval of this.$globalConfig.timeSeriesIntervals) {
+                if (interval.value == this.$route.query.timeSeriesInterval) {
+                    return interval;
+                }
+            }
+        },
+        getFormValues() {
+            let formValues = {};
+            for (const key of this.$globalConfig.metadataFields.source) {
+                if (key.value in this.$route.query) {
+                    formValues[key.value] = this.$route.query[key.value];
+                } else {
+                    formValues[key.value] = "";
+                }
+            }
+            for (const key of this.$globalConfig.metadataFields.target) {
+                if (key.value in this.$route.query) {
+                    formValues[key.value] = this.$route.query[key.value];
+                } else {
+                    formValues[key.value] = "";
+                }
+            }
+            formValues.banality = "";
+            formValues.timeSeriesInterval = this.$globalConfig.timeSeriesIntervals[0].value;
+            formValues.directionSelected = "source";
+            return formValues;
+        },
         fetchData() {
             this.results = { alignments: [] }; // clear alignments with new search
             this.facetResults = null; // clear facet results with new search
@@ -147,9 +219,8 @@ export default {
                         callbacks: {
                             title: function (tooltipItem) {
                                 if (vm.interval != 1) {
-                                    return `${tooltipItem[0].xLabel}-${
-                                        parseInt(tooltipItem[0].xLabel) + vm.interval - 1
-                                    }`;
+                                    return `${tooltipItem[0].xLabel}-${parseInt(tooltipItem[0].xLabel) + vm.interval - 1
+                                        }`;
                                 } else {
                                     return tooltipItem[0].xLabel;
                                 }
@@ -196,6 +267,22 @@ export default {
                 b = "0x" + h[5] + h[6];
             }
             return "rgba(" + +r + "," + +g + "," + +b + ", .7)";
+        },
+        selectItem(key, item) {
+            this[key] = item;
+            this.formValues[key] = item.value;
+            this.toggleDropdown();
+        },
+        toggleDropdown() {
+            let element = event.srcElement.closest(".my-dropdown").querySelector("ul");
+            if (element.style.display != "inline-block") {
+                element.style.display = "inline-block";
+            } else {
+                element.style.display = "none";
+            }
+        },
+        displayTimeSeries() {
+            this.$router.push(`/time?${this.paramsToUrl(this.formValues)}`);
         },
     },
 };
@@ -260,5 +347,10 @@ export default {
 
 .separator {
     padding: 5px;
+}
+
+#time-series-options {
+    margin-left: -1rem;
+    margin-bottom: 1rem;
 }
 </style>

@@ -4,6 +4,7 @@
             <div class="m-4" style="font-size: 120%" v-if="error">No results for your query</div>
             <search-arguments></search-arguments>
         </div>
+        <report-switcher />
         <div class="row">
             <div class="col position-relative">
                 <div class="d-flex justify-content-center position-relative" v-if="loading">
@@ -101,12 +102,13 @@
 <script>
 import searchArguments from "./searchArguments";
 import passagePair from "./passagePair";
+import reportSwitcher from "./reportSwitcher";
 import Velocity from "velocity-animate";
 
 export default {
     name: "searchResults",
     components: {
-        searchArguments, passagePair
+        searchArguments, passagePair, reportSwitcher
     },
     inject: ["$http"],
     data() {

@@ -6,7 +6,7 @@
             <p class="card-text">
             <ul>
                 <li>This database contains {{ stats.pairs_count.toLocaleString() }} passage pairs.</li>
-                <li v-if="globalConfig.algorithm == 'sa'">These pairs were generated from {{
+                <li v-if="globalConfig.matchingAlgorithm == 'sa'">These pairs were generated from {{
                     stats.group_count.toLocaleString() }} source passages
                     borrowed from
                     {{

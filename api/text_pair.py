@@ -572,6 +572,40 @@ def get_passage_group(request: Request, group_id: int):
     for key, value in results.items():
         value.sort(key=lambda x: (x["target_title"], x["target_start_byte"]), reverse=True)
         passage_list.append({"year": key, "result": value})
-    passage_list.sort(key=lambda x: x["year"])
+    passage_list.sort(key=lambda x: x["year"] or 9999)
     full_results = {"passageList": passage_list, "original_passage": original_passage}
     return full_results
+
+
+@app.get("/sorted_results/")
+@app.get("/text-pair-api/sorted_results/")
+def get_sorted_results(request: Request):
+    """Sort results based on the number of passages within each group"""
+    sql_fields, sql_values, other_args, _ = parse_args(request)
+    conn = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    query = f"SELECT source_doc_id, group_id FROM {other_args.db_table}"
+    if sql_fields:
+        query += f" WHERE {sql_fields}"
+    cursor.execute(query, sql_values)
+    group_ids: dict[int, int] = {row["group_id"]: row["source_doc_id"] for row in cursor}
+    counts_per_group: dict[int, int] = {}
+    for group_id, source_doc_id in group_ids.items():
+        cursor.execute(f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
+        group_source_doc_id = cursor.fetchone()[0]
+        if group_source_doc_id != source_doc_id:
+            continue
+        cursor.execute(f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, source_doc_id))
+        counts_per_group[group_id] = cursor.fetchone()[0]
+    results = {"total_count": len(counts_per_group), "groups": []}
+    sorted_group_ids = sorted(counts_per_group.items(), key=lambda x: x[1], reverse=True)
+    for group_id, count in sorted_group_ids[:50]: # TODO: make this a parameter
+        cursor.execute(f"""SELECT * FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
+        group = cursor.fetchone()
+        results["groups"].append({**group, "count": count})
+    conn.close()
+    return results

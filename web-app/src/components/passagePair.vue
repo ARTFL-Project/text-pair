@@ -150,7 +150,6 @@ export default {
                 if (this.startByteIndex != undefined && this.startByteIndex > 0) {
                     // works around issue with diff-match-patch where no matches are found if the match is far after the beginning of the string
                     slicing = true
-
                     worker.postMessage([sourceText.slice(this.startByteIndex, this.endByteIndex), targetText]);
                 } else {
                     worker.postMessage([sourceText, targetText]);
@@ -194,7 +193,6 @@ export default {
             let parent = diffBtn.parentNode.parentNode.parentNode;
             let sourceElement = parent.querySelector(".source-passage");
             let targetElement = parent.querySelector(".target-passage");
-            console.log(alignment);
             if (diffBtn.getAttribute("diffed") == "false") {
                 let source = alignment.source_passage_with_matches.replace(/&gt;/g, ">").replace(/&lt;/g, "<");
                 sourceElement.innerHTML = source;
