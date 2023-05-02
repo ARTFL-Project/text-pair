@@ -4,7 +4,7 @@
             style="border-bottom-left-radius: 0;" @click="viewAllResults">View all
             passage pairs</button>
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'sortedResults' }"
-            @click="sortResults">Sort passages by frequency of
+            @click="sortResults">View passages by frequency of
             reuse</button>
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'timeSeries' }"
             style="border-bottom-right-radius: 0;" @click="viewPassageInTimeline">View passages in

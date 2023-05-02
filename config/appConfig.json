@@ -24,7 +24,9 @@
         },
         {
             "field": "source_title",
-            "style": {}
+            "style": {
+                "font-style": "italic"
+            }
         },
         {
             "field": "source_year",

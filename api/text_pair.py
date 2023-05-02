@@ -602,8 +602,8 @@ def get_sorted_results(request: Request):
         cursor.execute(f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, source_doc_id))
         counts_per_group[group_id] = cursor.fetchone()[0]
     results = {"total_count": len(counts_per_group), "groups": []}
-    sorted_group_ids = sorted(counts_per_group.items(), key=lambda x: x[1], reverse=True)
-    for group_id, count in sorted_group_ids[:50]: # TODO: make this a parameter
+    sorted_group_ids = sorted(counts_per_group.items(), key=lambda x: x[1], reverse=True)[:100] # TODO: make this a parameter
+    for group_id, count in sorted_group_ids:
         cursor.execute(f"""SELECT * FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
         group = cursor.fetchone()
         results["groups"].append({**group, "count": count})

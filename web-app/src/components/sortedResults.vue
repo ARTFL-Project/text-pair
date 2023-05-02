@@ -16,9 +16,9 @@
                 <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter"
                     v-on:enter="enter">
                     <div class="card mb-3 rounded-0 shadow-1" style="position: relative"
-                        v-for="(sourcePassage, index) in results" :key="index + 1" v-bind:data-index="index">
+                        v-for="(sourcePassage, index) in results.groups" :key="index + 1" v-bind:data-index="index">
                         <div class="corner-btn left">{{ index + 1 }}</div>
-                        <p class="mt-2 pt-3" style="text-align: center;">
+                        <h6 class="mt-2 pt-3" style="text-align: center;">
                             <span v-for="(citation, citationIndex) in globalConfig.sourceCitation" :key="citation.field">
                                 <span v-if="sourcePassage[citation.field]">
                                     <span :style="citation.style">{{ sourcePassage[citation.field] }}</span>
@@ -26,7 +26,7 @@
                                         v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
                                 </span>
                             </span>
-                        </p>
+                        </h6>
                         <span class="px-3 pb-2" v-if="sourcePassage.count">The following passage is reused (in whole or in
                             part) {{
                                 sourcePassage.count.toLocaleString() }}
@@ -43,6 +43,7 @@
                 </transition-group>
             </div>
         </div>
+        <h5 class="mt-2 mb-4" style="text-align: center">For performance reasons, only the top 100 are displayed.</h5>
     </div>
 </template>
 
@@ -62,7 +63,7 @@ export default {
         return {
             loading: false,
             done: false,
-            results: [],
+            results: { groups: [] },
             counts: null,
             error: null,
             globalConfig: this.$globalConfig,
@@ -79,7 +80,7 @@ export default {
     },
     methods: {
         fetchData() {
-            this.results = { alignments: [] }; // clear alignments with new search
+            this.results = { groups: [] }; // clear alignments with new search
             this.facetResults = null; // clear facet results with new search
             this.error = null;
             this.loading = true;
@@ -92,7 +93,7 @@ export default {
             this.$http
                 .get(`${this.$globalConfig.apiServer}/sorted_results/?${this.paramsToUrl(params)}`)
                 .then((response) => {
-                    this.results = response.data.groups;
+                    this.results.groups = response.data.groups;
                     this.loading = false;
                     this.done = true;
                     this.emitter.emit("searchArgsUpdate", {
