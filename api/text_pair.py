@@ -259,6 +259,8 @@ def get_ressource(db_path: str, resource: str):
 @app.get("/text-pair/{db_path}")
 @app.get("/text-pair/{db_path}/group/{id}")
 @app.get("/{db_path}/group/{id}")
+@app.get("/text-pair/{db_path}/sorted-results")
+@app.get("/{db_path}/sorted-results")
 def index(db_path: str):
     """Return index.html which lists available POOLs"""
     with open(os.path.join(APP_PATH, db_path, "dist/index.html"), encoding="utf8") as html:
