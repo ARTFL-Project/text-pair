@@ -49,15 +49,7 @@
                     </ul>
                 </div>
 
-                <!-- Search reports -->
-                <div class="position-relative mb-3" style="width: 100%" aria-label="Search reports">
-                    <button class="report btn rounded-0 d-inline"
-                        :class="{ 'btn-secondary': timeActive, 'btn-outline-secondary selected': searchActive }"
-                        type="button" @click="changeReport('search')">
-                        Search Alignments
-                    </button>
-                </div>
-                <div id="search-alignments" v-if="searchActive">
+                <div id="search-alignments">
                     <button class="btn btn-secondary rounded-0" type="button" @click="search()">Search</button>
                     <button type="button" class="btn btn-outline-secondary rounded-0" @click="clearForm()">
                         Reset
@@ -97,8 +89,6 @@ export default {
                 value: "source",
             },
             searchSelected: this.search,
-            searchActive: true,
-            timeActive: false,
             banalitiesStored: this.$globalConfig.banalitiesStored,
         };
     },
