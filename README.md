@@ -18,9 +18,21 @@ Common shingles across texts indicate many different types of textual borrowings
 
 ## Installation
 
-Note that TextPair will only run on 64 bit Linux and MacOS. Windows will NOT be supported.
+The recommended install is to build your own Docker image and run TextPAIR inside a container.
 
-We do offer a Docker image for TextPAIR (or you can build the image from the Dockerfile provided in the repository). See below for more details.
+### Docker container method
+
+-   Go to the docker folder and build a docker image" `docker build -t textpair .`
+-   Start a new container: `docker run -td -p 80:80 --name textpair artfl/textpair init_textpair_db`
+    Note that you may want to customize the `run` command according to your needs (e.g. to mount a volume for your data)
+    You will need to copy your texts to the container, and then follow the normal procedure described below once inside the container.
+
+If you do run into the issue where the web server does not respond, restart the web server with the following command:
+`/var/lib/text-pair/api_server/web_server.sh &`
+
+### Manual installation
+
+If you wish to install Docker on a host machine, note that TextPair will only run on 64 bit Linux, see below.
 
 #### Dependencies
 
@@ -35,26 +47,6 @@ See <a href="docs/ubuntu_installation.md">Ubuntu install instructions</a>
 -   Run `install.sh` script. This should install all needed components
 -   Make sure you include `/etc/text-pair/apache_wsgi.conf` in your main Apache configuration file to enable searching
 -   Edit `/etc/text-pair/global_settings.ini` to provide your PostgreSQL user, database, and password.
-
-## Docker setup (EXPERIMENTAL)
-
-You can also install the artfl/textpair Docker image from Dockerhub. Note that it also comes with PhiloLogic preinstalled.
-
-`docker pull artfl/textpair`
-
-When starting a container, you need to provide a volume for mounted at /data. If you also wish to build your TextPAIR alignments from PhiloLogic databases, you will also need to provide a mountpoint for the philologic directory
-
-To run the container without PhiloLogic on port 80, run the following:
-
-`docker run -td -p 80:80 -v /PATH/TO/DATA:/data artfl/textpair`
-
-To run the container with PhiloLogic included on port 80:
-
-`docker run -td -p 80:80 -v /PATH/TO/DATA:/data -v /PATH/TO/philologic:/var/www/html/philologic artfl/textpair`
-
-You can then enter the container shell with the following command:
-
-`docker exec -it CONTAINER_NAME /bin/bash`
 
 ## Quick start
 
