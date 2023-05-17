@@ -20,12 +20,12 @@
         "vue-router": "^4.0.13"
     },
     "devDependencies": {
-        "@vitejs/plugin-vue": "^4.1.0",
+        "@vitejs/plugin-vue": "^4.2.3",
         "@vue/compiler-sfc": "^3.1.0",
         "eslint": "^7.32.0",
         "eslint-plugin-vue": "^8.5.0",
         "sass": "^1.54.9",
-        "vite": "^4.2.1",
+        "vite": "^4.3.7",
         "worker-loader": "^3.0.2"
     },
     "eslintConfig": {

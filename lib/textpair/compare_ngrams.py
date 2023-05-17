@@ -1,12 +1,12 @@
 #!/usr/bin env python3
 
 
-import rapidjson as json
 import os
 from collections import defaultdict
 from math import floor
-from multiprocess import Pool
 
+import rapidjson as json
+from multiprocess import Pool
 from namedlist import namedlist
 
 docIndex = namedlist("docIndex", "doc_id, ngrams, ngram_length")

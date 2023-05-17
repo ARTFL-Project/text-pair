@@ -114,7 +114,7 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
             for phrase in banality_phrases:
                 if phrase in clean_text(alignment["source_passage"]):
                     passage = f"{phrase}\nFOUND IN:\n{alignment['source_passage']}\n\n"
-                    filtered_passages.write(passage.encode("utf8"))
+                    filtered_passages.write(passage.encode("utf8")) # type: ignore
                     passages_filtered += 1
                     banality = True
                     break
@@ -127,7 +127,7 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
 if __name__ == "__main__":
     import sys
 
-    filepath = sys.argv[1]
+    file_path = sys.argv[1]
     # ngrams_file = sys.argv[2]
     # ngram_doc_path = sys.argv[3]
     # percentage = float(sys.argv[4])
@@ -135,5 +135,5 @@ if __name__ == "__main__":
     #     count = int(input_file.read().strip())
     # total = banality_auto_detect(filepath, ngrams_file, ngram_doc_path, count, percentage=percentage)
     phrase_path = sys.argv[2]
-    total = phrase_matcher(filepath, phrase_path, int(sys.argv[3]))
+    total = phrase_matcher(file_path, phrase_path, int(sys.argv[3]))
     print(total, "banalities found.")
