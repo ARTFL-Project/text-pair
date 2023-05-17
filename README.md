@@ -22,7 +22,7 @@ The recommended install is to build your own Docker image and run TextPAIR insid
 
 ### Docker container method
 
--   Go to the docker folder and build a docker image" `docker build -t textpair .`
+-   Go to the docker folder and build a docker image: `docker build -t textpair .`
 -   Start a new container: `docker run -td -p 80:80 --name textpair artfl/textpair init_textpair_db`
     Note that you may want to customize the `run` command according to your needs (e.g. to mount a volume for your data)
     You will need to copy your texts to the container, and then follow the normal procedure described below once inside the container.
