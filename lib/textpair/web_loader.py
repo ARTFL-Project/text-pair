@@ -449,9 +449,6 @@ def create_web_app(
             table,
             web_config.searchable_fields(),
         )
-    stats = generate_database_stats(table, algorithm)
-    with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
-        json.dump(stats, stats_file)
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)
@@ -463,7 +460,9 @@ def create_web_app(
         print(
             f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
         )
-
+    stats = generate_database_stats(table, algorithm)
+    with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
+        json.dump(stats, stats_file)
 
 if __name__ == "__main__":
     load_groups_file(
