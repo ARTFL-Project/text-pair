@@ -2,6 +2,7 @@
 """Sequence aligner script"""
 
 import os
+import json
 
 from textpair import (
     Ngrams,
@@ -16,6 +17,7 @@ from textpair import (
 
 
 def get_count(path: str) -> int:
+    """Get count from count file"""
     if os.path.exists(path):
         with open(path, encoding="utf8") as input_file:
             count = int(input_file.read().strip())
@@ -25,12 +27,27 @@ def get_count(path: str) -> int:
 
 
 def update_count(count: int, to_remove: int, path: str) -> int:
+    """Update count file"""
     path = os.path.join(path, "results/count.txt")
     count -= to_remove
     with open(path, "w", encoding="utf8") as output_file:
         output_file.write(str(count))
     return count
 
+def copy_data(params):
+    """Copy files and database file to web app directory"""
+    print("Copying text files to web app directory...", end="", flush=True)
+    directions = ["source"]
+    if params.paths["target"]:
+        directions.append("target")
+    for direction in directions:
+        with open(params.paths[direction]["metadata_path"], encoding="utf8") as metadata_file:
+            metadata = json.load(metadata_file)
+        for file in metadata:
+            os.system(f"cp {file['filename']} {params.web_app_config['web_application_directory']}/data/{direction}/texts/")
+            os.system(f"cp {params.output_path}/toms.db {params.web_app_config['web_application_directory']}/data/{direction}/")
+    if not params.paths["target"]:
+        os.system(f"cd {params.web_app_config['web_application_directory']}/data; ln -s source target")
 
 def run_alignment(params):
     """Main function to start sequence alignment"""
@@ -167,6 +184,9 @@ def run_alignment(params):
             groups_file=groups_file,
             store_banalities=params.matching_params["store_banalities"],
         )
+    if params.is_philo_db is False:
+        copy_data(params)
+
 
 
 def run_vsa_similarity(params) -> None:
@@ -195,6 +215,8 @@ def run_vsa_similarity(params) -> None:
             params.web_app_config["target_url"],
             params.matching_params["matching_algorithm"],
         )
+    if params.is_philo_db is False:
+        copy_data(params)
 
 
 if __name__ == "__main__":
@@ -215,6 +237,8 @@ if __name__ == "__main__":
             params.web_app_config["api_server"],
             params.web_app_config["source_url"],
             params.web_app_config["target_url"],
+            params.web_app_config["source_philo_db_path"],
+            params.web_app_config["target_philo_db_path"],
             params.matching_params["matching_algorithm"],
             load_only_db=True,
             groups_file=groups_file,
@@ -232,6 +256,8 @@ if __name__ == "__main__":
             params.web_app_config["api_server"],
             params.web_app_config["source_url"],
             params.web_app_config["target_url"],
+            params.web_app_config["source_philo_db_path"],
+            params.web_app_config["target_philo_db_path"],
             params.matching_params["matching_algorithm"],
             store_banalities=params.matching_params["store_banalities"],
         )

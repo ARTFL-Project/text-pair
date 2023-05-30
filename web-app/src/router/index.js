@@ -6,6 +6,7 @@ const searchResults = () => import("../components/searchResults");
 const timeSeries = () => import("../components/timeSeries");
 const sortedResults = () => import("../components/sortedResults");
 const alignmentGroup = () => import("../components/alignmentGroup");
+const textNavigation = () => import("../components/textNavigation");
 
 const router = createRouter({
     history: createWebHistory(globalConfig.appPath),
@@ -30,6 +31,11 @@ const router = createRouter({
             path: "/group/:groupId",
             name: "alignmentGroup",
             component: alignmentGroup,
+        },
+        {
+            path: "/text-view/",
+            name: "textNavigation",
+            component: textNavigation,
         },
     ],
     scrollBehavior(to, from, savedPosition) {

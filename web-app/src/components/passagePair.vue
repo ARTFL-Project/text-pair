@@ -73,11 +73,11 @@
             </div>
             <div v-if="globalConfig.matchingAlgorithm == 'sa'">
                 <a class="diff-btn" diffed="false" @click="showDifferences(
-                        alignment.source_passage,
-                        alignment.target_passage,
-                        alignment.source_passage_length,
-                        alignment.target_passage.length
-                    )
+                    alignment.source_passage,
+                    alignment.target_passage,
+                    alignment.source_passage_length,
+                    alignment.target_passage.length
+                )
                     ">Show differences</a>
                 <div class="loading position-absolute" style="display: none; left: 50%; transform: translateX(-50%)">
                     <div class="spinner-border"
@@ -213,28 +213,18 @@ export default {
             if (direction == "source") {
                 rootURL = this.globalConfig.sourcePhiloDBLink.replace(/\/$/, "");
                 params = {
-                    filename: alignment.source_filename.substr(alignment.source_filename.lastIndexOf("/") + 1),
-                    start_byte: alignment.source_start_byte,
-                    end_byte: alignment.source_end_byte,
+                    db_table: this.$globalConfig.databaseName, philo_url: rootURL, philo_path: this.globalConfig.sourcePhiloDBPath, philo_id: alignment.source_philo_id, start_byte: alignment.source_start_byte, end_byte: alignment.source_end_byte, direction: "source"
                 };
             } else {
                 rootURL = this.globalConfig.targetPhiloDBLink.replace(/\/$/, "");
                 params = {
-                    filename: alignment.target_filename.substr(alignment.target_filename.lastIndexOf("/") + 1),
-                    start_byte: alignment.target_start_byte,
-                    end_byte: alignment.target_end_byte,
+                    db_table: this.$globalConfig.databaseName, philo_url: rootURL, philo_path: this.globalConfig.targetPhiloDBPath, philo_id: alignment.target_philo_id, start_byte: alignment.target_start_byte, end_byte: alignment.target_end_byte, direction: "target"
                 };
             }
-            this.$http
-                .get(`${rootURL}/scripts/alignment_to_text.py?`, {
-                    params: params,
-                })
-                .then((response) => {
-                    window.open(`${rootURL}${response.data.link}`, "_blank");
-                })
-                .catch((error) => {
-                    alert(error);
-                });
+            this.$router.push({
+                path: "/text-view/",
+                query: params,
+            })
         },
     },
 };

@@ -13,6 +13,7 @@ class TextPairConfig:
 
     def __init__(self, cli_args: dict[str, Any]):
         self.__cli_args: dict[str, Any] = cli_args
+        self.is_philo_db: bool = self.__cli_args["is_philo_db"]
         self.__file_paths: dict[str, str] = {}
         self.text_parsing: dict[str, bool | str] = {}
         self.preprocessing_params: dict[str, Any] = {"source": {}, "target": {}}
@@ -23,6 +24,12 @@ class TextPairConfig:
         self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
         self.__parse_config()
         self.__set_params()
+        if self.is_philo_db is True:
+            self.web_app_config["source_philo_db_path"] = self.__file_paths["source_files"]
+            self.web_app_config["target_philo_db_path"] = self.__file_paths["target_files"]
+        else:
+            self.web_app_config["source_philo_db_path"] = ""
+            self.web_app_config["target_philo_db_path"] = ""
 
     def __getattr__(self, attr):
         return self.__cli_args[attr]

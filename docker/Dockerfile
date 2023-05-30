@@ -8,7 +8,7 @@ RUN curl -sL https://deb.nodesource.com/setup_16.x | sudo -E bash && apt-get ins
 
 RUN apt-get clean && rm -rf /var/lib/apt
 
-RUN mkdir textpair && curl -L  https://github.com/ARTFL-Project/text-pair/archive/v2.0-beta.12.tar.gz | tar xz -C textpair --strip-components 1 &&\
+RUN mkdir textpair && curl -L  https://github.com/ARTFL-Project/text-pair/archive/v2.0.1.tar.gz| tar xz -C textpair --strip-components 1 &&\
     cd textpair && sh install.sh && mkdir -p /var/www/html/text-pair
 
 RUN echo "[WEB_APP]\nweb_app_path = /var/www/html/text-pair\napi_server = http://localhost/text-pair-api\n[DATABASE]\ndatabase_name = textpair\ndatabase_user = textpair\ndatabase_password = textpair" > /etc/text-pair/global_settings.ini

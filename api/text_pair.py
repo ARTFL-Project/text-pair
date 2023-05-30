@@ -8,13 +8,20 @@ from collections import Counter, OrderedDict, defaultdict
 from pathlib import Path
 import time
 from typing import Any
+from collections import namedtuple
 
+import requests
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
+from philologic.runtime.get_text import get_text_obj
+from philologic.runtime.DB import DB
+from philologic.Config import MakeWebConfig
+
+
 
 app = FastAPI()
 app.add_middleware(
@@ -29,6 +36,8 @@ GLOBAL_CONFIG = configparser.ConfigParser()
 GLOBAL_CONFIG.read("/etc/text-pair/global_settings.ini")
 APP_PATH = GLOBAL_CONFIG["WEB_APP"]["web_app_path"]
 
+PHILO_REQUEST = namedtuple("PHILO_REQUEST", ["byte", "start_byte", "end_byte", "passages"])
+PHILO_CONFIG = namedtuple("PHILO_CONFIG", ["db_path", "page_images_url_root", "page_image_extension", "page_external_page_images"])
 
 BOOLEAN_ARGS = re.compile(r"""(NOT \w+)|(OR \w+)|(\w+)|("")""")
 
@@ -124,6 +133,10 @@ def parse_args(request):
         "timeSeriesInterval",
         "field",
         "value",
+        "philo_db",
+        "philo_url",
+        "philo_id",
+        "philo_path",
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
@@ -206,6 +219,10 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
         sql_values.append(other_args.banality)
     return " AND ".join(sql_fields), sql_values
 
+def check_access_control(request: Request):
+    """Check if user has access to a particular database"""
+    return True # Placeholder
+
 
 @app.get("/")
 @app.get("/text-pair")
@@ -261,6 +278,8 @@ def get_ressource(db_path: str, resource: str):
 @app.get("/{db_path}/group/{id}")
 @app.get("/text-pair/{db_path}/sorted-results")
 @app.get("/{db_path}/sorted-results")
+@app.get("/text-pair/{db_path}/text-view")
+@app.get("/{db_path}/text-view")
 def index(db_path: str):
     """Return index.html which lists available POOLs"""
     with open(os.path.join(APP_PATH, db_path, "dist/index.html"), encoding="utf8") as html:
@@ -611,3 +630,31 @@ def get_sorted_results(request: Request):
         results["groups"].append({**group, "count": count})
     conn.close()
     return results
+
+@app.get("/text_view/")
+@app.get("/text-pair-api/text_view/")
+def text_view(request: Request):
+    """Retrieve a text object from PhiloLogic4"""
+    _, _, other_args, _ = parse_args(request)
+    access_control = check_access_control(request)
+    if access_control is False: #TODO check if user has access to this database
+        return {"error": "You do not have access to this database"}
+    conn = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute(f"SELECT {other_args.direction}_start_byte, {other_args.direction}_end_byte FROM {other_args.db_table} WHERE {other_args.direction}_philo_id=%s", (other_args.philo_id,))
+    passage_pairs = [{"start_byte": start_byte, "end_byte": end_byte} for start_byte, end_byte in cursor]
+    conn.close()
+    if other_args.philo_path:
+        philo_config = PHILO_CONFIG(other_args.philo_path, "", "", "")
+    else:
+        philo_path = os.path.join(APP_PATH, other_args.db_table)
+        philo_config = PHILO_CONFIG(philo_path, "", "", "")
+    philo_db = DB(f"{philo_config.db_path}/data", width=7)
+    philo_object = philo_db[other_args.philo_id]
+    philo_request = PHILO_REQUEST("", "", "", passage_pairs)
+    philo_text_object, _ = get_text_obj(philo_object, philo_config, philo_request, philo_db.locals["token_regex"])
+    return {"text": philo_text_object}

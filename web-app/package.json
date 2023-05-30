@@ -17,7 +17,8 @@
         "tiny-emitter": "^2.1.0",
         "velocity-animate": "^1.5.2",
         "vue": "^3.2.0",
-        "vue-router": "^4.0.13"
+        "vue-router": "^4.0.13",
+        "vue-scrollto": "^2.20.0"
     },
     "devDependencies": {
         "@vitejs/plugin-vue": "^4.2.3",

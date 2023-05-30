@@ -91,7 +91,8 @@ CONTROL_CHARS = dict.fromkeys(range(32))
 class WebAppConfig:
     """Web app config class"""
 
-    def __init__(self, db_name, api_server, source_database_link, target_database_link, algorithm, store_banalities):
+    def __init__(self, db_name, api_server, source_database_link, target_database_link, source_philo_db_path,
+    target_philo_db_path, algorithm, store_banalities):
         with open("/var/lib/text-pair/config/appConfig.json", encoding="utf8") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
@@ -100,6 +101,8 @@ class WebAppConfig:
         self.options["matchingAlgorithm"] = algorithm
         self.options["sourcePhiloDBLink"] = source_database_link
         self.options["targetPhiloDBLink"] = target_database_link
+        self.options["sourcePhiloDBPath"] = source_philo_db_path
+        self.options["targetPhiloDBPath"] = target_philo_db_path
         self.options["banalitiesStored"] = store_banalities
 
     def __call__(self):
@@ -422,6 +425,8 @@ def create_web_app(
     api_server,
     source_database_link,
     target_database_link,
+    source_philo_db_path,
+    target_philo_db_path,
     algorithm,
     load_only_db=False,
     groups_file=None,
@@ -429,7 +434,8 @@ def create_web_app(
 ):
     """Main routine"""
     web_config = WebAppConfig(
-        table, api_server, source_database_link, target_database_link, algorithm, store_banalities
+        table, api_server, source_database_link, target_database_link, source_philo_db_path,
+    target_philo_db_path, algorithm, store_banalities
     )
     print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(
