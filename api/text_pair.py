@@ -644,10 +644,9 @@ def text_view(request: Request):
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute(f"SELECT {other_args.direction}_start_byte, {other_args.direction}_end_byte FROM {other_args.db_table} WHERE {other_args.direction}_philo_id=%s", (other_args.philo_id,))
-    passage_pairs = [{"start_byte": start_byte, "end_byte": end_byte} for start_byte, end_byte in cursor]
-    conn.close()
+    passage_pairs = [{"start_byte": row[f"{other_args.direction}_start_byte"], "end_byte": row[f"{other_args.direction}_end_byte"]} for row in cursor]
     if other_args.philo_path:
         philo_config = PHILO_CONFIG(other_args.philo_path, "", "", "")
     else:
@@ -657,4 +656,9 @@ def text_view(request: Request):
     philo_object = philo_db[other_args.philo_id]
     philo_request = PHILO_REQUEST("", "", "", passage_pairs)
     philo_text_object, _ = get_text_obj(philo_object, philo_config, philo_request, philo_db.locals["token_regex"])
-    return {"text": philo_text_object}
+
+    # Get metadata
+    cursor.execute(f"SELECT * FROM {other_args.db_table} WHERE {other_args.direction}_philo_id=%s", (other_args.philo_id,))
+    metadata_fields = cursor.fetchone()
+    conn.close()
+    return {"text": philo_text_object, "metadata": metadata_fields, "direction": other_args.direction}

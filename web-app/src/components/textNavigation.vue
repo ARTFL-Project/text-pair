@@ -3,6 +3,10 @@
         <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content" style="text-align: center"
             v-if="textObject">
             <div class="card mt-2 mb-4 p-4 shadow d-inline-block">
+                <h5 class="pt-1 mb-1">
+                    <citations :citation="globalConfig[`${textObject.direction}Citation`]" :alignment="textObject.metadata">
+                    </citations>
+                </h5>
                 <div id="book-page" class="text-view">
                     <div id="text-obj-content" class="text-content-area" v-html="textObject.text" tabindex="0"></div>
                 </div>
@@ -11,14 +15,17 @@
     </div>
 </template>
 <script>
+import citations from "./citations.vue";
 import { Popover } from "bootstrap";
 import vueScrollTo from 'vue-scrollto'
 
 export default {
     name: "textNavigation",
+    components: { citations },
     inject: ["$http"],
     data() {
         return {
+            globalConfig: this.$globalConfig,
             textObject: {},
         }
     },
@@ -53,45 +60,6 @@ export default {
     vertical-align: middle;
 }
 
-#toc-content {
-    display: inline-block;
-    position: relative;
-    max-height: 90vh;
-    overflow: scroll;
-    text-align: justify;
-    line-height: 180%;
-    z-index: 50;
-    background: #fff;
-}
-
-#toc-wrapper {
-    position: relative;
-    z-index: 49;
-    pointer-events: all;
-    margin-left: -1.5rem;
-}
-
-#toc-top-bar {
-    height: 31px;
-    width: 100%;
-    pointer-events: none;
-}
-
-#toc {
-    margin-top: 31px;
-    pointer-events: all;
-}
-
-#toc-top-bar.visible {
-    position: fixed;
-}
-
-#nav-buttons.visible {
-    position: fixed;
-    backdrop-filter: blur(0.5rem);
-    background-color: rgba(255, 255, 255, 0.3);
-    pointer-events: all;
-}
 
 #back-to-top {
     position: absolute;
@@ -601,5 +569,9 @@ body {
 :deep([class*="passage-"]) {
     color: $passage-color;
     font-weight: 700;
+}
+
+:deep(.xml-titlePage) {
+    display: none;
 }
 </style>
