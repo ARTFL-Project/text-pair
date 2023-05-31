@@ -3,27 +3,11 @@
         <div class="row">
             <div class="col mt-4">
                 <h6 class="passage-label text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
-                <p class="pt-3 px-3">
-                    <span v-for="(citation, citationIndex) in globalConfig.sourceCitation" :key="citation.field">
-                        <span v-if="alignment[citation.field]">
-                            <span :style="citation.style">{{ alignment[citation.field] }}</span>
-                            <span class="separator"
-                                v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
-                        </span>
-                    </span>
-                </p>
+                <citations :citation="globalConfig.sourceCitation" :alignment="alignment"></citations>
             </div>
             <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0 target-passage-container">
                 <h6 class="passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
-                <p class="pt-3 px-3">
-                    <span v-for="(citation, citationIndex) in globalConfig.targetCitation" :key="citation.field">
-                        <span v-if="alignment[citation.field]">
-                            <span :style="citation.style">{{ alignment[citation.field] }}</span>
-                            <span class="separator"
-                                v-if="citationIndex != globalConfig.targetCitation.length - 1">&#9679;&nbsp;</span>
-                        </span>
-                    </span>
-                </p>
+                <citations :citation="globalConfig.targetCitation" :alignment="alignment"></citations>
             </div>
         </div>
         <div class="row passages">
@@ -93,10 +77,13 @@
 
 <script>
 import Worker from "./diffStrings?worker";
-
+import citations from "./citations";
 
 export default {
     name: "passagePair",
+    components: {
+        citations,
+    },
     inject: ["$http"],
     props: {
         alignment: Object,
@@ -259,9 +246,6 @@ export default {
     opacity: 0.25;
 }
 
-.separator {
-    padding: 5px;
-}
 
 .target-passage-container {
     border-right-width: 0 !important;

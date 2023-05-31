@@ -19,13 +19,7 @@
                         v-for="(sourcePassage, index) in results.groups" :key="index + 1" v-bind:data-index="index">
                         <div class="corner-btn left">{{ index + 1 }}</div>
                         <h6 class="mt-2 pt-3" style="text-align: center;">
-                            <span v-for="(citation, citationIndex) in globalConfig.sourceCitation" :key="citation.field">
-                                <span v-if="sourcePassage[citation.field]">
-                                    <span :style="citation.style">{{ sourcePassage[citation.field] }}</span>
-                                    <span class="separator"
-                                        v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
-                                </span>
-                            </span>
+                            <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"></citations>
                         </h6>
                         <span class="px-3 pb-2" v-if="sourcePassage.count">The following passage is reused (in whole or in
                             part) {{
@@ -51,12 +45,13 @@
 import searchArguments from "./searchArguments";
 import passagePair from "./passagePair";
 import reportSwitcher from "./reportSwitcher";
+import citations from "./citations";
 import Velocity from "velocity-animate";
 
 export default {
     name: "sortedResults",
     components: {
-        searchArguments, passagePair, reportSwitcher
+        searchArguments, passagePair, reportSwitcher, citations
     },
     inject: ["$http"],
     data() {
@@ -181,54 +176,8 @@ export default {
 </script>
 
 <style scoped>
-#facets,
 .corner-btn {
     font-family: "Open-Sans", sans-serif;
-}
-
-.passage-label {
-    font-family: "Open-Sans", sans-serif;
-}
-
-.card-link {
-    color: #007bff !important;
-}
-
-.card-link:hover,
-.page-link {
-    cursor: pointer;
-}
-
-.list-group-item:first-child,
-.list-group-item:last-child {
-    border-radius: 0 !important;
-}
-
-.facet-result {
-    cursor: pointer;
-}
-
-.facet-count {
-    float: right;
-}
-
-.list-group-item:focus,
-.list-group-item:active {
-    outline: none !important;
-}
-
-.facet-list {
-    transition: all 0.2s ease-out;
-}
-
-.facet-list button:hover {
-    cursor: pointer;
-}
-
-.facet-list.hide {
-    max-height: 0px;
-    opacity: 0;
-    margin: 0 !important;
 }
 
 #metadata-list {
@@ -238,27 +187,7 @@ export default {
     transition: all 0.2s ease-out;
 }
 
-#metadata-list.show {
-    display: block;
-    opacity: 1;
-}
-
 #metadata-list:hover {
     color: #565656;
-}
-
-
-
-.dropdown-header {
-    display: block;
-    padding: 0.5rem 1rem;
-    margin-bottom: 0;
-    font-size: 0.875rem;
-    color: #6c757d;
-    white-space: nowrap;
-}
-
-.separator {
-    padding: 5px;
 }
 </style>

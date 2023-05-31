@@ -3,13 +3,7 @@
         <h5 style="text-align: center">
             <i>"{{ sourcePassage.source_passage }}"</i>
             <div class="reuse-title mt-1">
-                <span v-for="(citation, citationIndex) in globalConfig.sourceCitation" :key="citation.field">
-                    <span v-if="sourcePassage[citation.field]">
-                        <span :style="citation.style">{{ sourcePassage[citation.field] }}</span>
-                        <span class="separator"
-                            v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
-                    </span>
-                </span>
+                <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"></citations>
             </div>
         </h5>
         <div id="timeline-container" class="px-2 pb-2">
@@ -19,14 +13,7 @@
                 <div class="timeline-events card shadow-1 px-2 pt-2 mt-3" v-for="(reuse, reuseIndex) in date.result"
                     :key="reuseIndex">
                     <h5 class="reuse-title" @click="showPassage">
-                        <span v-for="(citation, citationIndex) in globalConfig[`${reuse.direction}Citation`]"
-                            :key="citation.field">
-                            <span v-if="reuse[citation.field]">
-                                <span :style="citation.style">{{ reuse[citation.field] }}</span>
-                                <span class="separator"
-                                    v-if="citationIndex != globalConfig.sourceCitation.length - 1">&#9679;&nbsp;</span>
-                            </span>
-                        </span>
+                        <citations :citation="globalConfig[`${reuse.direction}Citation`]" :alignment="reuse"></citations>
                     </h5>
                     <p class="timeline-text-content m-0">
                         <span class="text-content">
@@ -60,11 +47,12 @@
 
 <script>
 import passagePair from "./passagePair.vue";
+import citations from "./citations.vue";
 import { Modal } from "bootstrap";
 
 export default {
     name: "alignmentGroup",
-    components: { passagePair },
+    components: { passagePair, citations },
     inject: ["$http"],
     data() {
         return {
@@ -223,11 +211,6 @@ export default {
     margin-top: 2rem;
     margin-bottom: .25rem;
     cursor: initial;
-}
-
-.separator {
-    color: black;
-    padding: 5px;
 }
 
 .group-diff-btn {
