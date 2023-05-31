@@ -103,6 +103,8 @@ class WebAppConfig:
         self.options["targetPhiloDBLink"] = target_database_link
         self.options["sourcePhiloDBPath"] = source_philo_db_path
         self.options["targetPhiloDBPath"] = target_philo_db_path
+        self.options["sourceLinkToDocMetadata"] = "source_title"
+        self.options["targetLinkToDocMetadata"] = "target_title"
         self.options["banalitiesStored"] = store_banalities
 
     def __call__(self):

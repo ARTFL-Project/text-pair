@@ -1,5 +1,11 @@
 <template>
     <div class="row mt-4" id="all-content">
+        <div class="position-relative" v-scroll="handleScroll">
+            <button type="button" class="btn btn-secondary btn-sm" id="back-to-top" @click="backToTop()"
+                v-scroll="handleScroll">
+                <span class="d-sm-inline-block">Back to top</span>
+            </button>
+        </div>
         <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content" style="text-align: center"
             v-if="textObject">
             <div class="card mt-2 mb-4 p-4 shadow d-inline-block">
@@ -27,6 +33,8 @@ export default {
         return {
             globalConfig: this.$globalConfig,
             textObject: {},
+            bookPagePosition: 0,
+            topButtonVisible: false
         }
     },
     created() {
@@ -36,16 +44,47 @@ export default {
             })
             .then((response) => {
                 this.textObject = response.data;
-                this.$nextTick(() => {
-                    vueScrollTo.scrollTo(document.querySelector(`[data-offsets="${this.$route.query.start_byte}-${this.$route.query.end_byte}"]`), 250, {
-                        easing: "ease-out",
-                        offset: -150,
-                    });
-                })
+                if (this.$route.query.start_byte && this.$route.query.end_byte) {
+                    this.$nextTick(() => {
+                        let el = document.querySelector(`[data-offsets="${this.$route.query.start_byte}-${this.$route.query.end_byte}"]`)
+                        vueScrollTo.scrollTo(el, 250, {
+                            easing: "ease-out",
+                            offset: -150,
+                        });
+                    },)
+                }
             })
             .catch((error) => {
                 alert(error);
             });
+    },
+    mounted() {
+        let bookPage = document.querySelector("#book-page");
+        this.bookPagePosition = bookPage.getBoundingClientRect().top;
+    },
+    methods: {
+        backToTop() {
+            window.scrollTo({
+                top: 0,
+                behavior: "smooth",
+            });
+        },
+        handleScroll() {
+            if (!this.topButtonVisible) {
+                if (window.scrollY > this.bookPagePosition) {
+                    this.topButtonVisible = true;
+                    let backToTop = document.getElementById("back-to-top");
+                    backToTop.classList.add("visible");
+                    backToTop.style.top = 0;
+                    backToTop.style.position = "fixed";
+                }
+            } else if (window.scrollY < this.bookPagePosition) {
+                this.topButtonVisible = false;
+                let backToTop = document.getElementById("back-to-top");
+                backToTop.classList.remove("visible");
+                backToTop.style.position = "initial"
+            }
+        },
     },
 }
 
@@ -569,6 +608,11 @@ body {
 :deep([class*="passage-"]) {
     color: $passage-color;
     font-weight: 700;
+}
+
+:deep([class*="passage-"].focus) {
+    background-color: $passage-color;
+    color: #fff;
 }
 
 :deep(.xml-titlePage) {

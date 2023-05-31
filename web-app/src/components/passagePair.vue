@@ -3,11 +3,13 @@
         <div class="row">
             <div class="col mt-4">
                 <h6 class="passage-label text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
-                <citations :citation="globalConfig.sourceCitation" :alignment="alignment"></citations>
+                <citations :citation="globalConfig.sourceCitation" :alignment="alignment"
+                    :link-to-doc="globalConfig.sourceLinkToDocMetadata"></citations>
             </div>
             <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0 target-passage-container">
                 <h6 class="passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
-                <citations :citation="globalConfig.targetCitation" :alignment="alignment"></citations>
+                <citations :citation="globalConfig.targetCitation" :alignment="alignment"
+                    :link-to-doc="globalConfig.targetLinkToDocMetadata"></citations>
             </div>
         </div>
         <div class="row passages">
@@ -200,12 +202,12 @@ export default {
             if (direction == "source") {
                 rootURL = this.globalConfig.sourcePhiloDBLink.replace(/\/$/, "");
                 params = {
-                    db_table: this.$globalConfig.databaseName, philo_url: rootURL, philo_path: this.globalConfig.sourcePhiloDBPath, philo_id: alignment.source_philo_id, start_byte: alignment.source_start_byte, end_byte: alignment.source_end_byte, direction: "source"
+                    db_table: this.$globalConfig.databaseName, philo_url: rootURL, philo_path: this.globalConfig.sourcePhiloDBPath, philo_id: alignment.source_philo_id, start_byte: alignment.source_start_byte, end_byte: alignment.source_end_byte, directionSelected: "source"
                 };
             } else {
                 rootURL = this.globalConfig.targetPhiloDBLink.replace(/\/$/, "");
                 params = {
-                    db_table: this.$globalConfig.databaseName, philo_url: rootURL, philo_path: this.globalConfig.targetPhiloDBPath, philo_id: alignment.target_philo_id, start_byte: alignment.target_start_byte, end_byte: alignment.target_end_byte, direction: "target"
+                    db_table: this.$globalConfig.databaseName, philo_url: rootURL, philo_path: this.globalConfig.targetPhiloDBPath, philo_id: alignment.target_philo_id, start_byte: alignment.target_start_byte, end_byte: alignment.target_end_byte, directionSelected: "target"
                 };
             }
             this.$router.push({
@@ -223,6 +225,7 @@ export default {
 .source-passage,
 .target-passage {
     color: $passage-color;
+    font-weight: 700;
 }
 
 :deep(.added) {

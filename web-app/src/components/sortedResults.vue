@@ -19,7 +19,8 @@
                         v-for="(sourcePassage, index) in results.groups" :key="index + 1" v-bind:data-index="index">
                         <div class="corner-btn left">{{ index + 1 }}</div>
                         <h6 class="mt-2 pt-3" style="text-align: center;">
-                            <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"></citations>
+                            <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"
+                                :link-to-doc="globalConfig.sourceLinkToDocMetadata"></citations>
                         </h6>
                         <span class="px-3 pb-2" v-if="sourcePassage.count">The following passage is reused (in whole or in
                             part) {{
