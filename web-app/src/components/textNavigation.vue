@@ -1,5 +1,5 @@
 <template>
-    <div class="row mt-4" id="all-content">
+    <div class="row mt-1" id="all-content">
         <div class="position-relative" v-scroll="handleScroll">
             <button type="button" class="btn btn-secondary btn-sm" id="back-to-top" @click="backToTop()"
                 v-scroll="handleScroll">
@@ -8,12 +8,20 @@
         </div>
         <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content" style="text-align: center"
             v-if="textObject">
-            <div class="card mt-2 mb-4 p-4 shadow d-inline-block">
-                <h5 class="pt-1 mb-1">
+            <div class="card mt-2 mb-4 pb-4 shadow d-inline-block">
+                <div class="btn-group" style="width: 100%" role="group" aria-label="alt-results">
+                    <button type="button" class="btn btn-secondary" :class="{ active: direction == 'target' }"
+                        @click="changeDirection('target')">Show reuses of
+                        ealier texts</button>
+                    <button type="button" class="btn btn-secondary" :class="{ active: direction == 'source' }"
+                        @click="changeDirection('source')">Show reuses in
+                        later texts</button>
+                </div>
+                <h5 class="pt-2 mb-1 px-4">
                     <citations :citation="globalConfig[`${textObject.direction}Citation`]" :alignment="textObject.metadata">
                     </citations>
                 </h5>
-                <div id="book-page" class="text-view">
+                <div id="book-page" class="text-view px-4">
                     <div id="text-obj-content" class="text-content-area" v-html="textObject.text" tabindex="0"></div>
                 </div>
             </div>
@@ -34,35 +42,45 @@ export default {
             globalConfig: this.$globalConfig,
             textObject: {},
             bookPagePosition: 0,
-            topButtonVisible: false
+            topButtonVisible: false,
+            direction: "target"
         }
     },
     created() {
-        this.$http
-            .get(`${this.$globalConfig.apiServer}/text_view/`, {
-                params: this.$route.query,
-            })
-            .then((response) => {
-                this.textObject = response.data;
-                if (this.$route.query.start_byte && this.$route.query.end_byte) {
-                    this.$nextTick(() => {
-                        let el = document.querySelector(`[data-offsets="${this.$route.query.start_byte}-${this.$route.query.end_byte}"]`)
-                        vueScrollTo.scrollTo(el, 250, {
-                            easing: "ease-out",
-                            offset: -150,
-                        });
-                    },)
-                }
-            })
-            .catch((error) => {
-                alert(error);
-            });
+        this.fetchText();
     },
     mounted() {
         let bookPage = document.querySelector("#book-page");
         this.bookPagePosition = bookPage.getBoundingClientRect().top;
     },
+    watch: {
+        // call again the method if the route changes
+        $route: "fetchText",
+    },
     methods: {
+        fetchText() {
+            this.$http
+                .get(`${this.$globalConfig.apiServer}/text_view/`, {
+                    params: this.$route.query,
+                })
+                .then((response) => {
+                    this.textObject = response.data;
+                    if (this.$route.query.start_byte && this.$route.query.end_byte) {
+                        this.$nextTick(() => {
+                            console.log(`passage-marker[n="${response.data.passage_number}"]`)
+                            let el = document.querySelector(`.passage-marker[n="${response.data.passage_number}"]`)
+                            vueScrollTo.scrollTo(el, 250, {
+                                easing: "ease-out",
+                                offset: -150,
+                            });
+                        },)
+                    }
+                    this.direction = this.textObject.direction;
+                })
+                .catch((error) => {
+                    alert(error);
+                });
+        },
         backToTop() {
             window.scrollTo({
                 top: 0,
@@ -85,6 +103,10 @@ export default {
                 backToTop.style.position = "initial"
             }
         },
+        changeDirection(direction) {
+            this.direction = direction;
+            this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&philo_url=${this.$route.query.philo_url}&philo_path=${this.$route.query.philo_path}&philo_id=${this.$route.query.philo_id}&directionSelected=${direction}`)
+        }
     },
 }
 

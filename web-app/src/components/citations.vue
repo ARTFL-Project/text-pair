@@ -20,20 +20,12 @@ export default {
         }
     },
     computed: {
-
         href() {
             if (this.linkToDoc.length == 0) return;
-            let philoUrl, philoPath, philo_id;
-            if (this.linkToDoc.indexOf("source_")) {
-                philoPath = this.globalConfig.sourcePhiloDBPath;
-                philoUrl = this.globalConfig.sourcePhiloDBUrl;
-                philo_id = this.alignment.source_philo_id;
-            } else {
-                philoPath = this.globalConfig.targetPhiloDBPath
-                philoUrl = this.globalConfig.targetPhiloDBUrl;
-                philo_id = this.alignment.target_philo_id;
+            if (this.linkToDoc.indexOf("source_") != -1) {
+                return `/text-view/?db_table=${this.globalConfig.databaseName}&philo_url=${this.globalConfig.sourcePhiloDBLink}&philo_path=${this.globalConfig.sourcePhiloDBPath}&philo_id=${this.alignment.source_philo_id}&directionSelected=source`
             }
-            return `/text-view/?db_table=${this.globalConfig.databaseName}&philo_url=${philoUrl}&philo_path=${philoPath}&philo_id=${philo_id}`
+            return `/text-view/?db_table=${this.globalConfig.databaseName}&philo_url=${this.globalConfig.targetPhiloDBLink}&philo_path=${this.globalConfig.targetPhiloDBPath}&philo_id=${this.alignment.target_philo_id}&directionSelected=target`
         }
 
     }

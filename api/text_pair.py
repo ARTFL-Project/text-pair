@@ -140,7 +140,7 @@ def parse_args(request):
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
-            if key in ("page", "id_anchor", "timeSeriesInterval"):
+            if key in ("page", "id_anchor", "timeSeriesInterval", "start_byte", "end_byte"):
                 if value.isdigit():
                     other_args[key] = int(value)
             elif key == "direction":
@@ -661,4 +661,15 @@ def text_view(request: Request):
     cursor.execute(f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s", (other_args.philo_id,))
     metadata_fields = cursor.fetchone()
     conn.close()
-    return {"text": philo_text_object, "metadata": metadata_fields, "direction": other_args.directionSelected}
+
+    # Find passage number in passage pairs for autoscroll
+    passage_number = 0
+    try:
+        start_byte = int(request.query_params["start_byte"])
+        for i, passage_pair in enumerate(passage_pairs):
+            if passage_pair["start_byte"] <= start_byte <= passage_pair["end_byte"]:
+                passage_number = i
+                break
+    except KeyError:
+        pass
+    return {"text": philo_text_object, "metadata": metadata_fields, "direction": other_args.directionSelected, "passage_number": passage_number}
