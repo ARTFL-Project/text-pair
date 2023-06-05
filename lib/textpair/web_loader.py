@@ -286,6 +286,10 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     cursor.execute(
         f"CREATE INDEX year_{table_name}_idx ON {table_name} USING BTREE(source_year, target_year, source_start_byte)"
     )
+    cursor.execute(f"CREATE INDEX source_start_byte_{table_name}_idx ON {table_name} USING BTREE(source_start_byte)")
+    cursor.execute(f"CREATE INDEX source_end_byte_{table_name}_idx ON {table_name} USING BTREE(source_end_byte)")
+    cursor.execute(f"CREATE INDEX target_start_byte_{table_name}_idx ON {table_name} USING BTREE(target_start_byte)")
+    cursor.execute(f"CREATE INDEX target_end_byte_{table_name}_idx ON {table_name} USING BTREE(target_end_byte)")
     cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
     cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
     cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")

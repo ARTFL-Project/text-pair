@@ -22,7 +22,6 @@ from philologic.runtime.DB import DB
 from philologic.Config import MakeWebConfig
 
 
-
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -37,7 +36,9 @@ GLOBAL_CONFIG.read("/etc/text-pair/global_settings.ini")
 APP_PATH = GLOBAL_CONFIG["WEB_APP"]["web_app_path"]
 
 PHILO_REQUEST = namedtuple("PHILO_REQUEST", ["byte", "start_byte", "end_byte", "passages"])
-PHILO_CONFIG = namedtuple("PHILO_CONFIG", ["db_path", "page_images_url_root", "page_image_extension", "page_external_page_images"])
+PHILO_CONFIG = namedtuple(
+    "PHILO_CONFIG", ["db_path", "page_images_url_root", "page_image_extension", "page_external_page_images"]
+)
 
 BOOLEAN_ARGS = re.compile(r"""(NOT \w+)|(OR \w+)|(\w+)|("")""")
 
@@ -219,9 +220,10 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
         sql_values.append(other_args.banality)
     return " AND ".join(sql_fields), sql_values
 
+
 def check_access_control(request: Request):
     """Check if user has access to a particular database"""
-    return True # Placeholder
+    return True  # Placeholder
 
 
 @app.get("/")
@@ -333,7 +335,10 @@ def search_alignments(request: Request):
         for group_id in set(group_ids):
             cursor.execute(f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
             source_doc_id = cursor.fetchone()[0]
-            cursor.execute(f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, source_doc_id))
+            cursor.execute(
+                f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s",
+                (group_id, source_doc_id),
+            )
             counts_per_group[group_id] = cursor.fetchone()[0]
         for alignment in alignments:
             alignment["count"] = counts_per_group[alignment["group_id"]]
@@ -578,12 +583,17 @@ def get_passage_group(request: Request, group_id: int):
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
     original_passage = {k: v for k, v in cursor.fetchone().items()}
-    cursor.execute(f"SELECT * FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, original_passage["source_doc_id"]))
+    cursor.execute(
+        f"SELECT * FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s",
+        (group_id, original_passage["source_doc_id"]),
+    )
     for row in cursor:
-        filtered_passages[row["target_filename"]].append({
+        filtered_passages[row["target_filename"]].append(
+            {
                 **row,
                 "direction": "target",
-            })
+            }
+        )
     conn.close()
     passage_list = []
     results = defaultdict(list)
@@ -620,10 +630,15 @@ def get_sorted_results(request: Request):
         group_source_doc_id = cursor.fetchone()[0]
         if group_source_doc_id != source_doc_id:
             continue
-        cursor.execute(f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s", (group_id, source_doc_id))
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s",
+            (group_id, source_doc_id),
+        )
         counts_per_group[group_id] = cursor.fetchone()[0]
     results = {"total_count": len(counts_per_group), "groups": []}
-    sorted_group_ids = sorted(counts_per_group.items(), key=lambda x: x[1], reverse=True)[:100] # TODO: make this a parameter
+    sorted_group_ids = sorted(counts_per_group.items(), key=lambda x: x[1], reverse=True)[
+        :100
+    ]  # TODO: make this a parameter
     for group_id, count in sorted_group_ids:
         cursor.execute(f"""SELECT * FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
         group = cursor.fetchone()
@@ -631,22 +646,48 @@ def get_sorted_results(request: Request):
     conn.close()
     return results
 
+
 @app.get("/text_view/")
 @app.get("/text-pair-api/text_view/")
 def text_view(request: Request):
     """Retrieve a text object from PhiloLogic4"""
     _, _, other_args, _ = parse_args(request)
     access_control = check_access_control(request)
-    if access_control is False: #TODO check if user has access to this database
+    if access_control is False:  # TODO check if user has access to this database
         return {"error": "You do not have access to this database"}
+
+    # Get passage pairs offsets
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cursor.execute(f"SELECT {other_args.directionSelected}_start_byte, {other_args.directionSelected}_end_byte FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s", (other_args.philo_id,))
-    passage_pairs = [{"start_byte": row[f"{other_args.directionSelected}_start_byte"], "end_byte": row[f"{other_args.directionSelected}_end_byte"]} for row in cursor]
+    cursor.execute(
+        f"SELECT {other_args.directionSelected}_start_byte, {other_args.directionSelected}_end_byte FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s",
+        (other_args.philo_id,),
+    )
+    passage_pairs = [
+        {
+            "start_byte": row[f"{other_args.directionSelected}_start_byte"],
+            "end_byte": row[f"{other_args.directionSelected}_end_byte"],
+        }
+        for row in cursor
+    ]
+
+    # Merge passage pairs based on overlapping offsets
+    passage_pairs.sort(key=lambda x: x["start_byte"])
+    merged_passage_pairs = []
+    for passage_pair in passage_pairs:
+        if not merged_passage_pairs:
+            merged_passage_pairs.append(passage_pair)
+        else:
+            last_merged_passage_pair = merged_passage_pairs[-1]
+            if passage_pair["start_byte"] <= last_merged_passage_pair["end_byte"]:
+                last_merged_passage_pair["end_byte"] = passage_pair["end_byte"]
+            else:
+                merged_passage_pairs.append(passage_pair)
+
     if other_args.philo_path:
         philo_config = PHILO_CONFIG(other_args.philo_path, "", "", "")
     else:
@@ -654,22 +695,40 @@ def text_view(request: Request):
         philo_config = PHILO_CONFIG(philo_path, "", "", "")
     philo_db = DB(f"{philo_config.db_path}/data", width=7)
     philo_object = philo_db[other_args.philo_id]
-    philo_request = PHILO_REQUEST("", "", "", passage_pairs)
+    philo_request = PHILO_REQUEST("", "", "", merged_passage_pairs)
     philo_text_object, _ = get_text_obj(philo_object, philo_config, philo_request, philo_db.locals["token_regex"])
 
     # Get metadata
-    cursor.execute(f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s", (other_args.philo_id,))
-    metadata_fields = cursor.fetchone()
+    cursor.execute(
+        f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s", (other_args.philo_id,)
+    )
+    metadata_fields: psycopg2.extras.RealDictCursor = cursor.fetchone()  # type: ignore
+
+    # Get metadata for other direction
+    other_metadata_fields = []
+    for passage_pair in merged_passage_pairs:
+        cursor.execute(f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s", (metadata_fields[f"{other_args.directionSelected}_filename"], passage_pair["start_byte"], passage_pair["end_byte"]))  # type: ignore
+        other_metadata_fields.append([])
+        for row in cursor:
+            other_metadata_fields[-1].append(
+                {field: value for field, value in row.items() if not field.startswith(other_args.directionSelected)}
+            )
     conn.close()
 
     # Find passage number in passage pairs for autoscroll
     passage_number = 0
     try:
         start_byte = int(request.query_params["start_byte"])
-        for i, passage_pair in enumerate(passage_pairs):
+        for i, passage_pair in enumerate(merged_passage_pairs):
             if passage_pair["start_byte"] <= start_byte <= passage_pair["end_byte"]:
                 passage_number = i
                 break
     except KeyError:
         pass
-    return {"text": philo_text_object, "metadata": metadata_fields, "direction": other_args.directionSelected, "passage_number": passage_number}
+    return {
+        "text": philo_text_object,
+        "metadata": metadata_fields,
+        "direction": other_args.directionSelected,
+        "passage_number": passage_number,
+        "other_metadata": other_metadata_fields,
+    }

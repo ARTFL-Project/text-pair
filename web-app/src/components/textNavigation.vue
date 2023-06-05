@@ -43,11 +43,20 @@ export default {
             textObject: {},
             bookPagePosition: 0,
             topButtonVisible: false,
-            direction: "target"
+            direction: "target",
+            popoverList: [],
         }
     },
     created() {
         this.fetchText();
+    },
+    destroyed() {
+        this.$off("scroll", this.handleScroll);
+
+        // Remove all event listeners
+        for (let popover of this.popoverList) {
+            popover.dispose();
+        }
     },
     mounted() {
         let bookPage = document.querySelector("#book-page");
@@ -67,7 +76,6 @@ export default {
                     this.textObject = response.data;
                     if (this.$route.query.start_byte && this.$route.query.end_byte) {
                         this.$nextTick(() => {
-                            console.log(`passage-marker[n="${response.data.passage_number}"]`)
                             let el = document.querySelector(`.passage-marker[n="${response.data.passage_number}"]`)
                             vueScrollTo.scrollTo(el, 250, {
                                 easing: "ease-out",
@@ -76,6 +84,26 @@ export default {
                         },)
                     }
                     this.direction = this.textObject.direction;
+                    let otherDirection = ""
+                    if (this.direction == "source") {
+                        otherDirection = "target"
+                    } else {
+                        otherDirection = "source"
+                    }
+                    this.$nextTick(() => {
+                        let passages = document.querySelectorAll('[class*="passage-"]');
+                        this.popoverList = [...passages].map((popoverTriggerEl, index) => {
+                            let metadataGroup = this.textObject.other_metadata[index];
+                            let citation = this.buildCitation(metadataGroup, otherDirection)
+                            return new Popover(popoverTriggerEl, {
+                                content: citation,
+                                sanitize: false,
+                                html: true,
+                                trigger: "hover focus",
+                                placement: "top",
+                            })
+                        })
+                    })
                 })
                 .catch((error) => {
                     alert(error);
@@ -106,6 +134,23 @@ export default {
         changeDirection(direction) {
             this.direction = direction;
             this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&philo_url=${this.$route.query.philo_url}&philo_path=${this.$route.query.philo_path}&philo_id=${this.$route.query.philo_id}&directionSelected=${direction}`)
+        },
+        buildCitation(metadataFields, direction) {
+            let citation = "<ul>"
+            for (let metadata of metadataFields) {
+                citation += "<li>";
+                let labels = []
+                for (let cite of this.globalConfig[`${direction}Citation`]) {
+                    let style = Object.entries(cite.style).map(([k, v]) => `${k}:${v}`).join(';')
+                    if (cite.field != "") {
+                        labels.push(`<span style="${style}">${metadata[cite.field]}</span>`)
+                    }
+                }
+                citation += labels.join('<span style="font-size: 0.75rem; vertical-align: 0.05rem;">&nbsp;&#9679;&nbsp;</span>') + "</li>";
+            }
+            citation += "</ul>"
+            console.log(citation)
+            return citation;
         }
     },
 }
@@ -630,6 +675,7 @@ body {
 :deep([class*="passage-"]) {
     color: $passage-color;
     font-weight: 700;
+    cursor: pointer;
 }
 
 :deep([class*="passage-"].focus) {
