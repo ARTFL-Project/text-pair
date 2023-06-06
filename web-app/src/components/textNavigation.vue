@@ -91,18 +91,22 @@ export default {
                         otherDirection = "source"
                     }
                     this.$nextTick(() => {
-                        let passages = document.querySelectorAll('[class*="passage-"]');
-                        this.popoverList = [...passages].map((popoverTriggerEl, index) => {
+                        let passageMarkers = document.getElementsByClassName("passage-marker");
+                        for (let index = 0; passageMarkers.length > index; index += 1) {
                             let metadataGroup = this.textObject.other_metadata[index];
                             let citation = this.buildCitation(metadataGroup, otherDirection)
-                            return new Popover(popoverTriggerEl, {
-                                content: citation,
-                                sanitize: false,
-                                html: true,
-                                trigger: "hover focus",
-                                placement: "top",
-                            })
-                        })
+                            let popoverTriggerEl = document.getElementsByClassName(`passage-${index}`);
+                            for (let el of popoverTriggerEl) {
+                                let popover = new Popover(el, {
+                                    content: citation,
+                                    sanitize: false,
+                                    html: true,
+                                    trigger: "hover focus",
+                                    placement: "top",
+                                })
+                                this.popoverList.push(popover)
+                            }
+                        }
                     })
                 })
                 .catch((error) => {
@@ -136,20 +140,19 @@ export default {
             this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&philo_url=${this.$route.query.philo_url}&philo_path=${this.$route.query.philo_path}&philo_id=${this.$route.query.philo_id}&directionSelected=${direction}`)
         },
         buildCitation(metadataFields, direction) {
-            let citation = "<ul>"
+            let citation = '<ul class="list-group" style="list-style-type: none; margin: 0; padding: 0;">'
             for (let metadata of metadataFields) {
-                citation += "<li>";
+                citation += '<li class="list-group-item">';
                 let labels = []
                 for (let cite of this.globalConfig[`${direction}Citation`]) {
                     let style = Object.entries(cite.style).map(([k, v]) => `${k}:${v}`).join(';')
-                    if (cite.field != "") {
+                    if (metadata[cite.field] != "" && metadata[cite.field] != null) {
                         labels.push(`<span style="${style}">${metadata[cite.field]}</span>`)
                     }
                 }
-                citation += labels.join('<span style="font-size: 0.75rem; vertical-align: 0.05rem;">&nbsp;&#9679;&nbsp;</span>') + "</li>";
+                citation += labels.join('<span class="separator">&nbsp;&#9679;&nbsp;</span>') + "</li>";
             }
-            citation += "</ul>"
-            console.log(citation)
+            citation += '</ul><div class="p-2"><b>Click on passage to see reuse.</b></div>'
             return citation;
         }
     },
@@ -685,5 +688,9 @@ body {
 
 :deep(.xml-titlePage) {
     display: none;
+}
+
+.popover-body {
+    padding: 0 !important;
 }
 </style>

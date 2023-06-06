@@ -100,6 +100,18 @@ input[type="text"]:focus {
 .card-header {
     border-radius: 0 !important;
 }
+.popover-body ul {
+    border-width: 0 !important;
+}
+.separator {
+    padding: 5px;
+    font-size: 60%;
+    display: inline-block;
+    vertical-align: middle;
+}
+
+$popover-body-padding-y: 0;
+$popover-body-padding-x: 0;
 
 :export {
     color: $passage-color
