@@ -26,26 +26,20 @@
                 </div>
             </div>
         </div>
-        <div class="modal modal-xl modal-dialog-scrollable fade" id="passage-pairs" tabindex="-1"
+        <div class="modal modal-xl modal-dialog-scrollable fade" id="passage-pairs" tabindex="-1" v-if="passagePairs"
             aria-labelledby="passage-pairs" aria-hidden="true">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h1 class="modal-title fs-5" id="exampleModalLabel">Reuses of <citations
-                                :citation="globalConfig[`${textObject.direction}Citation`]"
-                                :alignment="textObject.metadata">
-                            </citations>
+                        <h1 class="modal-title fs-5">Shared passages
                         </h1>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
-                    <div class="modal-body">
-                        <ul class="list-group">
-                            <li class="list-group-item" v-for="(passage, passageIndex) in passagePairs"
-                                :index="passageIndex">
-                                <passage-pair :alignment="passage" :index="passageIndex" :diffed="false"></passage-pair>
-                            </li>
-                        </ul>
-                    </div>
+                    <ul class="list-group">
+                        <li class="list-group-item" v-for="(passage, passageIndex) in passagePairs" :index="passageIndex">
+                            <passage-pair :alignment="passage" :index="passageIndex" :diffed="false"></passage-pair>
+                        </li>
+                    </ul>
                 </div>
             </div>
         </div>
@@ -70,6 +64,7 @@ export default {
             direction: "target",
             popoverList: [],
             passagePairs: [],
+            modal: null,
         }
     },
     created() {
@@ -86,7 +81,9 @@ export default {
         for (let passage of passages) {
             passage.removeEventListener("click", this.getAlignments);
         }
-
+        if (this.modal != null) {
+            this.modal.dispose();
+        }
     },
     mounted() {
         let bookPage = document.querySelector("#book-page");
@@ -98,6 +95,11 @@ export default {
     },
     methods: {
         fetchText() {
+            if (this.modal != null) { // TODO: broken
+                this.modal.hide();
+                this.modal.dispose();
+            }
+            this.passagePairs = [];
             this.$http
                 .get(`${this.$globalConfig.apiServer}/text_view/`, {
                     params: this.$route.query,
@@ -202,8 +204,8 @@ export default {
                 }
             }).then((response) => {
                 this.passagePairs = response.data.passages
-                const myModal = new Modal(document.getElementById('passage-pairs'))
-                myModal.show()
+                this.modal = new Modal(document.getElementById('passage-pairs'))
+                this.modal.show()
 
             }).catch((error) => {
                 alert(error);
