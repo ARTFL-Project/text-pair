@@ -732,3 +732,24 @@ def text_view(request: Request):
         "passage_number": passage_number,
         "other_metadata": other_metadata_fields,
     }
+
+
+@app.get("/get_passages/")
+@app.get("/text-pair-api/get_passages/")
+def get_passages(request: Request):
+    """Retrieve aligned passages"""
+    _, _, other_args, _ = parse_args(request)
+    start_byte = int(request.query_params["start_byte"])
+    end_byte = int(request.query_params["end_byte"])
+    conn = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute(f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s", (request.query_params["filename"], start_byte, end_byte))
+    passages = []
+    for row in cursor:
+        passages.append({field: value for field, value in row.items()})
+    conn.close()
+    return {"passages": passages}

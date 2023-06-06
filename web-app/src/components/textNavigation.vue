@@ -26,16 +26,40 @@
                 </div>
             </div>
         </div>
+        <div class="modal modal-xl modal-dialog-scrollable fade" id="passage-pairs" tabindex="-1"
+            aria-labelledby="passage-pairs" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h1 class="modal-title fs-5" id="exampleModalLabel">Reuses of <citations
+                                :citation="globalConfig[`${textObject.direction}Citation`]"
+                                :alignment="textObject.metadata">
+                            </citations>
+                        </h1>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <ul class="list-group">
+                            <li class="list-group-item" v-for="(passage, passageIndex) in passagePairs"
+                                :index="passageIndex">
+                                <passage-pair :alignment="passage" :index="passageIndex" :diffed="false"></passage-pair>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </template>
 <script>
 import citations from "./citations.vue";
-import { Popover } from "bootstrap";
+import passagePair from "./passagePair.vue";
+import { Popover, Modal } from "bootstrap";
 import vueScrollTo from 'vue-scrollto'
 
 export default {
     name: "textNavigation",
-    components: { citations },
+    components: { citations, passagePair },
     inject: ["$http"],
     data() {
         return {
@@ -45,6 +69,7 @@ export default {
             topButtonVisible: false,
             direction: "target",
             popoverList: [],
+            passagePairs: [],
         }
     },
     created() {
@@ -57,6 +82,11 @@ export default {
         for (let popover of this.popoverList) {
             popover.dispose();
         }
+        let passages = document.querySelectorAll('[class^="passage-"]')
+        for (let passage of passages) {
+            passage.removeEventListener("click", this.getAlignments);
+        }
+
     },
     mounted() {
         let bookPage = document.querySelector("#book-page");
@@ -95,8 +125,8 @@ export default {
                         for (let index = 0; passageMarkers.length > index; index += 1) {
                             let metadataGroup = this.textObject.other_metadata[index];
                             let citation = this.buildCitation(metadataGroup, otherDirection)
-                            let popoverTriggerEl = document.getElementsByClassName(`passage-${index}`);
-                            for (let el of popoverTriggerEl) {
+                            let passages = document.getElementsByClassName(`passage-${index}`);
+                            for (let el of passages) {
                                 let popover = new Popover(el, {
                                     content: citation,
                                     sanitize: false,
@@ -105,6 +135,7 @@ export default {
                                     placement: "top",
                                 })
                                 this.popoverList.push(popover)
+                                el.addEventListener("click", this.getAlignments);
                             }
                         }
                     })
@@ -154,6 +185,29 @@ export default {
             }
             citation += '</ul><div class="p-2"><b>Click on passage to see reuse.</b></div>'
             return citation;
+        },
+        getAlignments(event) {
+            let passageNumber = event.target.getAttribute("n")
+            let passageMarker = document.querySelector(`.passage-marker[n="${passageNumber}"]`)
+            let offsets = passageMarker.getAttribute("data-offsets").split("-")
+            let startByte = offsets[0]
+            let endByte = offsets[1]
+            this.$http.get(`${this.$globalConfig.apiServer}/get_passages/`, {
+                params: {
+                    start_byte: startByte,
+                    end_byte: endByte,
+                    db_table: this.$route.query.db_table,
+                    directionSelected: this.$route.query.directionSelected,
+                    filename: this.textObject.metadata[`${this.$route.query.directionSelected}_filename`]
+                }
+            }).then((response) => {
+                this.passagePairs = response.data.passages
+                const myModal = new Modal(document.getElementById('passage-pairs'))
+                myModal.show()
+
+            }).catch((error) => {
+                alert(error);
+            });
         }
     },
 }
@@ -675,13 +729,13 @@ body {
     opacity: 1;
 }
 
-:deep([class*="passage-"]) {
+:deep([class^="passage-"]) {
     color: $passage-color;
     font-weight: 700;
     cursor: pointer;
 }
 
-:deep([class*="passage-"].focus) {
+:deep([class^="passage-"].focus) {
     background-color: $passage-color;
     color: #fff;
 }

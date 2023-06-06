@@ -2,12 +2,12 @@
     <div class="local-pair">
         <div class="row">
             <div class="col mt-4">
-                <h6 class="passage-label text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
+                <h6 class="paired-passage-label text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
                 <citations :citation="globalConfig.sourceCitation" :alignment="alignment"
                     :link-to-doc="globalConfig.sourceLinkToDocMetadata"></citations>
             </div>
             <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0 target-passage-container">
-                <h6 class="passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
+                <h6 class="paired-passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
                 <citations :citation="globalConfig.targetCitation" :alignment="alignment"
                     :link-to-doc="globalConfig.targetLinkToDocMetadata"></citations>
             </div>
