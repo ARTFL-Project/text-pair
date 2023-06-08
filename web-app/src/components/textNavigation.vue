@@ -6,6 +6,11 @@
                 <span class="d-sm-inline-block">Back to top</span>
             </button>
         </div>
+        <div class="d-flex justify-content-center position-relative" v-if="loading">
+            <div class="spinner-border" style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px"
+                role="status">
+            </div>
+        </div>
         <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content" style="text-align: center"
             v-if="textObject">
             <div class="card mt-2 mb-4 pb-4 shadow d-inline-block">
@@ -50,6 +55,7 @@ import citations from "./citations.vue";
 import passagePair from "./passagePair.vue";
 import { Popover, Modal } from "bootstrap";
 import vueScrollTo from 'vue-scrollto'
+import { color } from "../assets/theme.module.scss"
 
 export default {
     name: "textNavigation",
@@ -65,6 +71,8 @@ export default {
             popoverList: [],
             passagePairs: [],
             modal: null,
+            loading: false,
+            color: color
         }
     },
     created() {
@@ -82,7 +90,7 @@ export default {
             passage.removeEventListener("click", this.getAlignments);
         }
         if (this.modal != null) {
-            this.modal.dispose();
+            this.modal.hide();
         }
     },
     mounted() {
@@ -95,9 +103,10 @@ export default {
     },
     methods: {
         fetchText() {
+            this.textObject = {};
+            this.loading = true;
             if (this.modal != null) { // TODO: broken
                 this.modal.hide();
-                this.modal.dispose();
             }
             this.passagePairs = [];
             this.$http
@@ -106,14 +115,22 @@ export default {
                 })
                 .then((response) => {
                     this.textObject = response.data;
+                    this.loading = false;
                     if (this.$route.query.start_byte && this.$route.query.end_byte) {
                         this.$nextTick(() => {
                             let el = document.querySelector(`.passage-marker[n="${response.data.passage_number}"]`)
                             vueScrollTo.scrollTo(el, 250, {
                                 easing: "ease-out",
                                 offset: -150,
-                            });
-                        },)
+                                onDone: () => {
+                                    for (let newEl of document.getElementsByClassName(`passage-${response.data.passage_number}`)) {
+                                        let backgroundColor = newEl.style.backgroundColor || "white";
+                                        newEl.style.backgroundColor = this.color;
+                                        newEl.style.color = backgroundColor;
+                                    }
+                                }
+                            })
+                        }, 300)
                     }
                     this.direction = this.textObject.direction;
                     let otherDirection = ""
@@ -743,6 +760,10 @@ body {
 }
 
 :deep(.xml-titlePage) {
+    display: none;
+}
+
+:deep(.link-back) {
     display: none;
 }
 
