@@ -342,6 +342,7 @@ def search_alignments(request: Request):
             counts_per_group[group_id] = cursor.fetchone()[0]
         for alignment in alignments:
             alignment["count"] = counts_per_group[alignment["group_id"]]
+    conn.rollback()
     conn.close()
 
     previous_url = ""
@@ -413,6 +414,7 @@ def retrieve_all(request: Request):
         if row[doc_id] not in docs_found:
             docs_found[row[doc_id]] = {"count": 0, **{key: row[key] for key in column_names}}
         docs_found[row[doc_id]]["count"] += 1
+    conn.rollback()
     conn.close()
     return list(docs_found.values())
 
@@ -443,6 +445,7 @@ def retrieve_all_passage_pairs(request: Request):
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     results = [{key: row[key] for key in column_names} for row in cursor]
+    conn.rollback()
     conn.close()
     return results
 
@@ -464,6 +467,7 @@ def count_results(request: Request):
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute(query, sql_values)
     result_object = {"counts": cursor.fetchone()[0]}
+    conn.rollback()
     conn.close()
     return result_object
 
@@ -504,6 +508,7 @@ def generate_time_series(request: Request):
         results.append({"year": year, "count": count})
         next_year = year + other_args.timeSeriesInterval
         total_results += count
+    conn.rollback()
     conn.close()
     return {"counts": total_results, "results": results}
 
@@ -555,6 +560,7 @@ def facets(request: Request):
             {"field": interval, "count": count}
             for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
         ]
+    conn.rollback()
     conn.close()
     return {"facet": other_args.facet, "results": results, "total_count": total_count}
 
@@ -594,6 +600,7 @@ def get_passage_group(request: Request, group_id: int):
                 "direction": "target",
             }
         )
+    conn.rollback()
     conn.close()
     passage_list = []
     results = defaultdict(list)
@@ -643,6 +650,7 @@ def get_sorted_results(request: Request):
         cursor.execute(f"""SELECT * FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
         group = cursor.fetchone()
         results["groups"].append({**group, "count": count})
+    conn.rollback()
     conn.close()
     return results
 
@@ -713,6 +721,7 @@ def text_view(request: Request):
             other_metadata_fields[-1].append(
                 {field: value for field, value in row.items() if not field.startswith(other_args.directionSelected)}
             )
+    conn.rollback()
     conn.close()
 
     # Find passage number in passage pairs for autoscroll
@@ -751,5 +760,6 @@ def get_passages(request: Request):
     passages = []
     for row in cursor:
         passages.append({field: value for field, value in row.items()})
+    conn.rollback()
     conn.close()
     return {"passages": passages}

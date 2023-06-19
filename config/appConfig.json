@@ -15,7 +15,9 @@
         }
     ],
     "sourcePhiloDBLink": "",
+    "sourcePhiloDBPath": "",
     "targetPhiloDBLink": "",
+    "targetPhiloDBPath": "",
     "sourceLabel": "Source",
     "targetLabel": "Target",
     "sourceCitation": [{

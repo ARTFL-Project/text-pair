@@ -94,4 +94,5 @@ def parse_files(
     loader.merge_files("toms", verbose=False)
     loader.setup_sql_load(verbose=False)
     loader.post_processing(verbose=False)
+    loader.write_db_config()
     os.chdir("../../..")

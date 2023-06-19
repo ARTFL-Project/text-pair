@@ -92,7 +92,7 @@ class WebAppConfig:
     """Web app config class"""
 
     def __init__(self, db_name, api_server, source_database_link, target_database_link, source_philo_db_path,
-    target_philo_db_path, algorithm, store_banalities):
+    target_philo_db_path, algorithm, store_banalities, source_against_source):
         with open("/var/lib/text-pair/config/appConfig.json", encoding="utf8") as app_config:
             self.options = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
@@ -100,9 +100,13 @@ class WebAppConfig:
         self.options["databaseName"] = db_name.lower()
         self.options["matchingAlgorithm"] = algorithm
         self.options["sourcePhiloDBLink"] = source_database_link
-        self.options["targetPhiloDBLink"] = target_database_link
         self.options["sourcePhiloDBPath"] = source_philo_db_path
-        self.options["targetPhiloDBPath"] = target_philo_db_path
+        if source_against_source is True:
+            self.options["targetPhiloDBLink"] = source_database_link
+            self.options["targetPhiloDBPath"] = source_philo_db_path
+        else:
+            self.options["targetPhiloDBLink"] = target_database_link
+            self.options["targetPhiloDBPath"] = target_philo_db_path
         self.options["sourceLinkToDocMetadata"] = "source_title"
         self.options["targetLinkToDocMetadata"] = "target_title"
         self.options["banalitiesStored"] = store_banalities
@@ -157,6 +161,19 @@ class WebAppConfig:
         self.options["sourceCitation"] = source_fields
         self.options["targetCitation"] = target_fields
 
+def copy_data(params, direction):
+    """Copy files and database file to web app directory"""
+    print(f"Copying {direction} text files to web app directory...", end="", flush=True)
+    if os.path.exists(f"{params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data"):
+        os.system(f"rm -rf {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data")
+    os.makedirs(f"{params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/TEXT", exist_ok=True)
+    os.system(f"cp {params.output_path}/{direction}/db.locals.py {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/")
+    with open(params.paths[direction]["metadata_path"], encoding="utf8") as metadata_file:
+        metadata = json.load(metadata_file)
+    for file in metadata.values():
+        os.system(f"cp {file['filename']} {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/TEXT/")
+        os.system(f"cp {params.output_path}/{direction}/toms.db {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/")
+    print("done")
 
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
@@ -434,6 +451,7 @@ def create_web_app(
     source_philo_db_path,
     target_philo_db_path,
     algorithm,
+    textpair_params,
     load_only_db=False,
     groups_file=None,
     store_banalities=False,
@@ -441,8 +459,15 @@ def create_web_app(
     """Main routine"""
     web_config = WebAppConfig(
         table, api_server, source_database_link, target_database_link, source_philo_db_path,
-    target_philo_db_path, algorithm, store_banalities
+    target_philo_db_path, algorithm, store_banalities, textpair_params.source_against_source
     )
+    if textpair_params.source_against_source is True:
+        copy_data(textpair_params, "source")
+        os.system(f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data")
+    else:
+        copy_data(textpair_params, "source")
+        copy_data(textpair_params, "target")
+
     print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(
         file,

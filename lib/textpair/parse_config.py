@@ -22,14 +22,9 @@ class TextPairConfig:
         self.web_app_config: dict[str, Any] = {"skip_web_app": self.__cli_args["skip_web_app"]}
         self.only_web_app = self.__cli_args["load_only_web_app"]
         self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
+        self.source_against_source = False
         self.__parse_config()
         self.__set_params()
-        if self.is_philo_db is True:
-            self.web_app_config["source_philo_db_path"] = self.__file_paths["source_files"]
-            self.web_app_config["target_philo_db_path"] = self.__file_paths["target_files"]
-        else:
-            self.web_app_config["source_philo_db_path"] = ""
-            self.web_app_config["target_philo_db_path"] = ""
 
     def __getattr__(self, attr):
         return self.__cli_args[attr]
@@ -44,6 +39,12 @@ class TextPairConfig:
         config.read(self.__cli_args["config"])
         self.web_app_config["source_url"] = config["TEXT_SOURCES"]["source_url"]
         self.web_app_config["target_url"] = config["TEXT_SOURCES"]["target_url"]
+        if self.__cli_args["is_philo_db"] is True:
+            self.web_app_config["source_philo_db_path"] = config["TEXT_SOURCES"]["source_file_path"]
+            self.web_app_config["target_philo_db_path"] = config["TEXT_SOURCES"]["target_file_path"] or config["TEXT_SOURCES"]["source_file_path"]
+        else:
+            self.web_app_config["source_philo_db_path"] = os.path.join(global_config["WEB_APP"]["web_app_path"], self.__cli_args["dbname"], "source_data")
+            self.web_app_config["target_philo_db_path"] = os.path.join(global_config["WEB_APP"]["web_app_path"], self.__cli_args["dbname"], "target_data")
         if self.only_align is False:
             self.__file_paths = {
                 "source_files": config["TEXT_SOURCES"]["source_file_path"] or "",
@@ -118,6 +119,8 @@ class TextPairConfig:
                     case "min_matching_words" | "source_batch" | "target_batch":
                         value = int(value)
                 self.matching_params[key] = value
+        if not config["TEXT_SOURCES"]["target_file_path"]:
+            self.source_against_source = True
 
     def __set_params(self):
         """Set parameters for alignment"""
