@@ -49,7 +49,7 @@ dependencies = [
 
 setup(
     name="textpair",
-    version="2.1rc1",
+    version="2.1",
     author="The ARTFL Project",
     author_email="clovisgladstone@gmail.com",
     python_requires=">=3.10",
