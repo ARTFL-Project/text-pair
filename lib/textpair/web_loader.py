@@ -172,7 +172,7 @@ def copy_data(params, direction):
         metadata = json.load(metadata_file)
     for file in metadata.values():
         os.system(f"cp {file['filename']} {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/TEXT/")
-        os.system(f"cp {params.output_path}/{direction}/toms.db {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/")
+    os.system(f"cp {params.output_path}/{direction}/toms.db {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/")
     print("done")
 
 def parse_file(file):
@@ -489,12 +489,13 @@ def create_web_app(
     with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
         json.dump(stats, stats_file)
 
-    if textpair_params.source_against_source is True:
-        copy_data(textpair_params, "source")
-        os.system(f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data")
-    else:
-        copy_data(textpair_params, "source")
-        copy_data(textpair_params, "target")
+    if textpair_params.is_philo_db is False:
+        if textpair_params.source_against_source is True:
+            copy_data(textpair_params, "source")
+            os.system(f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data")
+        else:
+            copy_data(textpair_params, "source")
+            copy_data(textpair_params, "target")
 
     db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
     print("\n### Finished ###", flush=True)

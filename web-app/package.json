@@ -1,6 +1,6 @@
 {
     "name": "text-pair",
-    "version": "2.1",
+    "version": "2.1.0",
     "private": true,
     "description": "text-pair web app build with Vue.js",
     "author": "Clovis <clovisgladstone@gmail.com>",
