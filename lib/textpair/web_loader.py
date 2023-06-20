@@ -435,7 +435,7 @@ def set_up_app(web_config, db_path):
     os.system(f"cp -R /var/lib/text-pair/web-app/. {db_path}")
     with open(os.path.join(db_path, "appConfig.json"), "w", encoding="utf8") as config_file:
         json.dump(web_config(), config_file, indent=4)
-    os.system(f"""cd {db_path}; npm install --silent > "/dev/null" 2>&1; npm run build > "/dev/null" 2>&1;""")
+    os.system(f"""cd {db_path}; npm install --silent; npm run build > "/dev/null" 2>&1;""")
 
 
 def create_web_app(
@@ -480,14 +480,16 @@ def create_web_app(
             table,
             web_config.searchable_fields(),
         )
+
+    stats = generate_database_stats(table, algorithm)
+    with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
+        json.dump(stats, stats_file)
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)
         print("Building web application...", flush=True)
         set_up_app(web_config, db_dir)
-    stats = generate_database_stats(table, algorithm)
-    with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
-        json.dump(stats, stats_file)
+
 
     if textpair_params.is_philo_db is False:
         if textpair_params.source_against_source is True:
