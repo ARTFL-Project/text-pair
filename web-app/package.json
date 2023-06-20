@@ -10,6 +10,7 @@
         "host": "npm i && vite --host"
     },
     "dependencies": {
+        "@popperjs/core": "^2.11.8",
         "axios": "^0.21.1",
         "bootstrap": "^5.2.1",
         "chart.js": "^2.9.3",
@@ -26,8 +27,7 @@
         "eslint": "^7.32.0",
         "eslint-plugin-vue": "^8.5.0",
         "sass": "^1.54.9",
-        "vite": "^4.3.7",
-        "worker-loader": "^3.0.2"
+        "vite": "^4.3.7"
     },
     "eslintConfig": {
         "root": true,

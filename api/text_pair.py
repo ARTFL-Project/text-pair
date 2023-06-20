@@ -655,8 +655,8 @@ def get_sorted_results(request: Request):
     return results
 
 
-@app.post("/text_view/")
-@app.post("/text-pair-api/text_view/")
+@app.get("/text_view/")
+@app.get("/text-pair-api/text_view/")
 def text_view(request: Request):
     """Retrieve a text object from PhiloLogic4"""
     _, _, other_args, _ = parse_args(request)
