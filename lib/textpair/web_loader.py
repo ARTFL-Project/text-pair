@@ -428,10 +428,13 @@ def generate_database_stats(table_name, algorithm):
     stats["pairs_count"] = cursor.fetchone()[0]
     return stats
 
-def set_up_app(web_config, db_path):
+def set_up_app(web_config, db_path, table, algorithm):
     """Copy and build web application with correct configuration"""
     os.system(f"rm -rf {db_path}")
     os.mkdir(db_path)
+    stats = generate_database_stats(table, algorithm)
+    with open(os.path.join(db_path, "stats.json"), "w", encoding="utf8") as stats_file:
+        json.dump(stats, stats_file)
     os.system(f"cp -R /var/lib/text-pair/web-app/. {db_path}")
     with open(os.path.join(db_path, "appConfig.json"), "w", encoding="utf8") as config_file:
         json.dump(web_config(), config_file, indent=4)
@@ -481,14 +484,11 @@ def create_web_app(
             web_config.searchable_fields(),
         )
 
-    stats = generate_database_stats(table, algorithm)
-    with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
-        json.dump(stats, stats_file)
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)
         print("Building web application...", flush=True)
-        set_up_app(web_config, db_dir)
+        set_up_app(web_config, db_dir, table, algorithm)
 
 
     if textpair_params.is_philo_db is False:
