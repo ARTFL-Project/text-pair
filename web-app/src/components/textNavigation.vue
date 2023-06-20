@@ -154,7 +154,7 @@ export default {
                                     placement: "top",
                                 })
                                 this.popoverList.push(popover)
-                                el.addEventListener("click", this.getAlignments);
+                                el.addEventListener("click", this.getAlignments, false);
                             }
                         }
                     })
@@ -765,6 +765,13 @@ body {
 
 :deep(.link-back) {
     display: none;
+}
+
+:deep(.xml-ref) {
+    vertical-align: 0.3em;
+    font-size: 0.7em;
+    padding: 0 0.2rem;
+    border-radius: 50%;
 }
 
 .popover-body {

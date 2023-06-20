@@ -461,12 +461,6 @@ def create_web_app(
         table, api_server, source_database_link, target_database_link, source_philo_db_path,
     target_philo_db_path, algorithm, store_banalities, textpair_params.source_against_source
     )
-    if textpair_params.source_against_source is True:
-        copy_data(textpair_params, "source")
-        os.system(f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data")
-    else:
-        copy_data(textpair_params, "source")
-        copy_data(textpair_params, "target")
 
     print("\n### Storing results in database ###", flush=True)
     fields_in_table = load_db(
@@ -491,15 +485,23 @@ def create_web_app(
         web_config.update(fields_in_table)
         print("Building web application...", flush=True)
         set_up_app(web_config, db_dir)
-        db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
-        print("\n### Finished ###", flush=True)
-        print(f"The database is viewable at this URL: {db_url}")
-        print(
-            f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
-        )
     stats = generate_database_stats(table, algorithm)
     with open(os.path.join(db_dir, "stats.json"), "w", encoding="utf8") as stats_file:
         json.dump(stats, stats_file)
+
+    if textpair_params.source_against_source is True:
+        copy_data(textpair_params, "source")
+        os.system(f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data")
+    else:
+        copy_data(textpair_params, "source")
+        copy_data(textpair_params, "target")
+
+    db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
+    print("\n### Finished ###", flush=True)
+    print(f"The database is viewable at this URL: {db_url}")
+    print(
+        f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
+    )
 
 if __name__ == "__main__":
     load_groups_file(

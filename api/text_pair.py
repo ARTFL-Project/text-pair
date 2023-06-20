@@ -684,6 +684,7 @@ def text_view(request: Request):
     ]
 
     # Merge passage pairs based on overlapping offsets
+    #TODO: fix issue where end_byte is not the last byte of the passage
     passage_pairs.sort(key=lambda x: x["start_byte"])
     merged_passage_pairs = []
     for passage_pair in passage_pairs:
