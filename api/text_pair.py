@@ -655,8 +655,8 @@ def get_sorted_results(request: Request):
     return results
 
 
-@app.get("/text_view/")
-@app.get("/text-pair-api/text_view/")
+@app.post("/text_view/")
+@app.post("/text-pair-api/text_view/")
 def text_view(request: Request):
     """Retrieve a text object from PhiloLogic4"""
     _, _, other_args, _ = parse_args(request)
@@ -684,7 +684,6 @@ def text_view(request: Request):
     ]
 
     # Merge passage pairs based on overlapping offsets
-    #TODO: fix issue where end_byte is not the last byte of the passage
     passage_pairs.sort(key=lambda x: x["start_byte"])
     merged_passage_pairs = []
     for passage_pair in passage_pairs:

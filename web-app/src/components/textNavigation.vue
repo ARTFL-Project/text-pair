@@ -187,7 +187,7 @@ export default {
         },
         changeDirection(direction) {
             this.direction = direction;
-            this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&philo_url=${this.$route.query.philo_url}&philo_path=${this.$route.query.philo_path}&philo_id=${this.$route.query.philo_id}&directionSelected=${direction}`)
+            this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&philo_path=${this.$route.query.philo_path}&philo_id=${this.$route.query.philo_id}&directionSelected=${direction}`)
         },
         buildCitation(metadataFields, direction) {
             let citation = '<ul class="list-group" style="list-style-type: none; margin: 0; padding: 0;">'

@@ -42,14 +42,14 @@ dependencies = [
     "uvicorn",
     "uvloop",
     "httptools",
-    "philologic>=4.7.3.2",
+    "philologic>=4.7.4.2",
     "regex"
 ]
 
 
 setup(
     name="textpair",
-    version="2.0-beta.13",
+    version="2.1rc1",
     author="The ARTFL Project",
     author_email="clovisgladstone@gmail.com",
     python_requires=">=3.10",
