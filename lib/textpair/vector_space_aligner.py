@@ -957,6 +957,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
     config["source"]["strip_tags"] = True  # this is useful for post-processing passages where we have tags included.
     config["target"]["strip_tags"] = True
     source_preproc: PreProcessor = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
+    print(source_path)
     source_texts: Iterable[Tokens] = source_preproc.process_texts(
         (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
     )
@@ -993,7 +994,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             target_batch=config["target_batch"],
         )
     print(f"{len(matches)} matches found.")
-    matches = merge_passages2(
+    matches = merge_passages(
         matches,
         source_corpus,
         config["min_similarity"],

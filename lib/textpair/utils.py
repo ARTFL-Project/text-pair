@@ -1,3 +1,6 @@
+"""Various utilities for textpair"""
+
+
 import re
 from html import unescape as unescape_html
 from xml.sax.saxutils import unescape as unescape_xml

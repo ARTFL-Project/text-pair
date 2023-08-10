@@ -16,10 +16,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/dolthub/swiss"
 )
 
 type sortedFile struct {
@@ -28,7 +31,7 @@ type sortedFile struct {
 }
 
 type docIndex struct {
-	Ngrams      map[int32][]indexedNgram
+	Ngrams      *swiss.Map[int32, []indexedNgram]
 	DocID       string
 	NgramLength int
 	SortID      int
@@ -122,12 +125,7 @@ var cleanStart = regexp.MustCompile(`^\S+ `)
 var cleanEnd = regexp.MustCompile(` \S+$`)
 
 func main() {
-	sourceFiles, targetFiles, sourceMetadata, targetMetadata, config, ngramIndex := parseFlags()
-	saveAlignmentConfig(config)
-	_ = alignPassages(sourceFiles, targetFiles, sourceMetadata, targetMetadata, config, ngramIndex)
-}
-
-func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map[string]map[string]string, *matchingParams, map[int32]string) {
+	// Parse command line arguments
 	outputPath := flag.String("output_path", "./output", "output path for results")
 	ngramIndexLocation := flag.String("ngram_index", "", "location of ngram index used for debugging. Should be the source or target index, not matter which since it'll be used for common ngrams")
 	sourceFilesArg := flag.String("source_files", "", "source files location")
@@ -150,8 +148,20 @@ func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map
 	mergeOnNgramDistance := flag.Bool("merge_passages_on_ngram_distance", true, "Merge passages within x number of ngrams: the value used is the matching_window_size defaulting to 20")
 	passageDistance := flag.Float64("passage_distance_multiplier", 0.5, "Combine passage which are within (multiplier*length of previous passage) bytes")
 	debugArg := flag.String("debug", "false", "set debugging: you need to also provide the --ngram_index option with a path to the ngram index to debug the matching logic.")
+	cpuProfile := flag.Bool("cpu_profile", false, "write cpu profile to file")
 	flag.Parse()
 	debug, _ := strconv.ParseBool(*debugArg)
+	if *cpuProfile && !debug {
+		f, err := os.Create("default.pgo")
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 	config := &matchingParams{int32(*matchingWindowSize), int32(*maxGap), *flexGap, int32(*minimumMatchingNgrams), int32(*minimumMatchingNgramsInWindow), *minimumMatchingNgramsInDocs,
 		int32(*contextSize), *mergeOnByteDistance, *mergeOnNgramDistance, float64(*passageDistance), float64(*duplicateThreshold), *sourceBatch, *targetBatch, *outputPath, *threadsArg, *sortField, debug}
 	var ngramIndex map[int32]string
@@ -177,7 +187,9 @@ func parseFlags() ([]sortedFile, []sortedFile, map[string]map[string]string, map
 		fmt.Println("\nNo target metadata provided, stopping now...")
 		os.Exit(-1)
 	}
-	return sourceFiles, targetFiles, sourceMetadata, targetMetadata, config, ngramIndex
+
+	saveAlignmentConfig(config)
+	_ = alignPassages(sourceFiles, targetFiles, sourceMetadata, targetMetadata, config, ngramIndex)
 }
 
 func openJSONMetadata(fileLocation *string, ngramFilesLocation string) map[string]map[string]string {
@@ -294,15 +306,17 @@ func getJSONDocs(fileLocations []sortedFile, prefixString string, threads int) [
 				checkErr(err, "getJSONDocs")
 				tempDoc := make(map[int32][][]int32)
 				json.Unmarshal(jsonFile, &tempDoc)
-				doc := make(map[int32][]indexedNgram)
+				doc := swiss.NewMap[int32, []indexedNgram](1)
 				for key, value := range tempDoc {
-					doc[key] = []indexedNgram{}
+					doc.Put(key, []indexedNgram{})
 					for _, ngram := range value {
-						doc[key] = append(doc[key], indexedNgram{ngram[0], ngram[1], ngram[2]})
+						newDoc, _ := doc.Get(key)
+						newDoc = append(newDoc, indexedNgram{ngram[0], ngram[1], ngram[2]})
+						doc.Put(key, newDoc)
 					}
 				}
 				docID := path.Base(strings.Replace(fileLocation.docID, ".json", "", 1))
-				docObject := docIndex{doc, docID, len(doc), fileLocation.sortID}
+				docObject := docIndex{doc, docID, doc.Count(), fileLocation.sortID}
 				c <- docObject
 			}(fileLocation)
 		}
@@ -326,8 +340,8 @@ func getJSONDocs(fileLocations []sortedFile, prefixString string, threads int) [
 
 func loadNgramIndex(fileLocation string) map[int32]string {
 	file, err := os.Open(fileLocation)
-	defer file.Close()
 	checkErr(err, "loadNgramIndex")
+	defer file.Close()
 	reader := bufio.NewReader(file)
 	ngramIndex := make(map[int32]string)
 	var line string
@@ -479,9 +493,11 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							}
 							var matches = []ngramMatch{}
 							for n := range ngramIntersection {
-								for sourceIndex := range sourceFile.Ngrams[ngramIntersection[n]] {
-									for targetIndex := range targetFile.Ngrams[ngramIntersection[n]] {
-										matches = append(matches, ngramMatch{&sourceFile.Ngrams[ngramIntersection[n]][sourceIndex], &targetFile.Ngrams[ngramIntersection[n]][targetIndex], &ngramIntersection[n]})
+								localNgrams, _ := sourceFile.Ngrams.Get(ngramIntersection[n])
+								localTargetNgrams, _ := targetFile.Ngrams.Get(ngramIntersection[n])
+								for sourceIndex := range localNgrams {
+									for targetIndex := range localTargetNgrams {
+										matches = append(matches, ngramMatch{&localNgrams[sourceIndex], &localTargetNgrams[targetIndex], &ngramIntersection[n]})
 									}
 								}
 							}
@@ -546,19 +562,21 @@ func getIntersection(sourceFile *docIndex, targetFile *docIndex) ([]int32, int) 
 	var intersectCount = []int32{}
 	totalCommonNgrams := 0
 	if sourceFile.NgramLength < targetFile.NgramLength {
-		for ngram := range sourceFile.Ngrams {
-			if _, ok := targetFile.Ngrams[ngram]; ok {
+		sourceFile.Ngrams.Iter(func(ngram int32, _ []indexedNgram) (stop bool) {
+			if targetFile.Ngrams.Has(ngram) {
 				intersectCount = append(intersectCount, ngram)
 				totalCommonNgrams++
 			}
-		}
+			return false
+		})
 	} else {
-		for ngram := range targetFile.Ngrams {
-			if _, ok := sourceFile.Ngrams[ngram]; ok {
+		targetFile.Ngrams.Iter(func(ngram int32, _ []indexedNgram) (stop bool) {
+			if sourceFile.Ngrams.Has(ngram) {
 				intersectCount = append(intersectCount, ngram)
 				totalCommonNgrams++
 			}
-		}
+			return false
+		})
 	}
 	return intersectCount, totalCommonNgrams
 }

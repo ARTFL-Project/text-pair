@@ -181,6 +181,18 @@ def run_vsa_similarity(params) -> None:
     print("\n### Starting vector space alignment ###")
     if params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
+    if params.text_parsing["parse_source_files"] is True:
+        print("\n### Parsing source files ###")
+        parse_files(
+            params.paths["source"]["input_files"],
+            params.text_parsing["source_file_type"],
+            params.paths["source"]["input_source_metadata"],
+            params.paths["source"]["parse_output"],
+            params.text_parsing["source_words_to_keep"],
+            params.preprocessing_params["source"]["text_object_type"],
+            params.workers,
+            params.debug,
+        )
     run_vsa(
         params.paths["source"]["input_files_for_ngrams"],
         params.paths["target"]["input_files_for_ngrams"],
@@ -200,6 +212,8 @@ def run_vsa_similarity(params) -> None:
             params.web_app_config["api_server"],
             params.web_app_config["source_url"],
             params.web_app_config["target_url"],
+            params.web_app_config["source_philo_db_path"],
+            params.web_app_config["target_philo_db_path"],
             params.matching_params["matching_algorithm"],
             params
         )

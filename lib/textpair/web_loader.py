@@ -440,7 +440,6 @@ def set_up_app(web_config, db_path, table, algorithm):
     with open(os.path.join(db_path, "appConfig.json"), "w", encoding="utf8") as config_file:
         json.dump(web_config(), config_file, indent=4)
     os.system(f"""cd {db_path}; npm install --silent; npm run build > "/dev/null" 2>&1;""")
-    # os.system(f"""cd {db_path}; npm install; npm run build""")
 
 
 
