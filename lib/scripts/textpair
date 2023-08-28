@@ -2,7 +2,6 @@
 """Sequence aligner script"""
 
 import os
-import json
 
 from textpair import (
     Ngrams,
@@ -178,7 +177,6 @@ def run_alignment(params):
 
 def run_vsa_similarity(params) -> None:
     """Run vsa similarity"""
-    print("\n### Starting vector space alignment ###")
     if params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
     if params.text_parsing["parse_source_files"] is True:
@@ -193,6 +191,19 @@ def run_vsa_similarity(params) -> None:
             params.workers,
             params.debug,
         )
+    if params.text_parsing["parse_target_files"] is True:
+        print("\n### Parsing target files ###")
+        parse_files(
+            params.paths["target"]["input_files"],
+            params.text_parsing["target_file_type"],
+            params.paths["target"]["input_target_metadata"],
+            params.paths["target"]["parse_output"],
+            params.text_parsing["target_words_to_keep"],
+            params.preprocessing_params["target"]["text_object_type"],
+            params.workers,
+            params.debug,
+        )
+    print("\n### Starting vector space alignment ###")
     run_vsa(
         params.paths["source"]["input_files_for_ngrams"],
         params.paths["target"]["input_files_for_ngrams"],

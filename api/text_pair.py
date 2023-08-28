@@ -4,23 +4,19 @@
 import configparser
 import os
 import re
-from collections import Counter, OrderedDict, defaultdict
-from pathlib import Path
 import time
+from collections import Counter, OrderedDict, defaultdict, namedtuple
+from pathlib import Path
 from typing import Any
-from collections import namedtuple
 
-import requests
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from philologic.runtime.DB import DB
+from philologic.runtime.get_text import get_text_obj
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
-from philologic.runtime.get_text import get_text_obj
-from philologic.runtime.DB import DB
-from philologic.Config import MakeWebConfig
-
 
 app = FastAPI()
 app.add_middleware(
@@ -330,7 +326,9 @@ def search_alignments(request: Request):
         alignments.reverse()
         group_ids.reverse()
 
-    if group_ids:
+    # Check if groups table exists
+    cursor.execute(f"""SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{other_args.db_table}_groups')""")
+    if cursor.fetchone()[0] is True:
         counts_per_group: dict[int, int] = {}
         for group_id in set(group_ids):
             cursor.execute(f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
