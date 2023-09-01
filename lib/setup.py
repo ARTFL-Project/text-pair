@@ -35,7 +35,7 @@ dependencies = [
     "sacremoses",  # required by some models for tokenization
     "lz4",
     "orjson",
-    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0-rc4#egg=text_preprocessing",
+    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0#egg=text_preprocessing",
     "fastapi",
     "psycopg2",
     "gunicorn",

@@ -242,7 +242,6 @@ export default {
 :deep(.token-match) {
     color: darkblue;
     font-weight: 700;
-    letter-spacing: -0.5px;
 }
 
 :deep(.filtered-token) {

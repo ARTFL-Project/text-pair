@@ -53,11 +53,16 @@ class TextPairConfig:
                 "input_target_metadata": config["TEXT_SOURCES"]["target_metadata"] or "",
             }
         else:
-            self.__file_paths["source_files"] = os.path.join(self.output_path, "source")
-            if config["TEXT_SOURCES"]["target_file_path"]:
-                self.__file_paths["target_files"] = os.path.join(self.output_path, "target")
+            if config["MATCHING"]["matching_algorithm"] == "sa":
+                self.__file_paths["source_files"] = os.path.join(self.output_path, "source")
+                if config["TEXT_SOURCES"]["target_file_path"]:
+                    self.__file_paths["target_files"] = os.path.join(self.output_path, "target")
+                else:
+                    self.__file_paths["target_files"] = ""
             else:
-                self.__file_paths["target_files"] = ""
+                self.__file_paths["source_files"] = os.path.join(self.output_path, "source/saved_docs")
+                if config["TEXT_SOURCES"]["target_file_path"]:
+                    self.__file_paths["target_files"] = os.path.join(self.output_path, "target/saved_docs")
 
         for key, value in dict(config["TEXT_PARSING"]).items():
             if key.startswith("parse"):
@@ -181,21 +186,28 @@ class TextPairConfig:
         elif self.__cli_args["update_db"] is True:
             self.paths["source"]["metadata_path"] = self.__cli_args["source_metadata"]
             self.paths["target"]["metadata_path"] = self.__cli_args["target_metadata"]
-        else:
-            self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source")
-            self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
-            self.paths["source"]["common_ngrams"] = os.path.join(
-                self.output_path, "source/index/most_common_ngrams.txt"
-            )
-            self.matching_params["ngram_index"] = os.path.join(self.output_path, "source/index/index.tab")
-            if self.__file_paths["target_files"]:
-                self.paths["target"]["ngram_output_path"] = os.path.join(self.output_path, "target")
-                self.paths["target"]["metadata_path"] = os.path.join(self.output_path, "target/metadata/metadata.json")
-                self.paths["target"]["common_ngrams"] = os.path.join(
-                    self.output_path, "target/index/most_common_ngrams.txt"
+        else: # only_align is True
+            if self.matching_params["matching_algorithm"] == "sa":
+                self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source")
+                self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
+                self.paths["source"]["common_ngrams"] = os.path.join(
+                    self.output_path, "source/index/most_common_ngrams.txt"
                 )
+                self.matching_params["ngram_index"] = os.path.join(self.output_path, "source/index/index.tab")
+                if self.__file_paths["target_files"]:
+                    self.paths["target"]["ngram_output_path"] = os.path.join(self.output_path, "target")
+                    self.paths["target"]["metadata_path"] = os.path.join(self.output_path, "target/metadata/metadata.json")
+                    self.paths["target"]["common_ngrams"] = os.path.join(
+                        self.output_path, "target/index/most_common_ngrams.txt"
+                    )
+                else:
+                    self.paths["target"] = self.paths["source"]
             else:
-                self.paths["target"] = self.paths["source"]
+                self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
+                self.paths["source"]["input_files"] = self.__file_paths["source_files"]
+                self.paths["target"]["input_files"] = self.__file_paths["target_files"]
+                if self.paths["target"]["input_files"]:
+                    self.paths["target"]["metadata_path"] = os.path.join(self.output_path, "target/metadata/metadata.json")
 
 
 def get_config() -> TextPairConfig:

@@ -9,7 +9,7 @@ from abc import ABC
 from collections import deque
 from html import unescape as unescape_html
 from shutil import rmtree
-from typing import Any, Callable, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Optional, Iterator
 from xml.sax.saxutils import unescape as unescape_xml
 
 import dill as pickle
@@ -17,14 +17,13 @@ import lz4.frame
 import numpy as np
 import spacy
 import torch
-from dill import dump, load
 from recordclass import dataobject
 from scipy.sparse import csr_matrix
 from sentence_transformers import SentenceTransformer, util
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from spacy.tokens import Doc
-from text_preprocessing import PreProcessor, Token, Tokens
+from text_preprocessing import PreProcessor, PreProcessingPipe, Token, Tokens
 from tqdm import tqdm
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -55,7 +54,7 @@ class MergedGroup(dataobject, fast_new=True):
 class DocumentChunks:
     """A generator with caching"""
 
-    def __init__(self, docs: Iterator[list[str]], save_path: str, transform_function: Callable):
+    def __init__(self, docs: Iterable[list[str]], save_path: str, transform_function: Callable):
         self.docs = docs
         self.doc_list: list[list[str]] = []
         self.doc_count = 0
@@ -67,7 +66,7 @@ class DocumentChunks:
             rmtree(self.path)
         os.makedirs(self.path, exist_ok=True)
 
-    def __iter__(self) -> Iterator[str | list[str] | torch.Tensor | np.ndarray]:
+    def __iter__(self) -> Iterable[str | list[str] | torch.Tensor | np.ndarray]:
         if self.generator_exhausted is False:
             if self.doc_count == 0:
                 for doc in self.docs:
@@ -193,12 +192,113 @@ class Matches:
             yield self.__get_file(file)
 
 
+class PreprocessedTexts:
+    """Load preprocessed texts from disk"""
+
+    def __init__(
+        self,
+        path: str,
+        workers: int,
+        text_object_type: str,
+        language: str = "french",
+        stemmer: bool = False,
+        lemmatizer: str | bool = False,
+        stopwords: str | bool = False,
+        strip_punctuation: bool = True,
+        strip_numbers: bool = True,
+        lowercase: bool = True,
+        min_word_length: int = 2,
+        ascii: bool = False,
+        convert_entities: bool = False,
+        pos_to_keep: list[str] | bool = False,
+        ents_to_keep: list[str] | bool = False,
+        **_,  # this is meant to make the constructor accept invalid keywords
+    ):
+        self.path = os.path.join(path, "saved_docs")
+        self.workers = workers
+        self.text_object_type = text_object_type
+        self.preprocessor = PreProcessingPipe(
+            None,
+            language,
+            stemmer,
+            lemmatizer,
+            stopwords,
+            strip_punctuation,
+            strip_numbers,
+            lowercase,
+            min_word_length,
+            ascii,
+            convert_entities,
+            pos_to_keep,
+            ents_to_keep,
+        )
+
+    def __iter__(self) -> Iterator[Tokens]:
+        files = [file.path for file in os.scandir(self.path)]
+        for token_objects in map(self.__local_process, files):
+            for tokens in token_objects:
+                yield tokens
+
+    def __local_process(self, file: str) -> list[Tokens]:
+        """Load and process a single file"""
+        text_objects: list[Tokens] = []
+        current_object_id: str = ""
+        tokens = self.preprocessor.normalize_from_tokens(Tokens.load(file))
+        text_object_tokens = []
+        for token in tokens:
+            object_id = " ".join(token.ext["position"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.text_object_type]])
+            if current_object_id == "":
+                current_object_id = object_id
+            if object_id != current_object_id:
+                philo_id = self.__make_philo_id(text_object_tokens[-1].ext["position"])
+                text_objects.append(
+                    Tokens(
+                        text_object_tokens,
+                        {
+                            **tokens.metadata,
+                            "philo_id": philo_id,
+                            "start_byte": text_object_tokens[0].ext["start_byte"],
+                            "end_byte": text_object_tokens[-1].ext["end_byte"],
+                        },
+                    )
+                )
+                text_object_tokens = []
+            text_object_tokens.append(token)
+            current_object_id = object_id
+        if text_object_tokens:
+            text_objects.append(
+                Tokens(
+                    text_object_tokens,
+                    {
+                        **tokens.metadata,
+                        "start_byte": text_object_tokens[0].ext["start_byte"],
+                        "end_byte": text_object_tokens[-1].ext["end_byte"],
+                    },
+                )
+            )
+        return text_objects
+
+    def __make_philo_id(self, position: str):
+        split_position = position.split()
+        if self.text_object_type == "doc":
+            philo_id = f"{split_position[0]} 0 0 0 0 0 0"
+            return philo_id
+        philo_id = (
+            " ".join(split_position[: PHILO_TEXT_OBJECT_LEVELS[self.text_object_type]])
+            + " "
+            + " ".join("0" for _ in range(7 - PHILO_TEXT_OBJECT_LEVELS[self.text_object_type]))
+        )
+        return philo_id
+
+
 class Corpus(ABC):
     """A Corpus of passages as preprocessed by the text-preprocessor"""
 
     def __init__(
         self,
         texts: Iterable[Tokens],
+        output_path: str,
+        only_align: bool,
         similarity_function: Callable,
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
@@ -208,13 +308,15 @@ class Corpus(ABC):
     ):
         """Initialize Corpus Object"""
         self.texts: Iterable[Tokens] = texts
+        self.only_align: bool = only_align
         self.min_text_obj_length: int = min_text_obj_length
         self.n_chunk: int = n_chunk
         self.metadata: list[dict[str, Any]] = []
         self.text_object_type_split = text_object_type_split
-        self.tmp_dir = os.path.abspath(f"{TEMP_DIR}/output/")
+        self.output_dir = os.path.abspath(output_path)
         self.direction: str = direction
-        os.makedirs(os.path.join(self.tmp_dir, self.direction), exist_ok=True)
+        os.makedirs(os.path.join(self.output_dir, self.direction, "saved_docs"), exist_ok=True)
+        os.makedirs(os.path.join(self.output_dir, self.direction, "doc_chunks"), exist_ok=True)
         self.length = 0
         self.n_batches = n_batches
         self.similarity = similarity_function
@@ -226,7 +328,7 @@ class Corpus(ABC):
     def __getitem__(self, _):
         pass
 
-    def get_text_chunks(self) -> Iterator[list[str]]:
+    def get_text_chunks(self) -> Iterable[list[str]]:
         """Process all texts into smaller text chunks"""
         chunk_group: deque[Tokens] = deque(maxlen=self.n_chunk)
         min_chunk_length: int = self.n_chunk * self.min_text_obj_length
@@ -237,13 +339,17 @@ class Corpus(ABC):
         for text in self.texts:
             print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
             text.metadata["parsed_filename"] = os.path.join(
-                self.tmp_dir, self.direction, os.path.basename(text.metadata["parsed_filename"].replace(".lz4", ""))
+                self.output_dir,
+                self.direction,
+                "saved_docs",
+                os.path.basename(text.metadata["parsed_filename"].replace(".lz4", "")),
             )
             doc_id = text.metadata["philo_id"].split()[0]
             if (
                 doc_id != current_doc_id and current_doc_id is not None
             ):  # we save the current doc when doc_ids don't match
-                self.__save_doc(full_doc)
+                if self.only_align is False:
+                    full_doc.save(full_doc.metadata["parsed_filename"])
                 full_doc = Tokens([], text.metadata)
             full_doc.extend(text)
             text.purge()
@@ -252,7 +358,7 @@ class Corpus(ABC):
             )
             if text_level_id != current_text_level_id:
                 chunk_group_length: int = sum([len(t) for t in chunk_group])
-                if chunk_group_length >= min_chunk_length and self.text_object_definition == "text_object":
+                if chunk_group_length >= min_chunk_length:
                     chunk_group.popleft()
                     chunk = [t for chunk in chunk_group for t in chunk]
                     if chunk_group:  # make sure this chunk is new
@@ -277,19 +383,10 @@ class Corpus(ABC):
                     chunks_done += 1
                     yield [t.text for t in chunk]
             current_doc_id = doc_id
-        self.__save_doc(full_doc)
+        if self.only_align is False:
+            full_doc.save(full_doc.metadata["parsed_filename"])
         del self.texts
         print()
-
-    def __save_doc(self, doc: Tokens):
-        """Save doc to tmp dir for later retrieval"""
-        start_bytes: dict[int, int] = {}
-        end_bytes: dict[int, int] = {}
-        for pos, token in enumerate(doc):
-            start_bytes[token.ext["start_byte"]] = pos
-            end_bytes[token.ext["end_byte"]] = pos
-        with open(doc.metadata["parsed_filename"], "wb") as output:
-            dump((doc, start_bytes, end_bytes), output)
 
     def __store_metadata(self, metadata: dict[str, Any], tokens: list[Token]):
         """Store Metadata for each chunk"""
@@ -368,26 +465,23 @@ class Corpus(ABC):
     ) -> Iterable[MergedGroup]:
         """Compare corpus with another corpus"""
         for outer_doc_id, inner_doc_id in np.argwhere(results >= min_similarity):
-            if (
-                self.metadata[outer_doc_id]["year"] <= target_corpus.metadata[inner_doc_id]["year"]
-            ):
-                yield MergedGroup(
-                    PassageGroup(
-                        self[outer_doc_id],  # type: ignore
-                        self.metadata[outer_doc_id]["start_byte"],
-                        self.metadata[outer_doc_id]["end_byte"],
-                        self.metadata[outer_doc_id]["filename"],
-                        self.metadata[outer_doc_id],
-                    ),
-                    PassageGroup(
-                        target_corpus[inner_doc_id],  # type:ignore
-                        target_corpus.metadata[inner_doc_id]["start_byte"],
-                        target_corpus.metadata[inner_doc_id]["end_byte"],
-                        target_corpus.metadata[inner_doc_id]["filename"],
-                        target_corpus.metadata[inner_doc_id],
-                    ),
-                    results[outer_doc_id, inner_doc_id],  # type: ignore
-                )
+            yield MergedGroup(
+                PassageGroup(
+                    self[outer_doc_id],  # type: ignore
+                    self.metadata[outer_doc_id]["start_byte"],
+                    self.metadata[outer_doc_id]["end_byte"],
+                    self.metadata[outer_doc_id]["filename"],
+                    self.metadata[outer_doc_id],
+                ),
+                PassageGroup(
+                    target_corpus[inner_doc_id],  # type:ignore
+                    target_corpus.metadata[inner_doc_id]["start_byte"],
+                    target_corpus.metadata[inner_doc_id]["end_byte"],
+                    target_corpus.metadata[inner_doc_id]["filename"],
+                    target_corpus.metadata[inner_doc_id],
+                ),
+                results[outer_doc_id, inner_doc_id],  # type: ignore
+            )
 
 
 class TfIdfCorpus(Corpus):
@@ -396,6 +490,8 @@ class TfIdfCorpus(Corpus):
     def __init__(
         self,
         texts: Iterable[Tokens],
+        output_path: str,
+        only_align: bool,
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_type_split: str = "doc",
@@ -406,6 +502,8 @@ class TfIdfCorpus(Corpus):
     ):
         super().__init__(
             texts,
+            output_path,
+            only_align,
             lambda x: None,  #
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
@@ -413,16 +511,10 @@ class TfIdfCorpus(Corpus):
             direction=direction,
         )
         if vectorizer is None:
-            local_path = os.path.join(self.tmp_dir, self.direction)
-            if not os.path.exists(local_path):
-                os.system(f"mkdir {local_path}")
             self.vectorizer = TfidfVectorizer(max_df=max_freq, min_df=min_freq)  # type: ignore
             self.vectors: csr_matrix = self.vectorizer.fit_transform(" ".join(d) for d in self.get_text_chunks())  # type: ignore
         else:
             self.direction = "target"
-            local_path = os.path.join(self.tmp_dir, self.direction)
-            if not os.path.exists(local_path):
-                os.system(f"mkdir {local_path}")
             self.vectorizer = vectorizer
             self.vectors: csr_matrix = self.vectorizer.transform(" ".join(d) for d in self.get_text_chunks())  # type: ignore
 
@@ -450,8 +542,10 @@ class Word2VecEmbeddingCorpus(Corpus):
     def __init__(
         self,
         texts: Iterable[Tokens],
+        output_path: str,
         model: str | spacy.Language,
         n_batches: int,
+        only_align: bool,
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_type_split: str = "doc",
@@ -459,6 +553,8 @@ class Word2VecEmbeddingCorpus(Corpus):
     ):
         super().__init__(
             texts,
+            output_path,
+            only_align,
             similarity_function=linear_kernel,
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
@@ -495,8 +591,10 @@ class TransformerCorpus(Corpus):
     def __init__(
         self,
         texts: Iterable[Tokens],
+        output_path: str,
         model_name: str,
         n_batches: int,
+        only_align: bool,
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_type_split: str = "sent",
@@ -505,6 +603,8 @@ class TransformerCorpus(Corpus):
     ):
         super().__init__(
             texts,
+            output_path,
+            only_align,
             similarity_function=lambda x, y: util.cos_sim(x, y).cpu().numpy(),
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
@@ -582,27 +682,31 @@ def evaluate_score(start_score: float, new_score: float, min_score: float) -> bo
     return False
 
 
-def get_docs_with_matches(
-    matches: Matches | list[MergedGroup],
-) -> dict[str, tuple[Tokens, dict[int, int], dict[int, int]]]:
-    """Fetch all documents with matches"""
-    docs_with_matches: dict[str, tuple[Tokens, dict[int, int], dict[int, int]]] = {}
+def get_docs_with_matches(matches: Matches) -> dict[str, dict[str, Tokens]]:
+    """Get all docs with matches"""
+    docs = {"source": {}, "target": {}}
     for match in matches:
-        if match.source.metadata["parsed_filename"] not in docs_with_matches:
-            with open(match.source.metadata["parsed_filename"], "rb") as input_doc:
-                docs_with_matches[match.source.metadata["parsed_filename"]] = load(input_doc)
-        if match.target.metadata["parsed_filename"] not in docs_with_matches:
-            with open(match.target.metadata["parsed_filename"], "rb") as input_doc:
-                docs_with_matches[match.target.metadata["parsed_filename"]] = load(input_doc)
-    return docs_with_matches
+        if match.source.metadata["parsed_filename"] not in docs["source"]:
+            source_doc = Tokens.load(match.source.metadata["parsed_filename"])
+            source_doc.purge()
+            docs["source"][match.source.metadata["parsed_filename"]] = source_doc
+        if match.target.metadata["parsed_filename"] not in docs["target"]:
+            target_doc = Tokens.load(match.target.metadata["parsed_filename"])
+            target_doc.purge()
+        docs["target"][match.target.metadata["parsed_filename"]] = target_doc
+    return docs
 
 
-def get_passage(doc: tuple[Tokens, dict[int, int], dict[int, int]], start_byte: int, end_byte: int) -> Iterable[Token]:
+def get_passage(doc: Tokens, start_byte: int, end_byte: int) -> list[Token]:
     """Get passage within Tokens object"""
-    text, start_bytes, end_bytes = doc
-    start_index = start_bytes[start_byte]
-    end_index = end_bytes[end_byte] + 1
-    return text[start_index:end_index]
+    tokens = []
+    for token in doc:
+        if token.ext["start_byte"] >= start_byte and token.ext["end_byte"] <= end_byte:
+            tokens.append(token)
+        elif token.ext["end_byte"] > end_byte:
+            break
+    return tokens
+
 
 def merge_passages(
     matches: Matches,
@@ -681,6 +785,7 @@ def merge_passages(
     print(flush=True)
     return merged_matches
 
+
 def optimize_match(
     tokens: Iterable[Token],
     intersection: set[str],
@@ -717,15 +822,19 @@ def optimize_matches(
 ) -> list[MergedGroup]:
     """Optimize matches to get highest sim score"""
     print("Optimizing matches...")
-    docs_with_matches: dict[str, tuple[Tokens, dict[int, int], dict[int, int]]] = get_docs_with_matches(matches)
+    docs_with_matches: dict[str, dict[str, Tokens]] = get_docs_with_matches(matches)
     optimized_matches: list[MergedGroup] = []
     match_count = 0
     for match in tqdm(matches, total=len(matches), leave=False):
         source_tokens = get_passage(
-            docs_with_matches[match.source.metadata["parsed_filename"]], match.source.start_byte, match.source.end_byte
+            docs_with_matches["source"][match.source.metadata["parsed_filename"]],
+            match.source.start_byte,
+            match.source.end_byte,
         )
         target_tokens = get_passage(
-            docs_with_matches[match.target.metadata["parsed_filename"]], match.target.start_byte, match.target.end_byte
+            docs_with_matches["target"][match.target.metadata["parsed_filename"]],
+            match.target.start_byte,
+            match.target.end_byte,
         )
         intersection = {t.text for t in source_tokens if t.text}.intersection({t.text for t in target_tokens})
         if len(intersection) >= min_matching_words:
@@ -777,9 +886,7 @@ def post_process_passages(
         if word and word in target_set:
             source_passage_with_matches.append(f'&lt;span class="token-match"&gt;{surface_form}&lt;/span&gt;')
         elif not word:
-            source_passage_with_matches.append(
-                f'&lt;span class="filtered-token"&gt;{surface_form or " "}&lt;/span&gt;'
-            )
+            source_passage_with_matches.append(f'&lt;span class="filtered-token"&gt;{surface_form or " "}&lt;/span&gt;')
         else:
             source_passage_with_matches.append(surface_form)
     target_passage_with_matches = []
@@ -807,11 +914,15 @@ def simple_similarity(
     source_config: dict[str, Any],
     target_config: dict[str, Any],
     min_similarity: float,
+    output_path: str,
+    only_align: bool,
     target_texts: Optional[Iterable[Tokens]] = None,
 ) -> tuple[TfIdfCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of TF-IDF vectors"""
     source_corpus: TfIdfCorpus = TfIdfCorpus(
         source_texts,
+        output_path,
+        only_align,
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
         text_object_type_split=text_object_upper_bound(source_config),
@@ -821,10 +932,13 @@ def simple_similarity(
     if target_texts is not None:
         target_corpus: TfIdfCorpus = TfIdfCorpus(
             target_texts,
+            output_path,
+            only_align,
             vectorizer=source_corpus.vectorizer,
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
             text_object_type_split=text_object_upper_bound(target_config),
+            direction="target",
         )
 
         matching_docs = source_corpus.outer_compare(target_corpus, min_similarity)
@@ -840,14 +954,18 @@ def transformer_similarity(
     target_config: dict[str, Any],
     min_similarity: float,
     source_batch: int,
+    output_path: str,
+    only_align: bool,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
 ) -> tuple[TransformerCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of sentence embeddings from transformer models"""
     source_corpus: TransformerCorpus = TransformerCorpus(
         source_texts,
+        output_path,
         source_config["model_name"],
         source_batch,
+        only_align,
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
         text_object_type_split=text_object_upper_bound(source_config),
@@ -855,8 +973,10 @@ def transformer_similarity(
     if target_texts is not None:
         target_corpus: TransformerCorpus = TransformerCorpus(
             target_texts,
+            output_path,
             source_config["model_name"],
             target_batch,
+            only_align,
             direction="target",
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
@@ -876,14 +996,18 @@ def word2vec_embed_similarity(
     target_config: dict[str, Any],
     min_similarity: float,
     source_batch: int,
+    output_path: str,
+    only_align: bool,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
 ) -> tuple[Word2VecEmbeddingCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of sentence embeddings using mean w2v vectors"""
     source_corpus: Word2VecEmbeddingCorpus = Word2VecEmbeddingCorpus(
         source_texts,
+        output_path,
         source_config["model_name"],
         source_batch,
+        only_align,
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
         text_object_type_split=text_object_upper_bound(source_config),
@@ -891,8 +1015,10 @@ def word2vec_embed_similarity(
     if target_texts is not None:
         target_corpus: Word2VecEmbeddingCorpus = Word2VecEmbeddingCorpus(
             target_texts,
+            output_path,
             source_corpus.model,
             target_batch,
+            only_align,
             direction="target",
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
@@ -905,34 +1031,40 @@ def word2vec_embed_similarity(
     return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
 
 
-def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, Any]):
+def run_vsa(
+    source_path: str, target_path: str, workers: int, config: dict[str, Any], output_path: str, only_align=False
+):
     """Main function"""
-    if config["source"]["text_object_definition"] not in ("n_token", "text_object"):
-        print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
-        exit()
-    if config["target"]["text_object_definition"] not in ("n_token", "text_object"):
-        print("Error: Only valid values for text object definition are 'n_token' and 'text_object'")
-        exit()
-    if config["source"]["text_object_definition"] == "n_token":
-        config["source"]["text_object_type"] = config["source"]["text_object_type_split"]
-    if config["target"]["text_object_definition"] == "n_token":
-        config["target"]["text_object_type"] = config["target"]["text_object_type_split"]
     config["source"]["strip_tags"] = True  # this is useful for post-processing passages where we have tags included.
     config["target"]["strip_tags"] = True
-    source_preproc: PreProcessor = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
-    source_texts: Iterable[Tokens] = source_preproc.process_texts(
-        (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
-    )
-    target_preproc: PreProcessor = PreProcessor(is_philo_db=True, workers=workers, **config["target"])
-    target_texts: Iterable[Tokens] = target_preproc.process_texts(
-        (file.path for file in os.scandir(target_path)), keep_all=True, progress=False
-    )
+    source_preproc: PreProcessor | None = None
+    target_preproc: PreProcessor | None = None
+    if only_align is False:
+        source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
+        target_preproc = PreProcessor(
+            is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, **config["target"]
+        )
+        source_texts: Iterable[Tokens] = source_preproc.process_texts(
+            (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
+        )
+        target_texts: Iterable[Tokens] = target_preproc.process_texts(
+            (file.path for file in os.scandir(target_path)), keep_all=True, progress=False
+        )
+    else:
+        source_texts: Iterable[Tokens] = PreprocessedTexts(
+            os.path.join(output_path, "source"), workers, **config["source"]
+        )
+        target_texts: Iterable[Tokens] = PreprocessedTexts(
+            os.path.join(output_path, "target"), workers, **config["target"]
+        )
     if config["source"]["vectorization"] == "tfidf":
         source_corpus, matches, source_metadata, target_metadata = simple_similarity(
             source_texts,
             config["source"],
             config["target"],
             config["min_similarity"],
+            output_path,
+            only_align,
             target_texts=target_texts,
         )
     elif config["source"]["vectorization"] == "transformer":
@@ -942,6 +1074,8 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             config["target"],
             config["min_similarity"],
             config["source_batch"],
+            output_path,
+            only_align,
             target_texts=target_texts,
             target_batch=config["target_batch"],
         )
@@ -952,6 +1086,8 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             config["target"],
             config["min_similarity"],
             config["source_batch"],
+            output_path,
+            only_align,
             target_texts=target_texts,
             target_batch=config["target_batch"],
         )
@@ -971,7 +1107,13 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
 
-    with lz4.frame.open("output/results/alignments.jsonl.lz4", mode="wb", compression_level=3) as output:
+    if source_preproc is None:
+        source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
+        target_preproc = PreProcessor(
+            is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, **config["target"]
+        )
+
+    with lz4.frame.open(f"{output_path}/results/alignments.jsonl.lz4", mode="wb", compression_level=3) as output:
         for match in tqdm(matches, total=len(matches), leave=False):
             source_context_before = get_text(
                 match.source.start_byte - 300, match.source.start_byte, match.source.metadata["filename"]
@@ -988,18 +1130,14 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
                 match.target.end_byte, match.target.end_byte + 300, match.target.metadata["filename"]
             )
             if config["source"]["vectorization"] == "tfidf":
-                source_preproc.options = {
-                    **source_preproc.options,
+                source_preproc.normalize_options = {
+                    **source_preproc.normalize_options,
                     "strip_tags": False,
-                    "with_pos": False,
-                    "spacy_lemmatizer": False,
                 }
                 source_preproc.pos_to_keep = []
-                target_preproc.options = {
-                    **target_preproc.options,
+                target_preproc.normalize_options = {
+                    **target_preproc.normalize_options,
                     "strip_tags": False,
-                    "with_pos": False,
-                    "spacy_lemmatizer": False,
                 }
                 target_preproc.pos_to_keep = []
                 source_passage_with_matches, target_passage_with_matches = post_process_passages(
