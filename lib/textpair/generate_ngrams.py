@@ -6,6 +6,7 @@ import os
 from collections import defaultdict
 from glob import glob
 from typing import Any, Dict, List, Tuple
+import sqlite3
 
 import orjson
 from mmh3 import hash as hash32
@@ -51,7 +52,7 @@ class Ngrams:
             "lowercase": lowercase,
             "minimum_word_length": minimum_word_length,
             "lemmatizer": lemmatizer,
-            "stopwords": stopwords,  # TODO: generate error if file not found
+            "stopwords": stopwords,
             "text_object_type": text_object_type,
             "pos_to_keep": pos_to_keep,
             "ascii": ascii,
@@ -62,10 +63,6 @@ class Ngrams:
         self.db_name = ""
         self.db_path = ""
         self.is_philo_db = False
-        if pos_to_keep:
-            self.use_pos = True
-        else:
-            self.use_pos = False
 
     def __dump_config(self, output_path):
         with open(os.path.join(output_path, "config/ngram_config.ini"), "w", encoding="utf-8") as ini_file:
@@ -97,9 +94,8 @@ class Ngrams:
         os.system(f"mkdir -p {output_path}/temp")
         os.system(f"mkdir -p {output_path}/ngrams_in_order")
         self.input_path = os.path.abspath(os.path.join(files[0], "../../../"))
-        # self.input_path = os.path.dirname(os.path.abspath(files[0])).replace("data/words_and_philo_ids", "")
         self.output_path = output_path
-        combined_metadata: Dict[str, Any] = {}
+        combined_metadata: dict[str, Any] = {}
 
         print("Generating ngrams...", flush=True)
         preprocessor = PreProcessor(
@@ -121,7 +117,8 @@ class Ngrams:
             workers=workers,
             progress=False,
         )
-        with tqdm(total=len(files), leave=False) as pbar:
+        philo_type_count = self.count_texts(files[0])
+        with tqdm(total=philo_type_count, leave=False) as pbar:
             for local_metadata in preprocessor.process_texts(files, progress=False):
                 combined_metadata.update(local_metadata)  # type: ignore
                 pbar.update()
@@ -167,3 +164,12 @@ class Ngrams:
         with open(f"{self.output_path}/ngrams_in_order/{text_object_id}.json", "wb") as json_file:
             json_file.write(orjson.dumps(doc_ngrams_in_order))
         return metadata
+
+    def count_texts(self, text: str) -> int:
+        """Count number of texts in PhiloLogic database"""
+        philo_db_path: str = os.path.abspath(os.path.join(text, os.pardir, os.pardir, "toms.db"))
+        toms_db = sqlite3.connect(philo_db_path)
+        cursor = toms_db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM toms WHERE philo_type = ?", (self.config["text_object_type"],))
+        philo_type_count = cursor.fetchone()[0]
+        return philo_type_count

@@ -10,10 +10,12 @@ import regex as re
 import lz4.frame
 import orjson
 from tqdm import tqdm
+import ahocorasick_rs
 
 
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
 SPACES = re.compile(r"\p{Z}+")
+
 
 def clean_text(text: str) -> str:
     """Clean text for banality detection"""
@@ -21,6 +23,7 @@ def clean_text(text: str) -> str:
     text = PUNCTUATION.sub("", text)
     text = SPACES.sub(" ", text)
     return text
+
 
 class NgramDoc:
     """Doc with various properties"""
@@ -97,12 +100,22 @@ def banality_auto_detect(
     return banalities_found
 
 
+def clean_phrases(file: str):
+    """Clean phrases for phrase-based banality detection"""
+    with open(file, encoding="utf8") as input_file:
+        for phrase in input_file:
+            phrase = clean_text(phrase)
+            if re.search(r"\w", phrase):
+                yield phrase
+
+
 def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[int]):
     """Detect banalities based on user provided phrases"""
-    with open(banality_phrases_path, encoding="utf8") as input_file:
-        banality_phrases = {clean_text(phrase) for phrase in input_file if re.search(r"\w", phrase)}
+    print("Building tree for phrase-based banality detection...", end="", flush=True)
+    ac = ahocorasick_rs.AhoCorasick(clean_phrases(banality_phrases_path))
+    print("\r", end="")
     passages_filtered = 0
-    filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages")
+    filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages.jsonl")
     with (
         lz4.frame.open(filtered_file_name, mode="wb") as filtered_passages,
         lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
@@ -111,16 +124,14 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
         for line in tqdm(input_file, total=count, desc="Running phrase-based banality detection...", leave=False):
             alignment: dict[str, Any] = orjson.loads(line)
             banality = False
-            for phrase in banality_phrases:
-                if phrase in clean_text(alignment["source_passage"]):
-                    passage = f"{phrase}\nFOUND IN:\n{alignment['source_passage']}\n\n"
-                    filtered_passages.write(passage.encode("utf8")) # type: ignore
-                    passages_filtered += 1
-                    banality = True
-                    break
+            if ac.find_matches_as_strings(clean_text(alignment["source_passage"])):
+                banality = True
+                passages_filtered += 1
+                filtered_passages.write(line)  # type: ignore
             if banality is False:
-                output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+                output_file.write(line)  # type: ignore
     os.system(f"rm {filepath} && mv {filepath}.keep.lz4 {filepath}")
+    print("done")
     return passages_filtered
 
 

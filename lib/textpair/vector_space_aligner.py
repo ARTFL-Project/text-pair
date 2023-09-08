@@ -192,105 +192,6 @@ class Matches:
             yield self.__get_file(file)
 
 
-class PreprocessedTexts:
-    """Load preprocessed texts from disk"""
-
-    def __init__(
-        self,
-        path: str,
-        workers: int,
-        text_object_type: str,
-        language: str = "french",
-        stemmer: bool = False,
-        lemmatizer: str | bool = False,
-        stopwords: str | bool = False,
-        strip_punctuation: bool = True,
-        strip_numbers: bool = True,
-        lowercase: bool = True,
-        min_word_length: int = 2,
-        ascii: bool = False,
-        convert_entities: bool = False,
-        pos_to_keep: list[str] | bool = False,
-        ents_to_keep: list[str] | bool = False,
-        **_,  # this is meant to make the constructor accept invalid keywords
-    ):
-        self.path = os.path.join(path, "saved_docs")
-        self.workers = workers
-        self.text_object_type = text_object_type
-        self.preprocessor = PreProcessingPipe(
-            None,
-            language,
-            stemmer,
-            lemmatizer,
-            stopwords,
-            strip_punctuation,
-            strip_numbers,
-            lowercase,
-            min_word_length,
-            ascii,
-            convert_entities,
-            pos_to_keep,
-            ents_to_keep,
-        )
-
-    def __iter__(self) -> Iterator[Tokens]:
-        files = [file.path for file in os.scandir(self.path)]
-        for token_objects in map(self.__local_process, files):
-            for tokens in token_objects:
-                yield tokens
-
-    def __local_process(self, file: str) -> list[Tokens]:
-        """Load and process a single file"""
-        text_objects: list[Tokens] = []
-        current_object_id: str = ""
-        tokens = self.preprocessor.normalize_from_tokens(Tokens.load(file))
-        text_object_tokens = []
-        for token in tokens:
-            object_id = " ".join(token.ext["position"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.text_object_type]])
-            if current_object_id == "":
-                current_object_id = object_id
-            if object_id != current_object_id:
-                philo_id = self.__make_philo_id(text_object_tokens[-1].ext["position"])
-                text_objects.append(
-                    Tokens(
-                        text_object_tokens,
-                        {
-                            **tokens.metadata,
-                            "philo_id": philo_id,
-                            "start_byte": text_object_tokens[0].ext["start_byte"],
-                            "end_byte": text_object_tokens[-1].ext["end_byte"],
-                        },
-                    )
-                )
-                text_object_tokens = []
-            text_object_tokens.append(token)
-            current_object_id = object_id
-        if text_object_tokens:
-            text_objects.append(
-                Tokens(
-                    text_object_tokens,
-                    {
-                        **tokens.metadata,
-                        "start_byte": text_object_tokens[0].ext["start_byte"],
-                        "end_byte": text_object_tokens[-1].ext["end_byte"],
-                    },
-                )
-            )
-        return text_objects
-
-    def __make_philo_id(self, position: str):
-        split_position = position.split()
-        if self.text_object_type == "doc":
-            philo_id = f"{split_position[0]} 0 0 0 0 0 0"
-            return philo_id
-        philo_id = (
-            " ".join(split_position[: PHILO_TEXT_OBJECT_LEVELS[self.text_object_type]])
-            + " "
-            + " ".join("0" for _ in range(7 - PHILO_TEXT_OBJECT_LEVELS[self.text_object_type]))
-        )
-        return philo_id
-
-
 class Corpus(ABC):
     """A Corpus of passages as preprocessed by the text-preprocessor"""
 
@@ -298,7 +199,6 @@ class Corpus(ABC):
         self,
         texts: Iterable[Tokens],
         output_path: str,
-        only_align: bool,
         similarity_function: Callable,
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
@@ -308,7 +208,6 @@ class Corpus(ABC):
     ):
         """Initialize Corpus Object"""
         self.texts: Iterable[Tokens] = texts
-        self.only_align: bool = only_align
         self.min_text_obj_length: int = min_text_obj_length
         self.n_chunk: int = n_chunk
         self.metadata: list[dict[str, Any]] = []
@@ -336,7 +235,9 @@ class Corpus(ABC):
         full_doc = Tokens([], {})
         current_doc_id = None
         chunks_done = 0
+        docs = {}
         for text in self.texts:
+            docs[text.metadata["philo_id"]] = " ".join([t.text for t in text])
             print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
             text.metadata["parsed_filename"] = os.path.join(
                 self.output_dir,
@@ -348,8 +249,7 @@ class Corpus(ABC):
             if (
                 doc_id != current_doc_id and current_doc_id is not None
             ):  # we save the current doc when doc_ids don't match
-                if self.only_align is False:
-                    full_doc.save(full_doc.metadata["parsed_filename"])
+                full_doc.save(full_doc.metadata["parsed_filename"])
                 full_doc = Tokens([], text.metadata)
             full_doc.extend(text)
             text.purge()
@@ -383,8 +283,7 @@ class Corpus(ABC):
                     chunks_done += 1
                     yield [t.text for t in chunk]
             current_doc_id = doc_id
-        if self.only_align is False:
-            full_doc.save(full_doc.metadata["parsed_filename"])
+        full_doc.save(full_doc.metadata["parsed_filename"])
         del self.texts
         print()
 
@@ -491,7 +390,6 @@ class TfIdfCorpus(Corpus):
         self,
         texts: Iterable[Tokens],
         output_path: str,
-        only_align: bool,
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_type_split: str = "doc",
@@ -503,7 +401,6 @@ class TfIdfCorpus(Corpus):
         super().__init__(
             texts,
             output_path,
-            only_align,
             lambda x: None,  #
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
@@ -545,7 +442,6 @@ class Word2VecEmbeddingCorpus(Corpus):
         output_path: str,
         model: str | spacy.Language,
         n_batches: int,
-        only_align: bool,
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_type_split: str = "doc",
@@ -554,7 +450,6 @@ class Word2VecEmbeddingCorpus(Corpus):
         super().__init__(
             texts,
             output_path,
-            only_align,
             similarity_function=linear_kernel,
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
@@ -594,7 +489,6 @@ class TransformerCorpus(Corpus):
         output_path: str,
         model_name: str,
         n_batches: int,
-        only_align: bool,
         min_text_obj_length: int = 15,
         n_chunk: int = 3,
         text_object_type_split: str = "sent",
@@ -604,7 +498,6 @@ class TransformerCorpus(Corpus):
         super().__init__(
             texts,
             output_path,
-            only_align,
             similarity_function=lambda x, y: util.cos_sim(x, y).cpu().numpy(),
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
@@ -915,14 +808,12 @@ def simple_similarity(
     target_config: dict[str, Any],
     min_similarity: float,
     output_path: str,
-    only_align: bool,
     target_texts: Optional[Iterable[Tokens]] = None,
 ) -> tuple[TfIdfCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of TF-IDF vectors"""
     source_corpus: TfIdfCorpus = TfIdfCorpus(
         source_texts,
         output_path,
-        only_align,
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
         text_object_type_split=text_object_upper_bound(source_config),
@@ -933,7 +824,6 @@ def simple_similarity(
         target_corpus: TfIdfCorpus = TfIdfCorpus(
             target_texts,
             output_path,
-            only_align,
             vectorizer=source_corpus.vectorizer,
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
@@ -955,7 +845,6 @@ def transformer_similarity(
     min_similarity: float,
     source_batch: int,
     output_path: str,
-    only_align: bool,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
 ) -> tuple[TransformerCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
@@ -965,7 +854,6 @@ def transformer_similarity(
         output_path,
         source_config["model_name"],
         source_batch,
-        only_align,
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
         text_object_type_split=text_object_upper_bound(source_config),
@@ -976,7 +864,6 @@ def transformer_similarity(
             output_path,
             source_config["model_name"],
             target_batch,
-            only_align,
             direction="target",
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
@@ -997,7 +884,6 @@ def word2vec_embed_similarity(
     min_similarity: float,
     source_batch: int,
     output_path: str,
-    only_align: bool,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
 ) -> tuple[Word2VecEmbeddingCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1007,7 +893,6 @@ def word2vec_embed_similarity(
         output_path,
         source_config["model_name"],
         source_batch,
-        only_align,
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
         text_object_type_split=text_object_upper_bound(source_config),
@@ -1018,7 +903,6 @@ def word2vec_embed_similarity(
             output_path,
             source_corpus.model,
             target_batch,
-            only_align,
             direction="target",
             min_text_obj_length=target_config["min_text_object_length"],
             n_chunk=target_config["n_chunk"],
@@ -1032,31 +916,24 @@ def word2vec_embed_similarity(
 
 
 def run_vsa(
-    source_path: str, target_path: str, workers: int, config: dict[str, Any], output_path: str, only_align=False
+    source_path: str, target_path: str, workers: int, config: dict[str, Any], output_path: str
 ):
     """Main function"""
     config["source"]["strip_tags"] = True  # this is useful for post-processing passages where we have tags included.
     config["target"]["strip_tags"] = True
     source_preproc: PreProcessor | None = None
     target_preproc: PreProcessor | None = None
-    if only_align is False:
-        source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
-        target_preproc = PreProcessor(
-            is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, **config["target"]
-        )
-        source_texts: Iterable[Tokens] = source_preproc.process_texts(
-            (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
-        )
-        target_texts: Iterable[Tokens] = target_preproc.process_texts(
-            (file.path for file in os.scandir(target_path)), keep_all=True, progress=False
-        )
-    else:
-        source_texts: Iterable[Tokens] = PreprocessedTexts(
-            os.path.join(output_path, "source"), workers, **config["source"]
-        )
-        target_texts: Iterable[Tokens] = PreprocessedTexts(
-            os.path.join(output_path, "target"), workers, **config["target"]
-        )
+    source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
+    target_preproc = PreProcessor(
+        is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, **config["target"]
+    )
+    source_texts: Iterable[Tokens] = source_preproc.process_texts(
+        (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
+    )
+    target_texts: Iterable[Tokens] = target_preproc.process_texts(
+        (file.path for file in os.scandir(target_path)), keep_all=True, progress=False
+    )
+
     if config["source"]["vectorization"] == "tfidf":
         source_corpus, matches, source_metadata, target_metadata = simple_similarity(
             source_texts,
@@ -1064,7 +941,6 @@ def run_vsa(
             config["target"],
             config["min_similarity"],
             output_path,
-            only_align,
             target_texts=target_texts,
         )
     elif config["source"]["vectorization"] == "transformer":
@@ -1075,7 +951,6 @@ def run_vsa(
             config["min_similarity"],
             config["source_batch"],
             output_path,
-            only_align,
             target_texts=target_texts,
             target_batch=config["target_batch"],
         )
@@ -1087,7 +962,6 @@ def run_vsa(
             config["min_similarity"],
             config["source_batch"],
             output_path,
-            only_align,
             target_texts=target_texts,
             target_batch=config["target_batch"],
         )
@@ -1100,9 +974,9 @@ def run_vsa(
         matches,
         config["min_similarity"],
     )
-    if isinstance(source_corpus, TfIdfCorpus):
-        print("\n### Post-processing results ###", flush=True)
-        matches = optimize_matches(matches, source_corpus, config["min_matching_words"])
+    # if isinstance(source_corpus, TfIdfCorpus):
+    #     print("\n### Post-processing results ###", flush=True)
+    #     matches = optimize_matches(matches, source_corpus, config["min_matching_words"])
 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
