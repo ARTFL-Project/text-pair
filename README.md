@@ -32,7 +32,7 @@ If you do run into the issue where the web server does not respond, restart the 
 
 ### Manual installation
 
-If you wish to install Docker on a host machine, note that TextPair will only run on 64 bit Linux, see below.
+If you wish to install TextPAIR on a host machine, note that TextPair will only run on 64 bit Linux, see below.
 
 #### Dependencies
 
