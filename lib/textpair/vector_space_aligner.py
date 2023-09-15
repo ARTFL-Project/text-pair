@@ -302,8 +302,6 @@ class Corpus(ABC):
                 "end_byte": chunk[-1].ext["end_byte"],
             }
         )
-        # removed = chunk_group.popleft()
-        # print("REMOVED", len(removed))
         return [t.text for t in chunk]
 
     def __compare(self, target_corpus=None) -> np.ndarray:
@@ -318,16 +316,14 @@ class Corpus(ABC):
             source_batch_size = int(np.ceil(self.length / self.n_batches))
             target_batch_size = int(np.ceil(target_corpus.length / target_corpus.n_batches))
             with tqdm(total=source_batch_size * target_batch_size, leave=False) as pbar:
-                for i in range(source_batch_size):
-                    start_index1 = i * source_batch_size
-                    end_index1 = min((i + 1) * source_batch_size, self.length)
-                    source_embeddings = self.docs[start_index1:end_index1]
-                    for j in range(target_batch_size):
-                        start_index2 = j * target_batch_size
-                        end_index2 = min((j + 1) * target_batch_size, target_corpus.length)
-                        target_embeddings = target_corpus.docs[start_index2:end_index2]
+                for outer_start_index in range(0, self.length, source_batch_size):
+                    outer_end_index = outer_start_index + source_batch_size
+                    source_embeddings = self.docs[outer_start_index:outer_end_index]
+                    for inner_start_index in range(0, target_corpus.length, target_batch_size):
+                        inner_end_index = inner_start_index + target_corpus.length
+                        target_embeddings = target_corpus.docs[inner_start_index:inner_end_index]
                         partial_results: np.ndarray = self.similarity(source_embeddings, target_embeddings)
-                        results[start_index1:end_index1, start_index2:end_index2] = partial_results
+                        results[outer_start_index:outer_end_index, inner_start_index:inner_end_index] = partial_results
                         pbar.update(1)
         return results
 
