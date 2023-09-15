@@ -9,7 +9,7 @@ from abc import ABC
 from collections import deque
 from html import unescape as unescape_html
 from shutil import rmtree
-from typing import Any, Callable, Iterable, Optional, Iterator
+from typing import Any, Callable, Iterable, Optional
 from xml.sax.saxutils import unescape as unescape_xml
 
 import dill as pickle
@@ -23,7 +23,7 @@ from sentence_transformers import SentenceTransformer, util
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from spacy.tokens import Doc
-from text_preprocessing import PreProcessor, PreProcessingPipe, Token, Tokens
+from text_preprocessing import PreProcessor, Token, Tokens
 from tqdm import tqdm
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -36,7 +36,6 @@ TEMP_DIR = os.getcwd()
 class PassageGroup(dataobject, fast_new=True):
     """Text passage with all associated properties and vector representation"""
 
-    vector: Any = []
     start_byte: int = 0
     end_byte: int = 0
     filename: str = ""
@@ -220,6 +219,8 @@ class Corpus(ABC):
         self.n_batches = n_batches
         self.similarity = similarity_function
         self.docs: DocumentChunks
+        self.max_tokens = float("inf")
+        self.device = "cpu"
 
     def __len__(self) -> int:
         return self.length
@@ -236,6 +237,7 @@ class Corpus(ABC):
         current_doc_id = None
         chunks_done = 0
         docs = {}
+        current_chunk_group_length = 0
         for text in self.texts:
             docs[text.metadata["philo_id"]] = " ".join([t.text for t in text])
             print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
@@ -257,45 +259,52 @@ class Corpus(ABC):
                 text.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.text_object_type_split]]
             )
             if text_level_id != current_text_level_id:
-                chunk_group_length: int = sum([len(t) for t in chunk_group])
-                if chunk_group_length >= min_chunk_length:
-                    chunk_group.popleft()
-                    chunk = [t for chunk in chunk_group for t in chunk]
-                    if chunk_group:  # make sure this chunk is new
-                        self.__store_metadata(chunk_group[0].metadata, chunk)
+                if current_chunk_group_length >= min_chunk_length:
+                    # chunk_group.popleft() # TODO: verify this is needed
+                    text_chunk = self.__build_text_chunk(chunk_group)
+                    if text_chunk:  # make sure this chunk is not empty
                         chunks_done += 1
-                        yield [t.text for t in chunk]
+                        # print("FIRST", len(text_chunk))
+                        yield text_chunk
                 chunk_group.clear()
             current_text_level_id = text_level_id
-            if len(text) < self.min_text_obj_length:
+            current_chunk_group_length = sum([len(t.tokens) for t in chunk_group])
+            text_length = len(text)
+            if current_chunk_group_length + text_length > self.max_tokens and current_chunk_group_length:
+                chunks_done += 1
+                # print("SECOND", current_chunk_group_length)
+                yield self.__build_text_chunk(chunk_group)
+            if text_length < self.min_text_obj_length:
                 try:
                     chunk_group[-1].extend(text)
                     continue
                 except IndexError:
                     pass
-            if text:
-                chunk_group.append(text)
+            chunk_group.append(text[:self.max_tokens]) # type: ignore
+            # print("ADDED", len(chunk_group[-1]))
             if len(chunk_group) == self.n_chunk:
-                chunk_group_length = sum([len(t) for t in chunk_group])
-                if chunk_group_length >= min_chunk_length:
-                    chunk = [t for c in chunk_group for t in c]
-                    self.__store_metadata(chunk_group[0].metadata, chunk)
+                current_chunk_group_length = sum([len(t) for t in chunk_group])
+                if current_chunk_group_length >= min_chunk_length:
                     chunks_done += 1
-                    yield [t.text for t in chunk]
+                    # print("LAST", current_chunk_group_length)
+                    yield self.__build_text_chunk(chunk_group)
             current_doc_id = doc_id
         full_doc.save(full_doc.metadata["parsed_filename"])
-        del self.texts
         print()
 
-    def __store_metadata(self, metadata: dict[str, Any], tokens: list[Token]):
-        """Store Metadata for each chunk"""
+    def __build_text_chunk(self, chunk_group: deque[Tokens]) -> list[str]:
+        """Build chunks from a group of text objects"""
+        chunk = [t for c in chunk_group for t in c]
         self.metadata.append(
             {
-                **metadata,
-                "start_byte": tokens[0].ext["start_byte"],
-                "end_byte": tokens[-1].ext["end_byte"],
+                **chunk_group[0].metadata,
+                "start_byte": chunk[0].ext["start_byte"],
+                "end_byte": chunk[-1].ext["end_byte"],
             }
         )
+        # removed = chunk_group.popleft()
+        # print("REMOVED", len(removed))
+        return [t.text for t in chunk]
 
     def __compare(self, target_corpus=None) -> np.ndarray:
         """Compare the corpus to another corpus"""
@@ -343,14 +352,12 @@ class Corpus(ABC):
             ):
                 yield MergedGroup(
                     PassageGroup(
-                        self[outer_doc_id],
                         self.metadata[outer_doc_id]["start_byte"],
                         self.metadata[outer_doc_id]["end_byte"],
                         self.metadata[outer_doc_id]["filename"],
                         self.metadata[outer_doc_id],
                     ),
                     PassageGroup(
-                        self[inner_doc_id],
                         self.metadata[inner_doc_id]["start_byte"],
                         self.metadata[inner_doc_id]["end_byte"],
                         self.metadata[inner_doc_id]["filename"],
@@ -366,14 +373,12 @@ class Corpus(ABC):
         for outer_doc_id, inner_doc_id in np.argwhere(results >= min_similarity):
             yield MergedGroup(
                 PassageGroup(
-                    self[outer_doc_id],  # type: ignore
                     self.metadata[outer_doc_id]["start_byte"],
                     self.metadata[outer_doc_id]["end_byte"],
                     self.metadata[outer_doc_id]["filename"],
                     self.metadata[outer_doc_id],
                 ),
                 PassageGroup(
-                    target_corpus[inner_doc_id],  # type:ignore
                     target_corpus.metadata[inner_doc_id]["start_byte"],
                     target_corpus.metadata[inner_doc_id]["end_byte"],
                     target_corpus.metadata[inner_doc_id]["filename"],
@@ -419,17 +424,34 @@ class TfIdfCorpus(Corpus):
         self.dim: int = self.vectors.shape[1]  # type: ignore
 
     def __getitem__(self, item: int) -> csr_matrix:
-        return self.vectors[item]
+        return self.vectors[item]  # type: ignore
+
+    def __filter_by_jaccard_sim(
+        self, similarity_matrix: np.ndarray, min_similarity: float, other_vectors: csr_matrix | None = None
+    ) -> np.ndarray:
+        """Give a score of 0 for all matches where the Jaccard similarity score is under 75% of the min score"""
+        for outer_doc_id, inner_doc_id in np.argwhere(similarity_matrix >= min_similarity):
+            outer_vector = self[outer_doc_id]
+            if other_vectors is not None:
+                inner_vector = other_vectors[inner_doc_id]
+            else:
+                inner_vector = self[inner_doc_id]
+            jaccard_similarity = jaccard_sim(outer_vector, inner_vector)
+            if jaccard_similarity < 0.5 * min_similarity:
+                similarity_matrix[outer_doc_id, inner_doc_id] = 0.0
+        return similarity_matrix
 
     def inner_compare(self, min_similarity: float) -> Matches:
         """Compare corpus with itself"""
         results: np.ndarray = linear_kernel(self.vectors, dense_output=False)  # type: ignore
+        results = self.__filter_by_jaccard_sim(results, min_similarity)
         return Matches(self.process_inner_compare(results, min_similarity))
 
-    def outer_compare(self, target_corpus: Corpus, min_similarity: float) -> Matches:
+    def outer_compare(self, target_corpus: TfIdfCorpus, min_similarity: float) -> Matches:
         """Compare corpus with another corpus"""
         print("Comparing source collection to target collection...", flush=True)
         results: np.ndarray = linear_kernel(self.vectors, target_corpus.vectors, dense_output=False)  # type: ignore
+        results = self.__filter_by_jaccard_sim(results, min_similarity, target_corpus.vectors)
         return Matches(self.process_outer_compare(results, target_corpus, min_similarity))
 
 
@@ -511,6 +533,9 @@ class TransformerCorpus(Corpus):
         else:
             self.model = model
 
+        self.model.max_seq_length = self.model.get_max_seq_length() - 2 # needed to enable truncating long sequences
+        self.max_tokens: int = int(self.model.max_seq_length / 2)
+
         self.docs = DocumentChunks(
             self.get_text_chunks(),
             self.direction,
@@ -527,7 +552,9 @@ class TransformerCorpus(Corpus):
 
     def create_embeddings(self, text_chunks) -> torch.Tensor:
         """Create document embedding"""
-        return self.model.encode(list(text_chunks), convert_to_tensor=True)  # type: ignore
+        # text_chunks = list(text_chunks)[:self.max_tokens] # just in case we went over the limit
+        tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)
+        return tensor  # type: ignore
 
 
 def clean_text(text: str) -> str:
@@ -565,29 +592,6 @@ def jaccard_sim(X, Y):
     xx, yy = np.meshgrid(x_sum, y_sum)
     union = (xx + yy).T - intersect
     return (intersect / union).A
-
-
-def evaluate_score(start_score: float, new_score: float, min_score: float) -> bool:
-    """Evaluate if new score is within 3/4 of start score"""
-    # TODO: evaluate whether Jaccard sim should have same score as Cosine sim
-    if new_score >= min_score or new_score / start_score > 0.75:
-        return True
-    return False
-
-
-def get_docs_with_matches(matches: Matches) -> dict[str, dict[str, Tokens]]:
-    """Get all docs with matches"""
-    docs = {"source": {}, "target": {}}
-    for match in matches:
-        if match.source.metadata["parsed_filename"] not in docs["source"]:
-            source_doc = Tokens.load(match.source.metadata["parsed_filename"])
-            source_doc.purge()
-            docs["source"][match.source.metadata["parsed_filename"]] = source_doc
-        if match.target.metadata["parsed_filename"] not in docs["target"]:
-            target_doc = Tokens.load(match.target.metadata["parsed_filename"])
-            target_doc.purge()
-        docs["target"][match.target.metadata["parsed_filename"]] = target_doc
-    return docs
 
 
 def get_passage(doc: Tokens, start_byte: int, end_byte: int) -> list[Token]:
@@ -677,71 +681,6 @@ def merge_passages(
         print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
     print(flush=True)
     return merged_matches
-
-
-def optimize_match(
-    tokens: Iterable[Token],
-    intersection: set[str],
-    passage_group: PassageGroup,
-    corpus: TfIdfCorpus | Word2VecEmbeddingCorpus,
-) -> PassageGroup:
-    """Optimize a single match by trimming non-matching words on left and right side"""
-    start = None
-    end = None
-    new_start_byte: int = 0
-    new_metadata_start_byte = 0
-    for pos, token in enumerate(tokens):
-        if token.text in intersection:
-            if start is None:
-                start = pos
-                new_start_byte = token.ext["start_byte"]
-                new_metadata_start_byte = token.ext["start_byte"]
-            end = pos
-    if isinstance(corpus, TfIdfCorpus):
-        new_vector = corpus.vectorizer.transform([" ".join(tokens[start:end])])  # type: ignore
-    else:
-        new_vector = corpus.create_embeddings([" ".join(tokens)])
-    if new_vector is not None:
-        passage_group.start_byte = new_start_byte
-        passage_group.metadata["start_byte"] = new_metadata_start_byte
-        passage_group.vector = new_vector
-        passage_group.end_byte = tokens[end].ext["end_byte"]  # type: ignore
-        passage_group.metadata["end_byte"] = tokens[end].ext["end_byte"]  # type: ignore
-    return passage_group
-
-
-def optimize_matches(
-    matches: list[MergedGroup], corpus: TfIdfCorpus | Word2VecEmbeddingCorpus, min_matching_words: int
-) -> list[MergedGroup]:
-    """Optimize matches to get highest sim score"""
-    print("Optimizing matches...")
-    docs_with_matches: dict[str, dict[str, Tokens]] = get_docs_with_matches(matches)
-    optimized_matches: list[MergedGroup] = []
-    match_count = 0
-    for match in tqdm(matches, total=len(matches), leave=False):
-        source_tokens = get_passage(
-            docs_with_matches["source"][match.source.metadata["parsed_filename"]],
-            match.source.start_byte,
-            match.source.end_byte,
-        )
-        target_tokens = get_passage(
-            docs_with_matches["target"][match.target.metadata["parsed_filename"]],
-            match.target.start_byte,
-            match.target.end_byte,
-        )
-        intersection = {t.text for t in source_tokens if t.text}.intersection({t.text for t in target_tokens})
-        if len(intersection) >= min_matching_words:
-            source = optimize_match(source_tokens, intersection, match.source, corpus)
-            target = optimize_match(target_tokens, intersection, match.target, corpus)
-            best_score_matrix: np.ndarray = linear_kernel(target.vector, source.vector)  # type: ignore
-            best_score: float = best_score_matrix[0, 0]
-            optimized_matches.append(MergedGroup(source, target, best_score))
-            match_count += 1
-    if len(matches) != match_count:
-        print(
-            f"{match_count} matches remaining: {len(matches)-match_count} matches were dropped due to low number of unique matching words."
-        )
-    return optimized_matches
 
 
 def get_tokens(passage: PassageGroup, preproc: PreProcessor) -> list[tuple[str, str]]:
@@ -915,18 +854,17 @@ def word2vec_embed_similarity(
     return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
 
 
-def run_vsa(
-    source_path: str, target_path: str, workers: int, config: dict[str, Any], output_path: str
-):
+def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, Any], output_path: str):
     """Main function"""
     config["source"]["strip_tags"] = True  # this is useful for post-processing passages where we have tags included.
     config["target"]["strip_tags"] = True
     source_preproc: PreProcessor | None = None
     target_preproc: PreProcessor | None = None
+    if config["source"]["vectorization"] == "transformer":
+        config["source"]["strip_punctuation"] = False
+        config["target"]["strip_punctuation"] = False
     source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
-    target_preproc = PreProcessor(
-        is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, **config["target"]
-    )
+    target_preproc = PreProcessor(is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, **config["target"])
     source_texts: Iterable[Tokens] = source_preproc.process_texts(
         (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
     )
@@ -974,9 +912,6 @@ def run_vsa(
         matches,
         config["min_similarity"],
     )
-    # if isinstance(source_corpus, TfIdfCorpus):
-    #     print("\n### Post-processing results ###", flush=True)
-    #     matches = optimize_matches(matches, source_corpus, config["min_matching_words"])
 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")

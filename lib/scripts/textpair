@@ -46,6 +46,7 @@ def run_alignment(params):
                 params.paths["source"]["parse_output"],
                 params.text_parsing["source_words_to_keep"],
                 params.preprocessing_params["source"]["text_object_type"],
+                params.preprocessing_params["source"]["lowercase"],
                 params.workers,
                 params.debug,
             )
@@ -66,6 +67,7 @@ def run_alignment(params):
                     params.paths["target"]["parse_output"],
                     params.text_parsing["target_words_to_keep"],
                     params.preprocessing_params["target"]["text_object_type"],
+                    params.preprocessing_params["target"]["lowercase"],
                     params.workers,
                     params.debug,
                 )
@@ -188,6 +190,7 @@ def run_vsa_similarity(params) -> None:
             params.paths["source"]["parse_output"],
             params.text_parsing["source_words_to_keep"],
             params.preprocessing_params["source"]["text_object_type"],
+            params.preprocessing_params["source"]["lowercase"],
             params.workers,
             params.debug,
         )
@@ -200,6 +203,7 @@ def run_vsa_similarity(params) -> None:
             params.paths["target"]["parse_output"],
             params.text_parsing["target_words_to_keep"],
             params.preprocessing_params["target"]["text_object_type"],
+            params.preprocessing_params["target"]["lowercase"],
             params.workers,
             params.debug,
         )

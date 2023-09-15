@@ -18,6 +18,7 @@ def parse_files(
     output_path: str,
     words_to_index: str,
     object_level: str,
+    lowercase: bool,
     workers: int,
     debug: bool,
 ):
@@ -56,6 +57,7 @@ def parse_files(
                 "load_filters": LoadFilters.set_load_filters(navigable_objects=navigable_objects),
                 "file_type": file_type,
                 "bibliography": metadata,
+                "lowercase_index": lowercase,
                 "load_config": "",
             }
         )
