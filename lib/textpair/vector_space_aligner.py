@@ -324,7 +324,7 @@ class Corpus(ABC):
                         target_embeddings = target_corpus.docs[inner_start_index:inner_end_index]
                         partial_results: np.ndarray = self.similarity(source_embeddings, target_embeddings)
                         results[outer_start_index:outer_end_index, inner_start_index:inner_end_index] = partial_results
-                        pbar.update(1)
+                        pbar.update(target_batch_size)
         return results
 
     def inner_compare(self, min_similarity: float) -> Matches:
