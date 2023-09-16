@@ -150,17 +150,25 @@ class Matches:
         if os.path.exists(self.path):
             rmtree(self.path)
         os.system(f"mkdir -p {self.path}")
-        self.matches = matches
-        if isinstance(self.matches, list):
+        if isinstance(matches, list) and matches:
+            self.matches = matches
             self.is_cached = False
             self.count = len(self.matches)
         else:
+            self.matches = None
             self.is_cached = True
-            self.count = self.__save()  # save generator to disk
+            self.count = self.__save(matches)  # save generator to disk
 
-    def __save(self):
+    def extend(self, new_matches: Iterable[MergedGroup]):
+        """Add new matches to existing matches"""
+        for match in new_matches:
+            with open(os.path.join(self.path, f"{self.count}"), "wb") as output:
+                pickle.dump(match, output)
+            self.count += 1
+
+    def __save(self, matches):
         count = 0
-        for count, match in enumerate(self.matches):
+        for count, match in enumerate(matches):
             with open(os.path.join(self.path, f"{count}"), "wb") as output:
                 pickle.dump(match, output)
         if count == 0:
@@ -260,11 +268,9 @@ class Corpus(ABC):
             )
             if text_level_id != current_text_level_id:
                 if current_chunk_group_length >= min_chunk_length:
-                    # chunk_group.popleft() # TODO: verify this is needed
                     text_chunk = self.__build_text_chunk(chunk_group)
                     if text_chunk:  # make sure this chunk is not empty
                         chunks_done += 1
-                        # print("FIRST", len(text_chunk))
                         yield text_chunk
                 chunk_group.clear()
             current_text_level_id = text_level_id
@@ -272,7 +278,6 @@ class Corpus(ABC):
             text_length = len(text)
             if current_chunk_group_length + text_length > self.max_tokens and current_chunk_group_length:
                 chunks_done += 1
-                # print("SECOND", current_chunk_group_length)
                 yield self.__build_text_chunk(chunk_group)
             if text_length < self.min_text_obj_length:
                 try:
@@ -281,12 +286,10 @@ class Corpus(ABC):
                 except IndexError:
                     pass
             chunk_group.append(text[:self.max_tokens]) # type: ignore
-            # print("ADDED", len(chunk_group[-1]))
             if len(chunk_group) == self.n_chunk:
                 current_chunk_group_length = sum([len(t) for t in chunk_group])
                 if current_chunk_group_length >= min_chunk_length:
                     chunks_done += 1
-                    # print("LAST", current_chunk_group_length)
                     yield self.__build_text_chunk(chunk_group)
             current_doc_id = doc_id
         full_doc.save(full_doc.metadata["parsed_filename"])
@@ -309,23 +312,33 @@ class Corpus(ABC):
         results: np.ndarray
         if target_corpus is None:
             target_corpus = self
-        if self.n_batches == 1 and target_corpus.n_batches == 1:
-            results = self.similarity(self.docs[0 : self.length], target_corpus.docs[0 : target_corpus.length])  # type: ignore
-        else:  # Reconstruct a similarity matrix from batches
-            results = np.empty((self.length, target_corpus.length))
-            source_batch_size = int(np.ceil(self.length / self.n_batches))
-            target_batch_size = int(np.ceil(target_corpus.length / target_corpus.n_batches))
-            with tqdm(total=source_batch_size * target_batch_size, leave=False) as pbar:
-                for outer_start_index in range(0, self.length, source_batch_size):
-                    outer_end_index = outer_start_index + source_batch_size
-                    source_embeddings = self.docs[outer_start_index:outer_end_index]
-                    for inner_start_index in range(0, target_corpus.length, target_batch_size):
-                        inner_end_index = inner_start_index + target_corpus.length
-                        target_embeddings = target_corpus.docs[inner_start_index:inner_end_index]
-                        partial_results: np.ndarray = self.similarity(source_embeddings, target_embeddings)
-                        results[outer_start_index:outer_end_index, inner_start_index:inner_end_index] = partial_results
-                        pbar.update(target_batch_size)
+        results = self.similarity(self.docs[0 : self.length], target_corpus.docs[0 : target_corpus.length])  # type: ignore
         return results
+
+    def __batched_compare(self, min_similarity: float, target_corpus: Corpus | None = None) -> Matches:
+        """Compare the corpus to another corpus"""
+        inner_compare = False
+        if target_corpus is None:
+            target_corpus = self
+            inner_compare = True
+        source_batch_size = int(np.ceil(self.length / self.n_batches))
+        target_batch_size = int(np.ceil(target_corpus.length / target_corpus.n_batches))
+        matches: Matches = Matches([])
+        with tqdm(total=source_batch_size * target_batch_size, leave=False) as pbar:
+            for outer_start_index in range(0, self.length, source_batch_size):
+                outer_end_index = outer_start_index + source_batch_size
+                source_embeddings = self.docs[outer_start_index:outer_end_index]
+                for inner_start_index in range(0, target_corpus.length, target_batch_size):
+                    inner_end_index = inner_start_index + target_corpus.length
+                    target_embeddings = target_corpus.docs[inner_start_index:inner_end_index]
+                    partial_results: np.ndarray = self.similarity(source_embeddings, target_embeddings)
+                    if inner_compare is False:
+                        processed_results = self.process_outer_compare(partial_results, target_corpus, min_similarity, outer_start_index=outer_start_index, inner_start_index=inner_start_index)
+                    else:
+                        processed_results = self.process_inner_compare(partial_results, min_similarity, outer_start_index=outer_start_index, inner_start_index=inner_start_index)
+                    matches.extend(processed_results)
+                    pbar.update(target_batch_size)
+        return matches
 
     def inner_compare(self, min_similarity: float) -> Matches:
         """Compare corpus with itself"""
@@ -336,12 +349,17 @@ class Corpus(ABC):
     def outer_compare(self, target_corpus, min_similarity: float) -> Matches:
         """Compare corpus with another corpus"""
         print("Comparing source collection to target collection...", flush=True)
-        results = self.__compare(target_corpus=target_corpus)
-        return Matches(self.process_outer_compare(results, target_corpus, min_similarity))
+        if self.n_batches == 1 and target_corpus.n_batches == 1:
+            results = self.__compare(target_corpus=target_corpus)
+            return Matches(self.process_outer_compare(results, target_corpus, min_similarity))
+        matches = self.__batched_compare(min_similarity, target_corpus=target_corpus)
+        return matches
 
-    def process_inner_compare(self, results, min_similarity: float) -> Iterable[MergedGroup]:
+    def process_inner_compare(self, results, min_similarity: float, outer_start_index=0, inner_start_index=0) -> Iterable[MergedGroup]:
         """Compare corpus with itself"""
         for outer_doc_id, inner_doc_id in np.argwhere(results >= min_similarity):
+            outer_doc_id += outer_start_index
+            inner_doc_id += inner_start_index
             if (
                 self.metadata[outer_doc_id]["year"] <= self.metadata[inner_doc_id]["year"]
                 and inner_doc_id != outer_doc_id
@@ -363,22 +381,24 @@ class Corpus(ABC):
                 )
 
     def process_outer_compare(
-        self, results: np.ndarray, target_corpus: Corpus, min_similarity
+        self, results: np.ndarray, target_corpus: Corpus, min_similarity, outer_start_index=0, inner_start_index=0
     ) -> Iterable[MergedGroup]:
         """Compare corpus with another corpus"""
         for outer_doc_id, inner_doc_id in np.argwhere(results >= min_similarity):
+            outer_index = outer_doc_id + outer_start_index
+            inner_index = inner_doc_id + inner_start_index
             yield MergedGroup(
                 PassageGroup(
-                    self.metadata[outer_doc_id]["start_byte"],
-                    self.metadata[outer_doc_id]["end_byte"],
-                    self.metadata[outer_doc_id]["filename"],
-                    self.metadata[outer_doc_id],
+                    self.metadata[outer_index]["start_byte"],
+                    self.metadata[outer_index]["end_byte"],
+                    self.metadata[outer_index]["filename"],
+                    self.metadata[outer_index],
                 ),
                 PassageGroup(
-                    target_corpus.metadata[inner_doc_id]["start_byte"],
-                    target_corpus.metadata[inner_doc_id]["end_byte"],
-                    target_corpus.metadata[inner_doc_id]["filename"],
-                    target_corpus.metadata[inner_doc_id],
+                    target_corpus.metadata[inner_index]["start_byte"],
+                    target_corpus.metadata[inner_index]["end_byte"],
+                    target_corpus.metadata[inner_index]["filename"],
+                    target_corpus.metadata[inner_index],
                 ),
                 results[outer_doc_id, inner_doc_id],  # type: ignore
             )
