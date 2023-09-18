@@ -11,6 +11,7 @@ from html import unescape as unescape_html
 from shutil import rmtree
 from typing import Any, Callable, Iterable, Optional
 from xml.sax.saxutils import unescape as unescape_xml
+import sqlite3
 
 import dill as pickle
 import lz4.frame
@@ -91,11 +92,10 @@ class DocumentChunks:
         if self.transform_function is None:
             with open(filename, "wb") as output_file:
                 pickle.dump(doc, output_file)
-        elif self.corpus_type == "TransformerCorpus":
-            transformed_doc = self.transform_function([doc])
+        transformed_doc = self.transform_function([doc])
+        if self.corpus_type == "TransformerCorpus":
             torch.save(transformed_doc, f"{filename}.pt")
         else:
-            transformed_doc = self.transform_function([doc])
             np.save(f"{filename}.npy", transformed_doc)
 
     def __load(self, doc_name) -> list[str] | torch.Tensor | np.ndarray:
@@ -150,11 +150,15 @@ class Matches:
         if os.path.exists(self.path):
             rmtree(self.path)
         os.system(f"mkdir -p {self.path}")
+        self.conn = sqlite3.connect(os.path.join(self.path, "matches.db"))
+        self.cursor = self.conn.cursor()
         if isinstance(matches, list) and matches:
             self.matches = matches
             self.is_cached = False
             self.count = len(self.matches)
         else:
+            self.cursor.execute("CREATE TABLE matches (match_id INTEGER, match blob)")
+            self.cursor.execute("CREATE INDEX match_id_index ON matches (match_id)")
             self.matches = None
             self.is_cached = True
             self.count = self.__save(matches)  # save generator to disk
@@ -162,41 +166,46 @@ class Matches:
     def extend(self, new_matches: Iterable[MergedGroup]):
         """Add new matches to existing matches"""
         for match in new_matches:
-            with open(os.path.join(self.path, f"{self.count}"), "wb") as output:
-                pickle.dump(match, output)
+            dump = pickle.dumps(match)
+            self.cursor.execute("INSERT INTO matches VALUES (?, ?)", (self.count, dump))
             self.count += 1
 
     def __save(self, matches):
         count = 0
         for count, match in enumerate(matches):
-            with open(os.path.join(self.path, f"{count}"), "wb") as output:
-                pickle.dump(match, output)
+            dump = pickle.dumps(match)
+            self.cursor.execute("INSERT INTO matches VALUES (?, ?)", (self.count, dump))
         if count == 0:
             return 0
+        self.conn.commit()
         return count + 1
+
+    def done(self):
+        """Commit changes to database"""
+        self.conn.commit()
 
     @classmethod
     def load(cls):
         """Load instance of class by reading previously cached matches"""
         matches = []
-        for file in os.scandir(os.path.join(TEMP_DIR, "output/results/matches")):
-            with open(file.path, "rb") as input_file:
-                matches.append(pickle.load(input_file))
+        conn = sqlite3.connect(os.path.join(TEMP_DIR, "output/results/matches/matches.db"))
+        cursor = conn.cursor()
+        cursor.execute("SELECT match from matches ORDER BY match_id")
+        for match in cursor:
+            matches.append(pickle.loads(match[0]))
         return cls(matches)
 
     def __len__(self):
         return self.count
 
-    def __get_file(self, index):
-        if self.is_cached is False:
-            return self.matches[index]  # type: ignore
-        else:
-            with open(os.path.join(self.path, f"{index}"), "rb") as input_file:
-                return pickle.load(input_file)
-
     def __iter__(self):
-        for file in range(self.count):
-            yield self.__get_file(file)
+        if self.is_cached is False:
+            for index in range(self.count):
+                yield self.matches[index] # type: ignore
+        else:
+            self.cursor.execute("SELECT match FROM matches ORDER BY match_id")
+            for match in self.cursor:
+                yield pickle.loads(match[0])
 
 
 class Corpus(ABC):
@@ -324,12 +333,12 @@ class Corpus(ABC):
         source_batch_size = int(np.ceil(self.length / self.n_batches))
         target_batch_size = int(np.ceil(target_corpus.length / target_corpus.n_batches))
         matches: Matches = Matches([])
-        with tqdm(total=source_batch_size * target_batch_size, leave=False) as pbar:
+        with tqdm(total=self.length * target_corpus.length, leave=False) as pbar:
             for outer_start_index in range(0, self.length, source_batch_size):
                 outer_end_index = outer_start_index + source_batch_size
                 source_embeddings = self.docs[outer_start_index:outer_end_index]
                 for inner_start_index in range(0, target_corpus.length, target_batch_size):
-                    inner_end_index = inner_start_index + target_corpus.length
+                    inner_end_index = inner_start_index + target_batch_size
                     target_embeddings = target_corpus.docs[inner_start_index:inner_end_index]
                     partial_results: np.ndarray = self.similarity(source_embeddings, target_embeddings)
                     if inner_compare is False:
@@ -337,14 +346,17 @@ class Corpus(ABC):
                     else:
                         processed_results = self.process_inner_compare(partial_results, min_similarity, outer_start_index=outer_start_index, inner_start_index=inner_start_index)
                     matches.extend(processed_results)
-                    pbar.update(target_batch_size)
+                    pbar.update(source_batch_size*target_batch_size)
+        matches.done()
         return matches
 
     def inner_compare(self, min_similarity: float) -> Matches:
         """Compare corpus with itself"""
         print("Comparing source collection to itself...", flush=True)
-        results = self.__compare()
-        return Matches(self.process_inner_compare(results, min_similarity))
+        if self.n_batches == 1:
+            results = self.__compare()
+            return Matches(self.process_inner_compare(results, min_similarity))
+        return self.__batched_compare(min_similarity)
 
     def outer_compare(self, target_corpus, min_similarity: float) -> Matches:
         """Compare corpus with another corpus"""
@@ -352,8 +364,7 @@ class Corpus(ABC):
         if self.n_batches == 1 and target_corpus.n_batches == 1:
             results = self.__compare(target_corpus=target_corpus)
             return Matches(self.process_outer_compare(results, target_corpus, min_similarity))
-        matches = self.__batched_compare(min_similarity, target_corpus=target_corpus)
-        return matches
+        return self.__batched_compare(min_similarity, target_corpus=target_corpus)
 
     def process_inner_compare(self, results, min_similarity: float, outer_start_index=0, inner_start_index=0) -> Iterable[MergedGroup]:
         """Compare corpus with itself"""
@@ -533,10 +544,16 @@ class TransformerCorpus(Corpus):
         model=None,
         direction="source",
     ):
+        def sim_function(x, y):
+            sim = util.cos_sim(x, y).cpu().numpy()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            return sim
+
         super().__init__(
             texts,
             output_path,
-            similarity_function=lambda x, y: util.cos_sim(x, y).cpu().numpy(),
+            similarity_function=sim_function,
             min_text_obj_length=min_text_obj_length,
             n_chunk=n_chunk,
             text_object_type_split=text_object_type_split,
@@ -558,7 +575,12 @@ class TransformerCorpus(Corpus):
             self.create_embeddings,
         )
         self.length = len(self.docs)
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache() # clear GPU cache after creating embeddings
+            self.device = torch.device("cuda:0")
+        else:
+            self.device = torch.device("cpu")
 
     def __getitem__(self, item: int) -> list[str]:
         return self.docs[item]  # type: ignore
@@ -568,7 +590,6 @@ class TransformerCorpus(Corpus):
 
     def create_embeddings(self, text_chunks) -> torch.Tensor:
         """Create document embedding"""
-        # text_chunks = list(text_chunks)[:self.max_tokens] # just in case we went over the limit
         tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)
         return tensor  # type: ignore
 
