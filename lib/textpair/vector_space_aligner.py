@@ -147,16 +147,15 @@ class Matches:
 
     def __init__(self, matches: Iterable[MergedGroup]):
         self.path = os.path.join(TEMP_DIR, "output/results/matches")
-        if os.path.exists(self.path):
-            rmtree(self.path)
-        os.system(f"mkdir -p {self.path}")
-        self.conn = sqlite3.connect(os.path.join(self.path, "matches.db"))
-        self.cursor = self.conn.cursor()
+        self.count = 0
         if isinstance(matches, list) and matches:
             self.matches = matches
             self.is_cached = False
             self.count = len(self.matches)
         else:
+            self.conn = sqlite3.connect(os.path.join(self.path, "matches.db"))
+            self.cursor = self.conn.cursor()
+            self.cursor.execute("DROP TABLE IF EXISTS matches")
             self.cursor.execute("CREATE TABLE matches (match_id INTEGER, match blob)")
             self.cursor.execute("CREATE INDEX match_id_index ON matches (match_id)")
             self.matches = None
@@ -183,6 +182,7 @@ class Matches:
     def done(self):
         """Commit changes to database"""
         self.conn.commit()
+        self.conn.close()
 
     @classmethod
     def load(cls):
@@ -193,6 +193,7 @@ class Matches:
         cursor.execute("SELECT match from matches ORDER BY match_id")
         for match in cursor:
             matches.append(pickle.loads(match[0]))
+        conn.close()
         return cls(matches)
 
     def __len__(self):
@@ -294,7 +295,7 @@ class Corpus(ABC):
                     continue
                 except IndexError:
                     pass
-            chunk_group.append(text[:self.max_tokens]) # type: ignore
+            chunk_group.append(text)
             if len(chunk_group) == self.n_chunk:
                 current_chunk_group_length = sum([len(t) for t in chunk_group])
                 if current_chunk_group_length >= min_chunk_length:
@@ -823,7 +824,7 @@ def transformer_similarity(
     output_path: str,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
-) -> tuple[TransformerCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of sentence embeddings from transformer models"""
     source_corpus: TransformerCorpus = TransformerCorpus(
         source_texts,
@@ -850,7 +851,7 @@ def transformer_similarity(
     else:
         matching_docs = source_corpus.inner_compare(min_similarity)
         target_corpus = source_corpus
-    return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
+    return matching_docs, source_corpus.metadata, target_corpus.metadata
 
 
 def word2vec_embed_similarity(
@@ -919,7 +920,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             target_texts=target_texts,
         )
     elif config["source"]["vectorization"] == "transformer":
-        source_corpus, matches, source_metadata, target_metadata = transformer_similarity(
+        matches, source_metadata, target_metadata = transformer_similarity(
             source_texts,
             config["source"],
             config["target"],

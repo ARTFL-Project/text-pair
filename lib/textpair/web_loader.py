@@ -10,17 +10,9 @@ from typing import Any
 
 import lz4.frame
 import orjson
+import psycopg2
 from psycopg2.extras import execute_values
 from tqdm import tqdm
-
-try:
-    import psycopg2
-except ImportError:
-    print(
-        "The textpair lib was not installed with the web components. Please \
-    run pip3 install .[web] from the lib/ directory to install missing dependencies \
-    or run the textpair command with --disable_web_app"
-    )
 
 DEFAULT_FIELDS = {
     "rowid",
@@ -91,10 +83,11 @@ CONTROL_CHARS = dict.fromkeys(range(32))
 class WebAppConfig:
     """Web app config class"""
 
-    def __init__(self, db_name, api_server, source_database_link, target_database_link, source_philo_db_path,
-    target_philo_db_path, algorithm, store_banalities, source_against_source):
+    def __init__(self, db_name: str, api_server: str, source_database_link: str, target_database_link: str,
+    source_philo_db_path: str, target_philo_db_path: str, algorithm: str, store_banalities: bool,
+    source_against_source: bool):
         with open("/var/lib/text-pair/config/appConfig.json", encoding="utf8") as app_config:
-            self.options = json.load(app_config, object_pairs_hook=OrderedDict)
+            self.options: OrderedDict = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
         self.options["appPath"] = os.path.join("/text-pair", db_name)
         self.options["databaseName"] = db_name.lower()
@@ -111,13 +104,13 @@ class WebAppConfig:
         self.options["targetLinkToDocMetadata"] = "target_title"
         self.options["banalitiesStored"] = store_banalities
 
-    def __call__(self):
+    def __call__(self) -> dict[str, Any]:
         return self.options
 
-    def __getattr__(self, attr):
+    def __getattr__(self, attr: str) -> Any:
         return self.options[attr]
 
-    def searchable_fields(self):
+    def searchable_fields(self) -> list[str]:
         """Return list of all searchable fields"""
         fields = []
         for field in self.options["metadataFields"]["source"]:
@@ -126,7 +119,7 @@ class WebAppConfig:
             fields.append(field["value"])
         return fields
 
-    def update(self, available_fields):
+    def update(self, available_fields: list):
         """Only store fields that are actually in the table in config"""
         source_fields = []
         target_fields = []

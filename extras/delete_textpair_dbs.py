@@ -1,3 +1,10 @@
+# This code deletes a TextPAIR database by name.
+# It is used to remove databases that are no longer in use.
+
+# This code is invoked with the following command:
+# python3 delete_textpair_dbs.py <dbname>
+# where <dbname> is the name of the database to delete.
+
 """Delete TextPAIR database by name."""
 
 import os
@@ -26,18 +33,22 @@ if __name__ == '__main__':
     conn.autocommit = True
     cursor = conn.cursor()
 
-    print(f"Dropping table {dbname}...", end="")
-    cursor.execute(f"DROP TABLE IF EXISTS {dbname}")
-    print("done")
-    print(f"Dropping table {dbname}__ordered...", end="")
-    cursor.execute(f"DROP TABLE IF EXISTS {dbname}__ordered")
-    print("done")
-    print(f"Dropping table {dbname}__groups...", end="")
-    cursor.execute(f"DROP TABLE IF EXISTS {dbname}___groups")
-    print("done")
-    print(f"Deleting {dbname} web app directory...", end="")
-    os.system(f"rm -rf {GLOBAL_CONFIG['WEB_APP']['web_app_path']}/{dbname}")
-    print("done")
+    try:
+        print(f"Dropping table {dbname}...", end="")
+        cursor.execute(f"DROP TABLE IF EXISTS {dbname}")
+        print("done")
+        print(f"Dropping table {dbname}__ordered...", end="")
+        cursor.execute(f"DROP TABLE IF EXISTS {dbname}__ordered")
+        print("done")
+        print(f"Dropping table {dbname}__groups...", end="")
+        cursor.execute(f"DROP TABLE IF EXISTS {dbname}___groups")
+        print("done")
+        print(f"Deleting {dbname} web app directory...", end="")
+        os.system(f"rm -rf {GLOBAL_CONFIG['WEB_APP']['web_app_path']}/{dbname}")
+        print("done")
 
-    print(f"Deleted database {dbname}")
-    conn.close()
+        print(f"Deleted database {dbname}")
+    except Exception as e:
+        print(e)
+    finally:
+        conn.close()

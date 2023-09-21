@@ -35,14 +35,14 @@ dependencies = [
     "sacremoses",  # required by some models for tokenization
     "lz4",
     "orjson",
-    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0.1#egg=text_preprocessing",
+    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0.2#egg=text_preprocessing",
     "fastapi",
     "psycopg2",
     "gunicorn",
     "uvicorn",
     "uvloop",
     "httptools",
-    "philologic>=4.7.4.3",
+    "philologic>=4.7.4.4",
     "regex",
     "ahocorasick-rs"
 ]
