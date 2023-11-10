@@ -147,6 +147,7 @@ class Matches:
 
     def __init__(self, matches: Iterable[MergedGroup]):
         self.path = os.path.join(TEMP_DIR, "output/results/matches")
+        os.makedirs(self.path, exist_ok=True)
         self.count = 0
         if isinstance(matches, list) and matches:
             self.matches = matches

@@ -263,6 +263,10 @@ if __name__ == "__main__":
         )
     elif params.only_web_app is True:
         count = get_count(os.path.join(params.output_path, "results/count.txt"))
+        groups_file = None
+        if params.matching_params["matching_algorithm"] == "sa":  # we merge alignments prior to loading
+            print("Grouping passages by source...", end="", flush=True)
+            groups_file = merge_alignments(params.file, count)
         create_web_app(
             params.file,
             params.paths["source"]["metadata_path"],
@@ -277,6 +281,7 @@ if __name__ == "__main__":
             params.web_app_config["target_philo_db_path"],
             params.matching_params["matching_algorithm"],
             params,
+            groups_file=groups_file,
             store_banalities=params.matching_params["store_banalities"],
         )
     elif params.matching_params["matching_algorithm"] == "sa":
