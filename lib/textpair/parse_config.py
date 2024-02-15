@@ -37,6 +37,8 @@ class TextPairConfig:
         self.web_app_config["api_server"] = global_config["WEB_APP"]["api_server"]
         config = configparser.ConfigParser()
         config.read(self.__cli_args["config"])
+        self.web_app_config["source_url"] = config["TEXT_SOURCES"]["source_url"]
+        self.web_app_config["target_url"] = config["TEXT_SOURCES"]["target_url"]
         if self.__cli_args["is_philo_db"] is True:
             self.web_app_config["source_philo_db_path"] = config["TEXT_SOURCES"]["source_file_path"]
             self.web_app_config["target_philo_db_path"] = config["TEXT_SOURCES"]["target_file_path"] or config["TEXT_SOURCES"]["source_file_path"]
