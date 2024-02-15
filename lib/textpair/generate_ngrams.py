@@ -28,7 +28,7 @@ class Ngrams:
         gap=0,
         stemmer=True,
         lemmatizer="",
-        stopwords=None,
+        stopwords=False,
         numbers=False,
         language="french",
         lowercase=True,
