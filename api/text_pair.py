@@ -266,23 +266,13 @@ def get_ressource(db_path: str, resource: str):
         return Response(resource_content, media_type="text/css")
 
 
-@app.get("/{db_path}/search")
-@app.get("/text-pair/{db_path}/search")
-@app.get("/{db_path}/time")
-@app.get("/text-pair/{db_path}/time")
-@app.get("/{db_path}")
-@app.get("/text-pair/{db_path}")
-@app.get("/text-pair/{db_path}/group/{id}")
-@app.get("/{db_path}/group/{id}")
-@app.get("/text-pair/{db_path}/sorted-results")
-@app.get("/{db_path}/sorted-results")
-@app.get("/text-pair/{db_path}/text-view")
-@app.get("/{db_path}/text-view")
-def index(db_path: str):
-    """Return index.html which lists available POOLs"""
-    with open(os.path.join(APP_PATH, db_path, "dist/index.html"), encoding="utf8") as html:
-        index_html = html.read()
-    return HTMLResponse(index_html)
+@app.get("/{db_path}/favicon.ico")
+@app.get("/text-pair/{db_path}/favicon.ico")
+def get_favicon(db_path: str):
+    """Retrieve favicon"""
+    with open(os.path.join(APP_PATH, db_path, "dist/favicon.ico"), "rb") as resource_file:
+        resource_content = resource_file.read()
+    return Response(resource_content, media_type="image/x-icon")
 
 
 @app.get("/search_alignments/")
@@ -761,3 +751,22 @@ def get_passages(request: Request):
     conn.rollback()
     conn.close()
     return {"passages": passages}
+
+
+@app.get("/{db_path}/search")
+@app.get("/text-pair/{db_path}/search")
+@app.get("/{db_path}/time")
+@app.get("/text-pair/{db_path}/time")
+@app.get("/{db_path}")
+@app.get("/text-pair/{db_path}")
+@app.get("/text-pair/{db_path}/group/{id}")
+@app.get("/{db_path}/group/{id}")
+@app.get("/text-pair/{db_path}/sorted-results")
+@app.get("/{db_path}/sorted-results")
+@app.get("/text-pair/{db_path}/text-view")
+@app.get("/{db_path}/text-view")
+def index(db_path: str):
+    """Return index.html which lists available POOLs"""
+    with open(os.path.join(APP_PATH, db_path, "dist/index.html"), encoding="utf8") as html:
+        index_html = html.read()
+    return HTMLResponse(index_html)

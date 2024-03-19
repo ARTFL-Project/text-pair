@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copied to docker container and run as command
+
 if [ ! -d "/data/psql_data" ]; then
 su postgres <<'EOF'
 service postgresql start

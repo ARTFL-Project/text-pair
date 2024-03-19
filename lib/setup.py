@@ -28,7 +28,6 @@ dependencies = [
     "cython",
     "pystemmer",
     "lxml",
-    "gensim",
     "namedlist",  # to remove
     "recordclass",
     "sentence-transformers",

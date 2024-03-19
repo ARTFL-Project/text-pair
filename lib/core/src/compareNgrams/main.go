@@ -379,7 +379,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 		}
 		targetFileBatches = makeSliceOfSlices(targetFiles, config.targetBatch)
 	}
-	duplicateFilesOutput := creatDuplicateFilesOutputFile(config)
+	duplicateFilesOutput, duplicateFile := createDuplicateFilesOutputFile(config)
 	resultBatchPath := filepath.Join(config.outputPath, "result_batches")
 	resultChunksPath := filepath.Join(config.outputPath, "result_batches/result_chunks")
 	os.MkdirAll(resultBatchPath, 0755)
@@ -485,9 +485,10 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 							if len(ngramIntersection) < config.minimumMatchingNgramsInDocs {
 								continue
 							} else if float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100 > config.duplicateThreshold {
-								sourceInfo := fmt.Sprintf("%s\t%s\t%s\t%s\t%s-%s", sourceMetadata[sourceFile.DocID]["title"], sourceMetadata[sourceFile.DocID]["author"], sourceMetadata[sourceFile.DocID]["filename"], sourceMetadata[sourceFile.DocID]["philo_id"], sourceMetadata[sourceFile.DocID]["start_byte"], sourceMetadata[sourceFile.DocID]["end_byte"])
-								targetInfo := fmt.Sprintf("%s\t%s\t%s\t%s\t%s-%s", targetMetadata[targetFile.DocID]["title"], targetMetadata[targetFile.DocID]["author"], targetMetadata[targetFile.DocID]["filename"], targetMetadata[targetFile.DocID]["philo_id"], targetMetadata[targetFile.DocID]["start_byte"], targetMetadata[targetFile.DocID]["end_byte"])
-								localAlignmentOutput.duplicates = append(localAlignmentOutput.duplicates, []string{sourceInfo, targetInfo, fmt.Sprintf("%f", float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100)})
+								duplicate := []string{sourceMetadata[sourceFile.DocID]["title"], sourceMetadata[sourceFile.DocID]["author"], sourceMetadata[sourceFile.DocID]["filename"], sourceMetadata[sourceFile.DocID]["philo_id"], fmt.Sprintf("%s-%s", sourceMetadata[sourceFile.DocID]["start_byte"], sourceMetadata[sourceFile.DocID]["end_byte"])}
+								duplicate = append(duplicate, targetMetadata[targetFile.DocID]["title"], targetMetadata[targetFile.DocID]["author"], targetMetadata[targetFile.DocID]["filename"], targetMetadata[targetFile.DocID]["philo_id"], fmt.Sprintf("%s-%s", targetMetadata[targetFile.DocID]["start_byte"], targetMetadata[targetFile.DocID]["end_byte"]))
+								duplicate = append(duplicate, fmt.Sprintf("%.2f", float64(totalCommonNgrams)/float64(sourceFile.NgramLength)*100))
+								localAlignmentOutput.duplicates = append(localAlignmentOutput.duplicates, duplicate)
 								localAlignments = append(localAlignments, alignmentsPerDoc{&[]Alignment{}, targetFile.DocID})
 								continue
 							}
@@ -532,7 +533,10 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 					counts += localAlignmentOutput.count
 					duplicates = append(duplicates, localAlignmentOutput.duplicates...)
 				}
-				duplicateFilesOutput.WriteAll(duplicates)
+				err := duplicateFilesOutput.WriteAll(duplicates)
+				if err != nil {
+					fmt.Println(err)
+				}
 			}
 			os.Stdout.Write([]byte("\r\033[KComparing files... done.\n"))
 			os.Stdout.Sync()
@@ -555,6 +559,8 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 	countsOutput.WriteString(strconv.Itoa(counts))
 	countsOutput.Sync()
 	countsOutput.Close()
+	duplicateFilesOutput.Flush()
+	duplicateFile.Close()
 	return counts
 }
 
@@ -628,14 +634,14 @@ func createDebugOutputFile(config *matchingParams, sourceDocID string, targetDoc
 	return debugOutput
 }
 
-func creatDuplicateFilesOutputFile(config *matchingParams) *csv.Writer {
+func createDuplicateFilesOutputFile(config *matchingParams) (*csv.Writer, *os.File) {
 	duplicateFiles, err := os.Create(filepath.Join(config.outputPath, "duplicate_files.csv"))
-	checkErr(err, "creatDuplicateFilesOutputFile")
-	defer duplicateFiles.Close()
+	checkErr(err, "createDuplicateFilesOutputFile")
+	// defer duplicateFiles.Close()
 	w := csv.NewWriter(duplicateFiles)
-	defer w.Flush()
+	// defer w.Flush()
 	w.Write([]string{"source_title", "source_author", "source_filename", "source_philo_id", "source_byte_offsets", "target_title", "target_author", "target_filename", "target_philo_id", "target_byte_offsets", "overlap"})
-	return w
+	return w, duplicateFiles
 }
 
 func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMatch, config *matchingParams, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
