@@ -5,20 +5,21 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 from abc import ABC
 from collections import deque
 from html import unescape as unescape_html
 from shutil import rmtree
 from typing import Any, Callable, Iterable, Optional
 from xml.sax.saxutils import unescape as unescape_xml
-import sqlite3
 
 import dill as pickle
 import lz4.frame
+import msgspec
 import numpy as np
 import spacy
 import torch
-from recordclass import dataobject
+from msgspec import field
 from scipy.sparse import csr_matrix
 from sentence_transformers import SentenceTransformer, util
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -33,8 +34,7 @@ TAGS = re.compile(r"<[^>]+>")
 PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
 TEMP_DIR = os.getcwd()
 
-
-class PassageGroup(dataobject, fast_new=True):
+class PassageGroup(msgspec.Struct, array_like=True):
     """Text passage with all associated properties and vector representation"""
 
     start_byte: int = 0
@@ -43,13 +43,15 @@ class PassageGroup(dataobject, fast_new=True):
     metadata: dict = {}
 
 
-class MergedGroup(dataobject, fast_new=True):
+class MergedGroup(msgspec.Struct, array_like=True):
     """A source and target PassageGroup pair with similarity"""
 
-    source: PassageGroup = PassageGroup()
-    target: PassageGroup = PassageGroup()
+    source: PassageGroup = field(default_factory=PassageGroup)
+    target: PassageGroup = field(default_factory=PassageGroup)
     similarity: float = 0.0
 
+ENCODER = msgspec.msgpack.Encoder()
+DECODER = msgspec.msgpack.Decoder(type=MergedGroup)
 
 class DocumentChunks:
     """A generator with caching"""
@@ -163,17 +165,21 @@ class Matches:
             self.is_cached = True
             self.count = self.__save(matches)  # save generator to disk
 
+    def match_generator(self, new_matches):
+        for match in new_matches:
+            dump = ENCODER.encode(match)
+            yield (self.count, dump)
+            self.count += 1
+
     def extend(self, new_matches: Iterable[MergedGroup]):
         """Add new matches to existing matches"""
-        for match in new_matches:
-            dump = pickle.dumps(match)
-            self.cursor.execute("INSERT INTO matches VALUES (?, ?)", (self.count, dump))
-            self.count += 1
+        encoded_matches = self.match_generator(new_matches)
+        self.cursor.executemany("INSERT INTO matches VALUES (?, ?)", encoded_matches)
 
     def __save(self, matches):
         count = 0
         for count, match in enumerate(matches):
-            dump = pickle.dumps(match)
+            dump = ENCODER.encode(match)
             self.cursor.execute("INSERT INTO matches VALUES (?, ?)", (self.count, dump))
         if count == 0:
             return 0
@@ -193,7 +199,7 @@ class Matches:
         cursor = conn.cursor()
         cursor.execute("SELECT match from matches ORDER BY match_id")
         for match in cursor:
-            matches.append(pickle.loads(match[0]))
+            matches.append(DECODER.decode(match[0]))
         conn.close()
         return cls(matches)
 
@@ -207,7 +213,7 @@ class Matches:
         else:
             self.cursor.execute("SELECT match FROM matches ORDER BY match_id")
             for match in self.cursor:
-                yield pickle.loads(match[0])
+                yield DECODER.decode(match[0])
 
 
 class Corpus(ABC):
@@ -390,7 +396,7 @@ class Corpus(ABC):
                         self.metadata[inner_doc_id]["filename"],
                         self.metadata[inner_doc_id],
                     ),
-                    results[outer_doc_id, inner_doc_id],  # type: ignore
+                    float(results[outer_doc_id, inner_doc_id]),  # type: ignore
                 )
 
     def process_outer_compare(
@@ -413,7 +419,7 @@ class Corpus(ABC):
                     target_corpus.metadata[inner_index]["filename"],
                     target_corpus.metadata[inner_index],
                 ),
-                results[outer_doc_id, inner_doc_id],  # type: ignore
+                float(results[outer_doc_id, inner_doc_id]),  # type: ignore
             )
 
 
@@ -903,7 +909,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
         config["source"]["strip_punctuation"] = False
         config["target"]["strip_punctuation"] = False
     source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
-    target_preproc = PreProcessor(is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, **config["target"])
+    target_preproc = PreProcessor(is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, using_gpu=source_preproc.using_gpu, **config["target"])
     source_texts: Iterable[Tokens] = source_preproc.process_texts(
         (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
     )

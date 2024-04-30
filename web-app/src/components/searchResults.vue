@@ -6,7 +6,7 @@
         </div>
         <report-switcher />
         <div class="row">
-            <div class="col position-relative">
+            <div class="col-9 position-relative">
                 <div class="d-flex justify-content-center position-relative" v-if="loading">
                     <div class="spinner-border"
                         style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px" role="status">
@@ -65,7 +65,8 @@
                         </div>
                     </div>
                 </div>
-                <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="facetLoading">
+                <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)"
+                    v-if="facetLoading">
                     <div class="d-flex justify-content-center position-relative">
                         <div class="spinner-border"
                             style="width: 4rem; height: 4rem; position: absolute; z-index: 50; top: 30px" role="status">
@@ -100,10 +101,10 @@
 </template>
 
 <script>
-import searchArguments from "./searchArguments";
+import Velocity from "velocity-animate";
 import passagePair from "./passagePair";
 import reportSwitcher from "./reportSwitcher";
-import Velocity from "velocity-animate";
+import searchArguments from "./searchArguments";
 
 export default {
     name: "searchResults",

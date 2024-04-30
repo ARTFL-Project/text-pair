@@ -3,10 +3,10 @@
 
 import configparser
 import os
+import sqlite3
 from collections import defaultdict
 from glob import glob
 from typing import Any, Dict, List, Tuple
-import sqlite3
 
 import orjson
 from mmh3 import hash as hash32
