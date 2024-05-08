@@ -1,8 +1,38 @@
-#!/bin/sh
+#!/bin/bash
 
-sudo pip3 install lib/.[web] --upgrade
+# Install virtualenv to sidestep venv (python3-venv installs python3-setuptools which causes issues on Ubuntu 22.04)
+pip3 install virtualenv
 
-echo "\nMoving web application components into place..."
+# Give current user permission to write to /var/lib/textpair
+sudo mkdir -p /var/lib/textpair
+sudo chown -R $USER:$USER /var/lib/textpair
+
+# Create the virtual environment
+virtualenv /var/lib/textpair/textpair_env
+source /var/lib/textpair/textpair_env/bin/activate
+pip3 install lib/.
+deactivate
+
+# Install the textpair script
+sudo cp textpair /usr/local/bin/
+
+# Install compareNgrams binary
+arch=$(uname -m)
+if [ "$arch" = "x86_64" ]; then
+    binary_path="lib/core/binary/x86_64/compareNgrams"
+elif [ "$arch" = "aarch64" ]; then
+    binary_path="lib/core/binary/aarch64/compareNgrams"
+else
+    echo "Only x86_64 and ARM are supported at this time."
+    exit 1
+fi
+sudo rm -f /usr/local/bin/compareNgrams
+sudo cp "$binary_path" /usr/local/bin/compareNgrams
+sudo chmod +x /usr/local/bin/compareNgrams
+
+
+# Install the web application components
+echo -e "\nMoving web application components into place..."
 sudo mkdir -p /var/lib/text-pair
 if [ ! -f /var/lib/text-pair/api_server/web_server.sh ]
     then
@@ -19,7 +49,7 @@ sudo cp -Rf api /var/lib/text-pair/
 sudo cp -Rf web-app /var/lib/text-pair/
 sudo cp -Rf config /var/lib/text-pair/
 
-echo "\nMoving global configuration into place..."
+echo -e "\nMoving global configuration into place..."
 sudo mkdir -p /etc/text-pair
 if [ ! -f /etc/text-pair/global_settings.ini ]
     then
@@ -36,7 +66,7 @@ else
     echo "/etc/text-pair/global_settings.ini already exists, not modifying..."
 fi
 
-echo "\n## IMPORTANT ##"
+echo -e "\n## IMPORTANT ##"
 echo "In order to start the TextPAIR web app, you need to configure and start up the web_server.sh script."
 echo "You can either:"
 echo "- Start it manually at /var/lib/text-pair/api_server/web_server.sh"
