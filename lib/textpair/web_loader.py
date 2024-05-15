@@ -410,10 +410,16 @@ def generate_database_stats(table_name, algorithm):
     if algorithm == "sa":
         cursor.execute(f"SELECT COUNT(*) FROM {table_name}_groups")
         stats["group_count"] = cursor.fetchone()[0]
-        cursor.execute(f"SELECT COUNT(DISTINCT source_author) FROM {table_name}_groups")
-        stats["author_group_count"] = cursor.fetchone()[0]
-        cursor.execute(f"SELECT COUNT(DISTINCT source_title) FROM {table_name}_groups")
-        stats["title_group_count"] = cursor.fetchone()[0]
+        try:
+            cursor.execute(f"SELECT COUNT(DISTINCT source_author) FROM {table_name}_groups")
+            stats["author_group_count"] = cursor.fetchone()[0]
+        except psycopg2.errors.UndefinedColumn:
+            stats["author_group_count"] = 0
+        try:
+            cursor.execute(f"SELECT COUNT(DISTINCT source_title) FROM {table_name}_groups")
+            stats["title_group_count"] = cursor.fetchone()[0]
+        except psycopg2.errors.UndefinedColumn:
+            stats["title_group_count"] = 0
     else:
         # TODO: Add stats for other algorithms
         pass
