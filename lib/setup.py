@@ -13,11 +13,10 @@ dependencies = [
     "lxml",
     "namedlist",
     "sentence-transformers",
-    # "sacremoses",  # required by some models for tokenization
     "lz4",
     "orjson",
     "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0.5#egg=text_preprocessing",
-    "fastapi",
+    "fastapi==0.110.3",
     "psycopg2",
     "gunicorn",
     "uvicorn",

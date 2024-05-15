@@ -376,6 +376,7 @@ class Corpus(ABC):
 
     def process_inner_compare(self, results, min_similarity: float, outer_start_index=0, inner_start_index=0) -> Iterable[MergedGroup]:
         """Compare corpus with itself"""
+        print("Processing similarity results...", flush=True, end=" ")
         for outer_doc_id, inner_doc_id in np.argwhere(results >= min_similarity):
             outer_doc_id += outer_start_index
             inner_doc_id += inner_start_index
@@ -403,6 +404,7 @@ class Corpus(ABC):
         self, results: np.ndarray, target_corpus: Corpus, min_similarity, outer_start_index=0, inner_start_index=0
     ) -> Iterable[MergedGroup]:
         """Compare corpus with another corpus"""
+        print("Processing similarity results...", flush=True, end=" ")
         for outer_doc_id, inner_doc_id in np.argwhere(results >= min_similarity):
             outer_index = outer_doc_id + outer_start_index
             inner_index = inner_doc_id + inner_start_index
