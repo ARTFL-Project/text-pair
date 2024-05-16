@@ -1,5 +1,5 @@
 #!/bin/bash
 
-source /var/lib/textpair/textpair_env/bin/activate
+source /var/lib/text-pair/textpair_env/bin/activate
 python3 -m textpair "$@"
 deactivate

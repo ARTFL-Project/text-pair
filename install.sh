@@ -4,12 +4,12 @@
 pip3 install virtualenv
 
 # Give current user permission to write to /var/lib/textpair
-sudo mkdir -p /var/lib/textpair
-sudo chown -R $USER:$USER /var/lib/textpair
+sudo mkdir -p /var/lib/text-pair
+sudo chown -R $USER:$USER /var/lib/text-pair
 
 # Create the virtual environment
-virtualenv /var/lib/textpair/textpair_env
-source /var/lib/textpair/textpair_env/bin/activate
+virtualenv /var/lib/text-pair/textpair_env
+source /var/lib/text-pair/textpair_env/bin/activate
 pip3 install lib/.
 deactivate
 

@@ -415,11 +415,13 @@ def generate_database_stats(table_name, algorithm):
             stats["author_group_count"] = cursor.fetchone()[0]
         except psycopg2.errors.UndefinedColumn:
             stats["author_group_count"] = 0
+            database.rollback()
         try:
             cursor.execute(f"SELECT COUNT(DISTINCT source_title) FROM {table_name}_groups")
             stats["title_group_count"] = cursor.fetchone()[0]
         except psycopg2.errors.UndefinedColumn:
             stats["title_group_count"] = 0
+            database.rollback()
     else:
         # TODO: Add stats for other algorithms
         pass
