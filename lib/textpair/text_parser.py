@@ -3,10 +3,10 @@
 import os
 from typing import Set
 
-from philologic.loadtime.Loader import Loader, setup_db_dir
 from philologic.loadtime import LoadFilters
 from philologic.loadtime import Parser as XMLParser
 from philologic.loadtime import PlainTextParser
+from philologic.loadtime.Loader import Loader, setup_db_dir
 
 PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
 

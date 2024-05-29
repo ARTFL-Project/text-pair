@@ -3,16 +3,8 @@
 
 import os
 
-from textpair import (
-    Ngrams,
-    create_web_app,
-    get_config,
-    run_vsa,
-    banality_auto_detect,
-    phrase_matcher,
-    parse_files,
-    merge_alignments,
-)
+from . import (Ngrams, banality_auto_detect, create_web_app, get_config,
+               merge_alignments, parse_files, phrase_matcher, run_vsa)
 
 
 def get_count(path: str) -> int:
