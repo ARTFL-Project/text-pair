@@ -124,6 +124,9 @@ var tabEntities = regexp.MustCompile("(&#9;)+")
 var cleanStart = regexp.MustCompile(`^\S+ `)
 var cleanEnd = regexp.MustCompile(` \S+$`)
 
+// Map containing the file size of each file
+var fileSize = map[string]int32{}
+
 func main() {
 	// Parse command line arguments
 	outputPath := flag.String("output_path", "./output", "output path for results")
@@ -213,6 +216,13 @@ func openJSONMetadata(fileLocation *string, ngramFilesLocation string) map[strin
 	for doc, fields := range metadata {
 		for field, value := range fields {
 			metadata[doc][field] = spaceChars.ReplaceAllString(value, " ") // clean up metadata
+			// Store file size of filename
+			if field == "filename" {
+				fileInfo, err := os.Stat(value)
+				if err == nil {
+					fileSize[value] = int32(fileInfo.Size())
+				}
+			}
 		}
 		metadata[doc]["ngrams"] = fmt.Sprintf("%s.json", doc)
 	}
@@ -912,10 +922,13 @@ func getText(fileLocation *string, startByte int32, endByte int32, passageType s
 		startByte = int32(0)
 	}
 	_, err = f.Seek(int64(startByte), 0)
-	checkErr(err, "getText (seeking in file)")
+	checkErr(err, fmt.Sprintf("getText() seeking in %s for %s with start byte %d", *fileLocation, passageType, startByte))
 	passage := make([]byte, endByte-startByte)
+	if endByte > fileSize[*fileLocation] {
+		endByte = fileSize[*fileLocation]
+	}
 	_, err = f.Read(passage)
-	checkErr(err, "getText (reading in file)")
+	checkErr(err, fmt.Sprintf("getText() seeking in %s for %s with end byte %d", *fileLocation, passageType, endByte))
 	f.Close()
 	passage = bytes.Trim(passage, "\x00")
 	passage = bytes.Replace(passage, []byte("\xc2\xa0"), []byte(" "), -1) // remove non-breaking spaces
@@ -962,7 +975,7 @@ func buildPercentMap(total int) map[int]int {
 func checkErr(err error, errorMessage string) {
 	if err != nil {
 		fmt.Printf("An error occured in following function %s. See error message below:\n", errorMessage)
-		log.Fatal(err)
+		fmt.Println(err)
 	}
 }
 

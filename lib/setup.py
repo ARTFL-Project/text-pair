@@ -22,7 +22,7 @@ dependencies = [
     "uvicorn",
     "uvloop",
     "httptools",
-    "philologic>=4.7.4.4",
+    "philologic>=4.7.5.0",
     "regex",
     "ahocorasick-rs",
     "msgspec"
