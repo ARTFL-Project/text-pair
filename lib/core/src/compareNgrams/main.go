@@ -178,11 +178,11 @@ func main() {
 		fmt.Println("\nNo source metadata provided, stopping now...")
 		os.Exit(-1)
 	}
-	sourceMetadata := openJSONMetadata(sourceMetadataArg, *sourceFilesArg)
+	sourceMetadata := openJSONMetadata(sourceMetadataArg)
 	if *targetFilesArg == *sourceFilesArg {
 		*targetFilesArg = ""
 	}
-	targetMetadata := openJSONMetadata(targetMetadataArg, *targetFilesArg)
+	targetMetadata := openJSONMetadata(targetMetadataArg)
 	fmt.Println("done.")
 	sourceFiles := getFiles(*sourceFilesArg, sourceMetadata, *sortField)
 	targetFiles := getFiles(*targetFilesArg, targetMetadata, *sortField)
@@ -195,7 +195,7 @@ func main() {
 	_ = alignPassages(sourceFiles, targetFiles, sourceMetadata, targetMetadata, config, ngramIndex)
 }
 
-func openJSONMetadata(fileLocation *string, ngramFilesLocation string) map[string]map[string]string {
+func openJSONMetadata(fileLocation *string) map[string]map[string]string {
 	if *fileLocation == "" {
 		return map[string]map[string]string{}
 	}
@@ -520,7 +520,7 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 								}
 								return matches[i].target.index < matches[j].target.index
 							})
-							alignments := matchPassage(&sourceFile, &targetFile, matches, config, ngramIndex, debugOutput)
+							alignments := matchPassage(matches, config, ngramIndex, debugOutput)
 							if config.mergeOnByteDistance || config.mergeOnNgramDistance {
 								alignments = mergeWithPrevious(alignments, config, debugOutput)
 							}
@@ -654,7 +654,7 @@ func createDuplicateFilesOutputFile(config *matchingParams) (*csv.Writer, *os.Fi
 	return w, duplicateFiles
 }
 
-func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMatch, config *matchingParams, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
+func matchPassage(matches []ngramMatch, config *matchingParams, ngramIndex map[int32]string, debugOutput *os.File) []Alignment {
 	alignments := make([]Alignment, 0)
 	m := &matchValues{}
 	m.lastSourcePosition = 0
@@ -721,12 +721,12 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			}
 			if !m.inAlignment {
 				if m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
-					addAlignment(m, config, &alignments)
+					addAlignment(m, &alignments)
 					if config.debug {
-						writeDebugOutput(m, true, &currentAnchor, debugOutput)
+						writeDebugOutput(m, true, debugOutput)
 					}
 				} else if config.debug {
-					writeDebugOutput(m, false, &currentAnchor, debugOutput)
+					writeDebugOutput(m, false, debugOutput)
 				}
 				m.lastSourcePosition = m.lastMatch[0].index + 1 // Make sure we start the next match at index that follows last source match
 				break innerMatchingLoop
@@ -755,7 +755,7 @@ func matchPassage(sourceFile *docIndex, targetFile *docIndex, matches []ngramMat
 			}
 		}
 		if m.inAlignment && m.matchesInCurrentAlignment >= config.minimumMatchingNgrams {
-			addAlignment(m, config, &alignments)
+			addAlignment(m, &alignments)
 		}
 	}
 	return alignments
@@ -825,7 +825,7 @@ func mergeWithPrevious(alignments []Alignment, config *matchingParams, debugOutp
 	return mergedAlignments
 }
 
-func writeDebugOutput(m *matchValues, match bool, currentAnchor *ngramMatch, debugOutput *os.File) {
+func writeDebugOutput(m *matchValues, match bool, debugOutput *os.File) {
 	var stringOutput string
 	if match {
 		stringOutput = "\n\n## MATCH ##\n"
@@ -950,7 +950,7 @@ func getText(fileLocation *string, startByte int32, endByte int32, passageType s
 }
 
 // Add alignments to list of alignments
-func addAlignment(m *matchValues, config *matchingParams, alignments *[]Alignment) {
+func addAlignment(m *matchValues, alignments *[]Alignment) {
 	m.currentAlignment.source = position{&m.firstMatch[0].startByte, &m.lastMatch[0].endByte, &m.firstMatch[0].index, &m.lastMatch[0].index}
 	m.currentAlignment.target = position{&m.firstMatch[1].startByte, &m.lastMatch[1].endByte, &m.firstMatch[1].index, &m.lastMatch[1].index}
 	m.currentAlignment.totalMatchingNgrams = m.matchesInCurrentAlignment
