@@ -15,7 +15,7 @@ dependencies = [
     "sentence-transformers",
     "lz4",
     "orjson",
-    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.0.5#egg=text_preprocessing",
+    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.1.0.1#egg=text_preprocessing",
     "fastapi==0.110.3",
     "psycopg2",
     "gunicorn",
