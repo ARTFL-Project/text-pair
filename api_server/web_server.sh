@@ -13,7 +13,7 @@ CERTFILE=
 
 if [ -z "$KEYFILE" ]
 then
-    gunicorn -k uvicorn.workers.UvicornWorker -b :$PORT -w 4 --access-logfile=/var/lib/text-pair/api_server/access.log --error-logfile=/var/lib/text-pair/api_server/error.log --chdir /var/lib/text-pair/api/ text_pair:app
+    /var/lib/text-pair/textpair_env/bin/gunicorn -k uvicorn.workers.UvicornWorker -b :$PORT -w 4 --access-logfile=/var/lib/text-pair/api_server/access.log --error-logfile=/var/lib/text-pair/api_server/error.log --chdir /var/lib/text-pair/api/ text_pair:app
 else
-    gunicorn --keyfile=$KEYFILE --certfile=$CERTFILE -k uvicorn.workers.UvicornWorker -b :$PORT -w 4 --access-logfile=/var/lib/text-pair/api_server/access.log --error-logfile=/var/lib/text-pair/api_server/error.log --chdir /var/lib/text-pair/api/ text_pair:app
+    /var/lib/text-pair/textpair_env/bin/gunicorn --keyfile=$KEYFILE --certfile=$CERTFILE -k uvicorn.workers.UvicornWorker -b :$PORT -w 4 --access-logfile=/var/lib/text-pair/api_server/access.log --error-logfile=/var/lib/text-pair/api_server/error.log --chdir /var/lib/text-pair/api/ text_pair:app
 fi

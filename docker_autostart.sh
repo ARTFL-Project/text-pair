@@ -1,15 +1,15 @@
 #!/bin/bash
 # Copied to docker container and run as command
 
-if [ ! -d "/data/psql_data" ]; then
-su postgres <<'EOF'
-service postgresql start
-psql -c "create database textpair"
-psql -d textpair -c "create extension pg_trgm;"
-psql -c "create role textpair with login password 'textpair';"
-psql -c "GRANT ALL PRIVILEGES ON database textpair to textpair;"
-EOF
-perl -pi -e 's/^(local.*)peer$/$1 md5/;' /etc/postgresql/14/main/pg_hba.conf
+# if [ ! -d "/data/psql_data" ]; then
+# su postgres <<'EOF'
+# service postgresql start
+# psql -c "create database textpair"
+# psql -d textpair -c "create extension pg_trgm;"
+# psql -c "create role textpair with login password 'textpair';"
+# psql -c "GRANT ALL PRIVILEGES ON database textpair to textpair;"
+# EOF
+# perl -pi -e 's/^(local.*)peer$/$1 md5/;' /etc/postgresql/14/main/pg_hba.conf
 su postgres <<'EOF'
 service postgresql restart
 EOF
