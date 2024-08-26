@@ -486,6 +486,8 @@ func alignPassages(sourceFiles []sortedFile, targetFiles []sortedFile, sourceMet
 						for _, targetFile := range splitTargets {
 							if sourceAgainstSource && sourceFile.SortID >= targetFile.SortID {
 								continue
+							} else if sourceFile.DocID == targetFile.DocID {
+								continue
 							}
 							var debugOutput *os.File
 							if config.debug {
