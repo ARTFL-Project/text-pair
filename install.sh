@@ -1,14 +1,41 @@
 #!/bin/bash
 
-# Install virtualenv to sidestep venv (python3-venv installs python3-setuptools which causes issues on Ubuntu 22.04)
-pip3 install virtualenv
+# Default Python version
+PYTHON_VERSION="python3"
+
+# Parse command line arguments
+while getopts "p:" opt; do
+  case $opt in
+    p) PYTHON_VERSION="$OPTARG"
+    ;;
+    *) echo "Usage: $0 [-p python_version]"
+       exit 1
+    ;;
+  esac
+done
+
+echo "Using Python version: $PYTHON_VERSION"
+
+# Check if virtualenv is installed
+if ! command -v virtualenv &> /dev/null
+then
+    echo "virtualenv could not be found. Installing..."
+    pip install virtualenv
+fi
+
+# Delete virtual environment if it already exists
+if [ -d /var/lib/text-pair ]; then
+    echo "Deleting existing TextPAIR installation..."
+    sudo rm -rf /var/lib/text-pair
+fi
+
 
 # Give current user permission to write to /var/lib/textpair
 sudo mkdir -p /var/lib/text-pair
 sudo chown -R $USER:$USER /var/lib/text-pair
 
 # Create the virtual environment
-virtualenv /var/lib/text-pair/textpair_env
+virtualenv -p $PYTHON_VERSION /var/lib/text-pair/textpair_env
 source /var/lib/text-pair/textpair_env/bin/activate
 pip3 install lib/.
 deactivate

@@ -12,7 +12,7 @@ dependencies = [
     "pystemmer",
     "lxml",
     "namedlist",
-    "sentence-transformers",
+    "sentence-transformers~=3.2",
     "lz4",
     "orjson",
     "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.1.0.1#egg=text_preprocessing",
