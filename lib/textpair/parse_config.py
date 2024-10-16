@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Parse textpair config file"""
 
-import configparser
 import argparse
+import configparser
 import os
+from collections import defaultdict, namedtuple
 from typing import Any
-from collections import defaultdict
 
 
 class TextPairConfig:
@@ -13,18 +13,20 @@ class TextPairConfig:
 
     def __init__(self, cli_args: dict[str, Any]):
         self.__cli_args: dict[str, Any] = cli_args
-        self.is_philo_db: bool = self.__cli_args["is_philo_db"]
-        self.__file_paths: dict[str, str] = {}
-        self.text_parsing: dict[str, bool | str] = {}
-        self.preprocessing_params: dict[str, Any] = {"source": {}, "target": {}}
-        self.matching_params: defaultdict[str, Any] = defaultdict(str)
-        self.matching_params["matching_algorithm"] = "sa"
-        self.web_app_config: dict[str, Any] = {"skip_web_app": self.__cli_args["skip_web_app"]}
-        self.only_web_app = self.__cli_args["load_only_web_app"]
-        self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
-        self.source_against_source = False
-        self.__parse_config()
-        self.__set_params()
+        if cli_args["delete"] is False:
+            self.is_philo_db: bool = self.__cli_args["is_philo_db"]
+            self.__file_paths: dict[str, str] = {}
+            self.text_parsing: dict[str, bool | str] = {}
+            self.preprocessing_params: dict[str, Any] = {"source": {}, "target": {}}
+            self.matching_params: defaultdict[str, Any] = defaultdict(str)
+            self.matching_params["matching_algorithm"] = "sa"
+            self.web_app_config: dict[str, Any] = {"skip_web_app": self.__cli_args["skip_web_app"]}
+            self.only_web_app = self.__cli_args["load_only_web_app"]
+            self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
+            self.source_against_source = False
+            self.__parse_config()
+            self.__set_params()
+
 
     def __getattr__(self, attr):
         return self.__cli_args[attr]
@@ -204,8 +206,9 @@ def get_config() -> TextPairConfig:
         "dbname",
         help="Name of TextPAIR database. This will also be used for the PostgreSQL table name. Must not be longer than 30 characters",
     )
+    parser.add_argument("--delete", help="delete database", action="store_true", default=False)
     parser.add_argument(
-        "--config", help="configuration file used to override defaults", type=str, default="", required=True
+        "--config", help="configuration file used to override defaults", type=str, default=""
     )
     parser.add_argument(
         "--is_philo_db", help="define if files are from a PhiloLogic instance", action="store_true", default=False
@@ -252,14 +255,15 @@ def get_config() -> TextPairConfig:
     )
     parser.add_argument("--debug", help="add debugging", action="store_true", default=False)
     args = vars(parser.parse_args())
-    if args["config"]:
+    if not args["config"] and args["delete"] is False:
+        parser.print_usage()
+        print("No config file provided.")
+        print("Exiting...")
+        exit()
+    elif args["config"] and args["delete"] is False:
         if not os.path.exists(args["config"]):
             print(f"""config file does not exist at the location {args["config"]} you provided.""")
             print("Exiting...")
             exit()
-    else:
-        print("No config file provided.")
-        print("Exiting...")
-        exit()
     text_pair_config = TextPairConfig(args)
     return text_pair_config

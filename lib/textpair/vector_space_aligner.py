@@ -555,7 +555,11 @@ class TransformerCorpus(Corpus):
         direction="source",
     ):
         def sim_function(x, y):
-            sim = util.cos_sim(x, y).cpu().numpy()
+            sim = util.cos_sim(x, y).cpu()
+            if sim.dtype != torch.bfloat16:
+                sim = sim.numpy()
+            else:
+                sim = np.array(sim.to(torch.float16))
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return sim
@@ -572,7 +576,7 @@ class TransformerCorpus(Corpus):
         )
 
         if model is None:
-            self.model = SentenceTransformer(model_name)
+            self.model = SentenceTransformer(model_name, trust_remote_code=True)
         else:
             self.model = model
 

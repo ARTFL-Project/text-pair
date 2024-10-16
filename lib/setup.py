@@ -25,7 +25,7 @@ dependencies = [
     "philologic>=4.7.5.0",
     "regex",
     "ahocorasick-rs",
-    "msgspec"
+    "msgspec",
 ]
 
 

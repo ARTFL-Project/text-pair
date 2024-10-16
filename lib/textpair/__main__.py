@@ -1,10 +1,45 @@
 #!/usr/bin/env python3
 """Sequence aligner script"""
 
+import configparser
 import os
+
+import psycopg2
 
 from . import (Ngrams, banality_auto_detect, create_web_app, get_config,
                merge_alignments, parse_files, phrase_matcher, run_vsa)
+
+
+def delete_database(dbname: str) -> None:
+    global_config = configparser.ConfigParser()
+    global_config.read("/etc/text-pair/global_settings.ini")
+    conn = psycopg2.connect(
+        user=global_config["DATABASE"]["database_user"],
+        password=global_config["DATABASE"]["database_password"],
+        database=global_config["DATABASE"]["database_name"],
+    )
+    conn.autocommit = True
+    cursor = conn.cursor()
+
+    try:
+        print(f"Dropping table {dbname}...", end="")
+        cursor.execute(f"DROP TABLE IF EXISTS {dbname}")
+        print("done")
+        print(f"Dropping table {dbname}__ordered...", end="")
+        cursor.execute(f"DROP TABLE IF EXISTS {dbname}__ordered")
+        print("done")
+        print(f"Dropping table {dbname}__groups...", end="")
+        cursor.execute(f"DROP TABLE IF EXISTS {dbname}___groups")
+        print("done")
+        print(f"Deleting {dbname} web app directory...", end="")
+        os.system(f"rm -rf {global_config['WEB_APP']['web_app_path']}/{dbname}")
+        print("done")
+
+        print(f"\nDeletion of database {dbname} complete.")
+    except Exception as e:
+        print(e)
+    finally:
+        conn.close()
 
 
 def get_count(path: str) -> int:
@@ -229,7 +264,9 @@ def run_vsa_similarity(params) -> None:
 
 if __name__ == "__main__":
     params = get_config()
-    if params.update_db is True:
+    if params.delete is True:
+        delete_database(params.dbname)
+    elif params.update_db is True:
         count = get_count(os.path.join(params.output_path, "results/count.txt"))
         groups_file = None
         if params.matching_params["matching_algorithm"] == "sa":  # we merge alignments prior to loading
