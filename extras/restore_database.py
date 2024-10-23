@@ -227,11 +227,14 @@ def restore_textpair_database(backup_path, web_app_dest=None, force=False):
                     raise Exception("Web application build failed")
 
         print("\nRestore completed successfully!")
+        db_url = Path(GLOBAL_CONFIG.get("WEB_APP", "api_server").replace("-api", "")) / web_app_dest.name
+        print(f"The database is viewable at this URL: {db_url}")
 
     finally:
         # Clean up
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
+        os.remove(backup_path)
 
 
 if __name__ == "__main__":
