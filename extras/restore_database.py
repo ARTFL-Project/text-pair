@@ -32,7 +32,8 @@ def check_database_connection(user, password):
 
 def update_app_config(web_app_path):
     """
-    Update the appConfig.json file with the API server from global settings.
+    Update the appConfig.json file with the API server from global settings
+    and update PhiloLogic paths to point to the backed up data.
     Returns True if successful, False otherwise.
     """
     try:
@@ -49,11 +50,28 @@ def update_app_config(web_app_path):
         api_server = GLOBAL_CONFIG.get("WEB_APP", "api_server")
         config['apiServer'] = api_server
 
+        # Update PhiloLogic paths to point to the restored data
+        source_data_path = web_app_path / "source_data"
+        if source_data_path.exists():
+            config['sourcePhiloDBPath'] = str(source_data_path.absolute())
+
+        target_data_path = web_app_path / "target_data"
+        if target_data_path.exists():
+            config['targetPhiloDBPath'] = str(target_data_path.absolute())
+        elif 'targetPhiloDBPath' in config:
+            # If target_data doesn't exist and there was a target path, remove it
+            config['targetPhiloDBPath'] = ""
+
         # Write the updated config back
         with open(config_path, 'w') as f:
             json.dump(config, f, indent=2)
 
-        print(f"Updated apiServer in appConfig.json to: {api_server}")
+        print(f"Updated appConfig.json:")
+        print(f"  - apiServer: {api_server}")
+        print(f"  - sourcePhiloDBPath: {config['sourcePhiloDBPath']}")
+        if config.get('targetPhiloDBPath'):
+            print(f"  - targetPhiloDBPath: {config['targetPhiloDBPath']}")
+
         return True
 
     except Exception as e:

@@ -1,5 +1,6 @@
 """Backs up existing TextPAIR database (a table in PostGreSQL), along with web config and web files to a tarball file."""
 
+import json
 import os
 import shutil
 from argparse import ArgumentParser
@@ -24,6 +25,19 @@ def table_exists(user, password, table_name):
     return result if result else None
 
 
+def back_up_philo_db_data(philo_db_path, output_path):
+    """Backs up the source data for a PhiloLogic database."""
+    # Copy text files
+    text_path = output_path / "TEXT"
+    text_path.mkdir()
+    for file in os.scandir(philo_db_path / 'data/TEXT/'):
+        shutil.copy(file.path, text_path)
+
+    # Copy db related files:
+    os.system(f"cp {philo_db_path / 'data/toms.db'} {output_path}")
+    os.system(f"cp {philo_db_path / 'data/db.locals.py'} {output_path}")
+
+
 def extract_textpair_database(table, web_app_path, output_path):
     db_name = GLOBAL_CONFIG.get("DATABASE", "database_name")
     db_user = GLOBAL_CONFIG.get("DATABASE", "database_user")
@@ -41,6 +55,18 @@ def extract_textpair_database(table, web_app_path, output_path):
     web_app_name = Path(web_app_path).name
     web_app_dest = backup_dir / web_app_name
     shutil.copytree(web_app_path, web_app_dest, dirs_exist_ok=True)
+
+    # Check if we have a source_data directory in our temp directory
+    # if not, call the back_up_philo_db_data function to create one
+    source_data_dir = web_app_dest / "source_data"
+    if not source_data_dir.exists():
+        app_config = json.load(open(web_app_dest / "appConfig.json"))
+        source_data_dir.mkdir()
+        back_up_philo_db_data(Path(app_config["sourcePhiloDBPath"]), source_data_dir)
+        if app_config["targetPhiloDBPath"] and app_config["sourcePhiloDBPath"] != app_config["targetPhiloDBPath"]:
+            target_data_dir = web_app_dest / "target_data"
+            target_data_dir.mkdir()
+            back_up_philo_db_data(Path(app_config["targetPhiloDBPath"]), target_data_dir)
 
     # Dump database tables to backup directory
     existing_tables = [
