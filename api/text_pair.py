@@ -45,7 +45,7 @@ class FormArguments:
     def __init__(self):
         self.dict = OrderedDict()
 
-    def __getitem__(self, item) -> str | int:
+    def __getitem__(self, item) -> str | int | list:
         if item in self.dict:
             return self.dict[item]
         elif item == "page":
@@ -58,6 +58,8 @@ class FormArguments:
             return 1
         elif item == "directionSelected":
             return "source"
+        elif item == "classification_filter":
+            return []
         else:
             return ""
 
@@ -134,6 +136,9 @@ def parse_args(request):
         "philo_url",
         "philo_id",
         "philo_path",
+        "classification_filter_1",
+        "classification_filter_2",
+        "classification_filter_3",
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
@@ -144,6 +149,12 @@ def parse_args(request):
                 other_args["direction"] = value or "next"
             elif key == "directionSelected":
                 other_args["directionSelected"] = value or "source"
+            elif key == "classification_filter":
+                # Handle multiple values for classification_filter
+                if key in other_args and isinstance(other_args[key], list):
+                    other_args[key].append(value)
+                else:
+                    other_args[key] = [value]  # Initialize as list with first value
             else:
                 other_args[key] = value
         else:
@@ -183,14 +194,14 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
                 elif value.startswith("NOT "):
                     split_value = " ".join(value.split()[1:]).strip()
                     query = f"{field} !~* %s"
-                    sql_values.append(f"\m{split_value}\M")
+                    sql_values.append(fr"\m{split_value}\M")
                 # elif value.startswith("OR "):  ## TODO: add support to OR queries by changing the join logic at the end of the function
                 #     split_value = " ".join(value.split()[1:]).strip()
                 #     query = "{} !~* %s".format(field)
                 #     sql_values.append('\m{}\M'.format(split_value))
                 else:
                     query = f"{field} ~* %s"
-                    sql_values.append(f"\m{value}\M")
+                    sql_values.append(fr"\m{value}\M")
                 sql_fields.append(query)
         elif field_type in ("INTEGER", "FLOAT"):
             value = value.replace('"', "")
@@ -214,6 +225,18 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
     if other_args.banality != "":
         sql_fields.append("banality=%s")
         sql_values.append(other_args.banality)
+
+    # Add classification filter condition
+    for i in range(1, 4):  # Handle classification_filter_1, classification_filter_2, classification_filter_3
+        filter_key = f"classification_filter_{i}"
+        if filter_key in other_args and other_args[filter_key]:
+            # Each filter value must match in at least one classification field
+            condition = "(target_first_class=%s OR target_second_class=%s OR target_third_class=%s)"
+            sql_fields.append(condition)
+            # Add the same filter value three times (once for each field)
+            filter_value = other_args[filter_key]
+            sql_values.extend([filter_value, filter_value, filter_value])
+
     return " AND ".join(sql_fields), sql_values
 
 

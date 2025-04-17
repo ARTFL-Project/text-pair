@@ -24,9 +24,9 @@ then
 fi
 
 # Delete virtual environment if it already exists
-if [ -d /var/lib/text-pair ]; then
+if [ -d /var/lib/text-pair/textpair_env ]; then
     echo "Deleting existing TextPAIR installation..."
-    sudo rm -rf /var/lib/text-pair
+    sudo rm -rf /var/lib/text-pair/textpair_env
 fi
 
 

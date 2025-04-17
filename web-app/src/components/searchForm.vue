@@ -5,10 +5,10 @@
             <form @submit.prevent @keyup.enter="searchSelected()">
                 <div class="row">
                     <div class="col">
-                        <h6 class="text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
+                        <h5 class="section-title text-center pb-2" v-html="globalConfig.sourceLabel"></h5>
                     </div>
                     <div class="col border border-top-0 border-right-0 border-bottom-0">
-                        <h6 class="text-center pb-2" v-html="globalConfig.targetLabel"></h6>
+                        <h5 class="section-title text-center pb-2" v-html="globalConfig.targetLabel"></h5>
                     </div>
                 </div>
 
@@ -35,18 +35,78 @@
                         </div>
                     </div>
                 </div>
-
-                <!-- Banality filter -->
-                <div id="banality-filter" class="my-dropdown mb-3" v-if="banalitiesStored">
-                    <button type="button" class="btn btn-outline-secondary rounded-0" @click="toggleDropdown()">
-                        {{ banalitySelected }}&nbsp;&nbsp;&#9662;
-                    </button>
-                    <ul class="my-dropdown-menu shadow-1">
-                        <li class="my-dropdown-item" v-for="(option, optionIndex) in formBanalityValues" :key="optionIndex"
-                            @click="banalitySelect(optionIndex)">
-                            {{ option.label }}
-                        </li>
-                    </ul>
+                <!-- Reuse Classification -->
+                <div id="reuse-classification" class="mb-3">
+                    <div class="row">
+                        <div class="col-12">
+                            <h5 class="section-title text-center pb-2">Context of Reuse Classification</h5>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col">
+                            <div class="input-group pb-3">
+                                <span class="input-group-prepend">
+                                    <span class="input-group-text rounded-0">First Criterion</span>
+                                </span>
+                                <select class="form-control rounded-0 select-with-arrow"
+                                    v-model="classificationFilters[0]">
+                                    <option value="">Any classification</option>
+                                    <option v-for="classItem in globalConfig.reuseClassification.classes"
+                                        :key="classItem.label" :value="classItem.label" :title="classItem.description">
+                                        {{ classItem.label.replace(/_/g, ' ') }}
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col">
+                            <div class="input-group pb-3">
+                                <span class="input-group-prepend">
+                                    <span class="input-group-text rounded-0">Second Criterion</span>
+                                </span>
+                                <select class="form-control rounded-0 select-with-arrow"
+                                    v-model="classificationFilters[1]">
+                                    <option value="">Any classification</option>
+                                    <option v-for="classItem in globalConfig.reuseClassification.classes"
+                                        :key="classItem.label" :value="classItem.label" :title="classItem.description">
+                                        {{ classItem.label.replace(/_/g, ' ') }}
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col">
+                            <div class="input-group pb-3">
+                                <span class="input-group-prepend">
+                                    <span class="input-group-text rounded-0">Third Criterion</span>
+                                </span>
+                                <select class="form-control rounded-0 select-with-arrow"
+                                    v-model="classificationFilters[2]">
+                                    <option value="">Any classification</option>
+                                    <option v-for="classItem in globalConfig.reuseClassification.classes"
+                                        :key="classItem.label" :value="classItem.label" :title="classItem.description">
+                                        {{ classItem.label.replace(/_/g, ' ') }}
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row mt-3" v-if="banalitiesStored">
+                        <div class="col-12">
+                            <div id="banality-filter" class="pb-3">
+                                <div class="input-group">
+                                    <span class="input-group-prepend">
+                                        <span class="input-group-text rounded-0">Banality Filter</span>
+                                    </span>
+                                    <select class="form-control rounded-0 select-with-arrow" v-model="banalitySelected"
+                                        @change="updateBanalityValue">
+                                        <option v-for="(option, optionIndex) in formBanalityValues" :key="optionIndex"
+                                            :value="option.label">
+                                            {{ option.label }}
+                                        </option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="search-alignments">
@@ -69,6 +129,8 @@ export default {
         return {
             globalConfig: this.$globalConfig,
             formValues: this.populateSearchForm(),
+            // Add this new array for classification filters
+            classificationFilters: ["", "", ""],
             formBanalityValues: [
                 {
                     label: "Don't filter banalities",
@@ -148,6 +210,17 @@ export default {
                 }
             }
         }
+
+        // Initialize classification filters from URL
+        if (this.$route.query.classification_filter_1) {
+            this.classificationFilters[0] = this.$route.query.classification_filter_1;
+        }
+        if (this.$route.query.classification_filter_2) {
+            this.classificationFilters[1] = this.$route.query.classification_filter_2;
+        }
+        if (this.$route.query.classification_filter_3) {
+            this.classificationFilters[2] = this.$route.query.classification_filter_3;
+        }
     },
     methods: {
         populateSearchForm() {
@@ -178,16 +251,34 @@ export default {
         banalitySelect(index) {
             this.formValues.banality = this.formBanalityValues[index].value;
             this.banalitySelected = this.formBanalityValues[index].label;
-            this.toggleDropdown();
         },
         search() {
             this.toggleSearchForm();
-            this.$router.push(`/search?${this.paramsToUrl(this.formValues)}`);
+
+            // Create URLSearchParams to properly handle multiple parameters with the same name
+            const urlParams = new URLSearchParams();
+
+            // Add all regular form values
+            for (const [key, value] of Object.entries(this.formValues)) {
+                if (value !== "" && value !== null && value !== undefined) {
+                    urlParams.append(key, value);
+                }
+            }
+
+            for (const [index, filter] of this.classificationFilters.entries()) {
+                if (filter) {
+                    urlParams.append(`classification_filter_${index + 1}`, filter);
+                }
+            }
+
+            this.$router.push(`/search?${urlParams.toString()}`);
         },
         clearForm() {
             for (const key in this.formValues) {
                 this.formValues[key] = "";
             }
+            // Reset classification filters
+            this.classificationFilters = ["", "", ""];
         },
         toggleSearchForm() {
             this.$nextTick(() => {
@@ -217,6 +308,13 @@ export default {
                 element.style.display = "none";
             }
         },
+        updateBanalityValue() {
+            // Find the matching option and set its value in formValues
+            const selectedOption = this.formBanalityValues.find(option => option.label === this.banalitySelected);
+            if (selectedOption) {
+                this.formValues.banality = selectedOption.value;
+            }
+        }
     },
 };
 </script>
@@ -237,8 +335,6 @@ export default {
     border-bottom-left-radius: 0 !important;
     border-left-color: $link-color;
 }
-
-
 
 .input-group-text,
 .form-control {
@@ -293,5 +389,83 @@ export default {
     color: $button-color !important;
     border-bottom-color: #fff;
 }
-</style>
 
+#reuse-classification {
+    select {
+        option[title] {
+            cursor: help;
+        }
+    }
+
+    .select-with-arrow {
+        position: relative;
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        padding-right: 25px;
+        /* Space for the arrow */
+    }
+
+    .select-with-arrow::after {
+        content: '\25BC';
+        /* Unicode down triangle */
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
+        /* Ensures clicks pass through to the select */
+    }
+}
+
+/* Enhanced section styling */
+.section-title {
+    font-weight: 600;
+    color: #343a40;
+    font-size: 1.1rem;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.section-divider {
+    margin: 1.5rem auto;
+    width: 50%;
+    border-top: 2px solid #e9ecef;
+}
+
+#reuse-classification {
+    padding: 1.25rem;
+}
+
+#banality-filter {
+    text-align: left;
+    width: fit-content;
+
+    label {
+        font-weight: 500;
+        font-size: 0.9rem;
+        color: #666;
+    }
+
+    button {
+        width: fit-content;
+        text-align: left;
+    }
+
+    .my-dropdown-menu {
+        width: fit-content;
+    }
+}
+
+/* Select styling enhancements */
+.select-with-arrow {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23495057' viewBox='0 0 16 16'><path d='M7.247 11.14L2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/></svg>");
+    background-repeat: no-repeat;
+    background-position: calc(100% - 10px) center;
+    padding-right: 28px;
+    /* Space for the arrow */
+}
+</style>

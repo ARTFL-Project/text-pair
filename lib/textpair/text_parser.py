@@ -25,7 +25,7 @@ def parse_files(
     """Parse files using Philologic parser"""
     output_path = os.path.abspath(output_path)
     os.makedirs(output_path, exist_ok=True)
-    setup_db_dir(output_path, False, force_delete=True)
+    setup_db_dir(output_path, force_delete=True)
     word_list: Set[str] = set()
     if words_to_index != "all":
         with open(words_to_index, encoding="utf8") as fh:
@@ -59,6 +59,9 @@ def parse_files(
                 "bibliography": metadata,
                 "lowercase_index": lowercase,
                 "load_config": "",
+                "lemma_file": None,
+                "spacy_model": "",
+                "suppress_word_attributes": []
             }
         )
     else:
@@ -83,6 +86,9 @@ def parse_files(
                 "file_type": file_type,
                 "bibliography": metadata,
                 "load_config": "",
+                "lemma_file": None,
+                "spacy_model": "",
+                "suppress_word_attributes": []
             }
         )
     loader.tables = ["toms"]  # We just want the toms (metadata) table.

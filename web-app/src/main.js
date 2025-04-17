@@ -1,9 +1,9 @@
-import { createApp } from "vue";
-import App from "./App.vue";
-import router from "./router";
 import axios from "axios";
 import emitter from "tiny-emitter/instance";
+import { createApp } from "vue";
 import globalConfig from "../appConfig.json";
+import App from "./App.vue";
+import router from "./router";
 
 const app = createApp(App);
 app.config.globalProperties.$globalConfig = globalConfig;
@@ -13,14 +13,31 @@ app.provide("$http", axios);
 
 app.mixin({
     methods: {
-        paramsToUrl: function (formValues) {
-            var queryParams = [];
-            for (var param in formValues) {
-                queryParams.push(
-                    `${param}=${encodeURIComponent(formValues[param])}`
-                );
+        paramsToUrl: function (params) {
+            const urlParams = [];
+            for (const [key, value] of Object.entries(params)) {
+                if (value !== "" && value !== null && value !== undefined) {
+                    if (Array.isArray(value)) {
+                        // Handle array values (multiple parameters with same name)
+                        value.forEach((val) => {
+                            if (val) {
+                                urlParams.push(
+                                    `${encodeURIComponent(
+                                        key
+                                    )}=${encodeURIComponent(val)}`
+                                );
+                            }
+                        });
+                    } else {
+                        urlParams.push(
+                            `${encodeURIComponent(key)}=${encodeURIComponent(
+                                value
+                            )}`
+                        );
+                    }
+                }
             }
-            return queryParams.join("&");
+            return urlParams.join("&");
         },
     },
 });

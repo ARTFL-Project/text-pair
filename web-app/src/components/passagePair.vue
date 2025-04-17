@@ -10,8 +10,23 @@
                 <h6 class="paired-passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
                 <citations :citation="globalConfig.targetCitation" :alignment="alignment"
                     :link-to-doc="globalConfig.targetLinkToDocMetadata"></citations>
+
+                <!-- Move classification tags here, right after target citation -->
+                <div class="classification-tags ms-3" style="margin-top: -0.75rem"
+                    v-if="alignment.target_first_class || alignment.target_second_class || alignment.target_third_class">
+                    <span v-if="alignment.target_first_class" class="classification-tag tag-primary">
+                        {{ alignment.target_first_class.replace(/_/g, ' ') }}
+                    </span>
+                    <span v-if="alignment.target_second_class" class="classification-tag tag-secondary">
+                        {{ alignment.target_second_class.replace(/_/g, ' ') }}
+                    </span>
+                    <span v-if="alignment.target_third_class" class="classification-tag tag-tertiary">
+                        {{ alignment.target_third_class.replace(/_/g, ' ') }}
+                    </span>
+                </div>
             </div>
         </div>
+
         <div class="row passages">
             <div class="col mb-2">
                 <p class="card-text text-justify px-3 pt-2 mb-2">
@@ -78,8 +93,8 @@
 </template>
 
 <script>
-import Worker from "./diffStrings?worker";
 import citations from "./citations";
+import Worker from "./diffStrings?worker";
 
 export default {
     name: "passagePair",
@@ -219,7 +234,7 @@ export default {
 };
 </script>
 
-<style  lang="scss" scoped>
+<style lang="scss" scoped>
 @import "../assets/theme.module.scss";
 
 .source-passage,
@@ -251,5 +266,37 @@ export default {
 
 .target-passage-container {
     border-right-width: 0 !important;
+}
+
+/* Classification tag styling */
+.classification-tags {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.classification-tag {
+    display: inline-block;
+    font-size: 0.85rem;
+    font-weight: 500;
+    line-height: 1;
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: #fff;
+    text-transform: capitalize;
+}
+
+.tag-primary {
+    background-color: #2c3e50;
+}
+
+.tag-secondary {
+    background-color: #3498db;
+}
+
+.tag-tertiary {
+    background-color: #9b59b6;
 }
 </style>
