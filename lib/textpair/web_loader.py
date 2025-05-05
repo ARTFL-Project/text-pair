@@ -55,7 +55,7 @@ DEFAULT_FIELD_TYPES = {
     "source_passage_length": "INTEGER",
     "target_passage_length": "INTEGER",
     "similarity": "FLOAT",
-    "group_id": "INTEGER",
+    "group_id": "INTEGER[]", # Define directly as INTEGER[]
     "count": "INTEGER",
 }
 
@@ -182,28 +182,59 @@ def clean_text(text):
     return text
 
 
-def validate_field_type(fields, field_types, field_names):
+def validate_field_type(fields, field_types, field_names, groups_file=False):
     """Check field type and modify value type if needed"""
     values = []
     for field in field_names:
         if field in FILTERED_FIELDS:
             continue
-        value = fields.get(field, "")
+        value = fields.get(field) # Use get without default "" initially
+
+        if field == "group_id":
+            if groups_file is False:
+                if value is None:
+                    value = [] # Default to empty list if missing
+                elif not isinstance(value, list):
+                    try:
+                        value = [int(value)]
+                    except (ValueError, TypeError):
+                        value = []
+            values.append(value)
+            continue
+
+        # Default value handling for other fields
+        if value is None:
+             field_type = field_types.get(field, "TEXT").upper()
+             if field_type == "INTEGER" or field_type == "FLOAT":
+                 value = None
+             else:
+                 value = ""
+
         field_type = field_types.get(field, "TEXT")
+        # ... rest of validate_field_type remains the same ...
         if field_type.upper() == "INTEGER" and not field.endswith("passage_length") and field != "rowid":
+            if value is None:
+                 values.append(value)
+                 continue
             if isinstance(value, int):
                 value = str(value)
-            year_match = YEAR_FINDER.search(value)
+            year_match = YEAR_FINDER.search(str(value))
             if year_match:
                 matching_year = year_match.groups()[0]
-                neg_match = re.search(rf"^(\-{matching_year})", value)  # account for negative years
+                neg_match = re.search(rf"^(\-{matching_year})", str(value))
                 if neg_match:
-                    value = int(neg_match.groups()[0])
+                    try:
+                        value = int(neg_match.groups()[0])
+                    except ValueError:
+                        value = None
                 else:
-                    value = int(year_match.groups()[0])
+                    try:
+                        value = int(year_match.groups()[0])
+                    except ValueError:
+                         value = None
             else:
                 value = None
-        if field_type == "TEXT" and isinstance(value, str):
+        elif field_type == "TEXT" and isinstance(value, str):
             value = value.translate(CONTROL_CHARS)
             value = clean_text(value)
         values.append(value)
@@ -303,7 +334,7 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     cursor.execute(f"CREATE INDEX target_end_byte_{table_name}_idx ON {table_name} USING BTREE(target_end_byte)")
     cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
     cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
-    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
+    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING GIN(group_id)") # GIN index
     database.commit()
 
     print("Populating index table...")
@@ -369,7 +400,7 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
     with open(groups_file, encoding="utf8") as input_file:
         for line in tqdm(input_file, total=row_count, desc="Storing alignment groups...", leave=False):
             group = orjson.loads(line)
-            row = validate_field_type(group, DEFAULT_FIELD_TYPES, field_names)
+            row = validate_field_type(group, DEFAULT_FIELD_TYPES, field_names, groups_file=True)
             insert = (
                 f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES (" + ", ".join("%s" for _ in row) + ")"
             )

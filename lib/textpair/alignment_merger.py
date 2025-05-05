@@ -1,13 +1,14 @@
 """Merge Overlapping Alignments"""
 
-from dataclasses import dataclass, field
-from typing import Any
 import os
 from collections import Counter
+from dataclasses import dataclass, field
+from typing import Any
 
 import lz4.frame
 import orjson
 from tqdm import tqdm
+
 from .utils import get_text
 
 
@@ -139,7 +140,7 @@ def read_alignment(line: bytes, passage_id: int):
     alignment["passage_id"] = passage_id
     return alignment
 
-def merge_alignments(results_file: str, count: int) -> str:
+def first_step_merge(results_file: str, count: int) -> tuple[AlignmentGroups, Counter]:
     """Merge passages that are aligned to the same source passage"""
     passages: list[dict[str, str]] = []
     alignment_groups = AlignmentGroups()
@@ -182,6 +183,16 @@ def merge_alignments(results_file: str, count: int) -> str:
             output_file.write(orjson.dumps(fields) + b"\n")  # type: ignore
     os.remove(results_file)
     os.rename(f"{results_file}.groups.lz4", f"{results_file}")
+    return alignment_groups, group_id_count
+
+def second_step_merge(results_file: str, alignment_groups, count: int):
+    """We group passages that overlap in the same source passage. A single passage pair can be in multiple groups."""
+    pass
+
+
+def merge_alignments(results_file: str, count: int):
+    """Merge alignments"""
+    alignment_groups, group_id_count = first_step_merge(results_file, count)
 
     groups_file = os.path.join(os.path.dirname(results_file), "passage_group_source.jsonl")
     with open(groups_file, "wb") as output_file:
@@ -207,7 +218,6 @@ def merge_alignments(results_file: str, count: int) -> str:
             )
     print("Grouping alignments... done.")
     return groups_file
-
 
 if __name__ == "__main__":
     import sys

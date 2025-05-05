@@ -174,6 +174,38 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
         value: str = value.strip()
         field_type = field_types.get(field, "TEXT").upper()
         query = ""
+
+        # --- Handle group_id specifically first ---
+        if field == "group_id":
+            try:
+                # Assume user provides a single integer ID to filter by
+                filter_gid = int(value)
+                if field_type == "INTEGER":
+                    query = f"{field} = %s"
+                    sql_values.append(filter_gid)
+                elif field_type == "ARRAY": # Covers INTEGER[]
+                    # Use array containment operator
+                    query = f"{field} @> ARRAY[%s]::integer[]"
+                    sql_values.append(filter_gid)
+                elif field_type == "JSONB":
+                    # Assumes JSONB stores an array of numbers
+                    # Use JSONB containment operator
+                    query = f"{field} @> %s::jsonb"
+                    # Pass the integer as a JSON array string containing that number
+                    sql_values.append(f'[{filter_gid}]')
+                else: # Fallback to integer equality for unknown types
+                    query = f"{field} = %s"
+                    sql_values.append(filter_gid)
+
+                if query: # Only append if a query was successfully constructed
+                    sql_fields.append(query)
+
+            except (ValueError, TypeError):
+                # Ignore if the provided group_id filter value is not an integer
+                continue # Skip to the next field
+            continue # Skip the rest of the loop for group_id
+
+        # --- Existing logic for other types ---
         if field_type == "TEXT":
             for not_query, or_query, regular_query, empty_query in BOOLEAN_ARGS.findall(value):
                 if not_query != "":
@@ -303,6 +335,8 @@ def get_favicon(db_path: str):
 def search_alignments(request: Request):
     """Search alignments according to URL params"""
     sql_fields, sql_values, other_args, column_names = parse_args(request)
+    field_types = get_pg_type(other_args.db_table)
+    group_id_type = field_types.get("group_id", "INTEGER")
     if other_args.direction == "next":
         if sql_fields:
             query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE {sql_fields} AND o.source_year_target_year=m.rowid and \
@@ -331,10 +365,14 @@ def search_alignments(request: Request):
         metadata["rowid_ordered"] = row["rowid_ordered"]
         try:
             metadata["group_id"] = row["group_id"]
-            group_ids.append(metadata["group_id"])
+            if group_id_type == "ARRAY":
+                group_ids.extend([int(gid) for gid in metadata["group_id"]])
+            else:
+                group_ids.append(metadata["group_id"])
         except KeyError:
             pass
         alignments.append(metadata)
+
     if other_args.direction == "previous":
         alignments.reverse()
         group_ids.reverse()
@@ -345,14 +383,24 @@ def search_alignments(request: Request):
         counts_per_group: dict[int, int] = {}
         for group_id in set(group_ids):
             cursor.execute(f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
-            source_doc_id = cursor.fetchone()[0]
-            cursor.execute(
-                f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s",
-                (group_id, source_doc_id),
-            )
+            try:
+                source_doc_id = cursor.fetchone()[0]
+            except:
+                return {"group_id": group_id, "error": "No source_doc_id found for this group_id"}
+            if group_id_type == "ARRAY":
+                count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
+                params = (group_id, source_doc_id)
+            else: # Assume INTEGER
+                count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s"
+                params = (group_id, source_doc_id)
+            cursor.execute(count_query, params)
             counts_per_group[group_id] = cursor.fetchone()[0]
         for alignment in alignments:
-            alignment["count"] = counts_per_group[alignment["group_id"]]
+            if group_id_type == "ARRAY":
+                group_ids = [int(gid) for gid in alignment["group_id"]]
+                alignment["count"] = sum(counts_per_group[gid] for gid in group_ids)
+            else:
+                alignment["count"] = counts_per_group[alignment["group_id"]]
     conn.rollback()
     conn.close()
 
@@ -589,6 +637,8 @@ def metadata(request: Request):
 def get_passage_group(request: Request, group_id: int):
     """Retrieve a passage group"""
     alignment_table = request.query_params["db_table"]
+    field_types = get_pg_type(alignment_table)
+    group_id_type = field_types.get("group_id", "INTEGER").upper()
     groups_table = f"{alignment_table}_groups"
     filtered_passages: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     original_passage: dict[str, Any] = {}
@@ -598,12 +648,24 @@ def get_passage_group(request: Request, group_id: int):
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Query groups_table
     cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
-    original_passage = {k: v for k, v in cursor.fetchone().items()}
-    cursor.execute(
-        f"SELECT * FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s",
-        (group_id, original_passage["source_doc_id"]),
-    )
+    original_passage_result = cursor.fetchone()
+    original_passage = {k: v for k, v in original_passage_result.items()}
+
+
+    # Query the main alignment_table using the correct operator based on its group_id type
+    if group_id_type == "ARRAY":
+        query = f"SELECT * FROM {alignment_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
+        params = (group_id, original_passage["source_doc_id"])
+    else: # Backward compatibility for INTEGER type
+        query = f"SELECT * FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s"
+        params = (group_id, original_passage["source_doc_id"])
+
+    cursor.execute(query, params)
+
+    # Process results from the alignment_table query
     for row in cursor:
         filtered_passages[row["target_filename"]].append(
             {
@@ -631,36 +693,74 @@ def get_passage_group(request: Request, group_id: int):
 def get_sorted_results(request: Request):
     """Sort results based on the number of passages within each group"""
     sql_fields, sql_values, other_args, _ = parse_args(request)
+    field_types = get_pg_type(other_args.db_table)
+    group_id_type = field_types.get("group_id", "INTEGER").upper()
+
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # Select group_id and source_doc_id, applying filters if any
     query = f"SELECT source_doc_id, group_id FROM {other_args.db_table}"
     if sql_fields:
         query += f" WHERE {sql_fields}"
     cursor.execute(query, sql_values)
-    group_ids: dict[int, int] = {row["group_id"]: row["source_doc_id"] for row in cursor}
+
+    # Store potential group IDs and their source docs
+    # Check type of retrieved value here
+    potential_groups: dict[int, str] = {} # group_id -> source_doc_id
+    for row in cursor:
+        gid_value = row["group_id"]
+        source_doc_id = row["source_doc_id"]
+        if isinstance(gid_value, int): # Check if it's an integer
+            if gid_value is not None:
+                 potential_groups[gid_value] = source_doc_id
+        elif isinstance(gid_value, list): # Check if it's a list (from ARRAY)
+             for single_gid in gid_value:
+                 if single_gid is not None:
+                     try:
+                         potential_groups[int(single_gid)] = source_doc_id
+                     except (ValueError, TypeError):
+                         continue
+        elif gid_value is None:
+             continue
+
     counts_per_group: dict[int, int] = {}
-    for group_id, source_doc_id in group_ids.items():
-        cursor.execute(f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
-        group_source_doc_id = cursor.fetchone()[0]
-        if group_source_doc_id != source_doc_id:
+    groups_table = f"{other_args.db_table}_groups"
+
+    for group_id in potential_groups:
+        # Verify against the _groups table for the canonical source_doc_id
+        cursor.execute(f"""SELECT source_doc_id FROM {groups_table} WHERE group_id=%s""", (group_id,))
+        group_source_result = cursor.fetchone()
+        if not group_source_result:
             continue
-        cursor.execute(
-            f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s",
-            (group_id, source_doc_id),
-        )
-        counts_per_group[group_id] = cursor.fetchone()[0]
+        group_source_doc_id = group_source_result[0]
+
+        # Count occurrences in the main table using the correct query type
+        if group_id_type == "ARRAY": # Check for ARRAY type
+            count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
+            params = (group_id, group_source_doc_id)
+        else: # Assume INTEGER if not ARRAY
+            count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s"
+            params = (group_id, group_source_doc_id)
+
+        cursor.execute(count_query, params)
+        count_result = cursor.fetchone()
+        if count_result:
+            counts_per_group[group_id] = count_result[0]
+
     results = {"total_count": len(counts_per_group), "groups": []}
-    sorted_group_ids = sorted(counts_per_group.items(), key=lambda x: x[1], reverse=True)[
-        :100
-    ]  # TODO: make this a parameter
+    sorted_group_ids = sorted(counts_per_group.items(), key=lambda x: x[1], reverse=True)[:100]
+
     for group_id, count in sorted_group_ids:
-        cursor.execute(f"""SELECT * FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
-        group = cursor.fetchone()
-        results["groups"].append({**group, "count": count})
+        cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
+        group_data = cursor.fetchone()
+        if group_data:
+            results["groups"].append({**group_data, "count": count})
+
     conn.rollback()
     conn.close()
     return results
