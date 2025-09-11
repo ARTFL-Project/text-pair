@@ -36,7 +36,7 @@
                     </div>
                 </div>
                 <!-- Reuse Classification -->
-                <div id="reuse-classification" class="mb-3">
+                <div id="reuse-classification" class="mb-3" v-if="globalConfig.reuseClassification.classes.length">
                     <div class="row">
                         <div class="col-12">
                             <h5 class="section-title text-center pb-2">Context of Reuse Classification</h5>

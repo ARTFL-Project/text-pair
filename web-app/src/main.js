@@ -8,7 +8,6 @@ import router from "./router";
 const app = createApp(App);
 app.config.globalProperties.$globalConfig = globalConfig;
 app.config.globalProperties.emitter = emitter;
-app.config.unwrapInjectedRef = true;
 app.provide("$http", axios);
 
 app.mixin({
