@@ -6,8 +6,16 @@ import os
 
 import psycopg2
 
-from . import (Ngrams, banality_auto_detect, create_web_app, get_config,
-               merge_alignments, parse_files, phrase_matcher, run_vsa)
+from . import (
+    Ngrams,
+    banality_auto_detect,
+    create_web_app,
+    get_config,
+    merge_alignments,
+    parse_files,
+    phrase_matcher,
+    run_vsa,
+)
 
 
 def delete_database(dbname: str) -> None:
@@ -262,7 +270,8 @@ def run_vsa_similarity(params) -> None:
         )
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the textpair CLI."""
     params = get_config()
     if params.delete is True:
         delete_database(params.dbname)
@@ -317,3 +326,7 @@ if __name__ == "__main__":
         run_alignment(params)
     elif params.matching_params["matching_algorithm"] == "vsa":
         run_vsa_similarity(params)
+
+
+if __name__ == "__main__":
+    main()

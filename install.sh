@@ -1,26 +1,47 @@
 #!/bin/bash
 
-# Default Python version
+# Default values
 PYTHON_VERSION="python3"
+USE_CUDA=false
 
 # Parse command line arguments
-while getopts "p:" opt; do
+while getopts "p:c" opt; do
   case $opt in
     p) PYTHON_VERSION="$OPTARG"
     ;;
-    *) echo "Usage: $0 [-p python_version]"
+    c) USE_CUDA=true
+    ;;
+    *) echo "Usage: $0 [-p python_version] [-c]"
+       echo "  -p: Specify Python version (default: python3)"
+       echo "  -c: Install with CUDA support (default: CPU only)"
        exit 1
     ;;
   esac
 done
 
 echo "Using Python version: $PYTHON_VERSION"
+if [ "$USE_CUDA" = true ]; then
+    echo "Installing with CUDA support"
+else
+    echo "Installing with CPU-only PyTorch"
+fi
 
-# Check if virtualenv is installed
-if ! command -v virtualenv &> /dev/null
-then
-    echo "virtualenv could not be found. Installing..."
-    pip install virtualenv
+# Check if uv is installed, install if not
+if ! command -v uv &> /dev/null; then
+    echo "uv could not be found. Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # Add uv to PATH for current session
+    export PATH="$HOME/.local/bin:$PATH"
+    # Verify installation
+    if ! command -v uv &> /dev/null; then
+        echo "ERROR: Failed to install uv. Please install uv manually and try again."
+        echo "Visit https://docs.astral.sh/uv/getting-started/installation/ for installation instructions."
+        exit 1
+    else
+        echo "uv installed successfully"
+    fi
+else
+    echo "uv is already installed"
 fi
 
 # Delete virtual environment if it already exists
@@ -34,10 +55,20 @@ fi
 sudo mkdir -p /var/lib/text-pair
 sudo chown -R $USER:$USER /var/lib/text-pair
 
-# Create the virtual environment
-virtualenv -p $PYTHON_VERSION /var/lib/text-pair/textpair_env
+# Create the virtual environment using uv
+echo "Creating virtual environment with uv..."
+uv venv -p $PYTHON_VERSION /var/lib/text-pair/textpair_env
 source /var/lib/text-pair/textpair_env/bin/activate
-pip3 install lib/.
+
+# Install textpair with appropriate PyTorch configuration
+if [ "$USE_CUDA" = true ]; then
+    echo "Installing textpair with CUDA support..."
+    uv pip install -e lib/.[cuda]
+else
+    echo "Installing textpair with CPU-only PyTorch..."
+    uv pip install -e lib/.[cpu]
+fi
+
 deactivate
 
 # Install the textpair script
@@ -93,7 +124,16 @@ else
     echo "/etc/text-pair/global_settings.ini already exists, not modifying..."
 fi
 
-echo -e "\n## IMPORTANT ##"
+echo -e "\n## INSTALLATION COMPLETE ##"
+echo "TextPAIR has been installed successfully using uv!"
+if [ "$USE_CUDA" = true ]; then
+    echo "- PyTorch was installed with CUDA support"
+else
+    echo "- PyTorch was installed with CPU-only support"
+    echo "- To install with CUDA support in the future, run: $0 -c"
+fi
+echo ""
+echo "## NEXT STEPS ##"
 echo "In order to start the TextPAIR web app, you need to configure and start up the web_server.sh script."
 echo "You can either:"
 echo "- Start it manually at /var/lib/text-pair/api_server/web_server.sh"

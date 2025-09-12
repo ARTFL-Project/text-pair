@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -25,8 +25,8 @@ RUN service postgresql start && sleep 5 && \
     perl -pi -e 's/^(local.*)peer$/$1 md5/;' /etc/postgresql/14/main/pg_hba.conf
 
 USER root
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 CMD ["/usr/local/bin/init_textpair_db"]
