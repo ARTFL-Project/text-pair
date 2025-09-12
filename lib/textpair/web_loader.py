@@ -103,6 +103,7 @@ class WebAppConfig:
         self.options["sourceLinkToDocMetadata"] = "source_title"
         self.options["targetLinkToDocMetadata"] = "target_title"
         self.options["banalitiesStored"] = store_banalities
+        self.options["reuseClassification"] = {"classes": []}
 
     def __call__(self) -> dict[str, Any]:
         return self.options
