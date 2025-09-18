@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import atexit
 import json
 import os
 import re
 import sqlite3
+import subprocess
+import sys
+import time
 from abc import ABC
 from collections import deque
 from html import unescape as unescape_html
@@ -13,10 +18,13 @@ from shutil import rmtree
 from typing import Any, Callable, Iterable, Optional
 from xml.sax.saxutils import unescape as unescape_xml
 
+import aiohttp
 import dill as pickle
+import faiss
 import lz4.frame
 import msgspec
 import numpy as np
+import requests
 import spacy
 import torch
 from msgspec import field
@@ -215,6 +223,100 @@ class Matches:
             for match in self.cursor:
                 yield DECODER.decode(match[0])
 
+class LLMDebugLogger:
+    """Self-contained debug logger for LLM reasoning and similarity tracking"""
+
+    def __init__(self, enabled: bool = False, output_path: str = "output"):
+        self.enabled = enabled
+        if self.enabled:
+            self.debug_dir = os.path.join(TEMP_DIR, output_path, "debug")
+            os.makedirs(self.debug_dir, exist_ok=True)
+            self.similarity_file = os.path.join(self.debug_dir, "similarity_debug.txt")
+            self.llm_file = os.path.join(self.debug_dir, "post_merge_llm_evaluations.txt")
+
+            # Initialize similarity debug file
+            with open(self.similarity_file, "w", encoding="utf-8") as f:
+                f.write("SIMILARITY DEBUGGING - BEFORE AND AFTER MERGING\n")
+                f.write("=" * 80 + "\n\n")
+
+    def log_initial_info(self, matches_count: int, vectorization: str, min_score: float):
+        """Log initial pipeline information"""
+        if not self.enabled:
+            return
+        with open(self.similarity_file, "a", encoding="utf-8") as f:
+            f.write(f"Initial matches count: {matches_count}\n")
+            f.write(f"Vectorization method: {vectorization}\n")
+            f.write(f"Min similarity threshold: {min_score}\n\n")
+
+    def log_similarity_computation(self, iteration: int, group_idx: int, merged_group: 'MergedGroup',
+                                 before_similarity: float, after_similarity: float,
+                                 source_text: str, target_text: str):
+        """Log detailed similarity computation"""
+        if not self.enabled:
+            return
+        with open(self.similarity_file, "a", encoding="utf-8") as f:
+            f.write(f"ITERATION {iteration} - GROUP {group_idx + 1}\n")
+            f.write("-" * 60 + "\n")
+            f.write(f"BEFORE MERGING SIMILARITY: {before_similarity:.6f}\n")
+            f.write(f"AFTER MERGING SIMILARITY: {after_similarity:.6f}\n")
+            f.write(f"CHANGE: {after_similarity - before_similarity:.6f}\n")
+            f.write(f"SOURCE FILE: {merged_group.source.filename}\n")
+            f.write(f"SOURCE BYTES: {merged_group.source.start_byte}-{merged_group.source.end_byte}\n")
+            f.write(f"TARGET FILE: {merged_group.target.filename}\n")
+            f.write(f"TARGET BYTES: {merged_group.target.start_byte}-{merged_group.target.end_byte}\n")
+            f.write(f"SOURCE LENGTH: {len(source_text)} chars\n")
+            f.write(f"TARGET LENGTH: {len(target_text)} chars\n")
+            f.write("-" * 30 + " SOURCE TEXT " + "-" * 30 + "\n")
+            f.write(f"{source_text[:500]}{'...' if len(source_text) > 500 else ''}\n")
+            f.write("-" * 30 + " TARGET TEXT " + "-" * 30 + "\n")
+            f.write(f"{target_text[:500]}{'...' if len(target_text) > 500 else ''}\n")
+            f.write("=" * 80 + "\n\n")
+
+    def log_llm_evaluation(self, match_idx: int, computed_similarity: float,
+                          llm_similarity: float, llm_reasoning: str,
+                          merged_group: 'MergedGroup', source_text: str, target_text: str):
+        """Log LLM evaluation results"""
+        if not self.enabled:
+            return
+        with open(self.llm_file, "a", encoding="utf-8") as f:
+            f.write(f"MATCH #{match_idx+1}\n")
+            f.write(f"COMPUTED SIMILARITY: {computed_similarity:.6f} → LLM SIMILARITY: {llm_similarity:.6f}\n")
+            f.write(f"LLM REASONING: {llm_reasoning}\n")
+            f.write(f"SOURCE FILE: {merged_group.source.filename}\n")
+            f.write(f"SOURCE BYTES: {merged_group.source.start_byte}-{merged_group.source.end_byte}\n")
+            f.write(f"TARGET FILE: {merged_group.target.filename}\n")
+            f.write(f"TARGET BYTES: {merged_group.target.start_byte}-{merged_group.target.end_byte}\n")
+            f.write("-" * 40 + " SOURCE TEXT " + "-" * 40 + "\n")
+            f.write(f"{source_text[:500]}{'...' if len(source_text) > 500 else ''}\n")
+            f.write("-" * 40 + " TARGET TEXT " + "-" * 40 + "\n")
+            f.write(f"{target_text[:500]}{'...' if len(target_text) > 500 else ''}\n")
+            f.write("=" * 80 + "\n\n")
+
+    def log_llm_error(self, error_msg: str):
+        """Log LLM evaluation errors"""
+        if not self.enabled:
+            return
+        with open(self.llm_file, "a", encoding="utf-8") as f:
+            f.write(f"BATCH LLM EVALUATION FAILED\n")
+            f.write(f"ERROR: {error_msg}\n")
+            f.write(f"KEEPING ALL COMPUTED SIMILARITIES\n")
+            f.write("=" * 80 + "\n\n")
+
+    def log_final_summary(self, merged_matches: list, similarities: list):
+        """Log final statistics summary"""
+        if not self.enabled:
+            return
+        with open(self.similarity_file, "a", encoding="utf-8") as f:
+            f.write("\nFINAL SUMMARY:\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"Total merged passages: {len(merged_matches)}\n")
+            if similarities:
+                f.write(f"Mean similarity: {np.mean(similarities):.6f}\n")
+                f.write(f"Median similarity: {np.median(similarities):.6f}\n")
+                f.write(f"Min similarity: {min(similarities):.6f}\n")
+                f.write(f"Max similarity: {max(similarities):.6f}\n")
+                f.write(f"Std deviation: {np.std(similarities):.6f}\n")
+
 
 class Corpus(ABC):
     """A Corpus of passages as preprocessed by the text-preprocessor"""
@@ -263,9 +365,9 @@ class Corpus(ABC):
         chunks_done = 0
         docs = {}
         current_chunk_group_length = 0
+        print(f"Processing {self.direction} texts... ", end="", flush=True)
         for text in self.texts:
             docs[text.metadata["philo_id"]] = " ".join([t.text for t in text])
-            print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
             text.metadata["parsed_filename"] = os.path.join(
                 self.output_dir,
                 self.direction,
@@ -288,6 +390,7 @@ class Corpus(ABC):
                     text_chunk = self.__build_text_chunk(chunk_group)
                     if text_chunk:  # make sure this chunk is not empty
                         chunks_done += 1
+                        print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
                         yield text_chunk
                 chunk_group.clear()
             current_text_level_id = text_level_id
@@ -295,6 +398,7 @@ class Corpus(ABC):
             text_length = len(text)
             if current_chunk_group_length + text_length > self.max_tokens and current_chunk_group_length:
                 chunks_done += 1
+                print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
                 yield self.__build_text_chunk(chunk_group)
             if text_length < self.min_text_obj_length:
                 try:
@@ -307,6 +411,7 @@ class Corpus(ABC):
                 current_chunk_group_length = sum([len(t) for t in chunk_group])
                 if current_chunk_group_length >= min_chunk_length:
                     chunks_done += 1
+                    print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
                     yield self.__build_text_chunk(chunk_group)
             current_doc_id = doc_id
         full_doc.save(full_doc.metadata["parsed_filename"])
@@ -555,11 +660,16 @@ class TransformerCorpus(Corpus):
         direction="source",
     ):
         def sim_function(x, y):
+            # Handle BFloat16 conversion issues
+            if hasattr(x, 'dtype') and x.dtype == torch.bfloat16:
+                x = x.to(torch.float32)
+            if hasattr(y, 'dtype') and y.dtype == torch.bfloat16:
+                y = y.to(torch.float32)
+
             sim = util.cos_sim(x, y).cpu()
-            if sim.dtype != torch.bfloat16:
-                sim = sim.numpy()
-            else:
-                sim = np.array(sim.to(torch.float16))
+            if sim.dtype == torch.bfloat16:
+                sim = sim.to(torch.float32)
+            sim = sim.numpy()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return sim
@@ -576,7 +686,7 @@ class TransformerCorpus(Corpus):
         )
 
         if model is None:
-            self.model = SentenceTransformer(model_name, trust_remote_code=True)
+            self.model = SentenceTransformer(model_name, trust_remote_code=False)
         else:
             self.model = model
 
@@ -606,6 +716,95 @@ class TransformerCorpus(Corpus):
         """Create document embedding"""
         tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)
         return tensor  # type: ignore
+
+    def vectordb_compare(self, target_corpus, min_similarity: float) -> Matches:
+        """Compare using FAISS vector database for efficient similarity search"""
+        print(f"Building FAISS index for {target_corpus.length} target embeddings...", flush=True)
+
+        # Get all target embeddings as a batch (2D tensor)
+        target_embeddings_tensor = target_corpus.docs[0:target_corpus.length]
+
+        # Handle tensor conversion
+        if hasattr(target_embeddings_tensor, 'cpu'):  # PyTorch tensor
+            target_embeddings = target_embeddings_tensor.cpu().numpy()
+        else:  # Already numpy array
+            target_embeddings = np.array(target_embeddings_tensor, dtype=np.float32)
+
+        # Normalize for cosine similarity (each row is an embedding)
+        norms = np.linalg.norm(target_embeddings, axis=1, keepdims=True)
+        target_embeddings = target_embeddings / norms
+
+        # Create FAISS index for cosine similarity
+        dimension = target_embeddings.shape[1]
+        index = faiss.IndexFlatIP(dimension)  # Inner Product for normalized vectors = cosine similarity
+        index.add(target_embeddings)
+
+        print(f"Searching for matches above {min_similarity} similarity...", flush=True)
+
+        # Get all source embeddings as a batch (2D tensor)
+        source_embeddings_tensor = self.docs[0:self.length]
+
+        # Handle tensor conversion
+        if hasattr(source_embeddings_tensor, 'cpu'):  # PyTorch tensor
+            source_embeddings = source_embeddings_tensor.cpu().numpy()
+        else:  # Already numpy array
+            source_embeddings = np.array(source_embeddings_tensor, dtype=np.float32)
+
+        # Normalize for cosine similarity (each row is an embedding)
+        norms = np.linalg.norm(source_embeddings, axis=1, keepdims=True)
+        source_embeddings = source_embeddings / norms
+
+        # Search for matches above threshold
+        def process_vectordb_matches():
+            """Generator that yields matches from FAISS search results"""
+            similarities, target_indices = index.search(source_embeddings, target_corpus.length)
+
+            # Check if this is inner comparison (corpus comparing to itself)
+            is_inner_compare = target_corpus is self
+
+            with tqdm(total=self.length, desc="Processing matches") as pbar:
+                for source_idx in range(self.length):
+                    for i in range(len(similarities[source_idx])):
+                        similarity = float(similarities[source_idx][i])
+                        if similarity >= min_similarity:
+                            target_idx = int(target_indices[source_idx][i])
+
+                            if is_inner_compare:
+                                # Skip self-matches
+                                if source_idx == target_idx:
+                                    continue
+                                # Respect chronological order constraint
+                                if self.metadata[source_idx]["year"] > self.metadata[target_idx]["year"]:
+                                    continue
+
+                            # Yield match using metadata
+                            yield MergedGroup(
+                                PassageGroup(
+                                    self.metadata[source_idx]["start_byte"],
+                                    self.metadata[source_idx]["end_byte"],
+                                    self.metadata[source_idx]["filename"],
+                                    self.metadata[source_idx],
+                                ),
+                                PassageGroup(
+                                    target_corpus.metadata[target_idx]["start_byte"],
+                                    target_corpus.metadata[target_idx]["end_byte"],
+                                    target_corpus.metadata[target_idx]["filename"],
+                                    target_corpus.metadata[target_idx],
+                                ),
+                                similarity
+                            )
+
+                    pbar.update(1)
+
+        return Matches(process_vectordb_matches())
+
+    def inner_compare(self, min_similarity: float) -> Matches:
+        """Compare corpus with itself using vector database"""
+        return self.vectordb_compare(self, min_similarity)
+
+    def outer_compare(self, target_corpus, min_similarity: float) -> Matches:
+        """Compare corpus with another corpus using vector database"""
+        return self.vectordb_compare(target_corpus, min_similarity)
 
 
 def clean_text(text: str) -> str:
@@ -642,7 +841,7 @@ def jaccard_sim(X, Y):
     y_sum = Y.sum(axis=1).A1
     xx, yy = np.meshgrid(x_sum, y_sum)
     union = (xx + yy).T - intersect
-    return (intersect / union).A
+    return (intersect / union).toarray()
 
 
 def get_passage(doc: Tokens, start_byte: int, end_byte: int) -> list[Token]:
@@ -656,17 +855,381 @@ def get_passage(doc: Tokens, start_byte: int, end_byte: int) -> list[Token]:
     return tokens
 
 
+class AsyncLLMEvaluator:
+    """Async LLM-based similarity evaluator using llama-server via HTTP"""
+
+    def __init__(self, model_path: str, port: int = 8080):
+        self.model_path = model_path
+        self.port = port
+        self.base_url = f"http://127.0.0.1:{port}"
+        self.server_process = None
+
+    def start_server(self):
+        """Start the llama-server process"""
+        # Use the textpair_llama_server command
+        cmd = ["textpair_llama_server", self.model_path, str(self.port)]
+        self.server_process = subprocess.Popen(cmd)
+
+        # Wait for server to be ready
+        self._wait_for_server()
+        atexit.register(self.stop_server)
+
+    def _wait_for_server(self):
+        """Wait for server to be ready"""
+        max_retries = 30
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(f"{self.base_url}/health", timeout=2)
+                if response.status_code == 200:
+                    return
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(1)
+
+        raise RuntimeError("Failed to start llama-server")
+
+    def stop_server(self):
+        """Stop the llama-server process"""
+        if self.server_process:
+            self.server_process.terminate()
+            try:
+                self.server_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.server_process.kill()
+            self.server_process = None
+
+    async def evaluate_similarity(self, source_text: str, target_text: str) -> tuple[float, str]:
+        """
+        Evaluate passage similarity using LLM via HTTP
+        Returns: (similarity_score, reasoning)
+        """
+        try:
+
+            # Create evaluation prompt
+            prompt = self._create_evaluation_prompt(source_text, target_text)
+
+            # Prepare request payload
+            payload = {
+                "prompt": prompt,
+                "max_tokens": 100,
+                "temperature": 0.3,
+                "top_p": 0.9,
+                "stop": []
+            }
+
+            # Make async HTTP request
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/v1/completions",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    if response.status != 200:
+                        raise Exception(f"HTTP {response.status}: {await response.text()}")
+
+                    result = await response.json()
+
+            # Extract response text
+            response_text = ""
+            if 'choices' in result and len(result['choices']) > 0:
+                choice = result['choices'][0]
+                response_text = choice.get('text', '')
+
+            response_text = str(response_text).strip()
+            score, reasoning = self._parse_llm_response(response_text)
+
+            return score, reasoning
+
+        except Exception as e:
+            error_msg = f"Async LLM evaluation failed: {str(e)[:100]}..."
+            return 0.0, f"Error: {error_msg}"
+
+    async def evaluate_batch(self, passage_pairs: list[tuple[str, str]], batch_size: int = 8) -> list[tuple[float, str]]:
+        """
+        Evaluate multiple passage pairs concurrently
+        Returns: List of (similarity_score, reasoning) tuples
+        """
+        import aiohttp
+
+        async def evaluate_single(session, source_text, target_text):
+            try:
+                # Create evaluation prompt
+                prompt = self._create_evaluation_prompt(source_text, target_text)
+
+                # Prepare request payload
+                payload = {
+                    "prompt": prompt,
+                    "max_tokens": 100,
+                    "temperature": 0.3,
+                    "top_p": 0.9,
+                    "stop": []
+                }
+
+                # Make async HTTP request
+                async with session.post(
+                    f"{self.base_url}/v1/completions",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    if response.status != 200:
+                        raise Exception(f"HTTP {response.status}")
+
+                    result = await response.json()
+
+                # Extract response text
+                response_text = ""
+                if 'choices' in result and len(result['choices']) > 0:
+                    choice = result['choices'][0]
+                    response_text = choice.get('text', '')
+
+                response_text = str(response_text).strip()
+                return self._parse_llm_response(response_text)
+
+            except Exception as e:
+                return 0.0, f"Error: {str(e)[:100]}..."
+
+        # Process in batches to avoid overwhelming the server
+        results = []
+        total_pairs = len(passage_pairs)
+
+        with tqdm(total=total_pairs, desc="LLM Evaluation", unit="pairs", leave=False) as pbar:
+            for i in range(0, len(passage_pairs), batch_size):
+                batch = passage_pairs[i:i + batch_size]
+
+                async with aiohttp.ClientSession() as session:
+                    tasks = [
+                        evaluate_single(session, source, target)
+                        for source, target in batch
+                    ]
+                    batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    # Handle any exceptions and update progress
+                    for j, result in enumerate(batch_results):
+                        if isinstance(result, Exception):
+                            results.append((0.0, f"Error: {str(result)[:100]}..."))
+                        else:
+                            results.append(result)
+
+                        # Update progress bar
+                        pbar.update(1)
+
+        return results
+
+    def _create_evaluation_prompt(self, source_text: str, target_text: str) -> str:
+        """Create evaluation prompt for the LLM"""
+        # Truncate texts if too long
+        max_text_length = 400  # Shorter to ensure model can respond
+        if len(source_text) > max_text_length:
+            source_text = source_text[:max_text_length] + "..."
+        if len(target_text) > max_text_length:
+            target_text = target_text[:max_text_length] + "..."
+
+        prompt = f"""<bos><start_of_turn>user
+Compare these two text passages and rate their semantic similarity from 0.0 to 1.0:
+
+Passage 1: {source_text}
+
+Passage 2: {target_text}
+
+Use this scoring guide:
+• 0.0-0.3: Completely different topics or themes
+• 0.3-0.5: Related domain but different focus (e.g., both about history but different eras)
+• 0.5-0.7: Similar theme or subject matter (e.g., both discuss the same historical event)
+• 0.7-0.85: Similar ideas or concepts discussed (e.g., same event with similar analysis)
+• 0.85-0.95: Very similar content and perspective (e.g., similar arguments or conclusions)
+• 0.95-1.0: Nearly identical meaning or exact same point of view
+
+Provide your answer as:
+Score: X.X
+Reasoning: brief explanation of which similarity level applies
+<end_of_turn>
+<start_of_turn>model
+"""
+
+        return prompt
+
+    def _parse_llm_response(self, response: str) -> tuple[float, str]:
+        """Parse LLM response to extract score and reasoning"""
+        try:
+            import re
+
+            # Try multiple score patterns
+            score_patterns = [
+                r'Score:\s*([0-9]*\.?[0-9]+)',  # "Score: 0.8"
+                r'score:\s*([0-9]*\.?[0-9]+)',  # "score: 0.8" (lowercase)
+                r'([0-9]*\.?[0-9]+)',  # Just a number anywhere
+            ]
+
+            score = 0.0
+            for pattern in score_patterns:
+                score_match = re.search(pattern, response, re.IGNORECASE)
+                if score_match:
+                    score = float(score_match.group(1))
+                    score = max(0.0, min(1.0, score))  # Clamp to valid range
+                    break
+
+            # Try multiple reasoning patterns
+            reasoning_patterns = [
+                r'Reasoning:\s*(.+)',  # "Reasoning: explanation"
+                r'reasoning:\s*(.+)',  # "reasoning: explanation" (lowercase)
+                r'because\s*(.+)',     # "because explanation"
+                r'since\s*(.+)',       # "since explanation"
+            ]
+
+            reasoning = "No reasoning provided"
+            for pattern in reasoning_patterns:
+                reasoning_match = re.search(pattern, response, re.IGNORECASE | re.DOTALL)
+                if reasoning_match:
+                    reasoning = reasoning_match.group(1).strip()
+                    reasoning = reasoning
+                    break
+
+            # If no specific reasoning found, use the whole response as reasoning
+            if reasoning == "No reasoning provided" and response.strip():
+                reasoning = response.strip()
+
+            return score, reasoning
+
+        except Exception as e:
+            return 0.0, f"Failed to parse LLM response: {str(e)}"
+
+
+async def evaluate_passages_with_llm(
+    merged_matches: list[MergedGroup],
+    min_score: float,
+    llm_model_path: str,
+    debug_llm: bool = False,
+    output_path: str = "output",
+) -> list[MergedGroup]:
+    """Evaluate merged passages using LLM and filter by threshold."""
+
+    # Initialize LLM evaluator
+    llm_evaluator = AsyncLLMEvaluator(llm_model_path)
+    llm_evaluator.start_server()
+
+    # Initialize debug logger (controlled by debug_llm parameter)
+    debug_logger = LLMDebugLogger(enabled=debug_llm, output_path=output_path)
+
+    print("Evaluating matched passages with LLM...", flush=True)
+
+    # Initialize LLM evaluation debug file if debugging is enabled
+    if debug_logger.enabled:
+        with open(debug_logger.llm_file, "w", encoding="utf-8") as debug_file:
+            debug_file.write("LLM EVALUATION DEBUG LOG\n")
+            debug_file.write("=" * 50 + "\n\n")
+
+    try:
+        # Prepare passage pairs for batch evaluation
+        passage_pairs = []
+        computed_similarities = []
+
+        for merged_group in merged_matches:
+            source_text = get_text(
+                merged_group.source.start_byte,
+                merged_group.source.end_byte,
+                merged_group.source.filename
+            )
+            target_text = get_text(
+                merged_group.target.start_byte,
+                merged_group.target.end_byte,
+                merged_group.target.filename
+            )
+            passage_pairs.append((source_text, target_text))
+            computed_similarities.append(merged_group.similarity)
+
+        # Perform batch async evaluation
+        llm_results = await llm_evaluator.evaluate_batch(passage_pairs, batch_size=8)
+
+        # Update similarities and filter by threshold
+        for i, (merged_group, (llm_similarity, llm_reasoning)) in enumerate(zip(merged_matches, llm_results)):
+            computed_similarity = computed_similarities[i]
+
+            # Update the similarity score with LLM evaluation
+            merged_group.similarity = llm_similarity
+
+            # Debug: Log the LLM evaluation
+            debug_logger.log_llm_evaluation(
+                i, computed_similarity, llm_similarity, llm_reasoning,
+                merged_group, passage_pairs[i][0], passage_pairs[i][1]
+            )
+
+        # Filter out passages below threshold
+        original_count = len(merged_matches)
+        filtered_matches = [match for match in merged_matches if match.similarity >= min_score]
+
+        print(f"Completed LLM evaluation. Kept {len(filtered_matches)}/{original_count} passages above {min_score} threshold.", flush=True)
+
+        return filtered_matches
+
+    except Exception as llm_error:
+        print(f"Batch LLM evaluation failed: {str(llm_error)[:100]}...")
+        # Keep the original similarities as fallback
+        debug_logger.log_llm_error(str(llm_error))
+        return merged_matches
+
+    finally:
+        # Stop the LLM server
+        llm_evaluator.stop_server()
+
+
 def merge_passages(
     matches: Matches,
     min_score: float,
+    vectorization: str,
+    model: Optional[SentenceTransformer] = None,
+    debug_llm: bool = False,
+    output_path: str = "output",
 ) -> list[MergedGroup]:
-    """Merge all passages into bigger passages. Similarity is computed as the mean similarity of all passages in the group."""
-    # TODO: should merging be done using Jaccard sim metric: to avoid sparsity
+    """Merge all passages into bigger passages. Similarity is recomputed for merged text content."""
     last_count = len(matches)
     current_count = last_count + 1
     iteration = 1
     merged_matches: list[MergedGroup] = Matches.load().matches  # type:ignore
+
     print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
+
+    def compute_merged_similarity(merged_group: MergedGroup) -> float:
+        """Compute similarity for merged passages by encoding the actual text content"""
+        if model is None:
+            # Fallback to min_score if no model provided
+            return min_score
+
+        try:
+            # Get the actual text content for both merged passages
+            source_text = get_text(
+                merged_group.source.start_byte,
+                merged_group.source.end_byte,
+                merged_group.source.filename
+            )
+            target_text = get_text(
+                merged_group.target.start_byte,
+                merged_group.target.end_byte,
+                merged_group.target.filename
+            )
+
+            # Compute the baseline similarity using embeddings (no LLM evaluation here)
+            computed_similarity = min_score
+            if vectorization == "transformer" or vectorization == "transformer_vectordb":
+                source_embedding = model.encode([source_text], convert_to_tensor=True)
+                target_embedding = model.encode([target_text], convert_to_tensor=True)
+                computed_similarity = util.cos_sim(source_embedding, target_embedding).cpu().numpy()[0][0]
+            elif vectorization == "word2vec":
+                source_doc = model.model(source_text)
+                source_vector = (source_doc.vector / source_doc.vector_norm).reshape(1, -1)
+                target_doc = model.model(" ".join(target_text.split()))
+                target_vector = (target_doc.vector / target_doc.vector_norm).reshape(1, -1)
+                computed_similarity = linear_kernel(source_vector, target_vector, dense_output=False).toarray()[0][0]
+            elif vectorization == "tfidf":
+                source_vector = model.vectorizer.transform([source_text])
+                target_vector = model.vectorizer.transform([target_text])
+                computed_similarity = linear_kernel(source_vector, target_vector, dense_output=False).toarray()[0][0]
+
+
+            return float(computed_similarity)
+        except Exception as e:
+            # Fallback to min_score if computation fails
+            return min_score
+
     while last_count / current_count <= 1.0:  # we stop iterating if there are minimal change between iterations
         last_count = current_count
         merged_matches = sorted(
@@ -682,7 +1245,7 @@ def merge_passages(
         )  # sort by smaller start byte and bigger end_byte
         merged_group: MergedGroup = MergedGroup()
         saved_groups: list[MergedGroup] = []
-        total_matches: int = len(matches)
+        total_matches: int = len(matches)  # Use original matches count like the working version
         start_score: float = min_score
         merged_pairs: list[float] = []
 
@@ -697,7 +1260,8 @@ def merge_passages(
                 match.source.filename != merged_group.source.filename
                 or match.target.filename != merged_group.target.filename
             ):
-                merged_group.similarity = sum(merged_pairs) / len(merged_pairs)
+                # Recompute similarity for the merged group
+                merged_group.similarity = compute_merged_similarity(merged_group)
                 saved_groups.append(merged_group)
                 merged_pairs = [match.similarity]
                 merged_group = MergedGroup(match.source, match.target, start_score)
@@ -719,12 +1283,14 @@ def merge_passages(
             if any((merged_source, merged_target)):
                 merged_pairs.append(match.similarity)
             if merged_source is False and merged_target is False:
-                merged_group.similarity = sum(merged_pairs) / len(merged_pairs)
+                # Recompute similarity for the current merged group
+                merged_group.similarity = compute_merged_similarity(merged_group)
                 saved_groups.append(merged_group)
                 merged_pairs = [match.similarity]
                 merged_group = MergedGroup(match.source, match.target, match.similarity)
             if pos + 1 == total_matches:
-                merged_group.similarity = sum(merged_pairs) / len(merged_pairs)
+                # Recompute similarity for the final merged group
+                merged_group.similarity = compute_merged_similarity(merged_group)
                 saved_groups.append(merged_group)
         merged_matches = saved_groups
         iteration += 1
@@ -837,12 +1403,12 @@ def transformer_similarity(
     output_path: str,
     target_texts: Optional[Iterable[Tokens]] = None,
     target_batch: int = 1,
-) -> tuple[Matches, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[Matches, list[dict[str, Any]], list[dict[str, Any]], Optional[SentenceTransformer]]:
     """Cosine similarity of sentence embeddings from transformer models"""
     source_corpus: TransformerCorpus = TransformerCorpus(
         source_texts,
         output_path,
-        source_config["model_name"],
+        source_config["embedding_model"],
         source_batch,
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
@@ -852,7 +1418,7 @@ def transformer_similarity(
         target_corpus: TransformerCorpus = TransformerCorpus(
             target_texts,
             output_path,
-            source_config["model_name"],
+            source_config["embedding_model"],
             target_batch,
             direction="target",
             min_text_obj_length=target_config["min_text_object_length"],
@@ -864,8 +1430,7 @@ def transformer_similarity(
     else:
         matching_docs = source_corpus.inner_compare(min_similarity)
         target_corpus = source_corpus
-    return matching_docs, source_corpus.metadata, target_corpus.metadata
-
+    return matching_docs, source_corpus.metadata, target_corpus.metadata, source_corpus.model
 
 def word2vec_embed_similarity(
     source_texts: Iterable[Tokens],
@@ -881,7 +1446,7 @@ def word2vec_embed_similarity(
     source_corpus: Word2VecEmbeddingCorpus = Word2VecEmbeddingCorpus(
         source_texts,
         output_path,
-        source_config["model_name"],
+        source_config["embedding_model"],
         source_batch,
         min_text_obj_length=source_config["min_text_object_length"],
         n_chunk=source_config["n_chunk"],
@@ -905,7 +1470,14 @@ def word2vec_embed_similarity(
     return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
 
 
-def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, Any], output_path: str):
+async def run_vsa(
+    source_path: str,
+    target_path: str,
+    workers: int,
+    config: dict[str, Any],
+    output_path: str,
+    debug_llm: bool = True
+):
     """Main function"""
     config["source"]["strip_tags"] = True  # this is useful for post-processing passages where we have tags included.
     config["target"]["strip_tags"] = True
@@ -915,7 +1487,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
         config["source"]["strip_punctuation"] = False
         config["target"]["strip_punctuation"] = False
     source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
-    target_preproc = PreProcessor(is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, using_gpu=source_preproc.using_gpu, **config["target"])
+    target_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["target"])
     source_texts: Iterable[Tokens] = source_preproc.process_texts(
         (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
     )
@@ -932,8 +1504,20 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             output_path,
             target_texts=target_texts,
         )
+        model = None
     elif config["source"]["vectorization"] == "transformer":
-        matches, source_metadata, target_metadata = transformer_similarity(
+        matches, source_metadata, target_metadata, model = transformer_similarity(
+            source_texts,
+            config["source"],
+            config["target"],
+            config["min_similarity"],
+            config["source_batch"],
+            output_path,
+            target_texts=target_texts,
+            target_batch=config["target_batch"],
+        )
+    elif config["source"]["vectorization"] == "transformer_vectordb":
+        matches, source_metadata, target_metadata, model = transformer_vectordb_similarity(
             source_texts,
             config["source"],
             config["target"],
@@ -954,15 +1538,31 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
             target_texts=target_texts,
             target_batch=config["target_batch"],
         )
+        model = None
     if len(matches) == 0:
         print("No matches found. Exiting...")
         exit()
     print(f"{len(matches)} matches found.")
 
+    # First merge passages (now synchronous)
     matches = merge_passages(
         matches,
         config["min_similarity"],
+        config["source"]["vectorization"],
+        model,
+        config["source"]["llm_debug"],  # Debug LLM reasoning
+        output_path,  # Output path for debug files
     )
+
+    # Then evaluate with LLM if model path is provided
+    if config["source"]["llm_model"]:
+        matches = await evaluate_passages_with_llm(
+            matches,
+            config["min_similarity"],
+            config["source"]["llm_model"],
+            config["source"]["llm_debug"],
+            output_path,
+        )
 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
@@ -970,7 +1570,7 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
     if source_preproc is None:
         source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
         target_preproc = PreProcessor(
-            is_philo_db=True, workers=workers, nlp_model=source_preproc.nlp, **config["target"]
+            is_philo_db=True, workers=workers, **config["target"]
         )
 
     with lz4.frame.open(f"{output_path}/results/alignments.jsonl.lz4", mode="wb", compression_level=3) as output:
@@ -990,15 +1590,9 @@ def run_vsa(source_path: str, target_path: str, workers: int, config: dict[str, 
                 match.target.end_byte, match.target.end_byte + 300, match.target.metadata["filename"]
             )
             if config["source"]["vectorization"] == "tfidf":
-                source_preproc.normalize_options = {
-                    **source_preproc.normalize_options,
-                    "strip_tags": False,
-                }
+                source_preproc.strip_tags = False
                 source_preproc.pos_to_keep = []
-                target_preproc.normalize_options = {
-                    **target_preproc.normalize_options,
-                    "strip_tags": False,
-                }
+                target_preproc.strip_tags = False
                 target_preproc.pos_to_keep = []
                 source_passage_with_matches, target_passage_with_matches = post_process_passages(
                     match.source,

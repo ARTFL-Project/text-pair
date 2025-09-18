@@ -77,7 +77,7 @@ class TextPairConfig:
             if not value:
                 continue
             match key:
-                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer":
+                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer" | "llm_debug":
                     if value.lower() == "yes" or value.lower() == "true":
                         value = True
                     else:
@@ -104,6 +104,9 @@ class TextPairConfig:
                         self.preprocessing_params["target"]["language"] = self.preprocessing_params["source"][
                             "language"
                         ]
+                case "spacy_model":
+                    self.preprocessing_params["source"]["language_model"] = value
+                    self.preprocessing_params["target"]["language_model"] = value
                 case _:
                     self.preprocessing_params["source"][key] = value
                     self.preprocessing_params["target"][key] = value

@@ -1,0 +1,159 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "textpair"
+version = "2.2"
+description = "TextPAIR (Pairwise Alignment for Intertextual Relations) - A scalable and high-performance sequence aligner for humanities text analysis designed to identify similar passages in large collections of texts"
+readme = "README.md"
+license = {text = "GPL-3.0-or-later"}
+authors = [
+    {name = "The ARTFL Project", email = "clovisgladstone@gmail.com"}
+]
+maintainers = [
+    {name = "The ARTFL Project", email = "clovisgladstone@gmail.com"}
+]
+keywords = [
+    "text-analysis",
+    "digital-humanities",
+    "intertextuality",
+    "sequence-alignment",
+    "plagiarism-detection",
+    "text-reuse"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Text Processing :: Linguistic",
+    "Topic :: Digital Humanities"
+]
+requires-python = ">=3.11"
+dependencies = [
+    "multiprocess",
+    "mmh3",
+    "unidecode",
+    "tqdm",
+    "cython",
+    "pystemmer",
+    "lxml",
+    "namedlist",
+    "sentence-transformers~=5.1",
+    "lz4",
+    "orjson",
+    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.1.1.2#egg=text_preprocessing",
+    "fastapi==0.110.3",
+    "psycopg2",
+    "gunicorn",
+    "uvicorn",
+    "uvloop",
+    "httptools",
+    "philologic~=5.1",
+    "regex",
+    "ahocorasick-rs",
+    "msgspec",
+    "faiss-cpu",
+    "aiohttp~=3.12",
+    "spacy-transformers"
+]
+
+[project.urls]
+Homepage = "https://github.com/ARTFL-Project/text-pair"
+Repository = "https://github.com/ARTFL-Project/text-pair"
+Documentation = "https://github.com/ARTFL-Project/text-pair#readme"
+"Bug Tracker" = "https://github.com/ARTFL-Project/text-pair/issues"
+
+[project.scripts]
+textpair = "textpair.__main__:main"
+textpair_llama_server = "textpair.llama_server_manager:main"
+
+[project.optional-dependencies]
+cpu = [
+    "torch>=2.6.0",
+    "torchvision>=0.22.0",
+]
+cuda = [
+    "torch>=2.6.0",
+    "torchvision>=0.22.0",
+    "cupy-cuda12x>=13.0.0,<14.0.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["textpair*"]
+exclude = ["tests*"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+source = ["textpair"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ .__main__.:"
+]
+
+# UV-specific configuration for PyTorch indexes
+[tool.uv]
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cuda" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "cuda" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

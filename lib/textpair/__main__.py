@@ -212,7 +212,7 @@ def run_alignment(params):
 
 
 
-def run_vsa_similarity(params) -> None:
+async def run_vsa_similarity(params) -> None:
     """Run vsa similarity"""
     if params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
@@ -243,7 +243,7 @@ def run_vsa_similarity(params) -> None:
             params.debug,
         )
     print("\n### Starting vector space alignment ###")
-    run_vsa(
+    await run_vsa(
         params.paths["source"]["input_files_for_ngrams"],
         params.paths["target"]["input_files_for_ngrams"],
         params.workers,
@@ -270,7 +270,7 @@ def run_vsa_similarity(params) -> None:
         )
 
 
-def main():
+async def main():
     """Main entry point for the textpair CLI."""
     params = get_config()
     if params.delete is True:
@@ -325,8 +325,9 @@ def main():
     elif params.matching_params["matching_algorithm"] == "sa":
         run_alignment(params)
     elif params.matching_params["matching_algorithm"] == "vsa":
-        run_vsa_similarity(params)
+        await run_vsa_similarity(params)
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
