@@ -77,7 +77,7 @@ class TextPairConfig:
             if not value:
                 continue
             match key:
-                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer" | "llm_debug":
+                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer":
                     if value.lower() == "yes" or value.lower() == "true":
                         value = True
                     else:
@@ -113,12 +113,12 @@ class TextPairConfig:
         for key, value in dict(config["MATCHING"]).items():
             if value or key not in self.matching_params:
                 match key:
-                    case "flex_gap" | "banality_auto_detection" | "store_banalities":
+                    case "flex_gap" | "banality_auto_detection" | "store_banalities" | "llm_debug":
                         if value.lower() == "yes" or value.lower() == "true":
                             value = True
                         else:
                             value = False
-                    case "min_similarity" | "most_common_ngram_proportion" | "common_ngram_threshold":
+                    case "min_similarity" | "most_common_ngram_proportion" | "common_ngram_threshold" | "llm_similarity_threshold":
                         value = float(value)
                     case "min_matching_words" | "source_batch" | "target_batch":
                         value = int(value)

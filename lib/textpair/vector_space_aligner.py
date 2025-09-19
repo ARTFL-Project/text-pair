@@ -544,6 +544,7 @@ class TfIdfCorpus(Corpus):
         min_freq: int | float = 1,
         max_freq: float = 1.0,
         direction="source",
+        use_llm_evaluation: bool = False,
     ):
         super().__init__(
             texts,
@@ -554,6 +555,7 @@ class TfIdfCorpus(Corpus):
             text_object_type_split=text_object_type_split,
             direction=direction,
         )
+        self.use_llm_evaluation = use_llm_evaluation
         if vectorizer is None:
             self.vectorizer = TfidfVectorizer(max_df=max_freq, min_df=min_freq)  # type: ignore
             self.vectors: csr_matrix = self.vectorizer.fit_transform(" ".join(d) for d in self.get_text_chunks())  # type: ignore
@@ -586,14 +588,16 @@ class TfIdfCorpus(Corpus):
     def inner_compare(self, min_similarity: float) -> Matches:
         """Compare corpus with itself"""
         results: np.ndarray = linear_kernel(self.vectors, dense_output=False)  # type: ignore
-        results = self.__filter_by_jaccard_sim(results, min_similarity)
+        if not self.use_llm_evaluation:
+            results = self.__filter_by_jaccard_sim(results, min_similarity)
         return Matches(self.process_inner_compare(results, min_similarity))
 
     def outer_compare(self, target_corpus: TfIdfCorpus, min_similarity: float) -> Matches:
         """Compare corpus with another corpus"""
         print("Comparing source collection to target collection...", flush=True)
         results: np.ndarray = linear_kernel(self.vectors, target_corpus.vectors, dense_output=False)  # type: ignore
-        results = self.__filter_by_jaccard_sim(results, min_similarity, target_corpus.vectors)
+        if not self.use_llm_evaluation:
+            results = self.__filter_by_jaccard_sim(results, min_similarity, target_corpus.vectors)
         return Matches(self.process_outer_compare(results, target_corpus, min_similarity))
 
 
@@ -863,8 +867,9 @@ def get_passage(doc: Tokens, start_byte: int, end_byte: int) -> list[Token]:
 class AsyncLLMEvaluator:
     """Async LLM-based similarity evaluator using llama-server via HTTP"""
 
-    def __init__(self, model_path: str, port: int = 8080):
+    def __init__(self, model_path: str, context_window: int = 8192, port: int = 8080):
         self.model_path = model_path
+        self.context_window = context_window
         self.port = port
         self.base_url = f"http://127.0.0.1:{port}"
         self.server_process = None
@@ -872,7 +877,7 @@ class AsyncLLMEvaluator:
     def start_server(self):
         """Start the llama-server process"""
         # Use the textpair_llama_server command
-        cmd = ["textpair_llama_server", self.model_path, str(self.port)]
+        cmd = ["textpair_llama_server", self.model_path, str(self.port), str(self.context_window)]
         self.server_process = subprocess.Popen(cmd)
 
         # Wait for server to be ready
@@ -1101,13 +1106,15 @@ async def evaluate_passages_with_llm(
     merged_matches: list[MergedGroup],
     min_score: float,
     llm_model_path: str,
+    llm_context_window: int,
+    llm_similarity_threshold: float | None = None,
     debug_llm: bool = False,
     output_path: str = "output",
 ) -> list[MergedGroup]:
     """Evaluate merged passages using LLM and filter by threshold."""
 
     # Initialize LLM evaluator
-    llm_evaluator = AsyncLLMEvaluator(llm_model_path)
+    llm_evaluator = AsyncLLMEvaluator(llm_model_path, context_window=llm_context_window)
     llm_evaluator.start_server()
 
     # Initialize debug logger (controlled by debug_llm parameter)
@@ -1120,6 +1127,10 @@ async def evaluate_passages_with_llm(
         with open(debug_logger.llm_file, "w", encoding="utf-8") as debug_file:
             debug_file.write("LLM EVALUATION DEBUG LOG\n")
             debug_file.write("=" * 50 + "\n\n")
+
+    # Override min_score if llm_similarity_threshold is provided
+    if llm_similarity_threshold is not None:
+        min_score = llm_similarity_threshold
 
     try:
         # Prepare passage pairs for batch evaluation
@@ -1180,8 +1191,7 @@ def merge_passages(
     min_score: float,
     vectorization: str,
     model: Optional[SentenceTransformer] = None,
-    debug_llm: bool = False,
-    output_path: str = "output",
+    use_llm_evaluation: bool = False,
 ) -> list[MergedGroup]:
     """Merge all passages into bigger passages. Similarity is recomputed for merged text content."""
     last_count = len(matches)
@@ -1191,8 +1201,13 @@ def merge_passages(
 
     print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
 
-    def compute_merged_similarity(merged_group: MergedGroup) -> float:
+    def compute_merged_similarity(merged_group: MergedGroup, constituent_similarities: list[float]) -> float:
         """Compute similarity for merged passages by encoding the actual text content"""
+        # If LLM evaluation will be used, use fast placeholder similarity
+        if use_llm_evaluation and constituent_similarities:
+            # Use average of constituent similarities as fast, meaningful placeholder
+            return sum(constituent_similarities) / len(constituent_similarities)
+
         if model is None:
             # Fallback to min_score if no model provided
             return min_score
@@ -1264,7 +1279,7 @@ def merge_passages(
                 or match.target.filename != merged_group.target.filename
             ):
                 # Recompute similarity for the merged group
-                merged_group.similarity = compute_merged_similarity(merged_group)
+                merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
                 saved_groups.append(merged_group)
                 merged_pairs = [match.similarity]
                 merged_group = MergedGroup(match.source, match.target, start_score)
@@ -1287,13 +1302,13 @@ def merge_passages(
                 merged_pairs.append(match.similarity)
             if merged_source is False and merged_target is False:
                 # Recompute similarity for the current merged group
-                merged_group.similarity = compute_merged_similarity(merged_group)
+                merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
                 saved_groups.append(merged_group)
                 merged_pairs = [match.similarity]
                 merged_group = MergedGroup(match.source, match.target, match.similarity)
             if pos + 1 == total_matches:
                 # Recompute similarity for the final merged group
-                merged_group.similarity = compute_merged_similarity(merged_group)
+                merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
                 saved_groups.append(merged_group)
         merged_matches = saved_groups
         iteration += 1
@@ -1368,6 +1383,7 @@ def simple_similarity(
     min_similarity: float,
     output_path: str,
     target_texts: Optional[Iterable[Tokens]] = None,
+    use_llm_evaluation: bool = False,
 ) -> tuple[TfIdfCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of TF-IDF vectors"""
     source_corpus: TfIdfCorpus = TfIdfCorpus(
@@ -1378,6 +1394,7 @@ def simple_similarity(
         text_object_type_split=text_object_upper_bound(source_config),
         min_freq=source_config["min_freq"],
         max_freq=source_config["max_freq"],
+        use_llm_evaluation=use_llm_evaluation,  # Skip Jaccard filtering when using LLM
     )
     if target_texts is not None:
         target_corpus: TfIdfCorpus = TfIdfCorpus(
@@ -1388,6 +1405,7 @@ def simple_similarity(
             n_chunk=target_config["n_chunk"],
             text_object_type_split=text_object_upper_bound(target_config),
             direction="target",
+            use_llm_evaluation=use_llm_evaluation,  # Skip Jaccard filtering when using LLM
         )
 
         matching_docs = source_corpus.outer_compare(target_corpus, min_similarity)
@@ -1506,21 +1524,11 @@ async def run_vsa(
             config["min_similarity"],
             output_path,
             target_texts=target_texts,
+            use_llm_evaluation=bool(config["llm_model"]),  # Skip Jaccard if LLM will be used
         )
         model = None
     elif config["source"]["vectorization"] == "transformer":
         matches, source_metadata, target_metadata, model = transformer_similarity(
-            source_texts,
-            config["source"],
-            config["target"],
-            config["min_similarity"],
-            config["source_batch"],
-            output_path,
-            target_texts=target_texts,
-            target_batch=config["target_batch"],
-        )
-    elif config["source"]["vectorization"] == "transformer_vectordb":
-        matches, source_metadata, target_metadata, model = transformer_vectordb_similarity(
             source_texts,
             config["source"],
             config["target"],
@@ -1553,17 +1561,18 @@ async def run_vsa(
         config["min_similarity"],
         config["source"]["vectorization"],
         model,
-        config["source"]["llm_debug"],  # Debug LLM reasoning
-        output_path,  # Output path for debug files
+        use_llm_evaluation=bool(config["llm_model"]),  # Use placeholders if LLM will evaluate
     )
 
     # Then evaluate with LLM if model path is provided
-    if config["source"]["llm_model"]:
+    if config["llm_model"]:
         matches = await evaluate_passages_with_llm(
             matches,
             config["min_similarity"],
-            config["source"]["llm_model"],
-            config["source"]["llm_debug"],
+            config["llm_model"],
+            config["llm_context_window"],
+            config["llm_similarity_threshold"],
+            config["llm_debug"],
             output_path,
         )
 

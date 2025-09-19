@@ -16,9 +16,10 @@ import requests
 
 
 class LlamaServerManager:
-    def __init__(self, model_path, port=8080, max_retries=30, retry_delay=1):
+    def __init__(self, model_path, port=8080, context_window=8192, max_retries=30, retry_delay=1):
         self.model_path = model_path
         self.port = port
+        self.context_window = context_window
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.process = None
@@ -57,7 +58,7 @@ class LlamaServerManager:
             llama_server,
             "--host", "127.0.0.1",
             "--port", str(self.port),
-            "--ctx-size", "8092",
+            "--ctx-size", str(self.context_window),
             "--n-gpu-layers", "99",
             "--parallel", "8",  # Handle multiple concurrent requests
             "--log-disable",    # Reduce log noise
@@ -145,8 +146,9 @@ def main():
 
     model_path = sys.argv[1]
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
+    context_window = int(sys.argv[3]) if len(sys.argv) > 3 else 8192
 
-    server = LlamaServerManager(model_path, port)
+    server = LlamaServerManager(model_path, port, context_window)
 
     try:
         server.start()
