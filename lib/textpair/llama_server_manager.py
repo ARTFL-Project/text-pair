@@ -51,14 +51,10 @@ class LlamaServerManager:
 
     def start(self):
         """Start the llama-server process"""
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(f"Model file not found: {self.model_path}")
-
         llama_server = self.find_llama_server()
 
         cmd = [
             llama_server,
-            "--model", self.model_path,
             "--host", "127.0.0.1",
             "--port", str(self.port),
             "--ctx-size", "8092",
@@ -70,6 +66,14 @@ class LlamaServerManager:
             "--cont-batching",   # Enable continuous batching
             "-fa", "on"        # Enable fast attention
         ]
+
+        # If file exists locally, use --model, otherwise assume HF repo
+        if os.path.exists(self.model_path):
+            cmd.extend(["--model", self.model_path])
+            print(f"Starting llama-server with local model: {self.model_path}")
+        else:
+            cmd.extend(["-hf", self.model_path])
+            print(f"Starting llama-server with HF repo: {self.model_path}")
 
         try:
             self.process = subprocess.Popen(
@@ -133,7 +137,10 @@ class LlamaServerManager:
 def main():
     if len(sys.argv) < 2:
         print("Usage: python llama_server_manager.py <model_path> [port]")
-        print("Example: python llama_server_manager.py /path/to/model.gguf 8080")
+        print("Examples:")
+        print("  Local model: python llama_server_manager.py /path/to/model.gguf 8080")
+        print("  HF model:    python llama_server_manager.py microsoft/DialoGPT-medium 8080")
+        print("  HF model:    python llama_server_manager.py unsloth/gemma-2-2b-it-bnb-4bit 8080")
         sys.exit(1)
 
     model_path = sys.argv[1]

@@ -757,32 +757,37 @@ class TransformerCorpus(Corpus):
         # Search for matches above threshold
         def process_vectordb_matches():
             """Generator that yields matches from FAISS search results"""
-            similarities, target_indices = index.search(source_embeddings, target_corpus.length)
+            # Use range_search to find all matches above threshold - much more efficient!
+            lims, distances, target_indices = index.range_search(source_embeddings, min_similarity)
 
             # Check if this is inner comparison (corpus comparing to itself)
             is_inner_compare = target_corpus is self
 
-            with tqdm(total=self.length, desc="Processing matches") as pbar:
+            with tqdm(total=self.length, desc="Processing matches", leave=False) as pbar:
                 for source_idx in range(self.length):
-                    for i in range(len(similarities[source_idx])):
-                        similarity = float(similarities[source_idx][i])
-                        if similarity >= min_similarity:
-                            target_idx = int(target_indices[source_idx][i])
+                    # Get the range of results for this source embedding
+                    start_idx = lims[source_idx]
+                    end_idx = lims[source_idx + 1]
 
-                            if is_inner_compare:
-                                # Skip self-matches
-                                if source_idx == target_idx:
-                                    continue
-                                # Respect chronological order constraint
-                                if self.metadata[source_idx]["year"] > self.metadata[target_idx]["year"]:
-                                    continue
+                    # Process all matches for this source
+                    for i in range(start_idx, end_idx):
+                        similarity = float(distances[i])
+                        target_idx = int(target_indices[i])
 
-                            # Yield match using metadata
-                            yield MergedGroup(
-                                PassageGroup(
-                                    self.metadata[source_idx]["start_byte"],
-                                    self.metadata[source_idx]["end_byte"],
-                                    self.metadata[source_idx]["filename"],
+                        if is_inner_compare:
+                            # Skip self-matches
+                            if source_idx == target_idx:
+                                continue
+                            # Respect chronological order constraint
+                            if self.metadata[source_idx]["year"] > self.metadata[target_idx]["year"]:
+                                continue
+
+                        # Yield match using metadata
+                        yield MergedGroup(
+                            PassageGroup(
+                                self.metadata[source_idx]["start_byte"],
+                                self.metadata[source_idx]["end_byte"],
+                                self.metadata[source_idx]["filename"],
                                     self.metadata[source_idx],
                                 ),
                                 PassageGroup(
@@ -1024,8 +1029,7 @@ class AsyncLLMEvaluator:
         if len(target_text) > max_text_length:
             target_text = target_text[:max_text_length] + "..."
 
-        prompt = f"""<bos><start_of_turn>user
-Compare these two text passages and rate their semantic similarity from 0.0 to 1.0:
+        prompt = f"""Compare these two text passages and rate their semantic similarity from 0.0 to 1.0:
 
 Passage 1: {source_text}
 
@@ -1042,9 +1046,8 @@ Use this scoring guide:
 Provide your answer as:
 Score: X.X
 Reasoning: brief explanation of which similarity level applies
-<end_of_turn>
-<start_of_turn>model
-"""
+
+Answer:"""
 
         return prompt
 
