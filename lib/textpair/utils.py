@@ -1,11 +1,15 @@
 """Various utilities for textpair"""
 
 
-import re
 from html import unescape as unescape_html
 from xml.sax.saxutils import unescape as unescape_xml
 
+import numpy as np
+import regex as re
+
 TAGS = re.compile(r"<[^>]+>")
+PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
+
 
 
 def clean_text(text: str) -> str:
@@ -26,4 +30,35 @@ def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -
     with open(filename, "rb") as text_file:
         text_file.seek(start_byte)
         text: str = text_file.read(length).decode("utf8", "ignore")
+
+    # Remove leading and closing tags
+    if text.startswith("<"):
+        text = re.sub(r"^<[^>]+>", "", text, count=1).strip()
+    if text.endswith(">"):
+        text = re.sub(r"<[^>]+>$", "", text, count=1).strip()
     return clean_text(text)
+
+
+def text_object_upper_bound(config) -> str:
+    """Find the text object level above the one specified in the config"""
+    object_type_to_level = {v: k for k, v in PHILO_TEXT_OBJECT_LEVELS.items()}
+    text_object_level = PHILO_TEXT_OBJECT_LEVELS[config["text_object_type"]]
+    if text_object_level == 1:
+        return "doc"
+    return object_type_to_level[text_object_level - 1]
+
+
+def jaccard_sim(X, Y):
+    """Jaccard Similarity"""
+    assert X.shape[1] == Y.shape[1]
+
+    X = X.astype(bool).astype(int)
+    Y = Y.astype(bool).astype(int)
+
+    intersect = X.dot(Y.T)
+
+    x_sum = X.sum(axis=1).A1
+    y_sum = Y.sum(axis=1).A1
+    xx, yy = np.meshgrid(x_sum, y_sum)
+    union = (xx + yy).T - intersect
+    return (intersect / union).toarray()
