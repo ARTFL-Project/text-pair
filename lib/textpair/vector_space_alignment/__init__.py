@@ -541,35 +541,4 @@ async def run_vsa(
 # Public API
 # ============================================================================
 
-__all__ = [
-    # Main orchestrator
-    "run_vsa",
-    # Data structures
-    "PassageGroup",
-    "MergedGroup",
-    "DocumentChunks",
-    "Matches",
-    # Corpus classes
-    "Corpus",
-    "TfIdfCorpus",
-    "TransformerCorpus",
-    "Word2VecEmbeddingCorpus",
-    # LLM evaluation
-    "AsyncLLMEvaluator",
-    "evaluate_passages_with_llm",
-    # Expansion
-    "expand_validated_matches",
-    # Similarity functions
-    "simple_similarity",
-    "transformer_similarity",
-    "word2vec_embed_similarity",
-    # Text processing utilities
-    "post_process_passages",
-    "get_tokens",
-    "get_passage",
-    # From textpair.utils (re-exported for convenience)
-    "clean_text",
-    "get_text",
-    "jaccard_sim",
-    "text_object_upper_bound",
-]
+__all__ = ["run_vsa"]
