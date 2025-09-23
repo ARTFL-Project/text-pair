@@ -24,6 +24,7 @@ class LlamaServerManager:
         self.retry_delay = retry_delay
         self.process = None
         self.base_url = f"http://127.0.0.1:{port}"
+        self.llama_server_cmd = []
 
     def find_llama_server(self):
         """Find llama-server binary in common locations"""
@@ -76,6 +77,7 @@ class LlamaServerManager:
             cmd.extend(["-hf", self.model_path])
             print(f"Starting llama-server with HF repo: {self.model_path}")
 
+        self.llama_server_cmd = cmd
         try:
             self.process = subprocess.Popen(
                 cmd,
@@ -112,7 +114,16 @@ class LlamaServerManager:
 
             time.sleep(self.retry_delay)
 
-        raise RuntimeError(f"Server failed to become ready after {self.max_retries} attempts")
+
+        raise RuntimeError(
+            f"Server failed to become ready after {self.max_retries} attempts.\n"
+            f"This may indicate:\n"
+            f"  - Model download from Hugging Face is taking too long\n"
+            f"  - Insufficient system resources (RAM/GPU)\n"
+            f"  - Invalid model path or format\n\n"
+            f"Try running the server manually to diagnose the issue:\n"
+            f"  {' '.join(self.llama_server_cmd)}"
+        )
 
     def stop(self):
         """Stop the llama-server process"""
@@ -154,7 +165,8 @@ def main():
         server.start()
 
         # Keep the server alive
-        server.process.wait()
+        if server.process:
+            server.process.wait()
 
     except KeyboardInterrupt:
         print("\nShutting down...")
