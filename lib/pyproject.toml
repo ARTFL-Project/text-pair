@@ -61,7 +61,7 @@ dependencies = [
     "msgspec",
     "faiss-cpu",
     "aiohttp~=3.12",
-    "spacy-transformers"
+    "spacy-transformers",
 ]
 
 [project.urls]

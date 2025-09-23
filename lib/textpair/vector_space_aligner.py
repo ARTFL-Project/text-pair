@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import copy
+import itertools
 import json
 import os
-import re
 import sqlite3
 import subprocess
-import sys
 import time
 from abc import ABC
 from collections import deque
@@ -24,6 +24,7 @@ import faiss
 import lz4.frame
 import msgspec
 import numpy as np
+import regex as re
 import requests
 import spacy
 import torch
@@ -41,6 +42,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 TAGS = re.compile(r"<[^>]+>")
 PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
 TEMP_DIR = os.getcwd()
+SENTENCE_BOUNDARY_REGEX = re.compile(r'(?<=.{10,}[.?!])\s+(?=\p{Lu}|\p{L})')
+
 
 class PassageGroup(msgspec.Struct, array_like=True):
     """Text passage with all associated properties and vector representation"""
@@ -834,6 +837,12 @@ def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -
     with open(filename, "rb") as text_file:
         text_file.seek(start_byte)
         text: str = text_file.read(length).decode("utf8", "ignore")
+
+    # Remove leading and closing tags
+    if text.startswith("<"):
+        text = re.sub(r"^<[^>]+>", "", text, count=1).strip()
+    if text.endswith(">"):
+        text = re.sub(r"<[^>]+>$", "", text, count=1).strip()
     return clean_text(text)
 
 
@@ -1034,25 +1043,35 @@ class AsyncLLMEvaluator:
         if len(target_text) > max_text_length:
             target_text = target_text[:max_text_length] + "..."
 
-        prompt = f"""Compare these two text passages and rate their semantic similarity from 0.0 to 1.0:
+        prompt = f"""You are a text analysis expert. Your task is to rate the semantic similarity of two passages.
 
+First, determine if the passages address the same specific argument. Then, use the score guide below.
+
+IMPORTANT: Direct agreement and direct disagreement on the exact same point are both forms of HIGH similarity.
+IMPORTANT: Avoid defaulting to the boundary scores of a category (like 0.40, 0.70, or 0.90). Use the full range to show nuance.
+
+Score Guide:
+• 0.0 - 0.4: Different Subjects. The passages are about completely different topics.
+• > 0.4 to < 0.7: Shared Subject, Different Focus. The passages are about the same broad subject (e.g., the Roman Empire) but focus on different specific arguments or aspects (e.g., one is about military tactics, the other about trade policy).
+• 0.7 - 0.9: Shared Subject, Shared Focus. The passages address the exact same specific argument, question, or thesis. They are in direct conversation, whether they agree, disagree, or analyze it in parallel.
+• > 0.9 - 1.0: Paraphrase. The passages make the exact same point and have nearly identical meaning.
+
+Your thought process:
+1. What is the broad subject of each passage?
+2. Do they narrow in on the exact same specific argument or point?
+3. Based on that, which score category do they fall into?
+
+Provide your answer in this exact format:
+Score: X.XX
+Reasoning: [Your step-by-step analysis]
+
+---
 Passage 1: {source_text}
-
+---
 Passage 2: {target_text}
-
-Use this scoring guide:
-• 0.0-0.3: Completely different topics or themes
-• 0.3-0.5: Related domain but different focus (e.g., both about history but different eras)
-• 0.5-0.7: Similar theme or subject matter (e.g., both discuss the same historical event)
-• 0.7-0.85: Similar ideas or concepts discussed (e.g., same event with similar analysis)
-• 0.85-0.95: Very similar content and perspective (e.g., similar arguments or conclusions)
-• 0.95-1.0: Nearly identical meaning or exact same point of view
-
-Provide your answer as:
-Score: X.X
-Reasoning: brief explanation of which similarity level applies
-
+---
 Answer:"""
+
 
         return prompt
 
@@ -1100,90 +1119,6 @@ Answer:"""
 
         except Exception as e:
             return 0.0, f"Failed to parse LLM response: {str(e)}"
-
-
-async def evaluate_passages_with_llm(
-    merged_matches: list[MergedGroup],
-    min_score: float,
-    llm_model_path: str,
-    llm_context_window: int,
-    llm_similarity_threshold: float | None = None,
-    debug_llm: bool = False,
-    output_path: str = "output",
-) -> list[MergedGroup]:
-    """Evaluate merged passages using LLM and filter by threshold."""
-
-    # Initialize LLM evaluator
-    llm_evaluator = AsyncLLMEvaluator(llm_model_path, context_window=llm_context_window)
-    llm_evaluator.start_server()
-
-    # Initialize debug logger (controlled by debug_llm parameter)
-    debug_logger = LLMDebugLogger(enabled=debug_llm, output_path=output_path)
-
-    print("Evaluating matched passages with LLM...", flush=True)
-
-    # Initialize LLM evaluation debug file if debugging is enabled
-    if debug_logger.enabled:
-        with open(debug_logger.llm_file, "w", encoding="utf-8") as debug_file:
-            debug_file.write("LLM EVALUATION DEBUG LOG\n")
-            debug_file.write("=" * 50 + "\n\n")
-
-    # Override min_score if llm_similarity_threshold is provided
-    if llm_similarity_threshold is not None:
-        min_score = llm_similarity_threshold
-
-    try:
-        # Prepare passage pairs for batch evaluation
-        passage_pairs = []
-        computed_similarities = []
-
-        for merged_group in merged_matches:
-            source_text = get_text(
-                merged_group.source.start_byte,
-                merged_group.source.end_byte,
-                merged_group.source.filename
-            )
-            target_text = get_text(
-                merged_group.target.start_byte,
-                merged_group.target.end_byte,
-                merged_group.target.filename
-            )
-            passage_pairs.append((source_text, target_text))
-            computed_similarities.append(merged_group.similarity)
-
-        # Perform batch async evaluation
-        llm_results = await llm_evaluator.evaluate_batch(passage_pairs, batch_size=8)
-
-        # Update similarities and filter by threshold
-        for i, (merged_group, (llm_similarity, llm_reasoning)) in enumerate(zip(merged_matches, llm_results)):
-            computed_similarity = computed_similarities[i]
-
-            # Update the similarity score with LLM evaluation
-            merged_group.similarity = llm_similarity
-
-            # Debug: Log the LLM evaluation
-            debug_logger.log_llm_evaluation(
-                i, computed_similarity, llm_similarity, llm_reasoning,
-                merged_group, passage_pairs[i][0], passage_pairs[i][1]
-            )
-
-        # Filter out passages below threshold
-        original_count = len(merged_matches)
-        filtered_matches = [match for match in merged_matches if match.similarity >= min_score]
-
-        print(f"Completed LLM evaluation. Kept {len(filtered_matches)}/{original_count} passages above {min_score} threshold.", flush=True)
-
-        return filtered_matches
-
-    except Exception as llm_error:
-        print(f"Batch LLM evaluation failed: {str(llm_error)[:100]}...")
-        # Keep the original similarities as fallback
-        debug_logger.log_llm_error(str(llm_error))
-        return merged_matches
-
-    finally:
-        # Stop the LLM server
-        llm_evaluator.stop_server()
 
 
 def merge_passages(
@@ -1316,6 +1251,279 @@ def merge_passages(
         print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
     print(flush=True)
     return merged_matches
+
+
+
+def get_adjacent_sentence(
+    filename: str, byte_pos: int, direction: str, buffer_size: int = 2048
+) -> Optional[tuple[int, int]]:
+    """
+    Finds the start and end bytes of an adjacent sentence using a fast regex-based approach.
+    """
+    try:
+        with open(filename, "rb") as f:
+            if direction == "forward":
+                f.seek(byte_pos)
+                buffer = f.read(buffer_size).decode("utf-8", "ignore").lstrip()
+
+                # Find the first sentence boundary in the buffer
+                match = SENTENCE_BOUNDARY_REGEX.search(buffer)
+                if not match:
+                    return None
+
+                end_char = match.start()
+                # Return the byte offsets for the found sentence
+                return (byte_pos, byte_pos + buffer[:end_char].encode("utf-8").__len__())
+
+            elif direction == "backward":
+                start_read = max(0, byte_pos - buffer_size)
+                f.seek(start_read)
+                buffer = f.read(byte_pos - start_read).decode("utf-8", "ignore").rstrip()
+
+                # Find all sentence boundaries and take the one just before the end
+                matches = list(SENTENCE_BOUNDARY_REGEX.finditer(buffer))
+                if not matches:
+                    return None
+
+                # The start of the last sentence is the end of the second-to-last sentence
+                start_char = matches[-2].end() if len(matches) > 1 else 0
+                end_char = matches[-1].start()
+
+                # Return byte offsets for the found sentence
+                return (start_read + buffer[:start_char].encode("utf-8").__len__(),
+                        start_read + buffer[:end_char].encode("utf-8").__len__())
+
+    except (IOError, IndexError):
+        return None
+    return None
+
+
+def _get_sentence_chunk(filename: str, start_byte: int, direction: str, count: int) -> list[tuple[int, int]]:
+    """Gathers a chunk of N consecutive sentences."""
+    sentences = []
+    current_pos = start_byte
+    for _ in range(count):
+        next_sent_bounds = get_adjacent_sentence(filename, current_pos, direction)
+        if next_sent_bounds:
+            sentences.append(next_sent_bounds)
+            current_pos = next_sent_bounds[1] if direction == 'forward' else next_sent_bounds[0]
+        else:
+            break
+    return sentences
+
+async def evaluate_passages_with_llm(
+    merged_matches: list[MergedGroup],
+    min_score: float,
+    llm_model_path: str,
+    llm_context_window: int,
+    llm_similarity_threshold: float | None = None,
+    debug_llm: bool = False,
+    output_path: str = "output",
+) -> tuple[list[MergedGroup], AsyncLLMEvaluator]:
+    """Evaluate merged passages using LLM and filter by threshold. Returns (matches, evaluator)."""
+
+    # Initialize LLM evaluator
+    llm_evaluator = AsyncLLMEvaluator(llm_model_path, context_window=llm_context_window)
+    llm_evaluator.start_server()
+
+    # Initialize debug logger (controlled by debug_llm parameter)
+    debug_logger = LLMDebugLogger(enabled=debug_llm, output_path=output_path)
+
+    print("Evaluating matched passages with LLM...", flush=True)
+
+    # Initialize LLM evaluation debug file if debugging is enabled
+    if debug_logger.enabled:
+        with open(debug_logger.llm_file, "w", encoding="utf-8") as debug_file:
+            debug_file.write("LLM EVALUATION DEBUG LOG\n")
+            debug_file.write("=" * 50 + "\n\n")
+
+    # Override min_score if llm_similarity_threshold is provided
+    if llm_similarity_threshold is not None:
+        min_score = llm_similarity_threshold
+
+    try:
+        # Prepare passage pairs for batch evaluation
+        passage_pairs = []
+        computed_similarities = []
+
+        for merged_group in merged_matches:
+            source_text = get_text(
+                merged_group.source.start_byte,
+                merged_group.source.end_byte,
+                merged_group.source.filename
+            )
+            target_text = get_text(
+                merged_group.target.start_byte,
+                merged_group.target.end_byte,
+                merged_group.target.filename
+            )
+            passage_pairs.append((source_text, target_text))
+            computed_similarities.append(merged_group.similarity)
+
+        # Perform batch async evaluation
+        llm_results = await llm_evaluator.evaluate_batch(passage_pairs, batch_size=8)
+
+        # Update similarities and filter by threshold
+        for i, (merged_group, (llm_similarity, llm_reasoning)) in enumerate(zip(merged_matches, llm_results)):
+            computed_similarity = computed_similarities[i]
+
+            # Update the similarity score with LLM evaluation
+            merged_group.similarity = llm_similarity
+
+            # Debug: Log the LLM evaluation
+            debug_logger.log_llm_evaluation(
+                i, computed_similarity, llm_similarity, llm_reasoning,
+                merged_group, passage_pairs[i][0], passage_pairs[i][1]
+            )
+
+        # Filter out passages below threshold
+        original_count = len(merged_matches)
+        filtered_matches = [match for match in merged_matches if match.similarity >= min_score]
+
+        print(f"Completed LLM evaluation. Kept {len(filtered_matches)}/{original_count} passages above {min_score} threshold.", flush=True)
+
+        return filtered_matches, llm_evaluator
+
+    except Exception as llm_error:
+        print(f"Batch LLM evaluation failed: {str(llm_error)[:100]}...")
+        # Keep the original similarities as fallback
+        debug_logger.log_llm_error(str(llm_error))
+        return merged_matches, llm_evaluator
+
+
+def count_sentences(text: str) -> int:
+    """Count the number of sentences in a text using regex."""
+    sentences = [s for s in SENTENCE_BOUNDARY_REGEX.split(text) if s.strip()]
+    return len(sentences)
+
+async def _expand_single_match(
+    match: MergedGroup, evaluator: AsyncLLMEvaluator, threshold: float
+) -> tuple[MergedGroup, bool]:
+    """
+    Tests the largest combination first as a short-circuit. If that fails, it
+    tests all 16 combinations and returns the longest valid passage pair.
+    Returns: (expanded_match, was_expanded)
+    """
+    # 1. Get the potential boundaries for the "+2 sentence" expansions
+    s_back_chunk = _get_sentence_chunk(match.source.filename, match.source.start_byte, "backward", 2)
+    s_fwd_chunk = _get_sentence_chunk(match.source.filename, match.source.end_byte, "forward", 2)
+    t_back_chunk = _get_sentence_chunk(match.target.filename, match.target.start_byte, "backward", 2)
+    t_fwd_chunk = _get_sentence_chunk(match.target.filename, match.target.end_byte, "forward", 2)
+
+    s_start_expanded = s_back_chunk[0][0] if len(s_back_chunk) == 2 else match.source.start_byte
+    s_end_expanded = s_fwd_chunk[-1][1] if len(s_fwd_chunk) == 2 else match.source.end_byte
+    t_start_expanded = t_back_chunk[0][0] if len(t_back_chunk) == 2 else match.target.start_byte
+    t_end_expanded = t_fwd_chunk[-1][1] if len(t_fwd_chunk) == 2 else match.target.end_byte
+
+    # --- The "Early Exit" Check ---
+    # 2. First, test only the single largest possible combination.
+    max_expansion_match = copy.deepcopy(match)
+    max_expansion_match.source.start_byte = s_start_expanded
+    max_expansion_match.source.end_byte = s_end_expanded
+    max_expansion_match.target.start_byte = t_start_expanded
+    max_expansion_match.target.end_byte = t_end_expanded
+
+    source_text = get_text(max_expansion_match.source.start_byte, max_expansion_match.source.end_byte, max_expansion_match.source.filename)
+    target_text = get_text(max_expansion_match.target.start_byte, max_expansion_match.target.end_byte, max_expansion_match.target.filename)
+
+    if source_text and target_text:
+        score, _ = await evaluator.evaluate_similarity(source_text, target_text)
+        # 3. If it's valid, it must be the best one, so we can return it immediately.
+        if score >= threshold:
+            max_expansion_match.similarity = score
+            return max_expansion_match, True  # Successfully expanded
+    # --- End of Early Exit Check ---
+
+    # 4. If the early exit failed, proceed with the full 16-combination check.
+    combinations = list(itertools.product([False, True], repeat=4))
+    tasks = []
+    passage_configs = []
+
+    for combo in combinations:
+        # We already tested the all-True combo, but re-evaluating it is simpler
+        # than filtering it out and handling the results separately.
+        temp_match = copy.deepcopy(match)
+        if combo[0]: temp_match.source.start_byte = s_start_expanded
+        if combo[1]: temp_match.source.end_byte = s_end_expanded
+        if combo[2]: temp_match.target.start_byte = t_start_expanded
+        if combo[3]: temp_match.target.end_byte = t_end_expanded
+
+        source_text = get_text(temp_match.source.start_byte, temp_match.source.end_byte, temp_match.source.filename)
+        target_text = get_text(temp_match.target.start_byte, temp_match.target.end_byte, temp_match.target.filename)
+        if source_text and target_text:
+            tasks.append(evaluator.evaluate_similarity(source_text, target_text))
+            passage_configs.append(temp_match)
+
+    if not tasks:
+        return match, False  # No expansion attempted
+
+    results = await asyncio.gather(*tasks)
+
+    # 5. Filter for valid candidates and find the best one based on the new rule.
+    valid_candidates = []
+    for i, (score, _) in enumerate(results):
+        if score >= threshold:
+            config = passage_configs[i]
+            s_sents = count_sentences(get_text(config.source.start_byte, config.source.end_byte, config.source.filename))
+            t_sents = count_sentences(get_text(config.target.start_byte, config.target.end_byte, config.target.filename))
+            valid_candidates.append({'score': score, 'size': s_sents + t_sents, 'match': config})
+
+    if not valid_candidates:
+        return match, False  # No valid expansion found
+
+    # Sort to find the best: prioritize size first, then score as a tie-breaker.
+    valid_candidates.sort(key=lambda x: (x['size'], x['score']), reverse=True)
+
+    winner = valid_candidates[0]['match']
+    winner.similarity = valid_candidates[0]['score']
+
+    # Check if this is actually an expansion (different from original)
+    was_expanded = (winner.source.start_byte != match.source.start_byte or
+                   winner.source.end_byte != match.source.end_byte or
+                   winner.target.start_byte != match.target.start_byte or
+                   winner.target.end_byte != match.target.end_byte)
+
+    return winner, was_expanded
+
+async def expand_validated_matches(
+    matches: list[MergedGroup],
+    llm_model_path: str,
+    llm_context_window: int,
+    evaluator: AsyncLLMEvaluator,
+) -> list[MergedGroup]:
+    """Orchestrator for the async, LLM-based expansion."""
+    if not matches:
+        return []
+
+    expansion_tasks = []
+    final_matches = [] # This will hold all matches, expanded or not
+
+    # 1. Triage: Separate matches into those that need expansion and those that don't.
+    expansion_count = 0
+    for match in matches:
+        source_sents = count_sentences(get_text(match.source.start_byte, match.source.end_byte, match.source.filename))
+        target_sents = count_sentences(get_text(match.target.start_byte, match.target.end_byte, match.target.filename))
+
+        # If at least one side is shorter than 10 sentences, it's eligible for expansion.
+        if source_sents < 10 or target_sents < 10:
+            # The threshold for expansion is the match's current score
+            task = _expand_single_match(match, evaluator, match.similarity)
+            expansion_tasks.append(task)
+        else:
+            # This match is already long enough, so add it directly to the final list.
+            final_matches.append(match)
+
+    # 2. Process & Combine: Run the expansion tasks and add the results to the final list.
+    if expansion_tasks:
+        for future in tqdm(asyncio.as_completed(expansion_tasks), total=len(expansion_tasks), desc="Looking for potential passage expansions", leave=False):
+            expanded_match, was_expanded = await future
+            final_matches.append(expanded_match)
+            if was_expanded:
+                expansion_count += 1
+
+    print(f"Looking for potential passage expansions: expanded {expansion_count} passages.", flush=True)
+
+    return final_matches
 
 
 def get_tokens(passage: PassageGroup, preproc: PreProcessor) -> list[tuple[str, str]]:
@@ -1566,7 +1774,7 @@ async def run_vsa(
 
     # Then evaluate with LLM if model path is provided
     if config["llm_model"]:
-        matches = await evaluate_passages_with_llm(
+        matches, llm_evaluator = await evaluate_passages_with_llm(
             matches,
             config["min_similarity"],
             config["llm_model"],
@@ -1575,6 +1783,18 @@ async def run_vsa(
             config["llm_debug"],
             output_path,
         )
+        # Iteratively expand the boundaries of the validated matches
+        try:
+            if matches: # Only run expansion if there are matches left
+                matches = await expand_validated_matches(
+                    matches,
+                    config["llm_model"],
+                    config["llm_context_window"],
+                    evaluator=llm_evaluator,
+                )
+        finally:
+            # Ensure we always stop the server
+            llm_evaluator.stop_server()
 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
