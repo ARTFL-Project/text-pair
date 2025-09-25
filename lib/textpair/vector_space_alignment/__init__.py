@@ -459,7 +459,6 @@ async def run_vsa(
                 matches = await expand_validated_matches(
                     matches,
                     evaluator=llm_evaluator,
-                    get_text_func=get_text,
                 )
         finally:
             # Ensure we always stop the server
