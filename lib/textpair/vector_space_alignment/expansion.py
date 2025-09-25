@@ -25,6 +25,46 @@ def count_sentences(text: str) -> int:
     return len(sentences)
 
 
+def get_previous_sentences_with_boundary(filepath: str, start_byte: int, count: int) -> tuple[list[str], int]:
+    """Gets previous N sentences and the new start_byte for the entire chunk."""
+    start_read = max(0, start_byte - 4000)
+    with open(filepath, "r", encoding="utf-8") as f:
+        f.seek(start_read)
+        buffer = f.read(start_byte - start_read)
+
+    sentences = [s for s in SENTENCE_BOUNDARY_REGEX.split(buffer) if s.strip()]
+    chunk = sentences[-count:] if len(sentences) >= count else sentences
+
+    # Find the character position of the start of our chunk
+    if not chunk:
+        return [], start_byte
+    start_char_pos = buffer.find(chunk[0])
+
+    # Convert that to a byte offset and calculate the new absolute start_byte
+    new_start_byte = start_read + len(buffer[:start_char_pos].encode('utf-8'))
+    return chunk, new_start_byte
+
+
+def get_next_sentences_with_boundary(filepath: str, end_byte: int, count: int) -> tuple[list[str], int]:
+    """Gets next N sentences and the new end_byte for the entire chunk."""
+    with open(filepath, "r", encoding="utf-8") as f:
+        f.seek(end_byte)
+        buffer = f.read(4000)
+
+    sentences = [s for s in SENTENCE_BOUNDARY_REGEX.split(buffer) if s.strip()]
+    chunk = sentences[:count] if len(sentences) >= count else sentences
+
+    # Find the character position of the end of our chunk
+    if not chunk:
+        return [], end_byte
+    # Find where the last sentence in our chunk ends within the buffer
+    end_char_pos = buffer.find(chunk[-1]) + len(chunk[-1])
+
+    # Convert to a byte offset and calculate the new absolute end_byte
+    new_end_byte = end_byte + len(buffer[:end_char_pos].encode('utf-8'))
+    return chunk, new_end_byte
+
+
 def get_adjacent_sentence(
     filename: str, byte_pos: int, direction: str, buffer_size: int = 2048
 ) -> Optional[tuple[int, int]]:
@@ -82,101 +122,102 @@ def _get_sentence_chunk(filename: str, start_byte: int, direction: str, count: i
             break
     return sentences
 
-
 async def _expand_single_match(
     match: MergedGroup, evaluator, threshold: float, get_text_func
 ) -> tuple[MergedGroup, bool]:
     """
-    Tests the largest combination first as a short-circuit. If that fails, it
-    tests all 16 combinations and returns the longest valid passage pair.
-    Returns: (expanded_match, was_expanded)
+    Reads all potential text components once, then brute-forces the 16 combinations
+    to find the best expansion.
     """
-    # 1. Get the potential boundaries for the "+2 sentence" expansions
-    s_back_chunk = _get_sentence_chunk(match.source.filename, match.source.start_byte, "backward", 2)
-    s_fwd_chunk = _get_sentence_chunk(match.source.filename, match.source.end_byte, "forward", 2)
-    t_back_chunk = _get_sentence_chunk(match.target.filename, match.target.start_byte, "backward", 2)
-    t_fwd_chunk = _get_sentence_chunk(match.target.filename, match.target.end_byte, "forward", 2)
+    # Read all necessary text and boundary components exactly ONCE. (6 reads)
+    original_source_text = get_text_func(match.source.start_byte, match.source.end_byte, match.source.filename)
+    source_prev_sents, s_start_expanded = get_previous_sentences_with_boundary(match.source.filename, match.source.start_byte, 2)
+    source_next_sents, s_end_expanded = get_next_sentences_with_boundary(match.source.filename, match.source.end_byte, 2)
 
-    s_start_expanded = s_back_chunk[0][0] if len(s_back_chunk) == 2 else match.source.start_byte
-    s_end_expanded = s_fwd_chunk[-1][1] if len(s_fwd_chunk) == 2 else match.source.end_byte
-    t_start_expanded = t_back_chunk[0][0] if len(t_back_chunk) == 2 else match.target.start_byte
-    t_end_expanded = t_fwd_chunk[-1][1] if len(t_fwd_chunk) == 2 else match.target.end_byte
+    original_target_text = get_text_func(match.target.start_byte, match.target.end_byte, match.target.filename)
+    target_prev_sents, t_start_expanded = get_previous_sentences_with_boundary(match.target.filename, match.target.start_byte, 2)
+    target_next_sents, t_end_expanded = get_next_sentences_with_boundary(match.target.filename, match.target.end_byte, 2)
 
-    # --- The "Early Exit" Check ---
-    # 2. First, test only the single largest possible combination.
-    max_expansion_match = copy.deepcopy(match)
-    max_expansion_match.source.start_byte = s_start_expanded
-    max_expansion_match.source.end_byte = s_end_expanded
-    max_expansion_match.target.start_byte = t_start_expanded
-    max_expansion_match.target.end_byte = t_end_expanded
+    # Early exit: Check the max expansion case first
+    source_max_text = " ".join(source_prev_sents + [original_source_text] + source_next_sents)
+    target_max_text = " ".join(target_prev_sents + [original_target_text] + target_next_sents)
+    score, _ = await evaluator.evaluate_similarity(source_max_text, target_max_text)
+    if score >= threshold:
+        expanded_match = copy.deepcopy(match)
+        expanded_match.source.start_byte, expanded_match.source.end_byte = s_start_expanded, s_end_expanded
+        expanded_match.target.start_byte, expanded_match.target.end_byte = t_start_expanded, t_end_expanded
+        expanded_match.similarity = score
+        return expanded_match, True
 
-    source_text = get_text_func(max_expansion_match.source.start_byte, max_expansion_match.source.end_byte, max_expansion_match.source.filename)
-    target_text = get_text_func(max_expansion_match.target.start_byte, max_expansion_match.target.end_byte, max_expansion_match.target.filename)
-
-    if source_text and target_text:
-        score, _ = await evaluator.evaluate_similarity(source_text, target_text)
-        # 3. If it's valid, it must be the best one, so we can return it immediately.
-        if score >= threshold:
-            max_expansion_match.similarity = score
-            return max_expansion_match, True  # Successfully expanded
-    # --- End of Early Exit Check ---
-
-    # 4. If the early exit failed, proceed with the full 16-combination check.
+    # Generate all 16 combinations from in-memory strings.
     combinations = list(itertools.product([False, True], repeat=4))
     tasks = []
-    passage_configs = []
+
+    passage_data_list = []
 
     for combo in combinations:
-        # We already tested the all-True combo, but re-evaluating it is simpler
-        # than filtering it out and handling the results separately.
-        temp_match = copy.deepcopy(match)
-        if combo[0]: temp_match.source.start_byte = s_start_expanded
-        if combo[1]: temp_match.source.end_byte = s_end_expanded
-        if combo[2]: temp_match.target.start_byte = t_start_expanded
-        if combo[3]: temp_match.target.end_byte = t_end_expanded
+        # Build text strings and track byte offsets simultaneously
+        source_parts = []
+        s_start, s_end = match.source.start_byte, match.source.end_byte
+        if combo[0]:
+            source_parts.extend(source_prev_sents)
+            s_start = s_start_expanded
+        source_parts.append(original_source_text)
+        if combo[1]:
+            source_parts.extend(source_next_sents)
+            s_end = s_end_expanded
 
-        source_text = get_text_func(temp_match.source.start_byte, temp_match.source.end_byte, temp_match.source.filename)
-        target_text = get_text_func(temp_match.target.start_byte, temp_match.target.end_byte, temp_match.target.filename)
-        if source_text and target_text:
-            tasks.append(evaluator.evaluate_similarity(source_text, target_text))
-            passage_configs.append(temp_match)
+        target_parts = []
+        t_start, t_end = match.target.start_byte, match.target.end_byte
+        if combo[2]:
+            target_parts.extend(target_prev_sents)
+            t_start = t_start_expanded
+        target_parts.append(original_target_text)
+        if combo[3]:
+            target_parts.extend(target_next_sents)
+            t_end = t_end_expanded
 
-    if not tasks:
-        return match, False  # No expansion attempted
+        current_source_text = " ".join(s for s in source_parts if s)
+        current_target_text = " ".join(s for s in target_parts if s)
+
+        # Store the config and the generated text together
+        config = copy.deepcopy(match)
+        config.source.start_byte, config.source.end_byte = s_start, s_end
+        config.target.start_byte, config.target.end_byte = t_start, t_end
+
+        passage_data_list.append({
+            'match_config': config,
+            'source_text': current_source_text,
+            'target_text': current_target_text
+        })
+        tasks.append(evaluator.evaluate_similarity(current_source_text, current_target_text))
 
     results = await asyncio.gather(*tasks)
 
-    # 5. Filter for valid candidates and find the best one based on the new rule.
+    # Filter, sort, and find the winner
     valid_candidates = []
     for i, (score, _) in enumerate(results):
         if score >= threshold:
-            config = passage_configs[i]
-            s_sents = count_sentences(get_text_func(config.source.start_byte, config.source.end_byte, config.source.filename))
-            t_sents = count_sentences(get_text_func(config.target.start_byte, config.target.end_byte, config.target.filename))
-            valid_candidates.append({'score': score, 'size': s_sents + t_sents, 'match': config})
+            data = passage_data_list[i]
+            s_sents = count_sentences(data['source_text'])
+            t_sents = count_sentences(data['target_text'])
+            valid_candidates.append({'score': score, 'size': s_sents + t_sents, 'match': data['match_config']})
 
     if not valid_candidates:
-        return match, False  # No valid expansion found
+        return match, False
 
-    # Sort to find the best: prioritize size first, then score as a tie-breaker.
     valid_candidates.sort(key=lambda x: (x['size'], x['score']), reverse=True)
-
     winner = valid_candidates[0]['match']
     winner.similarity = valid_candidates[0]['score']
 
-    # Check if this is actually an expansion (different from original)
-    was_expanded = (winner.source.start_byte != match.source.start_byte or
-                   winner.source.end_byte != match.source.end_byte or
-                   winner.target.start_byte != match.target.start_byte or
-                   winner.target.end_byte != match.target.end_byte)
+    was_expanded = (winner.source.start_byte != match.source.start_byte or winner.source.end_byte != match.source.end_byte or
+                   winner.target.start_byte != match.target.start_byte or winner.target.end_byte != match.target.end_byte)
 
     return winner, was_expanded
 
 
 async def expand_validated_matches(
     matches: list[MergedGroup],
-    llm_model_path: str,
-    llm_context_window: int,
     evaluator,
     get_text_func,
 ) -> list[MergedGroup]:

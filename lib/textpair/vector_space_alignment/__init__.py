@@ -458,8 +458,6 @@ async def run_vsa(
             if matches: # Only run expansion if there are matches left
                 matches = await expand_validated_matches(
                     matches,
-                    config["llm_model"],
-                    config["llm_context_window"],
                     evaluator=llm_evaluator,
                     get_text_func=get_text,
                 )
