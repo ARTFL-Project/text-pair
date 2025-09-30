@@ -20,7 +20,14 @@ from spacy.tokens import Doc
 from text_preprocessing import Tokens
 from tqdm import tqdm
 
-from .structures import PHILO_TEXT_OBJECT_LEVELS, DocumentChunks, Matches, MergedGroup, PassageGroup
+from .structures import (
+    PHILO_TEXT_OBJECT_LEVELS,
+    DocumentChunks,
+    Matches,
+    MergedGroup,
+    PassageGroup,
+    save_tokens,
+)
 
 
 def jaccard_sim(X, Y):
@@ -93,13 +100,13 @@ class Corpus(ABC):
                 self.output_dir,
                 self.direction,
                 "saved_docs",
-                os.path.basename(text.metadata["parsed_filename"].replace(".lz4", "")),
+                os.path.basename(text.metadata["parsed_filename"].replace(".lz4", ".token_cache")),
             )
             doc_id = text.metadata["philo_id"].split()[0]
             if (
                 doc_id != current_doc_id and current_doc_id is not None
             ):  # we save the current doc when doc_ids don't match
-                full_doc.save(full_doc.metadata["parsed_filename"])
+                save_tokens(full_doc, full_doc.metadata["parsed_filename"])
                 full_doc = Tokens([], text.metadata)
             full_doc.extend(text)
             text.purge()
@@ -135,7 +142,7 @@ class Corpus(ABC):
                     print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
                     yield self.__build_text_chunk(chunk_group)
             current_doc_id = doc_id
-        full_doc.save(full_doc.metadata["parsed_filename"])
+        save_tokens(full_doc, full_doc.metadata["parsed_filename"])
         print()
 
     def __build_text_chunk(self, chunk_group: deque[Tokens]) -> list[str]:

@@ -4,7 +4,6 @@
 from html import unescape as unescape_html
 from xml.sax.saxutils import unescape as unescape_xml
 
-import numpy as np
 import regex as re
 
 TAGS = re.compile(r"<[^>]+>")
@@ -36,6 +35,8 @@ def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -
         text = re.sub(r"^<[^>]+>", "", text, count=1).strip()
     if text.endswith(">"):
         text = re.sub(r"<[^>]+>$", "", text, count=1).strip()
+    # Remove unclosed tags at the end
+    text = re.sub(r"<[^>]+$", "", text).strip()
     return clean_text(text)
 
 
@@ -46,19 +47,3 @@ def text_object_upper_bound(config) -> str:
     if text_object_level == 1:
         return "doc"
     return object_type_to_level[text_object_level - 1]
-
-
-def jaccard_sim(X, Y):
-    """Jaccard Similarity"""
-    assert X.shape[1] == Y.shape[1]
-
-    X = X.astype(bool).astype(int)
-    Y = Y.astype(bool).astype(int)
-
-    intersect = X.dot(Y.T)
-
-    x_sum = X.sum(axis=1).A1
-    y_sum = Y.sum(axis=1).A1
-    xx, yy = np.meshgrid(x_sum, y_sum)
-    union = (xx + yy).T - intersect
-    return (intersect / union).toarray()

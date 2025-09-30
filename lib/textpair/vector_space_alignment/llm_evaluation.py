@@ -148,8 +148,7 @@ class AsyncLLMEvaluator:
             payload = {
                 "prompt": prompt,
                 "max_tokens": 100,
-                "temperature": 0.3,
-                "top_p": 0.9,
+                "temperature": 0.1,
                 "stop": []
             }
 
@@ -196,8 +195,7 @@ class AsyncLLMEvaluator:
                 payload = {
                     "prompt": prompt,
                     "max_tokens": 100,
-                    "temperature": 0.3,
-                    "top_p": 0.9,
+                    "temperature": 0.1,
                     "stop": []
                 }
 

@@ -17,12 +17,12 @@ from sklearn.metrics.pairwise import linear_kernel
 from text_preprocessing import PreProcessor, Token, Tokens
 from tqdm import tqdm
 
-from textpair.utils import clean_text, get_text, jaccard_sim, text_object_upper_bound
+from textpair.utils import clean_text, get_text, text_object_upper_bound
 
-from .corpus import Corpus, TfIdfCorpus, TransformerCorpus, Word2VecEmbeddingCorpus
+from .corpus import TfIdfCorpus, TransformerCorpus, Word2VecEmbeddingCorpus
 from .expansion import expand_validated_matches
-from .llm_evaluation import AsyncLLMEvaluator, evaluate_passages_with_llm
-from .structures import DocumentChunks, Matches, MergedGroup, PassageGroup
+from .llm_evaluation import evaluate_passages_with_llm
+from .structures import Matches, MergedGroup, PassageGroup
 
 # ============================================================================
 # Helper Functions for Text Processing and Post-processing

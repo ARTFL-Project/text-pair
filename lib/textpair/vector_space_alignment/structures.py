@@ -13,6 +13,7 @@ import msgspec
 import numpy as np
 import torch
 from msgspec import field
+from text_preprocessing import Tokens
 
 # Global constants for serialization and path management
 TEMP_DIR = os.getcwd()
@@ -202,3 +203,77 @@ class Matches:
             self.cursor.execute("SELECT match FROM matches ORDER BY match_id")
             for match in self.cursor:
                 yield DECODER.decode(match[0])
+
+
+# Lightweight, serializable data structure for efficient sentence searching.
+class TokenSearchData(msgspec.Struct):
+    """A lightweight container for token data needed for sentence searching."""
+    start_bytes: list[int]
+    end_bytes: list[int]
+    surface_forms: list[str]
+    sentence_ids: list[str]
+
+
+def save_tokens(tokens: Tokens, parsed_filename: str):
+    """
+    Saves token search data to a cache file using msgpack serialization.
+    """
+    start_bytes = [token.ext['start_byte'] for token in tokens.tokens]
+    end_bytes = [token.ext['end_byte'] for token in tokens.tokens]
+    surface_forms = [token.surface_form for token in tokens.tokens]
+    sentence_ids = [get_sentence_id(token) for token in tokens.tokens]
+
+    search_data = TokenSearchData(
+        start_bytes=start_bytes,
+        end_bytes=end_bytes,
+        surface_forms=surface_forms,
+        sentence_ids=sentence_ids,
+    )
+
+    # Save the data to the cache file
+    encoder = msgspec.msgpack.Encoder()
+    with open(parsed_filename, "wb") as f:
+        f.write(encoder.encode(search_data))
+
+def load_token_search_data(parsed_filename: str) -> TokenSearchData:
+    """
+    Loads token search data from a cache if available, otherwise creates it
+    from the full Tokens object and caches it.
+    """
+    decoder = msgspec.msgpack.Decoder(TokenSearchData)
+
+    with open(parsed_filename, "rb") as f:
+        return decoder.decode(f.read())
+
+
+def find_token_index_by_byte(bytes: list[int], byte_offset: int) -> int:
+    """
+    Finds the index of the token at a given byte offset using binary search
+    on a pre-computed list of start_bytes.
+    """
+    import bisect
+    if not bytes:
+        return -1
+
+    # bisect_left finds the insertion point for the byte_offset.
+    index = bisect.bisect_left(bytes, byte_offset)
+
+    # If the offset is exactly a token's start, we found it.
+    if index < len(bytes) and bytes[index] == byte_offset:
+        return index
+
+    # If the insertion point is 0, it must be the first token.
+    if index == 0:
+        return 0
+
+    # Otherwise, the correct token is the one *before* the insertion point.
+    return index - 1
+
+
+def get_sentence_id(token) -> str:
+    """Extracts the sentence ID from a token's position string."""
+    try:
+        # The sentence ID is composed of the first 6 integers of the position string.
+        return " ".join(token.ext['position'].split()[:6])
+    except (AttributeError, KeyError, IndexError):
+        return ""
