@@ -7,14 +7,16 @@ import os
 import psycopg2
 
 from . import (
-    Ngrams,
-    banality_auto_detect,
     create_web_app,
     get_config,
-    merge_alignments,
     parse_files,
-    phrase_matcher,
     run_vsa,
+)
+from .sequence_alignment import (
+    Ngrams,
+    banality_auto_detect,
+    merge_alignments,
+    phrase_matcher,
 )
 
 
