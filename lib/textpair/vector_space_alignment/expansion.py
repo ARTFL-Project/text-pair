@@ -71,7 +71,6 @@ def get_previous_sentences_from_tokens(filepath: str, start_byte: int, count: in
         sentences.append(("".join(reversed(prev_sentence)), start_byte_of_sentence))
         match_start_index = first_token_index
 
-    print("PREVIOUS sentences:", sentences)
     return sentences
 
 def get_next_sentences_from_tokens(filepath: str, end_byte: int, count: int) -> list[tuple[str, int]]:
@@ -113,7 +112,6 @@ def get_next_sentences_from_tokens(filepath: str, end_byte: int, count: int) -> 
         sentences.append(("".join(next_sentence), end_byte_of_sentence))
         match_end_index = last_token_index
 
-    print("NEXT sentences:", sentences)
     return sentences
 
 
