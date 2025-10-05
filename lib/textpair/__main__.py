@@ -6,18 +6,8 @@ import os
 
 import psycopg2
 
-from . import (
-    create_web_app,
-    get_config,
-    parse_files,
-    run_vsa,
-)
-from .sequence_alignment import (
-    Ngrams,
-    banality_auto_detect,
-    merge_alignments,
-    phrase_matcher,
-)
+from . import create_web_app, get_config, parse_files, run_vsa
+from .sequence_alignment import Ngrams, banality_auto_detect, merge_alignments, phrase_matcher
 
 
 def delete_database(dbname: str) -> None:
@@ -250,7 +240,8 @@ async def run_vsa_similarity(params) -> None:
         params.paths["target"]["input_files_for_ngrams"],
         params.workers,
         {**params.preprocessing_params, **params.matching_params},
-        params.output_path
+        params.output_path,
+        params.llm_params
     )
     if params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")

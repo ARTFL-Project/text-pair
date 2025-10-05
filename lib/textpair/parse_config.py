@@ -24,6 +24,8 @@ class TextPairConfig:
             self.only_web_app = self.__cli_args["load_only_web_app"]
             self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
             self.source_against_source = False
+            self.llm_params: dict[str, Any] = {}
+            self.reuse_classification: dict[str, Any] = {"classes": {}}
             self.__parse_config()
             self.__set_params()
 
@@ -113,7 +115,7 @@ class TextPairConfig:
         for key, value in dict(config["MATCHING"]).items():
             if value or key not in self.matching_params:
                 match key:
-                    case "flex_gap" | "banality_auto_detection" | "store_banalities" | "llm_debug":
+                    case "flex_gap" | "banality_auto_detection" | "store_banalities" | "llm_debug" | "llm_eval":
                         if value.lower() == "yes" or value.lower() == "true":
                             value = True
                         else:
@@ -123,6 +125,17 @@ class TextPairConfig:
                     case "min_matching_words" | "source_batch" | "target_batch":
                         value = int(value)
                 self.matching_params[key] = value
+        for key, value in dict(config["LLM_PARAMS"]).items():
+            if value:
+                if key == "llm_context_window":
+                    value = int(value)
+                self.llm_params[key] = value
+        for key, value in dict(config["REUSE_CLASSIFICATION"]).items():
+            if value:
+                if key == "ADDITIONAL_INSTRUCTIONS":
+                    self.reuse_classification[key] = value.strip()
+                else:
+                    self.reuse_classification["classes"][key] = value.strip()
         if not config["TEXT_SOURCES"]["target_file_path"]:
             self.source_against_source = True
 

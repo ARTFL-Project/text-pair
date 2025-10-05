@@ -6,7 +6,7 @@ from .generate_ngrams import Ngrams
 
 __all__ = [
     'merge_alignments',
-    'banality_auto_detect', 
+    'banality_auto_detect',
     'phrase_matcher',
     'Ngrams'
 ]

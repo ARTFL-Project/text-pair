@@ -9,7 +9,7 @@ import lz4.frame
 import orjson
 from tqdm import tqdm
 
-from .utils import get_text
+from textpair.utils import get_text
 
 
 @dataclass(slots=True)

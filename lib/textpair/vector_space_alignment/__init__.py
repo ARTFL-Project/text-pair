@@ -374,7 +374,7 @@ async def run_vsa(
     workers: int,
     config: dict[str, Any],
     output_path: str,
-    debug_llm: bool = True
+    llm_params: dict[str, Any],
 ):
     """Main function for vector space alignment workflow"""
     config["source"]["strip_tags"] = True  # this is useful for post-processing passages where we have tags included.
@@ -438,16 +438,16 @@ async def run_vsa(
         config["min_similarity"],
         config["source"]["vectorization"],
         model,
-        use_llm_evaluation=bool(config["llm_model"]),  # Use placeholders if LLM will evaluate
+        use_llm_evaluation=config["llm_eval"],  # Use placeholders if LLM will evaluate
     )
 
     # Then evaluate with LLM if model path is provided
-    if config["llm_model"]:
+    if config["llm_eval"]:
         matches, llm_evaluator = await evaluate_passages_with_llm(
             matches,
             config["min_similarity"],
-            config["llm_model"],
-            config["llm_context_window"],
+            llm_params["llm_model"],
+            llm_params["llm_context_window"],
             config["llm_similarity_threshold"],
             config["llm_debug"],
             output_path,
