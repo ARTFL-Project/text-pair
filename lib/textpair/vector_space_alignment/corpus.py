@@ -406,6 +406,8 @@ class TransformerCorpus(Corpus):
                 torch.cuda.empty_cache()
             return sim
 
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
         super().__init__(
             texts,
             output_path,

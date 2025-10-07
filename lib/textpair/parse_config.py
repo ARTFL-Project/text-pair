@@ -115,7 +115,7 @@ class TextPairConfig:
         for key, value in dict(config["MATCHING"]).items():
             if value or key not in self.matching_params:
                 match key:
-                    case "flex_gap" | "banality_auto_detection" | "store_banalities" | "llm_debug" | "llm_eval":
+                    case "flex_gap" | "banality_auto_detection" | "store_banalities" | "llm_debug" | "llm_eval" | "banality_llm_post_eval" | "zero_shot_banality_detection":
                         if value.lower() == "yes" or value.lower() == "true":
                             value = True
                         else:
@@ -127,7 +127,7 @@ class TextPairConfig:
                 self.matching_params[key] = value
         for key, value in dict(config["LLM_PARAMS"]).items():
             if value:
-                if key == "llm_context_window":
+                if key in ("llm_context_window", "llm_concurrency_limit"):
                     value = int(value)
                 self.llm_params[key] = value
         for key, value in dict(config["REUSE_CLASSIFICATION"]).items():

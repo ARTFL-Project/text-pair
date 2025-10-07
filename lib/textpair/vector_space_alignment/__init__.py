@@ -17,11 +17,11 @@ from sklearn.metrics.pairwise import linear_kernel
 from text_preprocessing import PreProcessor, Token, Tokens
 from tqdm import tqdm
 
+from textpair.llm_evaluation import AsyncLLMEvaluator, LLMDebugLogger
 from textpair.utils import clean_text, get_text, text_object_upper_bound
 
 from .corpus import TfIdfCorpus, TransformerCorpus, Word2VecEmbeddingCorpus
 from .expansion import expand_validated_matches
-from .llm_evaluation import evaluate_passages_with_llm
 from .structures import Matches, MergedGroup, PassageGroup
 
 # ============================================================================
@@ -363,6 +363,84 @@ def word2vec_embed_similarity(
         target_corpus = source_corpus
     return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
 
+async def evaluate_passages_with_llm(
+    merged_matches: list[MergedGroup],
+    min_score: float,
+    llm_model_path: str,
+    llm_context_window: int,
+    llm_similarity_threshold: float | None = None,
+    debug_llm: bool = False,
+    output_path: str = "output",
+) -> tuple[list[MergedGroup], AsyncLLMEvaluator]:
+    """Evaluate merged passages using LLM and filter by threshold. Returns (matches, evaluator)."""
+
+    # Initialize LLM evaluator
+    llm_evaluator = AsyncLLMEvaluator(llm_model_path, context_window=llm_context_window)
+    llm_evaluator.start_server()
+
+    # Initialize debug logger (controlled by debug_llm parameter)
+    debug_logger = LLMDebugLogger(enabled=debug_llm, output_path=output_path)
+
+    print("Evaluating matched passages with LLM...", flush=True)
+
+    # Initialize LLM evaluation debug file if debugging is enabled
+    if debug_logger.enabled:
+        with open(debug_logger.llm_file, "w", encoding="utf-8") as debug_file:
+            debug_file.write("LLM EVALUATION DEBUG LOG\n")
+            debug_file.write("=" * 50 + "\n\n")
+
+    # Override min_score if llm_similarity_threshold is provided
+    if llm_similarity_threshold is not None:
+        min_score = llm_similarity_threshold
+
+    try:
+        # Prepare passage pairs for batch evaluation
+        passage_pairs = []
+        computed_similarities = []
+
+        for merged_group in merged_matches:
+            source_text = get_text(
+                merged_group.source.start_byte,
+                merged_group.source.end_byte,
+                merged_group.source.filename
+            )
+            target_text = get_text(
+                merged_group.target.start_byte,
+                merged_group.target.end_byte,
+                merged_group.target.filename
+            )
+            passage_pairs.append((source_text, target_text))
+            computed_similarities.append(merged_group.similarity)
+
+        # Perform batch async evaluation
+        llm_results = await llm_evaluator.evaluate_batch(passage_pairs, batch_size=8)
+
+        # Update similarities and filter by threshold
+        for i, (merged_group, (llm_similarity, llm_reasoning)) in enumerate(zip(merged_matches, llm_results)):
+            computed_similarity = computed_similarities[i]
+
+            # Update the similarity score with LLM evaluation
+            merged_group.similarity = llm_similarity
+
+            # Debug: Log the LLM evaluation
+            debug_logger.log_llm_evaluation(
+                i, computed_similarity, llm_similarity, llm_reasoning,
+                merged_group.source.filename, merged_group.target.filename, passage_pairs[i][0], passage_pairs[i][1]
+            )
+
+        # Filter out passages below threshold
+        original_count = len(merged_matches)
+        filtered_matches = [match for match in merged_matches if match.similarity >= min_score]
+
+        print(f"Completed LLM evaluation. Kept {len(filtered_matches)}/{original_count} passages above {min_score} threshold.", flush=True)
+
+        return filtered_matches, llm_evaluator
+
+    except Exception as llm_error:
+        print(f"Batch LLM evaluation failed: {str(llm_error)[:100]}...")
+        # Keep the original similarities as fallback
+        debug_logger.log_llm_error(str(llm_error))
+        return merged_matches, llm_evaluator
 
 # ============================================================================
 # Main Orchestrator Function
@@ -451,7 +529,6 @@ async def run_vsa(
             config["llm_similarity_threshold"],
             config["llm_debug"],
             output_path,
-            get_text_func=get_text,
         )
         # Iteratively expand the boundaries of the validated matches
         try:

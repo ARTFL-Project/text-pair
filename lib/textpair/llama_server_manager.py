@@ -16,10 +16,11 @@ import requests
 
 
 class LlamaServerManager:
-    def __init__(self, model_path, port=8080, context_window=8192, max_retries=30, retry_delay=1):
+    def __init__(self, model_path, port=8080, context_window=8192, concurrency_limit=8, max_retries=30, retry_delay=1):
         self.model_path = model_path
         self.port = port
         self.context_window = context_window
+        self.concurrency_limit = concurrency_limit
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.process = None
@@ -55,13 +56,17 @@ class LlamaServerManager:
         """Start the llama-server process"""
         llama_server = self.find_llama_server()
 
+        # When using --parallel, the context window is divided among all slots
+        # So we need to multiply the desired context window by the parallel value
+        total_context_size = self.context_window * self.concurrency_limit
+
         cmd = [
             llama_server,
             "--host", "127.0.0.1",
             "--port", str(self.port),
-            "--ctx-size", str(self.context_window),
+            "--ctx-size", str(total_context_size),
             "--n-gpu-layers", "99",
-            "--parallel", "8",  # Handle multiple concurrent requests
+            "--parallel", str(self.concurrency_limit),  # Handle multiple concurrent requests
             "--log-disable",    # Reduce log noise
             "--threads", "4",   # CPU threads
             "--mlock",           # Enable memory locking
@@ -76,6 +81,8 @@ class LlamaServerManager:
         else:
             cmd.extend(["-hf", self.model_path])
             print(f"Starting llama-server with HF repo: {self.model_path}")
+
+        print(f"Context window per slot: {self.context_window}, Parallel slots: {self.concurrency_limit}, Total context: {total_context_size}")
 
         self.llama_server_cmd = cmd
         try:
@@ -148,7 +155,7 @@ class LlamaServerManager:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python llama_server_manager.py <model_path> [port]")
+        print("Usage: python llama_server_manager.py <model_path> [port] [concurrency_limit]")
         print("Examples:")
         print("  Local model: python llama_server_manager.py /path/to/model.gguf 8080")
         print("  HF model:    python llama_server_manager.py microsoft/DialoGPT-medium 8080")
@@ -158,8 +165,9 @@ def main():
     model_path = sys.argv[1]
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
     context_window = int(sys.argv[3]) if len(sys.argv) > 3 else 8192
+    concurrency_limit = int(sys.argv[4]) if len(sys.argv) > 4 else 8
 
-    server = LlamaServerManager(model_path, port, context_window)
+    server = LlamaServerManager(model_path, port, context_window, concurrency_limit)
 
     try:
         server.start()

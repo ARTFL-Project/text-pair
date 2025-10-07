@@ -7,7 +7,14 @@ import os
 import psycopg2
 
 from . import create_web_app, get_config, parse_files, run_vsa
-from .sequence_alignment import Ngrams, banality_auto_detect, merge_alignments, phrase_matcher
+from .sequence_alignment import (
+    Ngrams,
+    banality_auto_detect,
+    banality_llm_post_eval,
+    merge_alignments,
+    phrase_matcher,
+    zero_shot_banality_detection,
+)
 
 
 def delete_database(dbname: str) -> None:
@@ -61,7 +68,7 @@ def update_count(count: int, to_remove: int, path: str) -> int:
     return count
 
 
-def run_alignment(params):
+async def run_alignment(params):
     """Main function to start sequence alignment"""
     if params.only_align is False:
         if params.text_parsing["parse_source_files"] is True:
@@ -151,15 +158,23 @@ def run_alignment(params):
     count = get_count(os.path.join(params.output_path, "results/count.txt"))
 
     # Postprocessing steps
-    if params.matching_params["phrase_filter"] or params.matching_params["banality_auto_detection"] is True:
+    if any([params.matching_params["phrase_filter"], params.matching_params["banality_auto_detection"], params.matching_params["banality_llm_eval"]]):
         print(f"\n### Postprocessing {count} pairwise alignments ###")
         if params.matching_params["phrase_filter"]:
             filtered_passages = phrase_matcher(results_file, params.matching_params["phrase_filter"], count)
             print(f"{filtered_passages} pairwise alignments have been filtered based on the phrase filter provided.")
             count = update_count(count, filtered_passages, params.output_path)
             print(f"{count} pairwise alignments remaining.")
-        if params.matching_params["banality_auto_detection"] is True:
-            banalities_found = banality_auto_detect(
+        elif params.matching_params["banality_auto_detection"] is True:
+            if params.matching_params["zero_shot_banality_detection"] is True:
+                print("Running zero-shot banality filtering...")
+                banalities_found = await zero_shot_banality_detection(
+                    results_file,
+                    params.matching_params["zero_shot_model"],
+                    params.matching_params["store_banalities"],
+                )
+            else:
+                banalities_found = banality_auto_detect(
                 results_file,
                 params.paths["source"]["common_ngrams"],
                 f'{params.paths["source"]["ngram_output_path"]}/ngrams_in_order',
@@ -168,6 +183,18 @@ def run_alignment(params):
                 params.matching_params["most_common_ngram_proportion"],
                 params.matching_params["common_ngram_threshold"],
             )
+            if params.matching_params["banality_llm_post_eval"] is True:
+                print("Running LLM post-evaluation on flagged banalities...")
+                rescued_count = await banality_llm_post_eval(
+                    results_file,
+                    params.llm_params["server_url"],
+                    params.llm_params["server_model"],
+                    params.llm_params["context_window"],
+                    params.llm_params["concurrency_limit"],
+                )
+                if rescued_count > 0:
+                    print(f"{rescued_count} passages were rescued (reclassified as substantive) after LLM evaluation.")
+                    banalities_found -= rescued_count  # Adjust the count
             if params.matching_params["store_banalities"] is False:
                 print(
                     f"{banalities_found} pairwise alignment(s) have been identified as formulaic and have been removed from matches."
@@ -316,7 +343,7 @@ async def main():
             store_banalities=params.matching_params["store_banalities"],
         )
     elif params.matching_params["matching_algorithm"] == "sa":
-        run_alignment(params)
+        await run_alignment(params)
     elif params.matching_params["matching_algorithm"] == "vsa":
         await run_vsa_similarity(params)
 
