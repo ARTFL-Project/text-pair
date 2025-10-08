@@ -36,7 +36,7 @@ If you wish to install TextPAIR on a host machine, note that TextPair will only 
 
 #### Dependencies
 
--   Python 3.10 and up
+-   Python 3.11 and up
 -   Node and NPM
 -   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database by running the following command in the PostgreSQL shell: `CREATE EXTENSION pg_trgm;` run as a superuser.
 

@@ -85,7 +85,7 @@ class WebAppConfig:
 
     def __init__(self, db_name: str, api_server: str, source_database_link: str, target_database_link: str,
     source_philo_db_path: str, target_philo_db_path: str, algorithm: str, store_banalities: bool,
-    source_against_source: bool):
+    source_against_source: bool, textpair_params=None):
         with open("/var/lib/text-pair/config/appConfig.json", encoding="utf8") as app_config:
             self.options: OrderedDict = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
@@ -103,7 +103,19 @@ class WebAppConfig:
         self.options["sourceLinkToDocMetadata"] = "source_title"
         self.options["targetLinkToDocMetadata"] = "target_title"
         self.options["banalitiesStored"] = store_banalities
-        self.options["reuseClassification"] = {"classes": []}
+
+        # Populate passage classification if available
+        if textpair_params and hasattr(textpair_params, 'passage_classification'):
+            classes = textpair_params.passage_classification.get("classes", {})
+            if classes:
+                self.options["passageClassification"] = [
+                    {"label": label, "description": desc}
+                    for label, desc in classes.items()
+                ]
+            else:
+                self.options["passageClassification"] = []
+        else:
+            self.options["passageClassification"] = []
 
     def __call__(self) -> dict[str, Any]:
         return self.options
@@ -293,6 +305,18 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
         alignment_fields["passage_id"] = rowid
         alignment_fields["source_passage_length"] = len(TOKENIZER.findall(alignment_fields["source_passage"]))
         alignment_fields["target_passage_length"] = len(TOKENIZER.findall(alignment_fields["target_passage"]))
+
+        # Map passage_categories to target_*_class fields
+        if "passage_categories" in alignment_fields:
+            categories = alignment_fields.get("passage_categories", [])
+            alignment_fields["target_first_class"] = categories[0] if len(categories) > 0 else ""
+            alignment_fields["target_second_class"] = categories[1] if len(categories) > 1 else ""
+            alignment_fields["target_third_class"] = categories[2] if len(categories) > 2 else ""
+        else:
+            alignment_fields["target_first_class"] = ""
+            alignment_fields["target_second_class"] = ""
+            alignment_fields["target_third_class"] = ""
+
         row = validate_field_type(alignment_fields, DEFAULT_FIELD_TYPES, field_names)
         rows.append(row)
         lines += 1
@@ -498,7 +522,8 @@ def create_web_app(
     """Main routine"""
     web_config = WebAppConfig(
         table, api_server, source_database_link, target_database_link, source_philo_db_path,
-    target_philo_db_path, algorithm, store_banalities, textpair_params.source_against_source
+        target_philo_db_path, algorithm, store_banalities, textpair_params.source_against_source,
+        textpair_params
     )
 
     print("\n### Storing results in database ###", flush=True)

@@ -5,7 +5,8 @@
     "databaseName": "alignment_db",
     "databaseLabel": "Text Alignments",
     "matchingAlgorithm": "sa",
-    "branding": [{
+    "branding": [
+        {
             "label": "ARTFL-Project",
             "link": "https://artfl-project.uchicago.edu"
         },
@@ -20,7 +21,8 @@
     "targetPhiloDBPath": "",
     "sourceLabel": "Source",
     "targetLabel": "Target",
-    "sourceCitation": [{
+    "sourceCitation": [
+        {
             "field": "source_author",
             "style": {}
         },
@@ -35,7 +37,8 @@
             "style": {}
         }
     ],
-    "targetCitation": [{
+    "targetCitation": [
+        {
             "field": "target_author",
             "style": {}
         },
@@ -51,7 +54,8 @@
         }
     ],
     "metadataFields": {
-        "source": [{
+        "source": [
+            {
                 "label": "Passage",
                 "value": "source_passage"
             },
@@ -72,7 +76,8 @@
                 "value": "source_passage_length"
             }
         ],
-        "target": [{
+        "target": [
+            {
                 "label": "Passage",
                 "value": "target_passage"
             },
@@ -95,7 +100,8 @@
         ]
     },
     "facetsFields": {
-        "source": [{
+        "source": [
+            {
                 "label": "Passage",
                 "value": "source_passage"
             },
@@ -116,7 +122,8 @@
                 "value": "source_passage_length"
             }
         ],
-        "target": [{
+        "target": [
+            {
                 "label": "Passage",
                 "value": "target_passage"
             },
@@ -138,7 +145,8 @@
             }
         ]
     },
-    "timeSeriesIntervals": [{
+    "timeSeriesIntervals": [
+        {
             "label": "Year",
             "value": 1
         },
@@ -154,5 +162,7 @@
             "label": "Century",
             "value": 100
         }
-    ]
+    ],
+    "banalitiesStored": false,
+    "passageClassification": []
 }

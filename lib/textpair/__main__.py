@@ -7,6 +7,7 @@ import os
 import psycopg2
 
 from . import create_web_app, get_config, parse_files, run_vsa
+from .passage_classifier import classify_passages
 from .sequence_alignment import (
     Ngrams,
     banality_auto_detect,
@@ -206,6 +207,18 @@ async def run_alignment(params):
                     f"{banalities_found} pairwise alignments identified as formulaic and will be flagged as banalities in the database."
                 )
 
+    # Passage classification
+    if params.passage_classification.get("classify_passage") is True:
+        print(f"\n### Classifying passages into thematic categories ###")
+        await classify_passages(
+            results_file,
+            params.matching_params.get("zero_shot_model", "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"),
+            params.passage_classification["classes"],
+            min_confidence=0.3,
+            top_k=3,
+            batch_size=32
+        )
+
     # Passage merger
     print("Grouping passages by source...", end="", flush=True)
     groups_file = merge_alignments(results_file, count)
@@ -270,6 +283,20 @@ async def run_vsa_similarity(params) -> None:
         params.output_path,
         params.llm_params
     )
+
+    # Passage classification (if enabled)
+    if params.passage_classification.get("classify_passage") is True:
+        output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
+        print(f"\n### Classifying passages into thematic categories ###")
+        await classify_passages(
+            output_file,
+            params.matching_params["zero_shot_model"],
+            params.passage_classification["classes"],
+            min_confidence=0.3,
+            top_k=3,
+            batch_size=32
+        )
+
     if params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
         count = get_count(os.path.join(params.output_path, "results/counts.txt"))

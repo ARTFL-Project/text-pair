@@ -292,7 +292,7 @@ async def banality_llm_post_eval(
     concurrency_limit: int = 8,
 ) -> int:
     """
-    LLM-based post-evaluation of banalities detected by Stage 1.
+    LLM-based post-evaluation of banalities detected by earlier stages.
 
     Re-evaluates passages already flagged as banalities using an LLM
     to score their scholarly interest. Can rescue false positives.

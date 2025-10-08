@@ -12,7 +12,8 @@ from .generate_ngrams import Ngrams
 __all__ = [
     'merge_alignments',
     'banality_auto_detect',
+    'banality_llm_post_eval',
     'phrase_matcher',
     'Ngrams',
-    'filter_banalities_with_llm'
+    'zero_shot_banality_detection',
 ]

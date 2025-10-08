@@ -25,7 +25,7 @@ class TextPairConfig:
             self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
             self.source_against_source = False
             self.llm_params: dict[str, Any] = {}
-            self.reuse_classification: dict[str, Any] = {"classes": {}}
+            self.passage_classification: dict[str, Any] = {"classes": {}}
             self.__parse_config()
             self.__set_params()
 
@@ -130,12 +130,15 @@ class TextPairConfig:
                 if key in ("llm_context_window", "llm_concurrency_limit"):
                     value = int(value)
                 self.llm_params[key] = value
-        for key, value in dict(config["REUSE_CLASSIFICATION"]).items():
+        for key, value in dict(config["PASSAGE_CLASSIFICATION"]).items():
             if value:
-                if key == "ADDITIONAL_INSTRUCTIONS":
-                    self.reuse_classification[key] = value.strip()
+                if key == "classify_passage":
+                    if value.lower() == "yes" or value.lower() == "true":
+                        self.passage_classification["classify_passage"] = True
+                    else:
+                        self.passage_classification["classify_passage"] = False
                 else:
-                    self.reuse_classification["classes"][key] = value.strip()
+                    self.passage_classification["classes"][key] = value.strip()
         if not config["TEXT_SOURCES"]["target_file_path"]:
             self.source_against_source = True
 

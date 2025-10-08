@@ -35,11 +35,11 @@
                         </div>
                     </div>
                 </div>
-                <!-- Reuse Classification -->
-                <div id="reuse-classification" class="mb-3" v-if="globalConfig.reuseClassification.classes.length">
+                <!-- Passage Classification -->
+                <div id="passage-classification" class="mb-3" v-if="globalConfig.passageClassification.length">
                     <div class="row">
                         <div class="col-12">
-                            <h5 class="section-title text-center pb-2">Context of Reuse Classification</h5>
+                            <h5 class="section-title text-center pb-2">Passage Classification</h5>
                         </div>
                     </div>
                     <div class="row">
@@ -51,7 +51,7 @@
                                 <select class="form-control rounded-0 select-with-arrow"
                                     v-model="classificationFilters[0]">
                                     <option value="">Any classification</option>
-                                    <option v-for="classItem in globalConfig.reuseClassification.classes"
+                                    <option v-for="classItem in globalConfig.passageClassification"
                                         :key="classItem.label" :value="classItem.label" :title="classItem.description">
                                         {{ classItem.label.replace(/_/g, ' ') }}
                                     </option>
@@ -66,7 +66,7 @@
                                 <select class="form-control rounded-0 select-with-arrow"
                                     v-model="classificationFilters[1]">
                                     <option value="">Any classification</option>
-                                    <option v-for="classItem in globalConfig.reuseClassification.classes"
+                                    <option v-for="classItem in globalConfig.passageClassification"
                                         :key="classItem.label" :value="classItem.label" :title="classItem.description">
                                         {{ classItem.label.replace(/_/g, ' ') }}
                                     </option>
@@ -81,7 +81,7 @@
                                 <select class="form-control rounded-0 select-with-arrow"
                                     v-model="classificationFilters[2]">
                                     <option value="">Any classification</option>
-                                    <option v-for="classItem in globalConfig.reuseClassification.classes"
+                                    <option v-for="classItem in globalConfig.passageClassification"
                                         :key="classItem.label" :value="classItem.label" :title="classItem.description">
                                         {{ classItem.label.replace(/_/g, ' ') }}
                                     </option>
