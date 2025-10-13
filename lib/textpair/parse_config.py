@@ -25,7 +25,10 @@ class TextPairConfig:
             self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
             self.source_against_source = False
             self.llm_params: dict[str, Any] = {}
-            self.passage_classification: dict[str, Any] = {"classes": {}}
+            self.passage_classification: dict[str, Any] = {
+                "classify_passage": False,
+                "classes": {}
+            }
             self.__parse_config()
             self.__set_params()
 
@@ -115,7 +118,7 @@ class TextPairConfig:
         for key, value in dict(config["MATCHING"]).items():
             if value or key not in self.matching_params:
                 match key:
-                    case "flex_gap" | "banality_auto_detection" | "store_banalities" | "llm_debug" | "llm_eval" | "banality_llm_post_eval" | "zero_shot_banality_detection":
+                    case "flex_gap" | "banality_auto_detection" | "store_banalities" | "llm_debug" | "llm_eval" | "banality_llm_post_eval":
                         if value.lower() == "yes" or value.lower() == "true":
                             value = True
                         else:
@@ -137,8 +140,17 @@ class TextPairConfig:
                         self.passage_classification["classify_passage"] = True
                     else:
                         self.passage_classification["classify_passage"] = False
+                elif key == "zero_shot_model":
+                    self.passage_classification["zero_shot_model"] = value.strip()
                 else:
                     self.passage_classification["classes"][key] = value.strip()
+
+        # Validate passage classification configuration
+        if self.passage_classification["classify_passage"] is True:
+            if not self.passage_classification.get("zero_shot_model"):
+                print("You need to set a value for zero_shot_model if classify_passage is enabled")
+                os._exit(1)
+
         if not config["TEXT_SOURCES"]["target_file_path"]:
             self.source_against_source = True
 

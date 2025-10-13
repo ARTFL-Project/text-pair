@@ -138,164 +138,20 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
     return passages_filtered
 
 
-async def zero_shot_banality_detection(
-    input_path: str,
-    zero_shot_model: str,
-    store_banalities: bool,
-) -> int:
-    """
-    Zero-shot classification-based banality detection.
-
-    Classifies passages as SUBSTANTIVE vs non-substantive (banality).
-    Anything not classified as substantive content is considered a banality.
-
-    Args:
-        input_path: Path to input alignments file (lz4 compressed)
-        zero_shot_model: Hugging Face model for zero-shot classification
-        store_banalities: Whether to keep banalities in output
-
-    Returns:
-        Number of banalities found
-    """
-    print(f"Loading zero-shot classifier: {zero_shot_model}")
-    classifier = pipeline(
-        "zero-shot-classification",
-        model=zero_shot_model,
-        device=0  # Use GPU if available
-    )
-
-    # Define categories for classification
-    # We only care about: is it substantive or not?
-    candidate_labels = [
-        "Standardized phrases used to begin or end correspondence, including greetings, salutations, closings, and formulaic farewells",
-        "Standard and conventional notes regarding printing, authorship, translation, or publication details, often found as paratextual elements",
-        "Passage which contains only titles of persons, including honorifics, ranks, and titles of nobility",
-        "Content that conveys specific information through developed narrative, unique description, argument, unique opinion, or detailed dialogue"
-    ]
-
-    # Prepare output
-    temp_output_path = input_path.replace(".jsonl.lz4", ".jsonl_temp.lz4")
-    if os.path.exists(temp_output_path):
-        os.remove(temp_output_path)
-
-    # Count lines for progress
-    print("Counting alignments...")
-    with lz4.frame.open(input_path, "rb") as f_count:
-        num_lines = sum(1 for _ in f_count)
-
-    if num_lines == 0:
-        print("Input file is empty.")
-        return 0
-
-    print(f"Processing {num_lines} alignments with zero-shot classification...")
-
-    banalities_found = 0
-    lines_written = 0
-    batch_size = 32  # Process 32 passages at a time
-
-    with (lz4.frame.open(temp_output_path, "wb") as output_file,
-          lz4.frame.open(input_path, "rb") as f_in,
-          tqdm(total=num_lines, desc="Zero-shot banality detection") as pbar):
-
-        batch = []
-        batch_alignments = []
-
-        for line_b in f_in:
-            alignment = orjson.loads(line_b)
-
-            # Pre-filter: very long passages are substantive
-            if len(alignment.get("target_passage", "")) > 3000:
-                alignment["zero_shot_classification"] = "SUBSTANTIVE"
-                alignment["banality"] = False
-                output_file.write(orjson.dumps(alignment) + b"\n")
-                lines_written += 1
-                pbar.update(1)
-                continue
-
-            batch.append(alignment["target_passage"])
-            batch_alignments.append(alignment)
-
-            # Process batch
-            if len(batch) >= batch_size:
-                results = classifier(
-                    batch,
-                    candidate_labels,
-                    multi_label=False,
-                    batch_size=batch_size
-                )
-
-                for alignment, result in zip(batch_alignments, results):
-                    top_label = result["labels"][0]
-
-                    # The last label is "substantive content" - if that's the top choice, it's not banal
-                    if top_label == candidate_labels[-1]:  # Substantive
-                        alignment["zero_shot_classification"] = "SUBSTANTIVE"
-                        alignment["banality"] = False
-                    else:  # Any other category = banality
-                        alignment["zero_shot_classification"] = "BANAL"
-                        alignment["banality"] = True
-                        banalities_found += 1
-                        if not store_banalities:
-                            pbar.update(1)
-                            continue
-
-                    output_file.write(orjson.dumps(alignment) + b"\n")
-                    lines_written += 1
-                    pbar.update(1)
-
-                batch = []
-                batch_alignments = []
-
-        # Process remaining batch
-        if batch:
-            results = classifier(
-                batch,
-                candidate_labels,
-                multi_label=False,
-                batch_size=len(batch)
-            )
-
-            for alignment, result in zip(batch_alignments, results):
-                top_label = result["labels"][0]
-
-                if top_label == candidate_labels[-1]:
-                    alignment["zero_shot_classification"] = "SUBSTANTIVE"
-                    alignment["banality"] = False
-                else:
-                    alignment["zero_shot_classification"] = "BANAL"
-                    alignment["banality"] = True
-                    banalities_found += 1
-                    if not store_banalities:
-                        pbar.update(1)
-                        continue
-
-                output_file.write(orjson.dumps(alignment) + b"\n")
-                lines_written += 1
-                pbar.update(1)
-
-    print(f"\nZero-shot banality detection complete.")
-    print(f"Total banalities found: {banalities_found}")
-    print(f"Lines written: {lines_written}")
-
-    os.remove(input_path)
-    os.rename(temp_output_path, input_path)
-
-    return banalities_found
-
-
 async def banality_llm_post_eval(
     input_path: str,
     model_path: str,
+    context_window: int,
+    concurrency_limit: int,
+    port: int,
     store_banalities: bool,
-    port: int = 8090,
-    context_window: int = 8192,
-    concurrency_limit: int = 8,
 ) -> int:
     """
-    LLM-based post-evaluation of banalities detected by earlier stages.
+    LLM-based post-evaluation of banalities detected by earlier stages using three-pass approach.
 
-    Re-evaluates passages already flagged as banalities using an LLM
-    to score their scholarly interest. Can rescue false positives.
+    Pass 1: Identify indices of passages flagged as banal
+    Pass 2: Re-read file, batch evaluate only banal passages, track indices to rescue
+    Pass 3: Re-read file, update banality flags for rescued passages, write output
 
     Args:
         input_path: Path to input alignments file (lz4 compressed) with banality flags
@@ -325,132 +181,142 @@ async def banality_llm_post_eval(
         if os.path.exists(temp_output_path):
             os.remove(temp_output_path)
 
-        # Count lines for progress
-        print("Counting alignments...")
-        num_lines = 0
-        try:
-            with lz4.frame.open(input_path, "rb") as f_count:
-                num_lines = sum(1 for _ in f_count)
-            if num_lines == 0:
-                print("Input file is empty.")
-                return 0
-        except Exception as e:
-            print(f"Error reading input file {input_path}: {e}")
+        # PASS 1: Identify indices of banal passages
+        banal_indices = []
+
+        with lz4.frame.open(input_path, "rb") as f_in:
+            for idx, line_b in enumerate(f_in):
+                alignment = orjson.loads(line_b)
+                if alignment.get("banality") is True:
+                    banal_indices.append(idx)
+
+        num_lines = idx + 1  # Total number of alignments
+        num_banal = len(banal_indices)
+
+        print(f"Total alignments: {num_lines}")
+        print(f"Banal passages to evaluate: {num_banal}")
+
+        if num_banal == 0:
+            print("No banal passages found. Skipping LLM evaluation.")
             return 0
 
-        print(f"Processing {num_lines} alignments with LLM post-evaluation...")
+        # PASS 2: Evaluate banal passages in batches, track rescues
+        batch_size = min(concurrency_limit // 2, 4)
+        non_banal_indices = set()  # Indices to flip from banal to non-banal
+        scores_map = {}  # Store scores for all evaluated passages
 
-        # Process in smaller batches for Stage 2 (longer prompts)
-        stage2_batch_size = min(concurrency_limit // 2, 4)
-        lines_written_count = 0
-        banalities_confirmed = 0
-        banalities_rescued = 0
-        llm_evaluated_count = 0
+        banal_passages = []
+        banal_idx_batch = []
+        banal_set = set(banal_indices)  # For fast lookup
+        next_banal_pos = 0  # Position in banal_indices list
 
-        with (lz4.frame.open(temp_output_path, "wb") as output_file,
-              lz4.frame.open(input_path, "rb") as f_in,
-              tqdm(total=num_lines, desc="LLM post-evaluation") as pbar):
+        with lz4.frame.open(input_path, "rb") as f_in, \
+             tqdm(total=num_banal, desc="LLM evaluation of banal passages") as pbar:
 
-            batch_to_eval = []
-            batch_no_eval = []
+            for idx, line_b in enumerate(f_in):
+                # Check if this is a banal passage
+                if idx in banal_set:
+                    alignment = orjson.loads(line_b)
+                    passage = alignment.get("target_passage", "")
+                    banal_passages.append(passage)
+                    banal_idx_batch.append(idx)
 
-            for line_b in f_in:
-                alignment = orjson.loads(line_b)
+                    # Process batch when full
+                    if len(banal_passages) >= batch_size * 10:
+                        # Evaluate with LLM
+                        results = await evaluator.score_scholarly_interest_batch(
+                            passages=banal_passages,
+                            batch_size=batch_size,
+                            show_progress=False
+                        )
 
-                # Only re-evaluate passages flagged as banalities by Stage 1
-                if alignment.get("banality") is True:
-                    batch_to_eval.append(alignment)
-                else:
-                    # Not a banality, keep as is
-                    batch_no_eval.append(alignment)
+                        # Process results
+                        for batch_idx, (score, is_banal) in enumerate(results):
+                            original_idx = banal_idx_batch[batch_idx]
+                            scores_map[original_idx] = score
 
-                # Process batch when it reaches size
-                if len(batch_to_eval) >= stage2_batch_size * 10:
-                    # Score the banalities with LLM
-                    scored = await evaluator.score_scholarly_interest_batch(
-                        alignments=batch_to_eval,
-                        batch_size=stage2_batch_size,
-                        show_progress=False
-                    )
+                            # If LLM says it's NOT banal, mark for rescue
+                            if not is_banal:
+                                non_banal_indices.add(original_idx)
 
-                    llm_evaluated_count += len(scored)
+                            pbar.update(1)
 
-                    # Process LLM results
-                    for result in scored:
-                        if isinstance(result, dict) and "error" not in result:
-                            if result.get("banality") is True:
-                                banalities_confirmed += 1
-                                if not store_banalities:
-                                    pbar.update(1)
-                                    continue
-                            else:
-                                # LLM says it's substantive, rescue it
-                                banalities_rescued += 1
+                        banal_passages = []
+                        banal_idx_batch = []
 
-                            output_file.write(orjson.dumps(result) + b"\n")  # type: ignore
-                            lines_written_count += 1
-                        pbar.update(1)
-
-                    batch_to_eval = []
-
-                # Write non-banalities
-                for alignment in batch_no_eval:
-                    output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
-                    lines_written_count += 1
-                    pbar.update(1)
-
-                batch_no_eval = []
-
-            # Process remaining batches
-            if batch_to_eval:
-                scored = await evaluator.score_scholarly_interest_batch(
-                    alignments=batch_to_eval,
-                    batch_size=stage2_batch_size,
+            # Process remaining batch
+            if banal_passages:
+                results = await evaluator.score_scholarly_interest_batch(
+                    passages=banal_passages,
+                    batch_size=len(banal_passages),
                     show_progress=False
                 )
 
-                llm_evaluated_count += len(scored)
+                for batch_idx, (score, is_banal) in enumerate(results):
+                    original_idx = banal_idx_batch[batch_idx]
+                    scores_map[original_idx] = score
 
-                for result in scored:
-                    if isinstance(result, dict) and "error" not in result:
-                        if result.get("banality") is True:
-                            banalities_confirmed += 1
-                            if not store_banalities:
-                                pbar.update(1)
-                                continue
-                        else:
-                            banalities_rescued += 1
+                    if not is_banal:
+                        non_banal_indices.add(original_idx)
 
-                        output_file.write(orjson.dumps(result) + b"\n")  # type: ignore
-                        lines_written_count += 1
                     pbar.update(1)
 
-            for alignment in batch_no_eval:
-                output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
-                lines_written_count += 1
+        banalities_rescued = len(non_banal_indices)
+        banalities_confirmed = num_banal - banalities_rescued
+
+        print(f"\nLLM evaluated {num_banal} passages")
+        print(f"Banalities confirmed: {banalities_confirmed}")
+        print(f"Banalities rescued (reclassified as interesting): {banalities_rescued}")
+
+        # PASS 3: Re-read file, update flags, write output
+        lines_written = 0
+
+        with lz4.frame.open(input_path, "rb") as f_in, \
+             lz4.frame.open(temp_output_path, "wb") as output_file, \
+             tqdm(total=num_lines, desc="Writing output") as pbar:
+
+            for idx, line_b in enumerate(f_in):
+                alignment = orjson.loads(line_b)
+
+                # Update banality flag if this passage was rescued
+                if idx in non_banal_indices:
+                    alignment["banality"] = False
+                    alignment["llm_rescued"] = True
+                    alignment["formulaic_score"] = scores_map.get(idx, -1)
+                elif idx in banal_set:
+                    # Was banal and still is, add score
+                    alignment["formulaic_score"] = scores_map.get(idx, -1)
+
+                # Decide whether to write based on store_banalities flag
+                should_write = True
+                if alignment.get("banality") is True and not store_banalities:
+                    should_write = False
+
+                if should_write:
+                    output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+                    lines_written += 1
+
                 pbar.update(1)
 
-            pbar.close()
+        print(f"Lines written to output: {lines_written}")
 
-        print(f"\nLLM post-evaluation complete.")
-        print(f"Passages evaluated by LLM: {llm_evaluated_count}")
-        print(f"Banalities confirmed: {banalities_confirmed}")
-        print(f"Banalities rescued (reclassified as substantive): {banalities_rescued}")
-        print(f"Total lines written: {lines_written_count}")
-
+        # Replace original file with updated version
         os.remove(input_path)
         os.rename(temp_output_path, input_path)
+        print(f"Updated file: {input_path}")
 
     except KeyboardInterrupt:
         print("\nInterrupted by user")
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise
     finally:
         print("Stopping llama-server...")
         evaluator.stop_server()
         if evaluator._session and not evaluator._session.closed:
-            await evaluator.close_session()
+            await evaluator._session.close()
         print("Server stopped.")
 
     return banalities_confirmed
@@ -460,13 +326,13 @@ if __name__ == "__main__":
     import sys
 
     file_path = sys.argv[1]
-    # ngrams_file = sys.argv[2]
-    # ngram_doc_path = sys.argv[3]
-    # percentage = float(sys.argv[4])
-    # with open(filepath.replace("alignments.jsonl.lz4", "count.txt"), "rb") as input_file:
-    #     count = int(input_file.read().strip())
-    # total = banality_auto_detect(filepath, ngrams_file, ngram_doc_path, count, percentage=percentage)
+    ngrams_file = sys.argv[2]
+    ngram_doc_path = sys.argv[3]
+    percentage = float(sys.argv[4])
+    with open(file_path.replace("alignments.jsonl.lz4", "count.txt"), "rb") as input_file:
+        count = int(input_file.read().strip())
+    total = banality_auto_detect(file_path, ngrams_file, ngram_doc_path, True, count, 0.25, percentage)
     # phrase_path = sys.argv[2]
     # total = phrase_matcher(file_path, phrase_path, int(sys.argv[3]))
     # print(total, "banalities found.")
-    total = asyncio.run(zero_shot_banality_detection(file_path, "tasksource/ModernBERT-large-nli", store_banalities=True))
+    # total = asyncio.run(zero_shot_banality_detection(file_path, "facebook/bart-large-mnli", store_banalities=True))

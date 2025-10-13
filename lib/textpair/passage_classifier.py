@@ -67,7 +67,7 @@ async def classify_passages(
     input_path: str,
     zero_shot_model: str,
     classification_classes: dict[str, str],
-    min_confidence: float = 0.5,
+    min_confidence: float = 0.7,
     top_k: int = 3,
     batch_size: int = 32
 ) -> int:

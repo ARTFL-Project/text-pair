@@ -102,20 +102,9 @@ class AsyncLLMEvaluator:
         self.server_process = None
         self._session = None
 
-        # Default LLM parameters for banality classification
-        self.DEFAULT_STAGE1_PARAMS = {
+        self.banality_eval_params = {
             "temperature": 0.1,
-            "max_tokens": 32,
-        }
-
-        self.DEFAULT_STAGE2_PARAMS = {
-            "temperature": 0.8,
             "max_tokens": 128,
-            "top_p": 0.9,
-            "top_k": 40,
-            "frequency_penalty": 1.1,
-            "presence_penalty": 0,
-            "repeat_penalty": 1.0,
         }
 
     def start_server(self):
@@ -262,106 +251,99 @@ class AsyncLLMEvaluator:
                 print(f"DEBUG: Server process alive: {self.server_process.poll() is None}")
             raise
 
-    async def close_session(self):
-        """Close the persistent session used for banality classification"""
-        if self._session and not self._session.closed:
-            await self._session.close()
 
-
-    async def classify_banality(
+    async def score_scholarly_interest(
         self,
-        alignment: dict,
-        semaphore: asyncio.Semaphore | None = None
-    ) -> dict:
+        passage: str
+    ) -> tuple[int, bool]:
         """
-        Two-stage banality classification for a single alignment.
-
-        Stage 1: Categorize into OPENING_CLOSING_FORMULA, PUBLISHING_ATTRIBUTION,
-                 PERSON_TITLES, or SUBSTANTIVE
-        Stage 2: If ambiguous (stage 1 = OPENING_CLOSING_FORMULA or PERSON_TITLES),
-                 evaluate scholarly interest (score 1-100)
+        Score scholarly interest (1-100) for a single passage.
 
         Args:
-            alignment: Alignment dict with 'target_passage' field
-            semaphore: Optional semaphore for concurrency control
+            passage: Text passage to evaluate
 
         Returns:
-            Alignment dict with added fields:
-                - llm_classification: Stage 1 category
-                - formulaic_score: Stage 2 score (if applicable)
-                - banality: Final boolean decision
+            Tuple of (score, is_banal) where:
+                - score: Interest score (1-100), or -1 on error
+                - is_banal: True if score >= 40, False otherwise
         """
-        async with (semaphore or asyncio.Semaphore(1)):
-            current_alignment = alignment.copy()
-            stage1_classification = "CLASSIFICATION_ERROR"
-            final_formulaic_status = "ERROR"
+        # Create a temporary alignment dict for the prompt
+        temp_alignment = {"target_passage": passage}
+        prompt = create_scoring_prompt(temp_alignment)
 
-            # Stage 1: Category classification
-            prompt1 = create_category_prompt(alignment)
+        try:
+            result = await self._make_completion_request(prompt, self.banality_eval_params)
 
-            try:
-                result1 = await self._make_completion_request(prompt1, self.DEFAULT_STAGE1_PARAMS)
-
-                # Extract response text
-                if result1.get("choices") and len(result1["choices"]) > 0:
-                    generated_text_stage1 = result1["choices"][0].get("text", "").strip()
-                else:
-                    generated_text_stage1 = "API_STRUCTURE_ERROR"
-
-                # Parse the response - try to find valid category anywhere in the response
-                valid_stage1_labels = {"OPENING_CLOSING_FORMULA", "PUBLISHING_ATTRIBUTION", "PERSON_TITLES", "SUBSTANTIVE"}
-
-                # First try: remove "OUTPUT:" prefix if present and take first part before colon
-                if generated_text_stage1.startswith("OUTPUT:"):
-                    generated_text_stage1 = generated_text_stage1[7:].strip()
-
-                parts = generated_text_stage1.split(":", 1)
-                stage1_classification = parts[0].strip()
-
-                # If first part is not valid, search for any valid label in the entire response
-                if stage1_classification not in valid_stage1_labels:
-                    for label in valid_stage1_labels:
-                        if label in generated_text_stage1:
-                            stage1_classification = label
-                            break
-                    else:
-                        # Still not found - mark as error
-                        print(f"DEBUG: Invalid classification received: '{parts[0].strip()}' from LLM response: '{generated_text_stage1}'")
-                        stage1_classification = "CLASSIFICATION_ERROR"
-
-            except aiohttp.ClientError as e:
-                stage1_classification = f"SERVER_CONNECTION_ERROR_S1: {str(e)}"
-            except json.JSONDecodeError as e:
-                stage1_classification = f"SERVER_RESPONSE_ERROR_S1: {str(e)}"
-            except Exception as e:
-                stage1_classification = f"UNEXPECTED_ERROR_S1: {type(e).__name__}: {str(e)}"
-
-            current_alignment["llm_classification"] = stage1_classification
-
-            # Stage 2 (Conditional)
-            if stage1_classification == "PUBLISHING_ATTRIBUTION":
-                final_formulaic_status = True
-                current_alignment["formulaic_score"] = 0
-            elif stage1_classification == "SUBSTANTIVE":
-                final_formulaic_status = False
-                current_alignment["formulaic_score"] = 100
-            elif "ERROR" in stage1_classification:
-                final_formulaic_status = False
+            if result.get("choices") and len(result["choices"]) > 0:
+                generated_text = result["choices"][0].get("text", "").strip()
             else:
-                # Stage 2: Scholarly interest scoring
-                prompt2 = create_scoring_prompt(alignment)
+                generated_text = "API_STRUCTURE_ERROR"
 
-                try:
-                    result2 = await self._make_completion_request(prompt2, self.DEFAULT_STAGE2_PARAMS)
+            score = -1
+            try:
+                match = re.search(r"\d+", generated_text)
+                if match:
+                    score = int(match.group(0))
+                    if not (1 <= score <= 100):
+                        score = -1
+            except Exception:
+                pass
 
-                    if result2.get("choices") and len(result2["choices"]) > 0:
-                        generated_text_stage2 = result2["choices"][0].get("text", "").strip()
+            # Score < 40 means banal (not interesting), >= 40 means scholarly/interesting (not banal)
+            is_banal = score < 40 if score != -1 else True
+
+            return score, is_banal
+
+        except Exception as e:
+            print(f"WARNING: Error scoring passage: {type(e).__name__}: {str(e)}")
+            return -1, False
+
+    async def score_scholarly_interest_batch(
+        self,
+        passages: list[str],
+        batch_size: int = 4,
+        show_progress: bool = True
+    ) -> list[tuple[int, bool]]:
+        """
+        Batch process passages for scholarly interest scoring.
+
+        Args:
+            passages: List of text passages to evaluate
+            batch_size: Number of concurrent LLM requests
+            show_progress: Show tqdm progress bar
+
+        Returns:
+            List of (score, is_banal) tuples in same order as input passages
+        """
+        async def score_single(session, passage):
+            try:
+                # Create a temporary alignment dict for the prompt
+                temp_alignment = {"target_passage": passage}
+                prompt = create_scoring_prompt(temp_alignment)
+
+                payload = {
+                    "prompt": prompt,
+                    **self.banality_eval_params
+                }
+
+                async with session.post(
+                    f"{self.base_url}/v1/completions",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=60.0)
+                ) as response:
+                    if response.status != 200:
+                        return -1, False
+
+                    result = await response.json()
+
+                    if result.get("choices") and len(result["choices"]) > 0:
+                        generated_text = result["choices"][0].get("text", "").strip()
                     else:
-                        generated_text_stage2 = "API_STRUCTURE_ERROR"
+                        return -1, False
 
                     score = -1
                     try:
-                        match = re.search(r"\d+", generated_text_stage2)
+                        match = re.search(r"\d+", generated_text)
                         if match:
                             score = int(match.group(0))
                             if not (1 <= score <= 100):
@@ -369,187 +351,33 @@ class AsyncLLMEvaluator:
                     except Exception:
                         pass
 
-                    if score >= 40:
-                        final_formulaic_status = True
-                    else:
-                        final_formulaic_status = False
-                    current_alignment["formulaic_score"] = score
+                    # Score < 40 means banal (not interesting), >= 40 means scholarly/interesting (not banal)
+                    is_banal = score < 40 if score != -1 else True
 
-                except aiohttp.ClientError as e:
-                    final_formulaic_status = f"SERVER_CONNECTION_ERROR_S2: {str(e)}"
-                except json.JSONDecodeError as e:
-                    final_formulaic_status = f"SERVER_RESPONSE_ERROR_S2: {str(e)}"
-                except Exception as e:
-                    final_formulaic_status = f"UNEXPECTED_ERROR_S2: {type(e).__name__}: {str(e)}"
+                    return score, is_banal
 
-            current_alignment["banality"] = final_formulaic_status
-            return current_alignment
-
-    async def classify_banality_batch(
-        self,
-        alignments: list[dict],
-        batch_size: int = 4,
-        show_progress: bool = True
-    ) -> list[dict]:
-        """
-        Batch process alignments for banality classification.
-
-        Args:
-            alignments: List of alignment dicts
-            batch_size: Number of concurrent LLM requests
-            show_progress: Show tqdm progress bar
-
-        Returns:
-            List of classified alignments (same order as input)
-        """
-        semaphore = asyncio.Semaphore(batch_size)
-        results = []
-        total = len(alignments)
-
-        pbar = tqdm(total=total, desc="Banality Classification", disable=not show_progress)
-
-        # Process in chunks to avoid overwhelming the server
-        # Use smaller chunks when batch_size is high to prevent too many concurrent requests
-        chunk_size = batch_size * 10
-        for i in range(0, total, chunk_size):
-            chunk = alignments[i:i + chunk_size]
-            tasks = [
-                self.classify_banality(alignment, semaphore)
-                for alignment in chunk
-            ]
-            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Handle exceptions
-            for result in chunk_results:
-                if isinstance(result, Exception):
-                    # Add error marker
-                    print(f"WARNING: Exception in classify_banality: {result}")
-                    results.append({"error": str(result)})
-                else:
-                    # Check for error classifications
-                    if isinstance(result, dict) and "ERROR" in result.get("llm_classification", ""):
-                        print(f"WARNING: LLM classification error: {result.get('llm_classification')}")
-                    results.append(result)
-                pbar.update(1)
-
-        pbar.close()
-        return results
-
-    async def score_scholarly_interest_batch(
-        self,
-        alignments: list[dict],
-        batch_size: int = 4,
-        show_progress: bool = True
-    ) -> list[dict]:
-        """
-        Batch process alignments for Stage 2 scholarly interest scoring only.
-        Assumes Stage 1 classification has already been done.
-
-        Args:
-            alignments: List of alignment dicts with 'llm_classification' already set
-            batch_size: Number of concurrent LLM requests
-            show_progress: Show tqdm progress bar
-
-        Returns:
-            List of scored alignments (same order as input)
-        """
-        semaphore = asyncio.Semaphore(batch_size)
-        results = []
-        total = len(alignments)
-
-        pbar = tqdm(total=total, desc="LLM Scholarly Interest Scoring", disable=not show_progress)
-
-        # Process in smaller chunks
-        chunk_size = min(batch_size * 10, 80)
-        for i in range(0, total, chunk_size):
-            chunk = alignments[i:i + chunk_size]
-            tasks = [
-                self.score_scholarly_interest(alignment, semaphore)
-                for alignment in chunk
-            ]
-            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Handle exceptions
-            for result in chunk_results:
-                if isinstance(result, Exception):
-                    print(f"WARNING: Exception in score_scholarly_interest: {result}")
-                    results.append({"error": str(result)})
-                else:
-                    results.append(result)
-                pbar.update(1)
-
-        pbar.close()
-        return results
-
-    async def score_scholarly_interest(
-        self,
-        alignment: dict,
-        semaphore: asyncio.Semaphore | None = None
-    ) -> dict:
-        """
-        Stage 2 only: Score scholarly interest (1-100) for passages categorized as
-        OPENING_CLOSING_FORMULA or PERSON_TITLES.
-
-        Args:
-            alignment: Alignment dict with 'llm_classification' and 'target_passage'
-            semaphore: Optional semaphore for concurrency control
-
-        Returns:
-            Alignment dict with added fields:
-                - formulaic_score: Score (1-100)
-                - banality: Final boolean decision (True if score >= 40)
-        """
-        async with (semaphore or asyncio.Semaphore(1)):
-            current_alignment = alignment.copy()
-
-            # Stage 2: Scholarly interest scoring
-            prompt = create_scoring_prompt(alignment)
-
-            try:
-                result = await self._make_completion_request(prompt, self.DEFAULT_STAGE2_PARAMS)
-
-                if result.get("choices") and len(result["choices"]) > 0:
-                    generated_text = result["choices"][0].get("text", "").strip()
-                else:
-                    generated_text = "API_STRUCTURE_ERROR"
-
-                score = -1
-                try:
-                    match = re.search(r"\d+", generated_text)
-                    if match:
-                        score = int(match.group(0))
-                        if not (1 <= score <= 100):
-                            score = -1
-                except Exception:
-                    pass
-
-                if score >= 40:
-                    current_alignment["banality"] = True
-                else:
-                    current_alignment["banality"] = False
-                current_alignment["formulaic_score"] = score
-
-            except aiohttp.ClientError as e:
-                print(f"WARNING: Server connection error in Stage 2")
-                print(f"  Error type: {type(e).__name__}")
-                print(f"  Error message: {str(e)}")
-                print(f"  Server URL: {self.base_url}")
-                print(f"  Passage length: {len(alignment.get('target_passage', ''))}")
-                current_alignment["formulaic_score"] = -1
-                current_alignment["banality"] = False
-            except json.JSONDecodeError as e:
-                print(f"WARNING: Server response error in Stage 2")
-                print(f"  Error: {str(e)}")
-                current_alignment["formulaic_score"] = -1
-                current_alignment["banality"] = False
             except Exception as e:
-                print(f"WARNING: Unexpected error in Stage 2")
-                print(f"  Error type: {type(e).__name__}")
-                print(f"  Error message: {str(e)}")
-                current_alignment["formulaic_score"] = -1
-                current_alignment["banality"] = False
+                return -1, False
 
-            return current_alignment
+        results = []
+        total_passages = len(passages)
+
+        with tqdm(total=total_passages, desc="LLM Scholarly Evaluation", unit="passages", disable=not show_progress) as pbar:
+            for i in range(0, total_passages, batch_size):
+                batch = passages[i:i + batch_size]
+
+                async with aiohttp.ClientSession() as session:
+                    tasks = [score_single(session, passage) for passage in batch]
+                    batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    for result in batch_results:
+                        if isinstance(result, Exception):
+                            results.append((-1, False))
+                        else:
+                            results.append(result)
+                        pbar.update(1)
+
+        return results
 
 
 
@@ -633,6 +461,7 @@ def create_scoring_prompt(alignment: dict) -> str:
     Distinct or particularly well-phrased expressions of ideas.
     Longer, significant quotations (from literature, philosophy, scripture, historical figures) likely reused for their specific content or meaning.
     The core text of specific laws, decrees, or oaths where the substantive content is the focus.
+    Passages, regardless of length or formulaic nature, that represent a pivotal, explicit statement of a significant philosophical, theological, or socio-political concept or axiom. Reuse of such passages indicates a core intellectual lineage, widespread transmission of a major idea, or engagement with fundamental historical thought.
 
     Consider the passage's complexity, length, and apparent function within a text. Short, highly predictable, purely functional text should score low. Evaluate the provided passage on its own merits based on these criteria.
 

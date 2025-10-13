@@ -14,7 +14,6 @@ from .sequence_alignment import (
     banality_llm_post_eval,
     merge_alignments,
     phrase_matcher,
-    zero_shot_banality_detection,
 )
 
 
@@ -167,15 +166,8 @@ async def run_alignment(params):
             count = update_count(count, filtered_passages, params.output_path)
             print(f"{count} pairwise alignments remaining.")
         elif params.matching_params["banality_auto_detection"] is True:
-            if params.matching_params["zero_shot_banality_detection"] is True:
-                print("Running zero-shot banality filtering...")
-                banalities_found = await zero_shot_banality_detection(
-                    results_file,
-                    params.matching_params["zero_shot_model"],
-                    params.matching_params["store_banalities"],
-                )
-            else:
-                banalities_found = banality_auto_detect(
+            print("Running automatic banality detection...")
+            banalities_found = banality_auto_detect(
                 results_file,
                 params.paths["source"]["common_ngrams"],
                 f'{params.paths["source"]["ngram_output_path"]}/ngrams_in_order',
@@ -184,14 +176,16 @@ async def run_alignment(params):
                 params.matching_params["most_common_ngram_proportion"],
                 params.matching_params["common_ngram_threshold"],
             )
+            print(f"{banalities_found} pairwise alignment(s) have been identified as formulaic.")
             if params.matching_params["banality_llm_post_eval"] is True:
                 print("Running LLM post-evaluation on flagged banalities...")
                 rescued_count = await banality_llm_post_eval(
                     results_file,
-                    params.llm_params["server_url"],
-                    params.llm_params["server_model"],
-                    params.llm_params["context_window"],
-                    params.llm_params["concurrency_limit"],
+                    params.llm_params["llm_model"],
+                    params.llm_params["llm_context_window"],
+                    params.llm_params["llm_concurrency_limit"],
+                    params.llm_params["llm_port"],
+                    params.matching_params["store_banalities"],
                 )
                 if rescued_count > 0:
                     print(f"{rescued_count} passages were rescued (reclassified as substantive) after LLM evaluation.")
@@ -208,11 +202,11 @@ async def run_alignment(params):
                 )
 
     # Passage classification
-    if params.passage_classification.get("classify_passage") is True:
+    if params.passage_classification["classify_passage"] is True:
         print(f"\n### Classifying passages into thematic categories ###")
         await classify_passages(
             results_file,
-            params.matching_params.get("zero_shot_model", "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"),
+            params.passage_classification["zero_shot_model"],
             params.passage_classification["classes"],
             min_confidence=0.3,
             top_k=3,
@@ -285,14 +279,14 @@ async def run_vsa_similarity(params) -> None:
     )
 
     # Passage classification (if enabled)
-    if params.passage_classification.get("classify_passage") is True:
+    if params.passage_classification["classify_passage"] is True:
         output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
         print(f"\n### Classifying passages into thematic categories ###")
         await classify_passages(
             output_file,
-            params.matching_params["zero_shot_model"],
+            params.passage_classification["zero_shot_model"],
             params.passage_classification["classes"],
-            min_confidence=0.3,
+            min_confidence=0.5,
             top_k=3,
             batch_size=32
         )
