@@ -139,6 +139,13 @@ def parse_args(request):
         "classification_filter_1",
         "classification_filter_2",
         "classification_filter_3",
+        "aggregation_field",
+        "min_threshold",
+        "max_nodes",
+        "node_id",
+        "node_type",
+        "limit",
+        "offset",
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
@@ -160,6 +167,20 @@ def parse_args(request):
         else:
             if value:
                 query_args[key] = value
+
+    # Handle network graph node expansion: remove source/target filters before query_builder
+    aggregation_field = request.query_params.get("aggregation_field", "author")
+    source_param = request.query_params.get(f"source_{aggregation_field}", "").strip('"')
+    target_param = request.query_params.get(f"target_{aggregation_field}", "").strip('"')
+
+    if source_param and target_param and source_param == target_param:
+        # This is a node expansion request - remove source/target filters from query_args
+        # so query_builder doesn't process them (we'll add OR logic in get_network_data)
+        if f"source_{aggregation_field}" in query_args:
+            del query_args.dict[f"source_{aggregation_field}"]
+        if f"target_{aggregation_field}" in query_args:
+            del query_args.dict[f"target_{aggregation_field}"]
+
     metadata_field_types = get_pg_type(other_args["db_table"])
     metadata_field_types["rowid"] = "INTEGER"
     sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
@@ -876,6 +897,226 @@ def get_passages(request: Request):
     return {"passages": passages}
 
 
+@app.get("/network_data/")
+@app.get("/text-pair-api/network_data/")
+def get_network_data(request: Request):
+    """Get network graph data aggregated by author or title
+    Returns nodes and edges for visualization with Sigma.js"""
+    sql_fields, sql_values, other_args, _ = parse_args(request)
+
+    # Get parameters for network configuration
+    aggregation_field = request.query_params.get("aggregation_field", "author")  # author or title
+    min_threshold = int(request.query_params.get("min_threshold", 5))
+    max_nodes = int(request.query_params.get("max_nodes", 10000))
+
+    conn = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # Determine which fields to aggregate by
+    if aggregation_field == "author":
+        source_field = "source_author"
+        target_field = "target_author"
+    else:  # title
+        source_field = "source_title"
+        target_field = "target_title"
+
+    # Check if the requested fields exist in the table
+    field_types = get_pg_type(other_args.db_table)
+    if source_field not in field_types or target_field not in field_types:
+        conn.close()
+        return {
+            "error": f"Field '{aggregation_field}' not available in database",
+            "available_fields": list(field_types.keys())
+        }
+
+    # Build aggregation query
+    # Special case: if filtering by same node in both source and target, use OR logic
+    source_param = request.query_params.get(f"source_{aggregation_field}", "").strip('"')
+    target_param = request.query_params.get(f"target_{aggregation_field}", "").strip('"')
+
+    # At this point, sql_fields and sql_values are clean (parse_args removed source/target filters for node expansion)
+    where_clause = f"WHERE {sql_fields}" if sql_fields else ""
+
+    if source_param and target_param and source_param == target_param:
+        # User wants all connections for a specific node (both as source and target)
+        # Add OR filter to existing filters
+        node_filter = f"({source_field} = %s OR {target_field} = %s)"
+        if where_clause:
+            where_clause += f" AND {node_filter}"
+            sql_values = list(sql_values) + [source_param, source_param]
+        else:
+            where_clause = f"WHERE {node_filter}"
+            sql_values = [source_param, source_param]
+
+    # Query to get aggregated edges (author/title pairs) - DIRECTED
+    edge_query = f"""
+        SELECT
+            {source_field} as source,
+            {target_field} as target,
+            COUNT(*) as weight
+        FROM {other_args.db_table}
+        {where_clause}
+        GROUP BY {source_field}, {target_field}
+        HAVING COUNT(*) >= %s
+            AND {source_field} IS NOT NULL
+            AND {target_field} IS NOT NULL
+            AND {source_field} != ''
+            AND {target_field} != ''
+            AND {source_field} != {target_field}
+        ORDER BY weight DESC
+    """
+
+    # Execute with threshold parameter added to sql_values
+    threshold_params = list(sql_values) + [min_threshold]
+    cursor.execute(edge_query, threshold_params)
+
+    edges = []
+    node_weights_total = defaultdict(int)  # Track total connections per node
+    node_weights_as_source = defaultdict(int)  # Track times as source
+    node_weights_as_target = defaultdict(int)  # Track times as target
+    node_set = set()
+
+    for row in cursor:
+        source = row["source"]
+        target = row["target"]
+        weight = row["weight"]
+
+        # Skip empty strings (extra safety check)
+        if not source or not target:
+            continue
+
+        edges.append({
+            "source": source,
+            "target": target,
+            "weight": weight
+        })
+
+        node_set.add(source)
+        node_set.add(target)
+        node_weights_total[source] += weight
+        node_weights_total[target] += weight
+        node_weights_as_source[source] += weight
+        node_weights_as_target[target] += weight
+
+    # Limit to top N nodes by total weight (most connected)
+    if len(node_set) > max_nodes:
+        top_nodes = set(sorted(node_weights_total.keys(), key=lambda x: node_weights_total[x], reverse=True)[:max_nodes])
+        # Filter edges to only include top nodes
+        edges = [e for e in edges if e["source"] in top_nodes and e["target"] in top_nodes]
+
+    # Always recalculate node_set based on final edges (handles self-loop filtering and top-node filtering)
+    node_set = set()
+    for edge in edges:
+        node_set.add(edge["source"])
+        node_set.add(edge["target"])
+
+    # Create nodes list with metadata
+    nodes = []
+    for node_id in node_set:
+        nodes.append({
+            "id": node_id,
+            "label": node_id,
+            "size": node_weights_total[node_id],  # Size based on total alignments
+            "total_alignments": node_weights_total[node_id],
+            "as_source": node_weights_as_source[node_id],
+            "as_target": node_weights_as_target[node_id],
+            "type": aggregation_field
+        })
+
+    conn.rollback()
+    conn.close()
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "aggregation_field": aggregation_field,
+        "total_nodes": len(nodes),
+        "total_edges": len(edges),
+        "threshold": min_threshold
+    }
+
+
+
+
+@app.get("/count_by_year/")
+
+
+
+@app.get("/network_data/edge_details/")
+@app.get("/text-pair-api/network_data/edge_details/")
+def get_edge_details(request: Request):
+    """Get sample alignments for a specific edge (source->target pair)
+    Returns paginated list of actual passage alignments"""
+    sql_fields, sql_values, other_args, _ = parse_args(request)
+
+    source_node = request.query_params.get("source")
+    target_node = request.query_params.get("target")
+    node_type = request.query_params.get("node_type", "author")
+    limit = int(request.query_params.get("limit", 50))
+    offset = int(request.query_params.get("offset", 0))
+
+    if not source_node or not target_node:
+        return {"error": "source and target parameters are required"}
+
+    conn = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # Determine field names
+    if node_type == "author":
+        source_field = "source_author"
+        target_field = "target_author"
+    else:
+        source_field = "source_title"
+        target_field = "target_title"
+
+    # Build query to get specific alignments (DIRECTED - matches get_network_data logic)
+    edge_where = f"({source_field} = %s AND {target_field} = %s)"
+    if sql_fields:
+        where_clause = f"WHERE {sql_fields} AND {edge_where}"
+        query_params = list(sql_values) + [source_node, target_node]
+    else:
+        where_clause = f"WHERE {edge_where}"
+        query_params = [source_node, target_node]
+
+    # Get total count
+    count_query = f"SELECT COUNT(*) FROM {other_args.db_table} {where_clause}"
+    cursor.execute(count_query, query_params)
+    total_count = cursor.fetchone()[0]
+
+    # Get sample alignments
+    alignments_query = f"""
+        SELECT * FROM {other_args.db_table}
+        {where_clause}
+        ORDER BY rowid
+        LIMIT %s OFFSET %s
+    """
+    cursor.execute(alignments_query, query_params + [limit, offset])
+
+    alignments = []
+    for row in cursor:
+        alignments.append(dict(row))
+
+    conn.rollback()
+    conn.close()
+
+    return {
+        "alignments": alignments,
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
+        "source": source_node,
+        "target": target_node
+    }
+
+
 @app.get("/{db_path}/search")
 @app.get("/text-pair/{db_path}/search")
 @app.get("/{db_path}/time")
@@ -888,6 +1129,8 @@ def get_passages(request: Request):
 @app.get("/{db_path}/sorted-results")
 @app.get("/text-pair/{db_path}/text-view")
 @app.get("/{db_path}/text-view")
+@app.get("/text-pair/{db_path}/network")
+@app.get("/{db_path}/network")
 def index(db_path: str):
     """Return index.html which lists available POOLs"""
     with open(os.path.join(APP_PATH, db_path, "dist/index.html"), encoding="utf8") as html:

@@ -7,6 +7,7 @@ const timeSeries = () => import("../components/timeSeries");
 const sortedResults = () => import("../components/sortedResults");
 const alignmentGroup = () => import("../components/alignmentGroup");
 const textNavigation = () => import("../components/textNavigation");
+const networkGraph = () => import("../components/networkGraph");
 
 const router = createRouter({
     history: createWebHistory(globalConfig.appPath),
@@ -26,6 +27,11 @@ const router = createRouter({
             path: "/sorted-results",
             name: "sortedResults",
             component: sortedResults,
+        },
+        {
+            path: "/network",
+            name: "networkGraph",
+            component: networkGraph,
         },
         {
             path: "/group/:groupId",

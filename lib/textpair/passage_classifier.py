@@ -101,13 +101,11 @@ async def classify_passages(
 
     # Extract class labels and their descriptions
     candidate_labels = list(classification_classes.keys())
-    print(f"Classification categories ({len(candidate_labels)}): {', '.join(candidate_labels)}")
 
     # Prepare output
     temp_output_path = input_path.replace(".jsonl.lz4", ".jsonl_temp.lz4")
 
     # Count lines for progress
-    print("Counting alignments...")
     with lz4.frame.open(input_path, "rb") as f_count:
         num_lines = sum(1 for _ in f_count)
 
@@ -115,10 +113,7 @@ async def classify_passages(
         print("Input file is empty.")
         return 0
 
-    print(f"Classifying {num_lines} passages (multi-label, top-{top_k}, min confidence: {min_confidence})...")
-
     classified_count = 0
-
     with (lz4.frame.open(temp_output_path, "wb") as output_file,
           lz4.frame.open(input_path, "rb") as f_in,
           tqdm(total=num_lines, desc="Passage classification") as pbar):

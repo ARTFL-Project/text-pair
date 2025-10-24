@@ -7,8 +7,11 @@
             @click="sortResults">View passages by frequency of
             reuse</button>
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'timeSeries' }"
-            style="border-bottom-right-radius: 0;" @click="viewPassageInTimeline">View passages in
+            @click="viewPassageInTimeline">View passages in
             timeline</button>
+        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'networkGraph' }"
+            style="border-bottom-right-radius: 0;" @click="viewNetworkGraph">View network
+            graph</button>
     </div>
 </template>
 <script>
@@ -40,6 +43,13 @@ export default {
             delete queryParams.id_anchor;
             queryParams.db_table = this.$globalConfig.databaseName;
             this.$router.push(`/time/?${this.paramsToUrl(queryParams)}`);
+        },
+        viewNetworkGraph() {
+            let queryParams = { ...this.$route.query };
+            delete queryParams.page;
+            delete queryParams.id_anchor;
+            queryParams.db_table = this.$globalConfig.databaseName;
+            this.$router.push(`/network/?${this.paramsToUrl(queryParams)}`);
         },
     }
 }

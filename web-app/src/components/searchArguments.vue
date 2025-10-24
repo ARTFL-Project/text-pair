@@ -4,18 +4,9 @@
         <div class="mb-1 p-2" style="font-size: 1rem" v-if="counts && !error">
             {{ counts }} results for the following query:
         </div>
-        <div class="m-2 pt-2 pb-1" v-if="banality">
-            <div class="metadata-args rounded-pill">
-                <span class="metadata-label"> Banality filter </span>
-                <span class="metadata-value">
-                    {{ banality }}
-                </span>
-                <span class="remove-metadata" @click="removeMetadata({ fieldName: 'banality' }, $event)">x </span>
-            </div>
-        </div>
         <div class="row pl-2" v-if="!error">
-            <div class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams"
-                :key="groupIndex">
+            <div class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group"
+                v-for="(paramGroup, groupIndex) in searchParams" :key="groupIndex">
                 <h6 class="text-center text-capitalize">
                     <span v-html="paramGroup.direction"></span>
                     Parameters:
@@ -32,6 +23,15 @@
                     </div>
                 </div>
                 <div class="metadata-args none" v-if="paramGroup.params == null">None</div>
+            </div>
+        </div>
+        <div class="my-2 pb-1" v-if="banality">
+            <div class="metadata-args rounded-pill">
+                <span class="metadata-label"> Banality filter </span>
+                <span class="metadata-value">
+                    {{ banality }}
+                </span>
+                <span class="remove-metadata" @click="removeMetadata({ fieldName: 'banality' }, $event)">x </span>
             </div>
         </div>
     </div>
