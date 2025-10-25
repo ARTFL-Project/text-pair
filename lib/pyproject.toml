@@ -41,6 +41,7 @@ dependencies = [
     "faiss-cpu",
     "aiohttp~=3.12",
     "spacy-transformers",
+    "networkx~=3.5"
 ]
 
 [project.urls]
