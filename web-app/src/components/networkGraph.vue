@@ -20,7 +20,7 @@
                 <!-- Network Controls -->
                 <div class="card-body p-3 border-bottom">
                     <div class="row align-items-center">
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label mb-1">Aggregate by:</label>
                             <select class="form-select form-select-sm" v-model="aggregationField"
                                 @change="reloadNetwork">
@@ -30,7 +30,15 @@
                                 </option>
                             </select>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
+                            <label class="form-label mb-1">Measure Importance By:</label>
+                            <select class="form-select form-select-sm" v-model="centralityMode" @change="reloadNetwork">
+                                <option value="degree">Total connections (degree)</option>
+                                <option value="eigenvector">Influence (eigenvector)</option>
+                                <option value="betweenness">Bridging Role (betweenness)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
                             <label class="form-label mb-1">
                                 Min. alignments: <strong>{{ minThreshold }}</strong>
                             </label>
@@ -38,12 +46,11 @@
                                 @change="applyThreshold">
                         </div>
                         <div class="col-md-3">
-                            <label class="form-label mb-1">Layout:</label>
+                            <label class="form-label mb-1">Arrange by:</label>
                             <select class="form-select form-select-sm" v-model="layoutType" @change="applyLayout">
-                                <option value="force">Force-directed</option>
-                                <option value="communities">Communities (Louvain)</option>
+                                <option value="force">Closeness (Force-directed)</option>
+                                <option value="communities">Community</option>
                                 <option value="circular">Circular</option>
-                                <option value="random">Random</option>
                             </select>
                         </div>
                         <div class="col-md-2">
@@ -145,6 +152,7 @@ export default {
             // UI state
             aggregationField: "author",
             availableAggregations: [],
+            centralityMode: "degree",  // degree, eigenvector, or betweenness
             minThreshold: 5,
             layoutType: "force",  // Start with force, user can switch to communities
             expandedNode: null,
@@ -245,6 +253,7 @@ export default {
             let params = { ...this.$route.query };
             params.db_table = this.globalConfig.databaseName;
             params.aggregation_field = this.aggregationField;
+            params.centrality = this.centralityMode;
             params.min_threshold = this.minThreshold;
             params.max_nodes = 10000;
 
@@ -285,28 +294,35 @@ export default {
             // Create new graph
             this.graph = new Graph();
 
-            // Find min and max sizes for normalization
-            const sizes = this.rawData.nodes.map(n => n.size);
-            const maxSize = Math.max(...sizes);
-            const minSize = Math.min(...sizes);
+            // Use centrality for node sizing
+            const centralities = this.rawData.nodes.map(n => n.centrality || 0);
+            const maxCentrality = Math.max(...centralities);
+            const minCentrality = Math.min(...centralities);
 
             // Define size range (min and max pixel sizes)
             const minNodeSize = 5;
             const maxNodeSize = 30;
 
-            // Add nodes with normalized sizes
+            // Add nodes with normalized sizes based on centrality
             this.rawData.nodes.forEach(node => {
-                // Normalize size to range [minNodeSize, maxNodeSize]
-                const normalizedSize = minNodeSize +
-                    (Math.sqrt(node.size) - Math.sqrt(minSize)) /
-                    (Math.sqrt(maxSize) - Math.sqrt(minSize)) *
-                    (maxNodeSize - minNodeSize);
+                // Normalize centrality to range [minNodeSize, maxNodeSize]
+                let normalizedSize;
+                if (maxCentrality === minCentrality) {
+                    // All nodes have same centrality, use uniform size
+                    normalizedSize = (minNodeSize + maxNodeSize) / 2;
+                } else {
+                    normalizedSize = minNodeSize +
+                        (node.centrality - minCentrality) /
+                        (maxCentrality - minCentrality) *
+                        (maxNodeSize - minNodeSize);
+                }
 
                 this.graph.addNode(node.id, {
                     label: node.label,
                     size: normalizedSize,
                     color: this.getUniqueNodeColor(node.id),
-                    connections: node.size,
+                    connections: node.total_alignments,
+                    centrality: node.centrality,
                     hidden: false,  // Initialize as visible
                     x: Math.random(),
                     y: Math.random()
@@ -390,10 +406,10 @@ export default {
 
                 // Apply force-directed layout with linLogMode for better community separation
                 forceAtlas2.assign(this.graph, {
-                    iterations: 200,
+                    iterations: 400,
                     settings: {
-                        gravity: 0.5,
-                        scalingRatio: 50,
+                        gravity: 0.1,
+                        scalingRatio: 100,
                         strongGravityMode: false,
                         barnesHutOptimize: true,
                         barnesHutTheta: 0.5,
@@ -415,7 +431,7 @@ export default {
 
             } else if (this.layoutType === "force") {
                 forceAtlas2.assign(this.graph, {
-                    iterations: 150,
+                    iterations: 300,
                     settings: {
                         gravity: 0.1,
                         scalingRatio: 100,

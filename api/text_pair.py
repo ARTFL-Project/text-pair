@@ -9,6 +9,7 @@ from collections import Counter, OrderedDict, defaultdict, namedtuple
 from pathlib import Path
 from typing import Any
 
+import networkx as nx
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Request
@@ -146,6 +147,7 @@ def parse_args(request):
         "node_type",
         "limit",
         "offset",
+        "centrality",
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
@@ -1014,13 +1016,34 @@ def get_network_data(request: Request):
         node_set.add(edge["source"])
         node_set.add(edge["target"])
 
+    # Calculate centrality metrics using NetworkX
+    centrality_mode = request.query_params.get("centrality", "degree")  # degree, eigenvector, or betweenness
+
+    # Build NetworkX graph for centrality calculations
+    G = nx.DiGraph()
+    for edge in edges:
+        G.add_edge(edge["source"], edge["target"], weight=edge["weight"])
+
+    # Calculate centrality based on mode
+    if centrality_mode == "eigenvector":
+        try:
+            centrality = nx.eigenvector_centrality(G, max_iter=100, weight='weight')
+        except:
+            # Fall back to degree centrality if eigenvector fails (e.g., disconnected graph)
+            centrality = dict(G.degree(weight='weight'))
+    elif centrality_mode == "betweenness":
+        centrality = nx.betweenness_centrality(G, weight='weight')
+    else:  # degree (default)
+        centrality = dict(G.degree(weight='weight'))
+
     # Create nodes list with metadata
     nodes = []
     for node_id in node_set:
         nodes.append({
             "id": node_id,
             "label": node_id,
-            "size": node_weights_total[node_id],  # Size based on total alignments
+            "size": centrality.get(node_id, 0),  # Size based on centrality metric
+            "centrality": centrality.get(node_id, 0),  # Also keep as separate field for reference
             "total_alignments": node_weights_total[node_id],
             "as_source": node_weights_as_source[node_id],
             "as_target": node_weights_as_target[node_id],
@@ -1034,6 +1057,7 @@ def get_network_data(request: Request):
         "nodes": nodes,
         "edges": edges,
         "aggregation_field": aggregation_field,
+        "centrality_mode": centrality_mode,
         "total_nodes": len(nodes),
         "total_edges": len(edges),
         "threshold": min_threshold
