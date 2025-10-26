@@ -11,7 +11,6 @@
                 <citations :citation="globalConfig.targetCitation" :alignment="alignment"
                     :link-to-doc="globalConfig.targetLinkToDocMetadata"></citations>
 
-                <!-- Move classification tags here, right after target citation -->
                 <div class="classification-tags ms-3" style="margin-top: -0.75rem"
                     v-if="alignment.target_first_class || alignment.target_second_class || alignment.target_third_class">
                     <span v-if="alignment.target_first_class" class="classification-tag tag-primary">

@@ -15,7 +15,7 @@
                 </div>
                 <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter"
                     v-on:enter="enter">
-                    <div class="card mb-3 rounded-0 shadow-1" style="position: relative"
+                    <div class="card mb-3 rounded-0 shadow-1" style="position: relative;"
                         v-for="(alignment, index) in results.alignments" :key="results.start_position + index + 1"
                         v-bind:data-index="index">
                         <div class="corner-btn left">{{ results.start_position + index + 1 }}</div>

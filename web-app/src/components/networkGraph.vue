@@ -30,7 +30,7 @@
                                 </option>
                             </select>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label mb-1">Measure Importance By:</label>
                             <select class="form-select form-select-sm" v-model="centralityMode" @change="reloadNetwork">
                                 <option value="degree">Total connections (degree)</option>
@@ -38,14 +38,14 @@
                                 <option value="betweenness">Bridging Role (betweenness)</option>
                             </select>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label mb-1">
                                 Min. alignments: <strong>{{ minThreshold }}</strong>
                             </label>
                             <input type="range" class="form-range" v-model.number="minThreshold" min="1" max="100"
                                 @change="applyThreshold">
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label mb-1">Arrange by:</label>
                             <select class="form-select form-select-sm" v-model="layoutType" @change="applyLayout">
                                 <option value="force">Closeness (Force-directed)</option>
@@ -111,6 +111,7 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 import noverlap from "graphology-layout-noverlap";
 import circular from "graphology-layout/circular";
 import Sigma from "sigma";
+import { EdgeLineProgram } from "sigma/rendering";
 import passagePair from "./passagePair";
 import reportSwitcher from "./reportSwitcher";
 import searchArguments from "./searchArguments";
@@ -153,7 +154,7 @@ export default {
             aggregationField: "author",
             availableAggregations: [],
             centralityMode: "degree",  // degree, eigenvector, or betweenness
-            minThreshold: 5,
+            minThreshold: 10,
             layoutType: "force",  // Start with force, user can switch to communities
             expandedNode: null,
             selectedNode: null,
@@ -271,7 +272,7 @@ export default {
                         return;
                     }
 
-                    this.rawData = response.data;
+                    this.rawData = Object.freeze(response.data);
                     this.expandedNode = null;
                     this.initializeGraph();
                     this.loading = false;
@@ -352,21 +353,34 @@ export default {
             }
 
             this.renderer = new Sigma(this.graph, this.$refs.sigmaContainer, {
+                edgeProgramClasses: {
+                    line: EdgeLineProgram,
+                },
                 renderEdgeLabels: false,
                 defaultNodeColor: "#999",
                 defaultEdgeColor: "#ccc",
                 labelSize: 12,
                 labelWeight: "bold",
                 enableEdgeEvents: true,  // Make edges clickable
-                labelDensity: 0.5,  // Show 50% of labels initially
+                labelDensity: 0.1,  // Show 10% of labels initially
                 labelGridCellSize: 100,  // Grid cell size for label positioning
-                labelRenderedSizeThreshold: 6,  // Only show labels for nodes with rendered size > 6px
+                labelRenderedSizeThreshold: 15,  // Only show labels for nodes with rendered size > 10px
+
+                // High-performance node reducer for hover effects (GPU-side)
+                nodeReducer(node, data) {
+                    const state = { ...data };
+                    if (data.highlighted) {
+                        state.color = "#f00"; // Highlight color (red)
+                        state.zIndex = 1;     // Bring to front
+                    }
+                    return state;
+                },
             });
 
             // Set camera to show full graph with some padding
             // Adjust camera to show full graph
             const camera = this.renderer.getCamera();
-            camera.setState({ ratio: 1.2 }); // Zoom out more to show spread-out nodes
+            camera.setState({ ratio: 1.1 }); // Zoom out more to show spread-out nodes
 
             // Update counts
             this.updateCounts();
@@ -406,7 +420,7 @@ export default {
 
                 // Apply force-directed layout with linLogMode for better community separation
                 forceAtlas2.assign(this.graph, {
-                    iterations: 400,
+                    iterations: 200,
                     settings: {
                         gravity: 0.1,
                         scalingRatio: 100,
@@ -431,7 +445,7 @@ export default {
 
             } else if (this.layoutType === "force") {
                 forceAtlas2.assign(this.graph, {
-                    iterations: 300,
+                    iterations: 150,
                     settings: {
                         gravity: 0.1,
                         scalingRatio: 100,
@@ -484,15 +498,13 @@ export default {
                 this.clearSelection();
             });
 
-            // Hover effects
+            // Hover effects - use graph attributes, reducer handles rendering
             this.renderer.on("enterNode", ({ node }) => {
                 this.graph.setNodeAttribute(node, 'highlighted', true);
-                this.renderer.refresh();
             });
 
             this.renderer.on("leaveNode", ({ node }) => {
                 this.graph.setNodeAttribute(node, 'highlighted', false);
-                this.renderer.refresh();
             });
         },
 
@@ -543,7 +555,7 @@ export default {
             this.expandedNode = null;
             this.selectedNode = null;
             this.selectedEdge = null;
-            this.minThreshold = 5;
+            this.minThreshold = 10;
             this.fetchNetworkData();
         },
 
@@ -600,7 +612,7 @@ export default {
                         return;
                     }
 
-                    this.rawData = response.data;
+                    this.rawData = Object.freeze(response.data);
                     this.expandedNode = nodeLabel;  // Mark as filtered
                     this.initializeGraph();
                     this.loading = false;
