@@ -8,10 +8,13 @@
             <report-switcher />
 
             <!-- Loading Spinner -->
-            <div class="d-flex justify-content-center position-relative" v-if="loading">
+            <div class="d-flex justify-content-center position-relative flex-column align-items-center" v-if="loading">
                 <div class="spinner-border"
-                    style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 100px" role="status">
+                    style="width: 10rem; height: 10rem; position: absolute; z-index: 50; top: 100px" role="status">
                     <span class="visually-hidden">Loading...</span>
+                </div>
+                <div class="position-absolute fw-bold fs-6 text-center" style="z-index: 51; top: 170px; width: 200px;">
+                    {{ loadingMessage }}
                 </div>
             </div>
 
@@ -70,7 +73,8 @@
                 </div>
 
                 <!-- Sigma Graph -->
-                <div id="sigma-container" ref="sigmaContainer" style="width: 100%; height: 800px;"></div>
+                <div id="sigma-container" ref="sigmaContainer" style="width: 100%; height: 800px;"
+                    :style="{ visibility: loading ? 'hidden' : 'visible' }"></div>
 
                 <!-- Edge Info Panel - Direction Selector -->
                 <div v-if="selectedEdge" class="edge-info-panel card shadow-lg">
@@ -127,6 +131,7 @@ export default {
     data() {
         return {
             loading: false,
+            loadingMessage: "Fetching data...",
             error: null,
             globalConfig: this.$globalConfig,
 
@@ -249,6 +254,7 @@ export default {
 
         fetchNetworkData() {
             this.loading = true;
+            this.loadingMessage = "Fetching data...";
             this.error = null;
 
             let params = { ...this.$route.query };
@@ -274,8 +280,13 @@ export default {
 
                     this.rawData = Object.freeze(response.data);
                     this.expandedNode = null;
-                    this.initializeGraph();
-                    this.loading = false;
+                    this.loadingMessage = "Rendering...";
+
+                    // Use setTimeout to allow the UI to update with the new message
+                    setTimeout(() => {
+                        this.initializeGraph();
+                        this.loading = false;
+                    }, 10);
 
                     // Update search args with total count
                     const totalAlignments = response.data.edges.reduce((sum, edge) => sum + edge.weight, 0);
@@ -339,14 +350,28 @@ export default {
                         weight: edge.weight,
                         size: Math.log(edge.weight + 1) * 2, // Log scale for edge thickness
                         color: '#cccccc', // Light gray
-                        hidden: false  // Initialize as visible
+                        hidden: true  // Initialize as hidden
                     });
                 }
             });
 
-            // Apply layout
-            this.applyLayout();
+            // Apply layout and initialize renderer after layout is complete
+            this.applyLayoutAndInitRenderer();
+        },
 
+        applyLayoutAndInitRenderer() {
+            if (!this.graph) return;
+
+            // Apply layout first
+            this.applyLayoutOnly();
+
+            // Wait for layout to complete, then initialize renderer
+            setTimeout(() => {
+                this.initRenderer();
+            }, 100);
+        },
+
+        initRenderer() {
             // Initialize or update renderer
             if (this.renderer) {
                 this.renderer.kill();
@@ -375,6 +400,15 @@ export default {
                     }
                     return state;
                 },
+
+                // Edge reducer to hide edges by default
+                edgeReducer(edge, data) {
+                    const state = { ...data };
+                    if (data.hidden) {
+                        state.hidden = true; // Mark as hidden for Sigma
+                    }
+                    return state;
+                },
             });
 
             // Set camera to show full graph with some padding
@@ -389,7 +423,7 @@ export default {
             this.setupInteractions();
         },
 
-        applyLayout() {
+        applyLayoutOnly() {
             if (!this.graph) return;
 
             if (this.layoutType === "circular") {
@@ -464,10 +498,27 @@ export default {
                     this.graph.setNodeAttribute(node, 'y', Math.random() * 2 - 1);
                 });
             }
+        },
 
-            if (this.renderer) {
-                this.renderer.refresh();
-            }
+        applyLayout() {
+            if (!this.graph) return;
+
+            this.loading = true;
+            this.loadingMessage = "Applying layout...";
+
+            // Use setTimeout to allow UI to update before heavy computation
+            setTimeout(() => {
+                this.applyLayoutOnly();
+
+                if (this.renderer) {
+                    this.renderer.refresh();
+                }
+
+                // Give renderer time to complete rendering before hiding spinner
+                setTimeout(() => {
+                    this.loading = false;
+                }, 50);
+            }, 10);
         }, setupInteractions() {
             // Click on node - filter network to show this node's connections
             this.renderer.on("clickNode", ({ node }) => {
@@ -592,6 +643,7 @@ export default {
         filterToNode(nodeLabel) {
             // Reload network data to show only connections for this node
             this.loading = true;
+            this.loadingMessage = "Fetching data...";
 
             let params = { ...this.$route.query };
             params.db_table = this.globalConfig.databaseName;
@@ -614,8 +666,13 @@ export default {
 
                     this.rawData = Object.freeze(response.data);
                     this.expandedNode = nodeLabel;  // Mark as filtered
-                    this.initializeGraph();
-                    this.loading = false;
+                    this.loadingMessage = "Rendering...";
+
+                    // Use setTimeout to allow the UI to update with the new message
+                    setTimeout(() => {
+                        this.initializeGraph();
+                        this.loading = false;
+                    }, 10);
                 })
                 .catch((error) => {
                     this.loading = false;
