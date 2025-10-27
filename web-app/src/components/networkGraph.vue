@@ -7,19 +7,22 @@
             </div>
             <report-switcher />
 
-            <!-- Loading Spinner -->
-            <div class="d-flex justify-content-center position-relative flex-column align-items-center" v-if="loading">
-                <div class="spinner-border"
-                    style="width: 10rem; height: 10rem; position: absolute; z-index: 50; top: 100px" role="status">
-                    <span class="visually-hidden">Loading...</span>
-                </div>
-                <div class="position-absolute fw-bold fs-6 text-center" style="z-index: 51; top: 170px; width: 200px;">
-                    {{ loadingMessage }}
-                </div>
-            </div>
-
             <!-- Graph Container with Controls -->
             <div class="card shadow-1" style="position: relative;">
+                <!-- Loading Spinner -->
+                <div class="d-flex justify-content-center position-relative flex-column align-items-center"
+                    v-if="loading">
+                    <div class="spinner-border"
+                        style="width: 10rem; height: 10rem; position: absolute; z-index: 50; top: 300px; color: #fff"
+                        role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <div class="position-absolute fw-bold fs-6 text-center"
+                        style="z-index: 51; top: 370px; width: 200px; color: #fff;">
+                        {{ loadingMessage }}
+                    </div>
+                </div>
+
                 <!-- Network Controls -->
                 <div class="card-body p-3 border-bottom">
                     <div class="row align-items-center">
@@ -64,17 +67,17 @@
                     </div>
                     <div class="row mt-2">
                         <div class="col-md-12">
-                            <small class="text-muted">
-                                Showing {{ visibleNodes }} nodes and {{ visibleEdges }} edges
+                            <span class="text-muted">
+                                Showing {{ visibleNodes }} nodes
                                 <span v-if="expandedNode"> | Expanded: <strong>{{ expandedNode }}</strong></span>
-                            </small>
+                            </span>
                         </div>
                     </div>
                 </div>
 
                 <!-- Sigma Graph -->
-                <div id="sigma-container" ref="sigmaContainer" style="width: 100%; height: 800px;"
-                    :style="{ visibility: loading ? 'hidden' : 'visible' }"></div>
+                <div id="sigma-container" ref="sigmaContainer" class="vector-space-bg"
+                    style="width: 100%; height: 800px;"></div>
 
                 <!-- Edge Info Panel - Direction Selector -->
                 <div v-if="selectedEdge" class="edge-info-panel card shadow-lg">
@@ -144,14 +147,13 @@ export default {
             nodeCommunities: new Map(), // Track community assignments
             communityColors: new Map(), // Colors for communities
             colorPalette: [
-                '#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231',
-                '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe',
-                '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000',
-                '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080',
-                '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7',
-                '#dfe6e9', '#74b9ff', '#a29bfe', '#fd79a8', '#fdcb6e',
-                '#6c5ce7', '#00b894', '#00cec9', '#0984e3', '#b2bec3',
-                '#e17055', '#d63031', '#ff7675', '#fab1a0', '#636e72'
+                '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
+                '#6C5CE7', '#A29BFE', '#FD79A8', '#FDCB6E', '#00B894',
+                '#0984E3', '#E17055', '#D63031', '#FF7675', '#74B9FF',
+                '#55EFC4', '#81ECEC', '#A29BFE', '#FDA7DF', '#FAB1A0',
+                '#00CEC9', '#FF6348', '#1E90FF', '#FF1493', '#32CD32',
+                '#FF6347', '#4169E1', '#FF69B4', '#00FA9A', '#FFD700',
+                '#E84393', '#00B8D4', '#6C5CE7', '#FDCB6E', '#00CEC9'
             ],
             colorIndex: 0,
 
@@ -164,6 +166,7 @@ export default {
             expandedNode: null,
             selectedNode: null,
             selectedEdge: null,
+            connectedNodes: new Set(), // Track nodes connected to selected node
             visibleNodes: 0,
             visibleEdges: 0
         };
@@ -333,9 +336,11 @@ export default {
                     label: node.label,
                     size: normalizedSize,
                     color: this.getUniqueNodeColor(node.id),
+                    originalColor: this.getUniqueNodeColor(node.id), // Store original color
                     connections: node.total_alignments,
                     centrality: node.centrality,
                     hidden: false,  // Initialize as visible
+                    zIndex: 0,  // Initialize with default zIndex
                     x: Math.random(),
                     y: Math.random()
                 });
@@ -349,7 +354,7 @@ export default {
                     this.graph.addEdge(edge.source, edge.target, {
                         weight: edge.weight,
                         size: Math.log(edge.weight + 1) * 2, // Log scale for edge thickness
-                        color: '#cccccc', // Light gray
+                        color: '#5B7FDB', // Medium blue - distinguishable from desaturated nodes
                         hidden: true  // Initialize as hidden
                     });
                 }
@@ -383,32 +388,68 @@ export default {
                 },
                 renderEdgeLabels: false,
                 defaultNodeColor: "#999",
-                defaultEdgeColor: "#ccc",
+                defaultEdgeColor: "#5B7FDB",
                 labelSize: 12,
                 labelWeight: "bold",
+                labelColor: { attribute: "labelColor", color: "#ffffff" },  // Use node's labelColor attribute
                 enableEdgeEvents: true,  // Make edges clickable
                 labelDensity: 0.1,  // Show 10% of labels initially
                 labelGridCellSize: 100,  // Grid cell size for label positioning
                 labelRenderedSizeThreshold: 15,  // Only show labels for nodes with rendered size > 10px
+                zIndex: true,  // Enable zIndex for node layering
+            });
 
-                // High-performance node reducer for hover effects (GPU-side)
-                nodeReducer(node, data) {
-                    const state = { ...data };
-                    if (data.highlighted) {
-                        state.color = "#f00"; // Highlight color (red)
-                        state.zIndex = 1;     // Bring to front
-                    }
-                    return state;
-                },
+            // Set up reducers using setSetting (best practice from Sigma examples)
+            this.renderer.setSetting('nodeReducer', (node, data) => {
+                const res = { ...data };
 
-                // Edge reducer to hide edges by default
-                edgeReducer(edge, data) {
-                    const state = { ...data };
-                    if (data.hidden) {
-                        state.hidden = true; // Mark as hidden for Sigma
+                // Highlight on hover - use black label on white background
+                if (data.highlighted) {
+                    res.color = "#f00";
+                    res.zIndex = 10;
+                    res.labelColor = "#000000";  // Black label for hover
+                    return res;
+                }
+
+                // Default: white label for dark background
+                res.labelColor = "#ffffff";
+
+                // When a node is selected
+                if (this.selectedNode) {
+                    if (this.connectedNodes.has(node)) {
+                        // Connected nodes - show in color and explicitly unhide
+                        res.hidden = false;
+                        res.color = data.originalColor || data.color;
+                        res.zIndex = 5;
+                    } else {
+                        // Unconnected nodes - hide them completely
+                        res.hidden = true;
                     }
-                    return state;
-                },
+                } else {
+                    // Default state - make sure nodes are visible
+                    res.hidden = false;
+                    res.zIndex = 1;
+                }
+
+                return res;
+            });
+
+            this.renderer.setSetting('edgeReducer', (edge, data) => {
+                const res = { ...data };
+
+                if (this.selectedNode) {
+                    // Show edge only if it connects to the selected node
+                    if (!this.graph.hasExtremity(edge, this.selectedNode)) {
+                        res.hidden = true;
+                    } else {
+                        res.hidden = false;
+                    }
+                } else {
+                    // Hide all edges by default
+                    res.hidden = true;
+                }
+
+                return res;
             });
 
             // Set camera to show full graph with some padding
@@ -519,19 +560,26 @@ export default {
                     this.loading = false;
                 }, 50);
             }, 10);
-        }, setupInteractions() {
-            // Click on node - filter network to show this node's connections
+        },
+
+        setupInteractions() {
+            // Click on node - show edges and desaturate unconnected nodes
             this.renderer.on("clickNode", ({ node }) => {
                 this.selectedEdge = null;
-                const nodeLabel = this.graph.getNodeAttribute(node, 'label');
 
-                // Reload network data filtered to this node's connections
-                this.filterToNode(nodeLabel);
+                // Toggle selection
+                if (this.selectedNode === node) {
+                    // Deselect - restore everything
+                    this.setSelectedNode(null);
+                } else {
+                    // Select new node
+                    this.setSelectedNode(node);
+                }
             });
 
             // Click on edge - show direction selector
             this.renderer.on("clickEdge", ({ edge }) => {
-                this.selectedNode = null;
+                this.setSelectedNode(null);
                 const source = this.graph.source(edge);
                 const target = this.graph.target(edge);
                 this.selectedEdge = {
@@ -547,6 +595,7 @@ export default {
             // Click on stage (background)
             this.renderer.on("clickStage", () => {
                 this.clearSelection();
+                this.setSelectedNode(null);
             });
 
             // Hover effects - use graph attributes, reducer handles rendering
@@ -556,6 +605,25 @@ export default {
 
             this.renderer.on("leaveNode", ({ node }) => {
                 this.graph.setNodeAttribute(node, 'highlighted', false);
+            });
+        },
+
+        // Set selected node following Sigma.js best practices pattern
+        setSelectedNode(node) {
+            if (node) {
+                this.selectedNode = node;
+                // Use graph.neighbors() for cleaner API
+                const neighbors = this.graph.neighbors(node);
+                this.connectedNodes = new Set([node, ...neighbors]);
+            } else {
+                this.selectedNode = null;
+                this.connectedNodes.clear();
+            }
+
+            // Refresh with skipIndexation for better performance
+            this.updateCounts();
+            this.renderer.refresh({
+                skipIndexation: true
             });
         },
 
@@ -594,8 +662,14 @@ export default {
         },
 
         updateCounts() {
-            this.visibleNodes = this.graph.filterNodes((node, attr) => !attr.hidden).length;
-            this.visibleEdges = this.graph.filterEdges((edge, attr) => !attr.hidden).length;
+            // Count nodes that are actually visible based on selection state
+            if (this.selectedNode) {
+                // When a node is selected, only count connected nodes
+                this.visibleNodes = this.connectedNodes.size;
+            } else {
+                // When no selection, count all non-hidden nodes
+                this.visibleNodes = this.graph.filterNodes((node, attr) => !attr.hidden).length;
+            }
         },
 
         reloadNetwork() {
@@ -715,5 +789,44 @@ export default {
 .form-label {
     font-weight: 600;
     font-size: 0.9rem;
+}
+
+#sigma-container.vector-space-bg {
+    background: radial-gradient(ellipse at bottom, #1B2735 0%, #090A0F 100%);
+    position: relative;
+    overflow: hidden;
+}
+
+#sigma-container.vector-space-bg::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image:
+        radial-gradient(2px 2px at 20% 30%, white, transparent),
+        radial-gradient(2px 2px at 60% 70%, white, transparent),
+        radial-gradient(1px 1px at 50% 50%, white, transparent),
+        radial-gradient(1px 1px at 80% 10%, white, transparent),
+        radial-gradient(2px 2px at 90% 60%, white, transparent),
+        radial-gradient(1px 1px at 33% 80%, white, transparent),
+        radial-gradient(1px 1px at 15% 95%, white, transparent);
+    background-size: 200% 200%, 180% 180%, 220% 220%, 190% 190%, 210% 210%, 240% 240%, 230% 230%;
+    background-position: 0% 0%, 10% 10%, 20% 20%, 30% 30%, 40% 40%, 50% 50%, 60% 60%;
+    background-repeat: repeat;
+    animation: stars 200s linear infinite;
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+@keyframes stars {
+    from {
+        background-position: 0% 0%, 10% 10%, 20% 20%, 30% 30%, 40% 40%, 50% 50%, 60% 60%;
+    }
+
+    to {
+        background-position: 100% 100%, 110% 110%, 120% 120%, 130% 130%, 140% 140%, 150% 150%, 160% 160%;
+    }
 }
 </style>
