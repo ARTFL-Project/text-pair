@@ -7,16 +7,22 @@ $popover-max-width: 50%;
 }
 
 // Theme colors
-$header-color: rgb(245, 219, 157);
-$button-color: rgba(143, 57, 49, .7);
-$button-color-active: rgb(143, 57, 49);
-$link-color: rgb(143, 57, 49);
+$header-color: rgb(95, 2, 2);
+$button-color: rgb(173, 66, 66);
+$button-color-active: rgba(160, 55, 55, 0.9);
+$link-color: rgb(142, 50, 50);
+$passage-color: rgb(155, 65, 55);
+$card-header-color: rgb(173, 66, 66);
 $removed-color: rgb(120, 157, 74);
-$passage-color: rgb(164, 52, 58);
 $added-color: rgb(0, 115, 150);
+$graph-btn-panel-color: rgb(200, 100, 100);
 // Themed elements
+
 nav.navbar {
     background-color: $header-color !important;
+}
+.navbar-brand {
+    color: #fff !important;
 }
 
 $secondary: $button-color;
@@ -52,7 +58,7 @@ a.btn-secondary {
 .number,
 .card-header {
     background-color: $header-color !important;
-    color: $link-color !important;
+    color: #fff !important;
 }
 
 .input-group-text,
@@ -94,11 +100,6 @@ input[type="text"]:focus {
 .corner-btn {
     background-color: $header-color !important;
     color: $link-color !important;
-}
-
-.card,
-.card-header {
-    border-radius: 0 !important;
 }
 .popover-body ul {
     border-width: 0 !important;

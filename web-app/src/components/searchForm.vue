@@ -331,8 +331,6 @@ export default {
 }
 
 .input-group> :not(:first-child):not(.dropdown-menu):not(.valid-tooltip):not(.valid-feedback):not(.invalid-tooltip):not(.invalid-feedback) {
-    border-top-left-radius: 0 !important;
-    border-bottom-left-radius: 0 !important;
     border-left-color: $link-color;
 }
 

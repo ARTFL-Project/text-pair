@@ -82,8 +82,7 @@
                     <!-- Node Info Panel -->
                     <div v-if="selectedNode" class="node-info-panel card shadow-lg">
                         <div class="card-header d-flex justify-content-between align-items-center">
-                            <h6 class="mb-0">{{ getNodeLabel(selectedNode) }}</h6>
-                            <button type="button" class="btn-close" @click="clearSelection" aria-label="Close"></button>
+                            <span class="node-label-text">{{ getNodeLabel(selectedNode) }}</span>
                         </div>
                         <div class="card-body p-2">
                             <div class="d-grid gap-2">
@@ -309,6 +308,8 @@ export default {
         },
 
         initializeGraph() {
+            console.time('Total graph initialization');
+
             // Create new graph
             this.graph = new Graph();
 
@@ -318,10 +319,14 @@ export default {
             const minCentrality = Math.min(...centralities);
 
             // Define size range (min and max pixel sizes)
-            const minNodeSize = 2;
+            // For small graphs (< 1000 nodes), use larger min size so all nodes are visible
+            const nodeCount = this.rawData.nodes.length;
+            const minNodeSize = nodeCount < 1000 ? 3 : 2;
             const maxNodeSize = 30;
 
             // Add nodes with normalized sizes based on centrality
+            console.time('Add nodes');
+            const labelMaxLength = 20;
             this.rawData.nodes.forEach(node => {
                 // Normalize centrality to range [minNodeSize, maxNodeSize]
                 let normalizedSize;
@@ -336,9 +341,14 @@ export default {
                 }
 
                 const nodeColor = this.getUniqueNodeColor(node.id);
+                const label = node.label;
+                const displayLabel = label.length > labelMaxLength
+                    ? label.substring(0, labelMaxLength) + '...'
+                    : label;
 
                 this.graph.addNode(node.id, {
-                    label: node.label,
+                    label: displayLabel,
+                    fullLabel: label,  // Store full label for reference
                     size: normalizedSize,
                     color: nodeColor,
                     originalColor: nodeColor, // Store original color
@@ -351,8 +361,10 @@ export default {
                 });
                 this.nodeTypes.set(node.id, node.type); // Store type separately
             });
+            console.timeEnd('Add nodes');
 
             // Add edges
+            console.time('Add edges');
             let skippedEdges = 0;
             this.rawData.edges.forEach((edge, index) => {
                 if (this.graph.hasNode(edge.source) && this.graph.hasNode(edge.target)) {
@@ -364,6 +376,8 @@ export default {
                     });
                 }
             });
+            console.timeEnd('Add edges');
+            console.timeEnd('Total graph initialization');
 
             // Apply layout and initialize renderer after layout is complete
             this.applyLayoutAndInitRenderer();
@@ -382,6 +396,8 @@ export default {
         },
 
         initRenderer() {
+            console.time('Renderer initialization');
+
             // Initialize or update renderer
             if (this.renderer) {
                 this.renderer.kill();
@@ -480,18 +496,27 @@ export default {
 
             // Setup interactions
             this.setupInteractions();
+
+            console.timeEnd('Renderer initialization');
         },
 
         applyLayoutOnly() {
             if (!this.graph) return;
 
+            console.time('Total layout');
+
             if (this.layoutType === "circular") {
+                console.time('Circular layout');
                 circular.assign(this.graph);
+                console.timeEnd('Circular layout');
             } else if (this.layoutType === "communities") {
                 // Detect communities using Louvain algorithm and assign to nodes
+                console.time('Louvain community detection');
                 louvain.assign(this.graph, {});
+                console.timeEnd('Louvain community detection');
 
                 // Assign colors based on community
+                console.time('Assign community colors');
                 this.communityColors.clear();
 
                 this.graph.forEachNode((node) => {
@@ -505,23 +530,27 @@ export default {
 
                     this.graph.setNodeAttribute(node, 'color', this.communityColors.get(community));
                 });
+                console.timeEnd('Assign community colors');
 
                 // Apply force-directed layout with linLogMode for better community separation
+                console.time('ForceAtlas2 layout');
                 forceAtlas2.assign(this.graph, {
-                    iterations: 200,
+                    iterations: 100,
                     settings: {
-                        gravity: 0.001,
+                        gravity: 0.01,
                         scalingRatio: 200,
                         strongGravityMode: false,
                         barnesHutOptimize: true,
                         barnesHutTheta: 0.5,
-                        edgeWeightInfluence: 1.5,  // Use edge weights for community structure
+                        edgeWeightInfluence: 1.0,  // Use edge weights for community structure
                         slowDown: 5,
                         linLogMode: true  // Better for community detection
                     }
                 });
+                console.timeEnd('ForceAtlas2 layout');
 
                 // Apply noverlap to prevent node overlapping
+                console.time('Noverlap layout');
                 noverlap.assign(this.graph, {
                     maxIterations: 50,
                     settings: {
@@ -530,11 +559,16 @@ export default {
                         expansion: 1.1
                     }
                 });
+                console.timeEnd('Noverlap layout');
 
             } else {
                 // Circular layout (default/fallback)
+                console.time('Circular layout (fallback)');
                 circular.assign(this.graph);
+                console.timeEnd('Circular layout (fallback)');
             }
+
+            console.timeEnd('Total layout');
         },
 
         applyLayout() {
@@ -691,7 +725,8 @@ export default {
         },
 
         getNodeLabel(nodeId) {
-            return this.graph.getNodeAttribute(nodeId, 'label');
+            // Return fullLabel for complete text, fallback to label if fullLabel doesn't exist
+            return this.graph.getNodeAttribute(nodeId, 'fullLabel') || this.graph.getNodeAttribute(nodeId, 'label');
         },
 
         viewNodeAsSource(nodeLabel) {
@@ -713,33 +748,38 @@ export default {
 };
 </script>
 
-<style scoped>
-.node-info-panel,
-.edge-info-panel {
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    width: 300px;
-    z-index: 10;
-}
+<style scoped lang="scss">
+@use "../assets/theme.module.scss" as theme;
 
 .node-info-panel {
     position: absolute;
     top: 0px;
     left: 0px;
-    width: 200px;
+    width: fit-content;
+    max-width: 200px;
     z-index: 10;
+    background-color: rgba(256, 256, 256, 0.0);
+    border-color: theme.$graph-btn-panel-color;
 }
 
-.edge-info-panel {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    right: auto;
-    bottom: auto;
-    transform: translate(-50%, -50%);
-    z-index: 1050;
+.node-info-panel .node-label-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+    min-width: 0;
+    flex: 1;
 }
+
+.node-info-panel .btn-outline-secondary {
+    border-color: theme.$graph-btn-panel-color;
+    color: theme.$graph-btn-panel-color;
+}
+
+.node-info-panel .btn-outline-secondary:hover {
+    color: #fff;
+}
+
 
 .form-label {
     font-weight: 600;
