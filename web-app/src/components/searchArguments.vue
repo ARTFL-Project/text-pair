@@ -1,8 +1,14 @@
 <template>
     <div id="search-arguments" class="mt-2 mb-4 pt-2 shadow-1"
         style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125)">
-        <div class="mb-1 p-2" style="font-size: 1rem" v-if="counts && !error">
-            {{ counts }} results for the following query:
+        <div class="mb-1 p-2" style="font-size: 1rem" v-if="!error">
+            <span v-if="!counts || counts === '...'">
+                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                results for the following query:
+            </span>
+            <span v-else>
+                {{ counts }} results for the following query:
+            </span>
         </div>
         <div class="row pl-2" v-if="!error">
             <div class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group"

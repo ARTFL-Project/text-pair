@@ -11,6 +11,7 @@
     },
     "dependencies": {
         "@popperjs/core": "^2.11.8",
+        "@sigma/node-border": "^3.0.0",
         "axios": "^0.21.1",
         "bootstrap": "^5.2.1",
         "chart.js": "^2.9.3",

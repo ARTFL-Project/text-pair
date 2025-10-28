@@ -54,7 +54,6 @@
                         <div class="col-md-2">
                             <label class="form-label mb-1">Arrange by:</label>
                             <select class="form-select form-select-sm" v-model="layoutType" @change="applyLayout">
-                                <option value="force">Closeness (Force-directed)</option>
                                 <option value="communities">Community</option>
                                 <option value="circular">Circular</option>
                             </select>
@@ -75,33 +74,28 @@
                     </div>
                 </div>
 
-                <!-- Sigma Graph -->
-                <div id="sigma-container" ref="sigmaContainer" class="vector-space-bg"
-                    style="width: 100%; height: 800px;"></div>
+                <!-- Sigma Graph Container with overlays -->
+                <div style="position: relative;">
+                    <div id="sigma-container" ref="sigmaContainer" class="vector-space-bg"
+                        style="width: 100%; height: 800px; min-height: 800px;"></div>
 
-                <!-- Edge Info Panel - Direction Selector -->
-                <div v-if="selectedEdge" class="edge-info-panel card shadow-lg">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">Select View</h5>
-                        <button type="button" class="btn-close" @click="clearSelection" aria-label="Close"></button>
-                    </div>
-                    <div class="card-body">
-                        <p class="mb-3">
-                            <span>{{ selectedEdge.weight }} total alignments</span>
-                        </p>
-                        <div class="d-grid gap-2">
-                            <button class="btn btn-secondary"
-                                @click="viewEdgeDirection(selectedEdge.source, selectedEdge.target)">
-                                <i class="bi bi-arrow-right"></i> {{ selectedEdge.source }} → {{ selectedEdge.target }}
-                            </button>
-                            <button class="btn btn-secondary"
-                                @click="viewEdgeDirection(selectedEdge.target, selectedEdge.source)">
-                                <i class="bi bi-arrow-left"></i> {{ selectedEdge.target }} → {{ selectedEdge.source }}
-                            </button>
-                            <button class="btn btn-secondary"
-                                @click="viewEdgeTitles(selectedEdge.source, selectedEdge.target)" v-if="canDrillDown">
-                                <i class="bi bi-diagram-3"></i> View {{ drillDownLabel }} Network
-                            </button>
+                    <!-- Node Info Panel -->
+                    <div v-if="selectedNode" class="node-info-panel card shadow-lg">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">{{ getNodeLabel(selectedNode) }}</h6>
+                            <button type="button" class="btn-close" @click="clearSelection" aria-label="Close"></button>
+                        </div>
+                        <div class="card-body p-2">
+                            <div class="d-grid gap-2">
+                                <button class="btn btn-sm btn-outline-secondary"
+                                    @click="viewNodeAsSource(getNodeLabel(selectedNode))">
+                                    <i class="bi bi-arrow-right"></i> View as Source
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary"
+                                    @click="viewNodeAsTarget(getNodeLabel(selectedNode))">
+                                    <i class="bi bi-arrow-left"></i> View as Target
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -112,6 +106,7 @@
 </template>
 
 <script>
+import { createNodeBorderProgram } from "@sigma/node-border";
 import Graph from "graphology";
 import louvain from "graphology-communities-louvain";
 import forceAtlas2 from "graphology-layout-forceatlas2";
@@ -144,7 +139,6 @@ export default {
             rawData: { nodes: [], edges: [] },
             nodeTypes: new Map(), // Track node types separately
             nodeColorMap: new Map(), // Track assigned colors
-            nodeCommunities: new Map(), // Track community assignments
             communityColors: new Map(), // Colors for communities
             colorPalette: [
                 '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
@@ -162,13 +156,12 @@ export default {
             availableAggregations: [],
             centralityMode: "degree",  // degree, eigenvector, or betweenness
             minThreshold: 10,
-            layoutType: "force",  // Start with force, user can switch to communities
+            layoutType: "communities",  // Default to community layout
             expandedNode: null,
             selectedNode: null,
             selectedEdge: null,
             connectedNodes: new Set(), // Track nodes connected to selected node
-            visibleNodes: 0,
-            visibleEdges: 0
+            visibleNodes: 0
         };
     },
     computed: {
@@ -260,6 +253,16 @@ export default {
             this.loadingMessage = "Fetching data...";
             this.error = null;
 
+            // Destroy existing renderer and graph
+            if (this.renderer) {
+                this.renderer.kill();
+                this.renderer = null;
+            }
+            if (this.graph) {
+                this.graph.clear();
+                this.graph = null;
+            }
+
             let params = { ...this.$route.query };
             params.db_table = this.globalConfig.databaseName;
             params.aggregation_field = this.aggregationField;
@@ -283,7 +286,7 @@ export default {
 
                     this.rawData = Object.freeze(response.data);
                     this.expandedNode = null;
-                    this.loadingMessage = "Rendering...";
+                    this.loadingMessage = "Calculating layout...";
 
                     // Use setTimeout to allow the UI to update with the new message
                     setTimeout(() => {
@@ -315,7 +318,7 @@ export default {
             const minCentrality = Math.min(...centralities);
 
             // Define size range (min and max pixel sizes)
-            const minNodeSize = 5;
+            const minNodeSize = 2;
             const maxNodeSize = 30;
 
             // Add nodes with normalized sizes based on centrality
@@ -332,11 +335,13 @@ export default {
                         (maxNodeSize - minNodeSize);
                 }
 
+                const nodeColor = this.getUniqueNodeColor(node.id);
+
                 this.graph.addNode(node.id, {
                     label: node.label,
                     size: normalizedSize,
-                    color: this.getUniqueNodeColor(node.id),
-                    originalColor: this.getUniqueNodeColor(node.id), // Store original color
+                    color: nodeColor,
+                    originalColor: nodeColor, // Store original color
                     connections: node.total_alignments,
                     centrality: node.centrality,
                     hidden: false,  // Initialize as visible
@@ -386,6 +391,17 @@ export default {
                 edgeProgramClasses: {
                     line: EdgeLineProgram,
                 },
+                nodeProgramClasses: {
+                    // Use border program to create hollow circles with colored border
+                    circle: createNodeBorderProgram({
+                        borders: [
+                            {
+                                size: { value: 0.2 },  // Thin border (10% of node size)
+                                color: { attribute: "color" }  // Use node's color for border
+                            }
+                        ]
+                    })
+                },
                 renderEdgeLabels: false,
                 defaultNodeColor: "#999",
                 defaultEdgeColor: "#5B7FDB",
@@ -397,6 +413,8 @@ export default {
                 labelGridCellSize: 100,  // Grid cell size for label positioning
                 labelRenderedSizeThreshold: 15,  // Only show labels for nodes with rendered size > 10px
                 zIndex: true,  // Enable zIndex for node layering
+                hideLabelsOnMove: true,
+                hideEdgesOnMove: true,
             });
 
             // Set up reducers using setSetting (best practice from Sigma examples)
@@ -455,7 +473,7 @@ export default {
             // Set camera to show full graph with some padding
             // Adjust camera to show full graph
             const camera = this.renderer.getCamera();
-            camera.setState({ ratio: 1.1 }); // Zoom out more to show spread-out nodes
+            camera.setState({ ratio: 1.1 }); // Zoom out slightly to show spread-out nodes
 
             // Update counts
             this.updateCounts();
@@ -470,19 +488,14 @@ export default {
             if (this.layoutType === "circular") {
                 circular.assign(this.graph);
             } else if (this.layoutType === "communities") {
-                // Detect communities using Louvain algorithm
-                const communities = louvain(this.graph, {
-                    resolution: 1.0,
-                    randomWalk: true
-                });
+                // Detect communities using Louvain algorithm and assign to nodes
+                louvain.assign(this.graph, {});
 
                 // Assign colors based on community
                 this.communityColors.clear();
-                this.nodeCommunities.clear();
 
                 this.graph.forEachNode((node) => {
-                    const community = communities[node];
-                    this.nodeCommunities.set(node, community);
+                    const community = this.graph.getNodeAttribute(node, 'community');
 
                     // Assign color for this community if not yet assigned
                     if (!this.communityColors.has(community)) {
@@ -497,12 +510,12 @@ export default {
                 forceAtlas2.assign(this.graph, {
                     iterations: 200,
                     settings: {
-                        gravity: 0.1,
-                        scalingRatio: 100,
+                        gravity: 0.001,
+                        scalingRatio: 200,
                         strongGravityMode: false,
                         barnesHutOptimize: true,
                         barnesHutTheta: 0.5,
-                        edgeWeightInfluence: 1.0,  // Use edge weights for community structure
+                        edgeWeightInfluence: 1.5,  // Use edge weights for community structure
                         slowDown: 5,
                         linLogMode: true  // Better for community detection
                     }
@@ -518,26 +531,9 @@ export default {
                     }
                 });
 
-            } else if (this.layoutType === "force") {
-                forceAtlas2.assign(this.graph, {
-                    iterations: 150,
-                    settings: {
-                        gravity: 0.1,
-                        scalingRatio: 100,
-                        strongGravityMode: false,
-                        barnesHutOptimize: true,
-                        barnesHutTheta: 0.5,
-                        edgeWeightInfluence: 0,
-                        slowDown: 5,
-                        linLogMode: false
-                    }
-                });
             } else {
-                // Random layout (default positions)
-                this.graph.forEachNode((node) => {
-                    this.graph.setNodeAttribute(node, 'x', Math.random() * 2 - 1);
-                    this.graph.setNodeAttribute(node, 'y', Math.random() * 2 - 1);
-                });
+                // Circular layout (default/fallback)
+                circular.assign(this.graph);
             }
         },
 
@@ -547,13 +543,18 @@ export default {
             this.loading = true;
             this.loadingMessage = "Applying layout...";
 
+            // Kill the renderer to hide the graph during layout calculation
+            if (this.renderer) {
+                this.renderer.kill();
+                this.renderer = null;
+            }
+
             // Use setTimeout to allow UI to update before heavy computation
             setTimeout(() => {
                 this.applyLayoutOnly();
 
-                if (this.renderer) {
-                    this.renderer.refresh();
-                }
+                // Reinitialize the renderer
+                this.initRenderer();
 
                 // Give renderer time to complete rendering before hiding spinner
                 setTimeout(() => {
@@ -689,78 +690,24 @@ export default {
             this.selectedEdge = null;
         },
 
-        viewEdgeDirection(source, target) {
-            // Navigate to search results with specific direction
-            let queryParams = { ...this.$route.query };
-            queryParams[`source_${this.aggregationField}`] = `"${source}"`;
-            queryParams[`target_${this.aggregationField}`] = `"${target}"`;
-            queryParams.db_table = this.globalConfig.databaseName;
-            this.clearSelection();
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
+        getNodeLabel(nodeId) {
+            return this.graph.getNodeAttribute(nodeId, 'label');
         },
 
-        viewEdgeTitles(source, target) {
-            // Navigate to network view showing titles from both nodes
-            const drillDownField = 'title';
-
+        viewNodeAsSource(nodeLabel) {
             let queryParams = { ...this.$route.query };
-            queryParams[`source_${this.aggregationField}`] = `"${source}"`;
-            queryParams[`target_${this.aggregationField}`] = `"${target}"`;
+            queryParams[`source_${this.aggregationField}`] = `"${nodeLabel}"`;
             queryParams.db_table = this.globalConfig.databaseName;
-            queryParams.aggregation_field = drillDownField; // Set the aggregation to title
-
             this.clearSelection();
-            // Navigate to network view with title aggregation
             this.$router.push(`/network?${this.paramsToUrl(queryParams)}`);
         },
 
-        filterToNode(nodeLabel) {
-            // Reload network data to show only connections for this node
-            this.loading = true;
-            this.loadingMessage = "Fetching data...";
-
-            let params = { ...this.$route.query };
-            params.db_table = this.globalConfig.databaseName;
-            params.aggregation_field = this.aggregationField;
-            params.min_threshold = this.minThreshold;
-            params.max_nodes = 10000;
-
-            // Special filter: same node for both source and target means "show all connections"
-            params[`source_${this.aggregationField}`] = `"${nodeLabel}"`;
-            params[`target_${this.aggregationField}`] = `"${nodeLabel}"`;
-
-            this.$http
-                .get(`${this.globalConfig.apiServer}/network_data/?${this.paramsToUrl(params)}`)
-                .then((response) => {
-                    if (response.data.error) {
-                        this.error = response.data.error;
-                        this.loading = false;
-                        return;
-                    }
-
-                    this.rawData = Object.freeze(response.data);
-                    this.expandedNode = nodeLabel;  // Mark as filtered
-                    this.loadingMessage = "Rendering...";
-
-                    // Use setTimeout to allow the UI to update with the new message
-                    setTimeout(() => {
-                        this.initializeGraph();
-                        this.loading = false;
-                    }, 10);
-                })
-                .catch((error) => {
-                    this.loading = false;
-                    this.error = error.toString();
-                    console.log(error);
-                });
-        },
-
-        filterByNode(nodeId) {
-            // Navigate to search results filtered by this author/title
+        viewNodeAsTarget(nodeLabel) {
             let queryParams = { ...this.$route.query };
-            queryParams[`source_${this.aggregationField}`] = `"${nodeId}"`;
+            queryParams[`target_${this.aggregationField}`] = `"${nodeLabel}"`;
             queryParams.db_table = this.globalConfig.databaseName;
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
+            this.clearSelection();
+            this.$router.push(`/network?${this.paramsToUrl(queryParams)}`);
         }
     }
 };
@@ -773,6 +720,14 @@ export default {
     top: 20px;
     right: 20px;
     width: 300px;
+    z-index: 10;
+}
+
+.node-info-panel {
+    position: absolute;
+    top: 0px;
+    left: 0px;
+    width: 200px;
     z-index: 10;
 }
 
