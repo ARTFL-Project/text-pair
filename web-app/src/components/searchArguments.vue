@@ -24,7 +24,7 @@
             </span>
         </div>
         <div class="row pl-2" v-if="!error">
-            <div class="col-6 rounded-0 pt-2 pb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams"
+            <div class="col-6 rounded-0 pb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams"
                 :key="groupIndex">
                 <h6 class="text-center text-capitalize mb-2">
                     <span v-html="paramGroup.direction"></span>

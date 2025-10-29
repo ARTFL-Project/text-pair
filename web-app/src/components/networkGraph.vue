@@ -77,7 +77,7 @@
                 <!-- Sigma Graph Container with overlays -->
                 <div style="position: relative;">
                     <div id="sigma-container" ref="sigmaContainer" class="vector-space-bg"
-                        style="width: 100%; height: calc(100vh - 350px); min-height: 600px;"></div>
+                        style="width: 100%; height: calc(100vh - 360px); min-height: 600px;"></div>
 
                     <!-- Node Info Panel -->
                     <div v-if="selectedNode" class="node-info-panel card shadow-lg">
