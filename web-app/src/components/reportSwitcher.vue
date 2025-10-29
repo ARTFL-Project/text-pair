@@ -1,5 +1,5 @@
 <template>
-    <div class="btn-group" role="group" aria-label="alt-results">
+    <div class="btn-group mt-2" role="group" aria-label="alt-results">
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'searchResults' }"
             style="border-bottom-left-radius: 0;" @click="viewAllResults">View all
             passage pairs</button>

@@ -1,19 +1,32 @@
 <template>
-    <div id="search-arguments" class="mt-2 mb-4 pt-2 shadow-1"
+    <!-- Compact version when no search params on either side -->
+    <div v-if="hasNoParams" class="compact-search-args p-2 mb-2 shadow-1"
         style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125)">
+        <div class="p-2" v-if="!counts || counts === '...'">
+            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+            results across all documents
+        </div>
+        <div class="p-2" v-else>
+            <strong>{{ counts }}</strong> results across all documents
+        </div>
+    </div>
+
+    <!-- Regular version when search params exist -->
+    <div v-else id="search-arguments" class="mt-1 mb-2 pt-2 shadow-1"
+        style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125);">
         <div class="mb-1 p-2" style="font-size: 1rem" v-if="!error">
             <span v-if="!counts || counts === '...'">
                 <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
                 results for the following query:
             </span>
             <span v-else>
-                {{ counts }} results for the following query:
+                <strong>{{ counts }}</strong> results for the following query:
             </span>
         </div>
         <div class="row pl-2" v-if="!error">
-            <div class="col-6 rounded-0 pt-2 pb-3 mb-2 search-args-group"
-                v-for="(paramGroup, groupIndex) in searchParams" :key="groupIndex">
-                <h6 class="text-center text-capitalize">
+            <div class="col-6 rounded-0 pt-2 pb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams"
+                :key="groupIndex">
+                <h6 class="text-center text-capitalize mb-2">
                     <span v-html="paramGroup.direction"></span>
                     Parameters:
                 </h6>
@@ -31,7 +44,7 @@
                 <div class="metadata-args none" v-if="paramGroup.params == null">None</div>
             </div>
         </div>
-        <div class="my-2 pb-1" v-if="banality">
+        <div class="my-2 pb-1 px-2" v-if="banality">
             <div class="metadata-args rounded-pill">
                 <span class="metadata-label"> Banality filter </span>
                 <span class="metadata-value">
@@ -71,6 +84,14 @@ export default {
             ],
             banality: null,
         };
+    },
+    computed: {
+        hasNoParams() {
+            // Check if both source and target have no params, and no banality filter
+            const noSourceParams = !this.searchParams[0].params || this.searchParams[0].params.length === 0;
+            const noTargetParams = !this.searchParams[1].params || this.searchParams[1].params.length === 0;
+            return noSourceParams && noTargetParams && !this.banality;
+        }
     },
     methods: {
         toggleSearchForm() {
@@ -123,6 +144,12 @@ export default {
 <style scoped>
 #search-arguments {
     font-family: "Open-Sans", sans-serif;
+}
+
+.compact-search-args {
+    font-family: "Open-Sans", sans-serif;
+    font-size: 1rem;
+    line-height: 1.2;
 }
 
 .metadata-args {
