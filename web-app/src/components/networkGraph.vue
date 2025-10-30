@@ -159,9 +159,15 @@ export default {
             expandedNode: null,
             selectedNode: null,
             selectedEdge: null,
-            connectedNodes: new Set(), // Track nodes connected to selected node
             visibleNodes: 0
         };
+    },
+    created() {
+        // Non-reactive property - avoid Vue reactivity overhead for performance-critical lookup
+        this.connectedNodes = new Set();
+
+        this.initializeAggregationOptions();
+        this.fetchNetworkData();
     },
     computed: {
         // Can we drill down to a more detailed view?
@@ -174,10 +180,6 @@ export default {
             const titleAgg = this.availableAggregations.find(agg => agg.value === 'title');
             return titleAgg ? titleAgg.label : 'Title';
         }
-    },
-    created() {
-        this.initializeAggregationOptions();
-        this.fetchNetworkData();
     },
     beforeUnmount() {
         if (this.renderer) {
@@ -365,7 +367,6 @@ export default {
 
             // Add edges
             console.time('Add edges');
-            let skippedEdges = 0;
             this.rawData.edges.forEach((edge, index) => {
                 if (this.graph.hasNode(edge.source) && this.graph.hasNode(edge.target)) {
                     this.graph.addEdge(edge.source, edge.target, {
@@ -486,10 +487,9 @@ export default {
                 return res;
             });
 
-            // Set camera to show full graph with some padding
-            // Adjust camera to show full graph
+            // Set camera to default position
             const camera = this.renderer.getCamera();
-            camera.setState({ ratio: 1.1 }); // Zoom out slightly to show spread-out nodes
+            camera.setState({ ratio: 1.0 });
 
             // Update counts
             this.updateCounts();
@@ -537,14 +537,13 @@ export default {
                 forceAtlas2.assign(this.graph, {
                     iterations: 100,
                     settings: {
-                        gravity: 0.01,
-                        scalingRatio: 200,
-                        strongGravityMode: false,
+                        gravity: 1,
+                        scalingRatio: 10,
+                        strongGravityMode: true,
                         barnesHutOptimize: true,
                         barnesHutTheta: 0.5,
                         edgeWeightInfluence: 1.0,  // Use edge weights for community structure
                         slowDown: 5,
-                        linLogMode: true  // Better for community detection
                     }
                 });
                 console.timeEnd('ForceAtlas2 layout');
@@ -643,11 +642,10 @@ export default {
             });
         },
 
-        // Set selected node following Sigma.js best practices pattern
+        // Set selected node
         setSelectedNode(node) {
             if (node) {
                 this.selectedNode = node;
-                // Use graph.neighbors() for cleaner API
                 const neighbors = this.graph.neighbors(node);
                 this.connectedNodes = new Set([node, ...neighbors]);
             } else {
