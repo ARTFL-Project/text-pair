@@ -5,12 +5,14 @@ import configparser
 import json
 import os
 import re
+import shutil
 from collections import OrderedDict
 from typing import Any
 
 import lz4.frame
 import orjson
 import psycopg2
+from pgvector.psycopg2 import register_vector
 from psycopg2.extras import execute_values
 from tqdm import tqdm
 
@@ -266,8 +268,10 @@ def get_metadata_fields(metadata_file, direction):
     return fields
 
 
-def load_db(file, source_metadata, target_metadata, table_name, searchable_fields, count, algorithm, banalities_stored):
+def load_db(file, source_metadata, target_metadata, table_name, searchable_fields, count, algorithm, banalities_stored, textpair_params=None):
     """Load SQL table"""
+    import numpy as np
+
     config = configparser.ConfigParser()
     config.read("/etc/text-pair/global_settings.ini")
     database = psycopg2.connect(
@@ -277,6 +281,34 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     )
     cursor = database.cursor()
     cursor2 = database.cursor()
+
+    # Register the vector type with psycopg2
+    # Note: The vector extension must be created by a superuser before running this
+    register_vector(database)
+
+    # Try to load embeddings if they exist
+    embeddings_memmap = None
+    sbert_dim = None
+    alignments_dir = os.path.dirname(file)
+
+    # Get embedding model name from params or use default
+    if textpair_params and hasattr(textpair_params, 'preprocessing_params'):
+        embedding_model = textpair_params.preprocessing_params["source"]["embedding_model"]
+    else:
+        embedding_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+    # Convert model name to safe directory name (replace / with _)
+    safe_model_name = embedding_model.replace("/", "_")
+    embeddings_cache_path = os.path.join(alignments_dir, f"{safe_model_name}_embeddings", "passage_embeddings.dat")
+    embeddings_meta_path = os.path.join(alignments_dir, f"{safe_model_name}_embeddings", "metadata.json")
+
+    if os.path.exists(embeddings_cache_path) and os.path.exists(embeddings_meta_path):
+        with open(embeddings_meta_path, 'rb') as f:
+            metadata = orjson.loads(f.read())
+        sbert_dim = metadata['sbert_dim']
+        alignment_counts = metadata['alignment_counts']
+        embeddings_memmap = np.memmap(embeddings_cache_path, dtype='float32', mode='r',
+                                      shape=(alignment_counts, sbert_dim))
 
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = DEFAULT_FIELDS
@@ -290,7 +322,13 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     else:
         field_names.update(get_metadata_fields(source_metadata, "target"))  # add the fields in source as target fields
     field_names.update({"target_first_class", "target_second_class", "target_third_class"})
-    fields_and_types = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f != "rowid"]
+
+    # Add embedding column if embeddings are available
+    if embeddings_memmap is not None:
+        fields_in_table.append(f"embedding vector({sbert_dim})")
+        field_names.add("embedding")
+
+    fields_and_types = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f not in ("rowid", "embedding")]
     fields_in_table.extend(fields_and_types)
     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
     cursor.execute(f"CREATE TABLE {table_name} ({', '.join(fields_in_table)})")
@@ -316,6 +354,11 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
             alignment_fields["target_first_class"] = ""
             alignment_fields["target_second_class"] = ""
             alignment_fields["target_third_class"] = ""
+
+        # Add embedding if available
+        if embeddings_memmap is not None:
+            embedding = embeddings_memmap[rowid - 1].tolist()  # rowid is 1-indexed, array is 0-indexed
+            alignment_fields["embedding"] = embedding
 
         row = validate_field_type(alignment_fields, DEFAULT_FIELD_TYPES, field_names)
         rows.append(row)
@@ -360,6 +403,13 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
     cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
     cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING GIN(group_id)") # GIN index
+
+    # Create vector similarity index if embeddings were added
+    if embeddings_memmap is not None:
+        print("Creating vector similarity index...")
+        cursor.execute(f"CREATE INDEX ON {table_name} USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)")
+        print("✓ Created vector similarity index")
+
     database.commit()
 
     print("Populating index table...")
@@ -536,6 +586,7 @@ def create_web_app(
         count,
         algorithm,
         web_config.banalitiesStored,
+        textpair_params,
     )
     db_dir = os.path.join(web_app_dir, table)
     if groups_file is not None:
@@ -550,6 +601,16 @@ def create_web_app(
         web_config.update(fields_in_table)
         set_up_app(web_config, db_dir, table, algorithm)
 
+    # Copy graph_data directory to web app for API access
+    source_graph_data = os.path.join(os.path.dirname(file), "graph_data")
+    if os.path.exists(source_graph_data):
+        dest_graph_data = os.path.join(db_dir, "graph_data")
+        print(f"Copying graph data to web app directory: {dest_graph_data}")
+        if os.path.exists(dest_graph_data):
+            shutil.rmtree(dest_graph_data)
+        shutil.copytree(source_graph_data, dest_graph_data)
+    else:
+        print(f"Note: No graph data found at {source_graph_data}. Clustering visualization will not be available.")
 
     if textpair_params.is_philo_db is False:
         if textpair_params.source_against_source is True:

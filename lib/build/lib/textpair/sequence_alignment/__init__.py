@@ -1,12 +1,7 @@
 """Sequence alignment submodule containing alignment merger, banality filter, and ngram generation."""
 
 from .alignment_merger import merge_alignments
-from .banality_finder import (
-    banality_auto_detect,
-    banality_llm_post_eval,
-    phrase_matcher,
-    separate_banalities,
-)
+from .banality_finder import banality_auto_detect, banality_llm_post_eval, phrase_matcher
 from .generate_ngrams import Ngrams
 
 __all__ = [
@@ -14,6 +9,5 @@ __all__ = [
     'banality_auto_detect',
     'banality_llm_post_eval',
     'phrase_matcher',
-    'separate_banalities',
     'Ngrams',
 ]

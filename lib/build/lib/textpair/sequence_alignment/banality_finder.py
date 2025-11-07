@@ -73,6 +73,9 @@ def banality_auto_detect(
     banalities_found = 0
     with (
         lz4.frame.open(f"{filepath}.temp.lz4", mode="wb") as output_file,
+        lz4.frame.open(
+            f"{filepath.replace('alignments.jsonl', 'banal_alignments.jsonl')}", mode="wb"
+        ) as banal_output_file,
         lz4.frame.open(filepath) as input_file,
     ):
         source_ngram_doc = None
@@ -89,10 +92,13 @@ def banality_auto_detect(
             ):  # if n % (or more) of ngrams are common ngrams
                 alignment["banality"] = True
                 banalities_found += 1
+                if store_banalities is True:
+                    output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+                else:
+                    banal_output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
             else:
                 alignment["banality"] = False
-            # Always write to main file with banality flag set
-            output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+                output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
     os.system(f"rm {filepath} && mv {filepath}.temp.lz4 {filepath}")
     return banalities_found
 
@@ -130,38 +136,6 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
     os.system(f"rm {filepath} && mv {filepath}.keep.lz4 {filepath}")
     print("done")
     return passages_filtered
-
-
-def separate_banalities(filepath: str, count: Optional[int]) -> int:
-    """
-    Separate passages flagged as banal into a separate file and remove them from main alignments.
-    Should be called AFTER all banality detection and LLM evaluation is complete.
-
-    Args:
-        filepath: Path to alignments file
-        count: Total number of alignments (for progress bar)
-
-    Returns:
-        Number of banalities separated
-    """
-    banalities_separated = 0
-    banal_file_name = filepath.replace("alignments.jsonl", "banal_alignments.jsonl")
-
-    with (
-        lz4.frame.open(banal_file_name, mode="wb") as banal_output_file,
-        lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
-        lz4.frame.open(filepath) as input_file,
-    ):
-        for line in tqdm(input_file, total=count, desc="Separating banalities...", leave=False):
-            alignment: dict[str, Any] = orjson.loads(line)
-            if alignment.get("banality") is True:
-                banalities_separated += 1
-                banal_output_file.write(line)  # type: ignore
-            else:
-                output_file.write(line)  # type: ignore
-
-    os.system(f"rm {filepath} && mv {filepath}.keep.lz4 {filepath}")
-    return banalities_separated
 
 
 async def banality_llm_post_eval(

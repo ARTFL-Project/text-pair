@@ -1,0 +1,67 @@
+Metadata-Version: 2.4
+Name: textpair_graph
+Version: 0.1.0
+Summary: Graph building and clustering for TextPair alignment data
+Author-email: ARTFL Project <artfl@uchicago.edu>
+License: MIT
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: scikit-learn
+Requires-Dist: umap-learn
+Requires-Dist: hdbscan
+Requires-Dist: networkx
+Requires-Dist: sentence-transformers
+Requires-Dist: torch
+Requires-Dist: numba
+Requires-Dist: lz4
+Requires-Dist: orjson
+Requires-Dist: tqdm
+Requires-Dist: textpair_llm
+Provides-Extra: cuda
+Requires-Dist: cuml-cu12==25.10.*; extra == "cuda"
+Requires-Dist: cugraph-cu12==25.10.*; extra == "cuda"
+Requires-Dist: nx-cugraph-cu12==25.10.*; extra == "cuda"
+
+# TextPair Graph
+
+Graph building and clustering for TextPair alignment data.
+
+## Installation
+
+```bash
+# Basic installation
+uv pip install -e .
+
+# With CUDA support (for faster UMAP/HDBSCAN)
+uv pip install -e ".[cuda]"
+```
+
+## Usage
+
+### Build Graph Model
+
+```bash
+python -m textpair_graph build <alignments_file> <output_dir> --model <sbert_model>
+```
+
+### Generate Cluster Labels
+
+```bash
+python -m textpair_graph label <graph_data_dir> --model <llm_model>
+```
+
+## Dependencies
+
+- numpy, scipy, scikit-learn
+- umap-learn, hdbscan (clustering)
+- networkx (graph manipulation)
+- sentence-transformers, torch (embeddings)
+- numba (performance)
+- lz4, orjson (data I/O)
+- textpair (for LLM evaluation)
+
+### Optional
+
+- cuml-cu12 (CUDA-accelerated UMAP/HDBSCAN)

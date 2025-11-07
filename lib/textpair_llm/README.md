@@ -1,0 +1,52 @@
+# TextPair LLM
+
+LLM server management and evaluation utilities for TextPair projects.
+
+## Installation
+
+```bash
+uv pip install -e .
+```
+
+## Features
+
+- **LlamaServerManager**: Start and manage llama.cpp server instances
+- **AsyncLLMEvaluator**: Async LLM evaluation with concurrent request handling
+- **LLMEvaluator**: Synchronous LLM evaluation
+
+## Usage
+
+### Manage Llama Server
+
+```bash
+textpair-llama-server start --model <model_path> --port 8080
+textpair-llama-server stop
+```
+
+### Python API
+
+```python
+from textpair_llm import AsyncLLMEvaluator
+
+evaluator = AsyncLLMEvaluator(
+    model_path="unsloth/gemma-3-4b-it-qat-GGUF",
+    port=8081,
+    context_window=4096
+)
+
+evaluator.start_server()
+
+# Async usage
+result = await evaluator._make_completion_request(prompt, params)
+
+evaluator.stop_server()
+```
+
+## Dependencies
+
+Minimal dependencies for maximum flexibility:
+- aiohttp (async HTTP requests)
+- requests (sync HTTP requests)
+- tqdm (progress bars)
+
+Requires llama.cpp server binary (not included).

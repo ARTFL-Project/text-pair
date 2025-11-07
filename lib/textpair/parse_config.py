@@ -112,6 +112,19 @@ class TextPairConfig:
                 case "spacy_model":
                     self.preprocessing_params["source"]["language_model"] = value
                     self.preprocessing_params["target"]["language_model"] = value
+                case "embedding_model":
+                    if value:
+                        self.preprocessing_params["source"]["embedding_model"] = value
+                        self.preprocessing_params["target"]["embedding_model"] = value
+                    else:
+                        # Default to small, fast multilingual model if not specified
+                        self.preprocessing_params["source"]["embedding_model"] = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                        self.preprocessing_params["target"]["embedding_model"] = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                        print("\nWARNING: Using default embedding model 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'")
+                        print("This is a small, fast multilingual model suitable for many languages.")
+                        print("For better quality results in specific languages, consider using a specialized model.")
+                        print("See: https://huggingface.co/models?library=sentence-transformers&sort=downloads")
+                        print("Configure via 'embedding_model' in your config.ini file.\n")
                 case _:
                     self.preprocessing_params["source"][key] = value
                     self.preprocessing_params["target"][key] = value

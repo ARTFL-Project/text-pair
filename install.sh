@@ -60,7 +60,7 @@ echo "Creating virtual environment with uv..."
 uv venv -p $PYTHON_VERSION /var/lib/text-pair/textpair_env
 source /var/lib/text-pair/textpair_env/bin/activate
 
-# Install textpair with appropriate PyTorch configuration
+# Install textpair and textpair_llm together
 if [ "$USE_CUDA" = true ]; then
     echo "Installing textpair with CUDA support..."
     uv pip install -e lib/.[cuda]
@@ -70,6 +70,34 @@ else
 fi
 
 deactivate
+
+# Create separate virtual environment for graph building
+echo ""
+echo "Creating separate virtual environment for graph building..."
+if [ -d /var/lib/text-pair/graph ]; then
+    echo "Deleting existing graph environment..."
+    rm -rf /var/lib/text-pair/graph
+fi
+
+uv venv -p $PYTHON_VERSION /var/lib/text-pair/graph
+source /var/lib/text-pair/graph/bin/activate
+
+
+# Install textpair_graph and textpair_llm together
+echo "Installing textpair_graph..."
+if [ "$USE_CUDA" = true ]; then
+    echo "Installing with GPU acceleration (cuML)..."
+    uv pip install -e lib/textpair_graph[cuda] || {
+        echo "WARNING: Failed to install CUDA graph libraries. Falling back to CPU alternatives..."
+        uv pip install -e lib/textpair_graph
+    }
+else
+    echo "Installing CPU-only graph dependencies..."
+    uv pip install -e lib/textpair_graph
+fi
+
+deactivate
+echo "Graph building environment created at /var/lib/text-pair/graph"
 
 # Install the textpair script
 sudo cp textpair /usr/local/bin/
@@ -122,6 +150,28 @@ if [ ! -f /etc/text-pair/global_settings.ini ]
         echo "Make sure you create a PostgreSQL database with a user with read/write access to that database and configure /etc/text-pair/global_settings.ini accordingly."
 else
     echo "/etc/text-pair/global_settings.ini already exists, not modifying..."
+fi
+
+# Check if pgvector extension is available in PostgreSQL
+echo ""
+echo "Checking for pgvector extension in PostgreSQL..."
+if [ -f /usr/share/postgresql/*/extension/vector.control ] || [ -f /usr/local/share/postgresql/*/extension/vector.control ]; then
+    echo "✓ pgvector extension found in PostgreSQL"
+    echo ""
+    echo "IMPORTANT: Before using TextPAIR, you must enable the vector extension in your database."
+    echo "As a PostgreSQL superuser, run:"
+    echo "  psql -d your_textpair_database -c 'CREATE EXTENSION IF NOT EXISTS vector;'"
+else
+    echo ""
+    echo "ERROR: pgvector extension not found!"
+    echo "TextPAIR requires the pgvector extension for PostgreSQL."
+    echo ""
+    echo "To install pgvector:"
+    echo "  See https://github.com/pgvector/pgvector?tab=readme-ov-file#installation for installation instructions."
+    echo ""
+    echo "After installing pgvector, run this install script again."
+    echo ""
+    exit 1
 fi
 
 echo -e "\n## INSTALLATION COMPLETE ##"

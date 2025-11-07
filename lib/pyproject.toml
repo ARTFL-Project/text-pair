@@ -39,9 +39,12 @@ dependencies = [
     "ahocorasick-rs",
     "msgspec",
     "faiss-cpu",
-    "aiohttp~=3.12",
     "spacy-transformers",
-    "networkx~=3.5"
+    "networkx~=3.5",
+    "torch-geometric~=2.7.0",
+    "umap-learn~=0.5.9",
+    "pgvector~=0.4.1",
+    "textpair_llm",
 ]
 
 [project.urls]
@@ -56,11 +59,11 @@ textpair_llama_server = "textpair.llama_server_manager:main"
 
 [project.optional-dependencies]
 cpu = [
-    "torch>=2.6.0",
+    "torch==2.8",
     "torchvision>=0.22.0",
 ]
 cuda = [
-    "torch>=2.6.0",
+    "torch==2.8",
     "torchvision>=0.22.0",
     "cupy-cuda12x>=13.0.0,<14.0.0",
 ]
@@ -70,7 +73,7 @@ package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["textpair*"]
+include = ["textpair"]
 exclude = ["tests*"]
 
 [tool.isort]
@@ -92,6 +95,7 @@ conflicts = [
 ]
 
 [tool.uv.sources]
+textpair_llm = { path = "textpair_llm", editable = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cuda", extra = "cuda" },
@@ -110,3 +114,5 @@ explicit = true
 name = "pytorch-cuda"
 url = "https://download.pytorch.org/whl/cu126"
 explicit = true
+
+

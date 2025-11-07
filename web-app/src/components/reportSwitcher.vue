@@ -10,7 +10,10 @@
             @click="viewPassageInTimeline">View passages in
             timeline</button>
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'networkGraph' }"
-            style="border-bottom-right-radius: 0;" @click="viewNetworkGraph">View network
+            @click="viewNetworkGraph">View network
+            graph</button>
+        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'semanticGraph' }"
+            style="border-bottom-right-radius: 0;" @click="viewSemanticGraph">View semantic
             graph</button>
     </div>
 </template>
@@ -50,6 +53,13 @@ export default {
             delete queryParams.id_anchor;
             queryParams.db_table = this.$globalConfig.databaseName;
             this.$router.push(`/network/?${this.paramsToUrl(queryParams)}`);
+        },
+        viewSemanticGraph() {
+            let queryParams = { ...this.$route.query };
+            delete queryParams.page;
+            delete queryParams.id_anchor;
+            queryParams.db_table = this.$globalConfig.databaseName;
+            this.$router.push(`/semantic/?${this.paramsToUrl(queryParams)}`);
         },
     }
 }

@@ -1,0 +1,2 @@
+[console_scripts]
+textpair-graph = textpair_graph.__main__:main

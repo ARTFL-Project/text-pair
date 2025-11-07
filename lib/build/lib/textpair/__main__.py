@@ -3,8 +3,6 @@
 
 import configparser
 import os
-import subprocess
-import sys
 
 import psycopg2
 
@@ -16,53 +14,7 @@ from .sequence_alignment import (
     banality_llm_post_eval,
     merge_alignments,
     phrase_matcher,
-    separate_banalities,
 )
-
-
-def build_graph_and_labels(alignments_file: str, embedding_model: str, llm_params: dict) -> None:
-    """
-    Build graph model and optionally generate cluster labels.
-    Runs in separate graph environment via subprocess.
-    """
-    print("\n### Building graph model for alignment clustering ###")
-
-    # Path to graph environment python
-    graph_python = "/var/lib/text-pair/graph/bin/python"
-    output_dir = os.path.dirname(alignments_file)
-
-    # Run graph building in separate environment
-    try:
-        result = subprocess.run(
-            [graph_python, "-m", "textpair_graph", "build",
-             alignments_file, output_dir, "--model", embedding_model],
-            check=True,
-            capture_output=False
-        )
-        print("✓ Graph model built successfully!")
-    except subprocess.CalledProcessError as e:
-        print(f"ERROR: Graph model generation failed with exit code {e.returncode}", file=sys.stderr)
-        return
-    except FileNotFoundError:
-        print(f"ERROR: Graph environment not found at {graph_python}", file=sys.stderr)
-        print("Install textpair_graph in a separate environment to enable graph functionality.")
-        return
-
-    # Generate cluster labels using LLM (if configured)
-    if llm_params.get("llm_model"):
-        print("\n### Generating cluster labels with LLM ###")
-        graph_data_path = os.path.join(output_dir, "graph_data")
-        if os.path.exists(graph_data_path):
-            try:
-                result = subprocess.run(
-                    [graph_python, "-m", "textpair_graph", "label",
-                     graph_data_path, "--model", llm_params["llm_model"],
-                     "--port", str(llm_params.get("llm_port", 8081))],
-                    check=True,
-                    capture_output=False
-                )
-            except subprocess.CalledProcessError as e:
-                print(f"WARNING: Cluster labeling failed with exit code {e.returncode}", file=sys.stderr)
 
 
 def delete_database(dbname: str) -> None:
@@ -239,8 +191,6 @@ async def run_alignment(params):
                     print(f"{rescued_count} passages were rescued (reclassified as substantive) after LLM evaluation.")
                     banalities_found -= rescued_count  # Adjust the count
             if params.matching_params["store_banalities"] is False:
-                # Separate banalities into a different file after all evaluation is complete
-                banalities_found = separate_banalities(results_file, count)
                 print(
                     f"{banalities_found} pairwise alignment(s) have been identified as formulaic and have been removed from matches."
                 )
@@ -268,10 +218,6 @@ async def run_alignment(params):
     groups_file = merge_alignments(results_file, count)
 
     if params.web_app_config["skip_web_app"] is False:
-        # Build graph model and generate cluster labels
-        embedding_model = params.preprocessing_params["source"]["embedding_model"]
-        build_graph_and_labels(results_file, embedding_model, params.llm_params)
-
         create_web_app(
             results_file,
             params.paths["source"]["metadata_path"],
@@ -348,11 +294,6 @@ async def run_vsa_similarity(params) -> None:
     if params.web_app_config["skip_web_app"] is False:
         output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
         count = get_count(os.path.join(params.output_path, "results/counts.txt"))
-
-        # Build graph model and generate cluster labels
-        embedding_model = params.preprocessing_params["source"]["embedding_model"]
-        build_graph_and_labels(output_file, embedding_model, params.llm_params)
-
         create_web_app(
             output_file,
             params.paths["source"]["metadata_path"],

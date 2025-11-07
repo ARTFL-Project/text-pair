@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+textpair_graph/__init__.py
+textpair_graph/__main__.py
+textpair_graph/build_graph_model.py
+textpair_graph/label_clusters.py
+textpair_graph.egg-info/PKG-INFO
+textpair_graph.egg-info/SOURCES.txt
+textpair_graph.egg-info/dependency_links.txt
+textpair_graph.egg-info/entry_points.txt
+textpair_graph.egg-info/requires.txt
+textpair_graph.egg-info/top_level.txt

@@ -328,7 +328,6 @@ export default {
 
             // Add nodes with normalized sizes based on centrality
             console.time('Add nodes');
-            const labelMaxLength = 20;
             this.rawData.nodes.forEach(node => {
                 // Normalize centrality to range [minNodeSize, maxNodeSize]
                 let normalizedSize;
@@ -344,9 +343,28 @@ export default {
 
                 const nodeColor = this.getUniqueNodeColor(node.id);
                 const label = node.label;
-                const displayLabel = label.length > labelMaxLength
-                    ? label.substring(0, labelMaxLength) + '...'
-                    : label;
+
+                // Truncate label: at second comma or 20 chars, whichever comes first
+                let displayLabel = label;
+                const firstComma = label.indexOf(',');
+                if (firstComma !== -1) {
+                    const secondComma = label.indexOf(',', firstComma + 1);
+                    if (secondComma !== -1) {
+                        // Truncate at second comma (no ellipsis), but respect 20 char limit
+                        const commaLimit = secondComma;
+                        if (commaLimit <= 20) {
+                            displayLabel = label.substring(0, commaLimit);
+                        } else {
+                            displayLabel = label.substring(0, 20) + '...';
+                        }
+                    } else if (label.length > 20) {
+                        // No second comma, but still too long
+                        displayLabel = label.substring(0, 20) + '...';
+                    }
+                } else if (label.length > 20) {
+                    // No commas, just truncate at 20
+                    displayLabel = label.substring(0, 20) + '...';
+                }
 
                 this.graph.addNode(node.id, {
                     label: displayLabel,

@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "textpair_graph"
+version = "0.1.0"
+description = "Graph building and clustering for TextPair alignment data"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "ARTFL Project", email = "artfl@uchicago.edu"}
+]
+license = {text = "MIT"}
+
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "umap-learn",
+    "hdbscan",
+    "networkx",
+    "sentence-transformers",
+    "torch",
+    "numba",
+    "lz4",
+    "orjson",
+    "tqdm",
+    "textpair_llm",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "cuml-cu12==25.10.*",
+    "cugraph-cu12==25.10.*",
+    "nx-cugraph-cu12==25.10.*",
+]
+
+[project.scripts]
+textpair-graph = "textpair_graph.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["textpair_graph*"]
+
+[tool.uv.sources]
+textpair_llm = { path = "../textpair_llm", editable = true }
+cuml-cu12 = [
+    { index = "nvidia-pypi", extra = "cuda" },
+]
+cugraph-cu12 = [
+    { index = "nvidia-pypi", extra = "cuda" },
+]
+nx-cugraph-cu12 = [
+    { index = "nvidia-pypi", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+name = "nvidia-pypi"
+url = "https://pypi.nvidia.com"
+explicit = true

@@ -8,6 +8,7 @@ const sortedResults = () => import("../components/sortedResults");
 const alignmentGroup = () => import("../components/alignmentGroup");
 const textNavigation = () => import("../components/textNavigation");
 const networkGraph = () => import("../components/networkGraph");
+const semanticGraph = () => import("../components/semanticGraph");
 
 const router = createRouter({
     history: createWebHistory(globalConfig.appPath),
@@ -32,6 +33,11 @@ const router = createRouter({
             path: "/network",
             name: "networkGraph",
             component: networkGraph,
+        },
+        {
+            path: "/semantic",
+            name: "semanticGraph",
+            component: semanticGraph,
         },
         {
             path: "/group/:groupId",

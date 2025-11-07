@@ -1,0 +1,2 @@
+[console_scripts]
+textpair-llama-server = textpair_llm.llama_server_manager:main
