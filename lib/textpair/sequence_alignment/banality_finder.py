@@ -1,6 +1,5 @@
 """Banality detection"""
 
-import asyncio
 import bisect
 import os
 import subprocess
@@ -12,9 +11,8 @@ import lz4.frame
 import orjson
 import regex as re
 from tqdm import tqdm
-from transformers import pipeline
 
-from textpair.llm_evaluation import AsyncLLMEvaluator
+from textpair_llm.llm_evaluation import AsyncLLMEvaluator
 
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
 SPACES = re.compile(r"\p{Z}+")

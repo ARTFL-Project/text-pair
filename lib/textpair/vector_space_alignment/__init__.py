@@ -17,8 +17,8 @@ from sklearn.metrics.pairwise import linear_kernel
 from text_preprocessing import PreProcessor, Token, Tokens
 from tqdm import tqdm
 
-from textpair.llm_evaluation import AsyncLLMEvaluator, LLMDebugLogger
 from textpair.utils import clean_text, get_text, text_object_upper_bound
+from textpair_llm.llm_evaluation import AsyncLLMEvaluator, LLMDebugLogger
 
 from .corpus import TfIdfCorpus, TransformerCorpus, Word2VecEmbeddingCorpus
 from .expansion import expand_validated_matches

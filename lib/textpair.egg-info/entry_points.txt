@@ -1,3 +1,2 @@
 [console_scripts]
 textpair = textpair.__main__:main
-textpair_llama_server = textpair.llama_server_manager:main
