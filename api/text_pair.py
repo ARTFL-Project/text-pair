@@ -1408,6 +1408,15 @@ def get_semantic_graph_data(request: Request):
     total_clusters = metadata['total_clusters']
     id_to_author = {v: k for k, v in author_to_id.items()}
 
+    # Load cluster labels if available
+    cluster_label_map = {}
+    cluster_labels_path = os.path.join(graph_data_path, 'cluster_labels.json')
+    if os.path.exists(cluster_labels_path):
+        with open(cluster_labels_path, 'rb') as f:
+            labels_data = orjson.loads(f.read())
+            # Convert string keys back to integers
+            cluster_label_map = {int(k): v for k, v in labels_data.items()}
+
     # Query alignments from database
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
@@ -1475,6 +1484,7 @@ def get_semantic_graph_data(request: Request):
             'author_id': author_id,
             'author_name': id_to_author[author_id],
             'cluster_id': cluster_id,
+            'cluster_label': cluster_label_map.get(cluster_id, ''),
             'passages': int(passage_count),
             'size': int(passage_count),
             'x': float(position[0]),
@@ -1506,6 +1516,7 @@ def get_semantic_graph_data(request: Request):
             'label': '',
             'node_type': 'cluster_anchor',
             'cluster_id': cluster_id,
+            'cluster_label': cluster_label_map.get(cluster_id, ''),
             'size': 0.01,
             'x': float(position_2d[0]),
             'y': float(position_2d[1]),

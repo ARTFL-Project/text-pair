@@ -68,7 +68,7 @@ async def generate_cluster_labels_async(
     embeddings: np.ndarray,
     n_clusters: int,
     evaluator,
-    top_k: int = 15,
+    top_k: int = 25,
 ) -> dict:
     """
     Generate thematic labels for each cluster using LLM.
@@ -110,8 +110,8 @@ async def generate_cluster_labels_async(
         top_indices_in_cluster = np.argsort(similarities)[-top_k:][::-1]
         top_alignment_indices = cluster_indices[top_indices_in_cluster]
 
-        # Extract passage texts from alignments file
-        top_passages = []
+        # Extract passage texts from alignments file (fetch all at once)
+        all_passages = []
         indices_to_fetch = set(int(i) for i in top_alignment_indices)
         max_index = max(indices_to_fetch)
         min_index = min(indices_to_fetch)
@@ -122,60 +122,107 @@ async def generate_cluster_labels_async(
                 if i in indices_to_fetch:
                     alignment = orjson.loads(line)
                     passage = alignment["source_passage"]
-                    top_passages.append(passage)
+                    all_passages.append(passage)
                     if i == max_index:
                         break
 
-        # Generate prompt
-        prompt = create_cluster_labeling_prompt(top_passages)
+        # Try with progressively fewer passages if context limit exceeded
+        passages_to_use = len(all_passages)
+        min_passages = 5
+        label = ""
 
-        # Query LLM using the evaluator's method
-        try:
-            llm_params = {
-                "temperature": 0.0,
-                "max_tokens": 200,
-            }
+        while passages_to_use >= min_passages:
+            # Generate prompt with current number of passages
+            prompt = create_cluster_labeling_prompt(all_passages[:passages_to_use])
 
-            result = await evaluator._make_completion_request(prompt, llm_params)
+            try:
+                llm_params = {
+                    "temperature": 0.0,
+                    "max_tokens": 200,
+                }
 
-            if result.get("choices") and len(result["choices"]) > 0:
-                response_text = result["choices"][0].get("text", "").strip()
+                result = await evaluator._make_completion_request(prompt, llm_params)
 
-                if not response_text:
-                    cluster_label_map[cluster_id] = ""
-                    continue
+                if result.get("choices") and len(result["choices"]) > 0:
+                    response_text = result["choices"][0].get("text", "").strip()
 
-                # Parse the LABEL line from the response
-                label = ""
-                for line in response_text.split('\n'):
-                    line = line.strip()
-                    if line.startswith("LABEL:"):
-                        label = line.replace("LABEL:", "").strip()
+                    if not response_text:
                         break
 
-                # If no LABEL: line found, try to extract from full response
-                if not label and len(response_text) < 50 and '\n' not in response_text:
-                    label = response_text
+                    # Parse the LABEL line from the response
+                    for line in response_text.split('\n'):
+                        line = line.strip()
+                        if line.startswith("LABEL:"):
+                            label = line.replace("LABEL:", "").strip()
+                            break
 
-                # Clean up the label
-                label = label.replace('"', '').replace("'", "").strip()
+                    # If no LABEL: line found, try to extract from full response
+                    if not label and len(response_text) < 50 and '\n' not in response_text:
+                        label = response_text
 
-                # Ensure uniqueness
-                original_label = label
-                counter = 1
-                while label in used_labels and label:
-                    label = f"{original_label} ({counter})"
-                    counter += 1
+                    # Clean up the label
+                    label = label.replace('"', '').replace("'", "").strip()
 
-                if label:
-                    used_labels.add(label)
-                    cluster_label_map[cluster_id] = label
+                    # Validate: reject template/placeholder responses
+                    invalid_patterns = [
+                        'your',
+                        'word final label',
+                        '[',
+                        ']',
+                        'insert',
+                        'replace',
+                        'fill in',
+                    ]
+
+                    if label and any(pattern in label.lower() for pattern in invalid_patterns):
+                        print(f"\n  Cluster {cluster_id}: Invalid label detected (template response), retrying...")
+                        label = ""
+                        passages_to_use = max(min_passages, passages_to_use - 5)  # Try with fewer passages
+                        continue
+
+                break  # Success, exit retry loop
+
+            except Exception as e:
+                error_str = str(e)
+
+                # Check for context overflow error
+                if "exceed_context_size" in error_str:
+                    # Try to parse token counts for proportional reduction
+                    import json
+                    try:
+                        json_part = error_str.split("HTTP 400:", 1)[1].strip() if "HTTP 400:" in error_str else error_str
+                        error_data = json.loads(json_part)
+                        n_prompt = error_data.get("error", {}).get("n_prompt_tokens", 0)
+                        n_ctx = error_data.get("error", {}).get("n_ctx", 1)
+
+                        if n_prompt and n_ctx:
+                            # Reduce proportionally with safety margin
+                            passages_to_use = int(passages_to_use * (n_ctx / n_prompt) * 0.85)
+                        else:
+                            # Couldn't parse, reduce by half
+                            passages_to_use = passages_to_use // 2
+                    except:
+                        # JSON parsing failed, reduce by half
+                        passages_to_use = passages_to_use // 2
+
+                    passages_to_use = max(min_passages, passages_to_use)
+                    print(f"\n  Cluster {cluster_id}: Context error, retrying with {passages_to_use} passages")
+                    continue
                 else:
-                    cluster_label_map[cluster_id] = ""
-            else:
-                cluster_label_map[cluster_id] = ""
-        except Exception as e:
-            print(f"\nError generating label for cluster {cluster_id}: {e}")
+                    # Different error, don't retry
+                    print(f"\n  Error generating label for cluster {cluster_id}: {e}")
+                    break
+
+        # Ensure uniqueness
+        if label:
+            original_label = label
+            counter = 1
+            while label in used_labels:
+                label = f"{original_label} ({counter})"
+                counter += 1
+            used_labels.add(label)
+            cluster_label_map[cluster_id] = label
+        else:
             cluster_label_map[cluster_id] = ""
 
     return cluster_label_map
@@ -231,8 +278,9 @@ async def generate_and_update_cluster_labels(
     alignments_file: str,
     graph_data_path: str,
     model_path: str = "unsloth/gemma-3-4b-it-qat-GGUF",
-    top_k: int = 15,
-    port: int = 8081,
+    context_window: int = 8192,
+    top_k: int = 25,
+    port: int = 8080,
 ) -> dict:
     """
     Generate thematic labels for each cluster using LLM and update graph JSON files.
@@ -267,6 +315,7 @@ async def generate_and_update_cluster_labels(
     # Load embeddings (check for memmap first, then regular npy)
     import glob
     embeddings_dirs = glob.glob(os.path.join(parent_dir, "*_embeddings"))
+    print(f"\rFound embeddings directories: {embeddings_dirs}")
 
     if embeddings_dirs:
         embeddings_cache_path = os.path.join(embeddings_dirs[0], "passage_embeddings.dat")
@@ -297,7 +346,7 @@ async def generate_and_update_cluster_labels(
     evaluator = AsyncLLMEvaluator(
         model_path=model_path,
         port=port,
-        context_window=4096,
+        context_window=context_window,
         concurrency_limit=4
     )
 
@@ -348,3 +397,25 @@ async def generate_and_update_cluster_labels(
         if evaluator._session and not evaluator._session.closed:
             await evaluator._session.close()
         print("Server stopped.")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate and update cluster labels using LLM.")
+    parser.add_argument("--alignments_file", type=str, required=True, help="Path to alignments file")
+    parser.add_argument("--graph_data_path", type=str, required=True, help="Path to graph_data directory")
+    parser.add_argument("--model_path", type=str, default="unsloth/gemma-3-4b-it-qat-GGUF", help="LLM model path or HuggingFace model ID")
+    parser.add_argument("--context_window", type=int, default=8192, help="Context window size for LLM")
+    parser.add_argument("--top_k", type=int, default=50, help="Number of top passages to use per cluster")
+    parser.add_argument("--port", type=int, default=8080, help="Port for llama-server")
+
+    args = parser.parse_args()
+
+    asyncio.run(generate_and_update_cluster_labels(
+        alignments_file=args.alignments_file,
+        graph_data_path=args.graph_data_path,
+        model_path=args.model_path,
+        top_k=args.top_k,
+        port=args.port,
+    ))

@@ -57,7 +57,8 @@ def build_graph_and_labels(alignments_file: str, embedding_model: str, llm_param
                 result = subprocess.run(
                     [graph_python, "-m", "textpair_graph", "label",
                      graph_data_path, "--model", llm_params["llm_model"],
-                     "--port", str(llm_params.get("llm_port", 8081))],
+                     "--context_window", str(llm_params["llm_context_window"]),
+                     "--port", str(llm_params["llm_port"])],
                     check=True,
                     capture_output=False
                 )
