@@ -1144,219 +1144,6 @@ def get_edge_details(request: Request):
         "target": target_node
     }
 
-@app.get("/get_clusters")
-@app.get("/text-pair-api/get_clusters")
-def get_clusters(request: Request):
-    """Return semantic graph using precomputed cluster model.
-
-    Two modes:
-    1. Full graph (no filters): Fast path - delegates to get_full_graph()
-    2. Filtered graph (with search params): Rebuild graph from database with filters
-
-    Returns nodes and edges for (author, cluster) pair visualization.
-    """
-    sql_fields, sql_values, other_args, _ = parse_args(request)
-
-    # Path to precomputed graph model files
-    db_name = str(other_args.db_table)
-    graph_data_path = os.path.join(APP_PATH, db_name, "graph_data")
-
-    # Check if graph data exists
-    if not os.path.exists(graph_data_path):
-        return {"error": f"Graph data not found at {graph_data_path}. Please run build_graph_model.py first."}
-
-    # Fast path: if no filters, use the existing get_full_graph function
-    if not sql_fields:
-        print("Loading full pre-built graph from disk...")
-        return get_full_graph(request, db_name)
-
-    # Filtered path: rebuild graph from database with search filters
-    print(f"Building filtered graph with query: {sql_fields}")
-
-    # Load precomputed graph model data
-    print("Loading precomputed graph model...")
-    cluster_labels_modified = np.load(os.path.join(graph_data_path, 'cluster_labels_modified.npy'))
-    cluster_centroids_umap = np.load(os.path.join(graph_data_path, 'cluster_centroids_umap.npy'))
-    embeddings_umap_2d = np.load(os.path.join(graph_data_path, 'embeddings_umap_2d.npy'))
-    cluster_similarity = np.load(os.path.join(graph_data_path, 'cluster_similarity_matrix.npy'))
-
-    with open(os.path.join(graph_data_path, 'author_to_id.json'), 'rb') as f:
-        author_to_id = orjson.loads(f.read())
-
-    with open(os.path.join(graph_data_path, 'cluster_metadata.json'), 'rb') as f:
-        metadata = orjson.loads(f.read())
-
-    n_clusters = metadata['n_clusters']
-    total_clusters = metadata['total_clusters']
-    id_to_author = {v: k for k, v in author_to_id.items()}
-
-    # Query alignments from database based on search parameters
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    register_vector(conn)
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-    # Build query to fetch alignments with embeddings
-    query = f"SELECT rowid, source_author, target_author, embedding FROM {other_args.db_table} WHERE {sql_fields}"
-    cursor.execute(query, sql_values)
-
-
-    # Process query results - map alignments to (author, cluster) pairs
-    from collections import defaultdict
-    pair_passage_counts = defaultdict(int)
-    pair_embeddings_2d = defaultdict(list)
-
-    for row in cursor:
-        rowid = row['rowid']
-        source_author = row['source_author']
-        target_author = row['target_author']
-
-        # Get cluster assignment for this alignment
-        # The rowid should correspond to the index in cluster_labels_modified
-        alignment_idx = rowid - 1  # Adjust for 0-indexing if needed
-        if alignment_idx < 0 or alignment_idx >= len(cluster_labels_modified):
-            continue
-
-        cluster_id = int(cluster_labels_modified[alignment_idx])
-
-        # Get 2D UMAP position for this alignment
-        embedding_2d = embeddings_umap_2d[alignment_idx]
-
-        # Track both source and target authors
-        for author_name in [source_author, target_author]:
-            if author_name not in author_to_id:
-                continue
-
-            author_id = author_to_id[author_name]
-            pair_key = (author_id, cluster_id)
-            pair_passage_counts[pair_key] += 1
-            pair_embeddings_2d[pair_key].append(embedding_2d)
-
-    conn.close()
-
-    # Calculate mean 2D positions for each pair
-    pair_positions = {}
-    for pair_key, embeddings_list in pair_embeddings_2d.items():
-        mean_position = np.mean(embeddings_list, axis=0)
-        pair_positions[pair_key] = mean_position
-
-    # Build graph structure
-    print(f"Building graph with {len(pair_passage_counts)} (author, cluster) pairs...")
-
-    # Create nodes list (colors assigned client-side)
-    nodes = []
-    for (author_id, cluster_id), passage_count in pair_passage_counts.items():
-        node_id = f"author_{author_id}_cluster_{cluster_id}"
-        position = pair_positions[(author_id, cluster_id)]
-
-        nodes.append({
-            'id': node_id,
-            'label': id_to_author[author_id],
-            'author_id': author_id,
-            'author_name': id_to_author[author_id],
-            'cluster_id': cluster_id,
-            'size': int(passage_count),
-            'x': float(position[0]),
-            'y': float(position[1])
-        })
-
-    # Group nodes by cluster for edge creation
-    cluster_nodes = defaultdict(list)
-    for node in nodes:
-        cluster_id = node['cluster_id']
-        cluster_nodes[cluster_id].append(node['id'])
-
-    # Add invisible cluster anchor nodes
-    cluster_centroid_positions_2d = {}
-    for cluster_id in range(total_clusters):
-        cluster_2d_positions = []
-        for pair_key, position in pair_positions.items():
-            if pair_key[1] == cluster_id:
-                cluster_2d_positions.append(position)
-
-        if cluster_2d_positions:
-            mean_2d_position = np.mean(cluster_2d_positions, axis=0)
-            cluster_centroid_positions_2d[cluster_id] = mean_2d_position
-
-    for cluster_id, position_2d in cluster_centroid_positions_2d.items():
-        anchor_node_id = f"anchor_cluster_{cluster_id}"
-        nodes.append({
-            'id': anchor_node_id,
-            'label': '',
-            'node_type': 'cluster_anchor',
-            'cluster_id': cluster_id,
-            'size': 0.01,
-            'x': float(position_2d[0]),
-            'y': float(position_2d[1]),
-            'hidden': True
-        })
-
-    # Create edges list
-    edges = []
-
-    # 1. Intra-cluster edges (complete subgraphs)
-    intra_weight = 100.0
-    for cluster_id, node_ids in cluster_nodes.items():
-        if len(node_ids) > 1:
-            for node1, node2 in itertools.combinations(node_ids, 2):
-                edges.append({
-                    'id': f"{node1}_{node2}",
-                    'source': node1,
-                    'target': node2,
-                    'weight': intra_weight,
-                    'edge_type': 'intra_cluster',
-                    'size': 2.0,
-                    'color': '#666666'
-                })
-
-    # 2. Anchor connection edges (pairs to anchors)
-    anchor_weight = 50.0
-    for cluster_id, node_ids in cluster_nodes.items():
-        anchor_node_id = f"anchor_cluster_{cluster_id}"
-        for node_id in node_ids:
-            edges.append({
-                'id': f"{node_id}_{anchor_node_id}",
-                'source': node_id,
-                'target': anchor_node_id,
-                'weight': anchor_weight,
-                'edge_type': 'anchor_connection',
-                'size': 0.5,
-                'color': '#444444'
-            })
-
-    # 3. Centroid similarity edges (between cluster anchors)
-    similarity_threshold = np.percentile(cluster_similarity[np.triu_indices_from(cluster_similarity, k=1)], 75)
-    for cluster_i in range(n_clusters):
-        for cluster_j in range(cluster_i + 1, n_clusters):
-            similarity = cluster_similarity[cluster_i, cluster_j]
-
-            if similarity > similarity_threshold:
-                anchor_i = f"anchor_cluster_{cluster_i}"
-                anchor_j = f"anchor_cluster_{cluster_j}"
-
-                edges.append({
-                    'id': f"{anchor_i}_{anchor_j}",
-                    'source': anchor_i,
-                    'target': anchor_j,
-                    'weight': float(similarity * 10),
-                    'edge_type': 'centroid_similarity',
-                    'size': 1.5,
-                    'color': '#999999'
-                })
-
-    return {
-        'nodes': nodes,
-        'edges': edges,
-        'total_nodes': len(nodes),
-        'total_edges': len(edges),
-        'num_clusters': n_clusters,
-        'similarity_threshold': float(similarity_threshold),
-        'metadata': metadata  # Include cluster metadata (n_clusters, n_noise, etc)
-    }
-
 
 @app.get("/semantic_graph_data/")
 @app.get("/text-pair-api/semantic_graph_data/")
@@ -1376,22 +1163,22 @@ def get_semantic_graph_data(request: Request):
     if not os.path.exists(graph_data_path):
         return {"error": f"Graph data not found at {graph_data_path}. Please run build_graph_model.py first."}
 
-    # Fast path: if no filters, load from full_graph.json
-    # if not sql_fields:
-    #     print("Loading full pre-built graph from disk...")
-    #     full_graph_path = os.path.join(graph_data_path, 'full_graph.json')
+    # Fast path: if no filters, load precomputed graph
+    if not sql_fields:
+        print("Loading precomputed full graph from disk...")
+        precomputed_graph_path = os.path.join(graph_data_path, 'precomputed_graph_api.json')
 
-    #     if not os.path.exists(full_graph_path):
-    #         return {"error": f"Full graph not found at {full_graph_path}"}
+        if os.path.exists(precomputed_graph_path):
+            with open(precomputed_graph_path, 'rb') as f:
+                graph_data = orjson.loads(f.read())
 
-    #     with open(full_graph_path, 'rb') as f:
-    #         graph_data = orjson.loads(f.read())
-
-    #     print(f"✓ Loaded full graph: {len(graph_data.get('nodes', []))} nodes, {len(graph_data.get('edges', []))} edges")
-    #     return graph_data
+            print(f"✓ Loaded precomputed graph: {len(graph_data.get('nodes', []))} nodes, {len(graph_data.get('edges', []))} edges")
+            return graph_data
+        else:
+            print(f"⚠ Precomputed graph not found at {precomputed_graph_path}, falling back to filtered path")
 
     # Filtered path: rebuild graph from database with search filters
-    print(f"Building filtered graph with query: {sql_fields}")
+    print(f"Building filtered graph with query: {sql_fields or '(no filters)'}")
 
     # Load precomputed graph model data
     cluster_labels_modified = np.load(os.path.join(graph_data_path, 'cluster_labels_modified.npy'))
@@ -1582,87 +1369,6 @@ def get_semantic_graph_data(request: Request):
             'min_passages_threshold': MIN_PASSAGES_THRESHOLD
         }
     }
-
-
-@app.get("/text-pair/{db_path}/get_full_graph")
-@app.get("/{db_path}/get_full_graph")
-def get_full_graph(request: Request, db_path: str):
-    """
-    Load and return the pre-built full corpus graph.
-
-    This endpoint loads the complete graph that was pre-computed by build_graph_model.py
-    from all alignments in the corpus. Much faster than building on-the-fly since it's
-    just loading a JSON file from disk.
-
-    Returns:
-        - nodes: List of (author, cluster) pair nodes with positions
-        - edges: List of edges (intra-cluster, anchor connections, centroid similarity)
-        - metadata: Graph statistics
-    """
-    _, _, other_args, _ = parse_args(request)
-
-    # Path to precomputed graph files
-    db_name = str(other_args.db_table)
-    graph_data_path = os.path.join(APP_PATH, db_name, "graph_data")
-    full_graph_path = os.path.join(graph_data_path, 'full_graph.json')
-
-    # Check if full graph exists
-    if not os.path.exists(full_graph_path):
-        return {
-            "error": f"Full graph not found at {full_graph_path}. Please run build_graph_model.py with full graph generation enabled."
-        }
-
-    # Load the pre-built graph
-    print(f"Loading full graph from {full_graph_path}...")
-    with open(full_graph_path, 'rb') as f:
-        graph_data = orjson.loads(f.read())
-
-    print(f"✓ Loaded full graph: {len(graph_data.get('nodes', []))} nodes, {len(graph_data.get('edges', []))} edges")
-
-    return graph_data
-
-
-@app.get("/text-pair/{db_path}/get_full_graph_graphology")
-@app.get("/{db_path}/get_full_graph_graphology")
-def get_full_graph_graphology(request: Request, db_path: str):
-    """
-    Load and return the pre-built full corpus graph in Graphology format.
-
-    This endpoint returns the graph in Graphology's native JSON format, which can be
-    loaded directly by Sigma.js for optimal performance. This is faster than the
-    standard format because Sigma.js doesn't need to transform the data.
-
-    Usage in JavaScript:
-        const response = await fetch('/text-pair/mydb/get_full_graph_graphology');
-        const graphData = await response.json();
-        const graph = new graphology.Graph();
-        graph.import(graphData);
-        const renderer = new Sigma(graph, container);
-
-    Returns:
-        Graphology-formatted graph with nodes, edges, and attributes ready for Sigma.js
-    """
-    _, _, other_args, _ = parse_args(request)
-
-    # Path to precomputed graph files
-    db_name = str(other_args.db_table)
-    graph_data_path = os.path.join(APP_PATH, db_name, "graph_data")
-    graphology_path = os.path.join(graph_data_path, 'full_graph_graphology.json')
-
-    # Check if Graphology format exists
-    if not os.path.exists(graphology_path):
-        return {
-            "error": f"Graphology graph not found at {graphology_path}. Please run build_graph_model.py to generate it."
-        }
-
-    # Load the Graphology-formatted graph
-    print(f"Loading Graphology graph from {graphology_path}...")
-    with open(graphology_path, 'rb') as f:
-        graph_data = orjson.loads(f.read())
-
-    print(f"✓ Loaded Graphology graph: {len(graph_data.get('nodes', []))} nodes, {len(graph_data.get('edges', []))} edges")
-
-    return graph_data
 
 
 @app.get("/{db_path}/search")

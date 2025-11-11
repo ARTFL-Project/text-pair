@@ -230,16 +230,16 @@ async def generate_cluster_labels_async(
 
 def update_graph_json_files(graph_data_path: str, cluster_label_map: dict):
     """
-    Update the graph JSON files with cluster labels.
+    Update the precomputed graph JSON file with cluster labels.
 
     Args:
         graph_data_path: Path to graph_data directory
         cluster_label_map: Dictionary mapping cluster_id -> label
     """
-    # Update full_graph.json
-    full_graph_path = os.path.join(graph_data_path, 'full_graph.json')
-    if os.path.exists(full_graph_path):
-        with open(full_graph_path, 'rb') as f:
+    # Update precomputed_graph_api.json (for fast API loading)
+    precomputed_api_path = os.path.join(graph_data_path, 'precomputed_graph_api.json')
+    if os.path.exists(precomputed_api_path):
+        with open(precomputed_api_path, 'rb') as f:
             graph_data = orjson.loads(f.read())
 
         # Add cluster_label to nodes
@@ -247,31 +247,9 @@ def update_graph_json_files(graph_data_path: str, cluster_label_map: dict):
             cluster_id = node.get('cluster_id', 0)
             node['cluster_label'] = cluster_label_map.get(cluster_id, '')
 
-        # Add to metadata (convert keys to strings for JSON)
-        if 'metadata' not in graph_data:
-            graph_data['metadata'] = {}
-        graph_data['metadata']['cluster_labels'] = {str(k): v for k, v in cluster_label_map.items()}
-
-        with open(full_graph_path, 'wb') as f:
+        with open(precomputed_api_path, 'wb') as f:
             f.write(orjson.dumps(graph_data))
-        print(f"✓ Updated full_graph.json")
-
-    # Update full_graph_graphology.json
-    graphology_path = os.path.join(graph_data_path, 'full_graph_graphology.json')
-    if os.path.exists(graphology_path):
-        with open(graphology_path, 'rb') as f:
-            graph_data = orjson.loads(f.read())
-
-        # Add cluster_label to node attributes
-        for node in graph_data['nodes']:
-            cluster_id = node.get('attributes', {}).get('cluster_id', 0)
-            if 'attributes' not in node:
-                node['attributes'] = {}
-            node['attributes']['cluster_label'] = cluster_label_map.get(cluster_id, '')
-
-        with open(graphology_path, 'wb') as f:
-            f.write(orjson.dumps(graph_data))
-        print(f"✓ Updated full_graph_graphology.json")
+        print(f"✓ Updated precomputed_graph_api.json")
 
 
 async def generate_and_update_cluster_labels(

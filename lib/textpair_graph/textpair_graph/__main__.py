@@ -61,7 +61,7 @@ Examples:
 
         from .build_graph_model import (
             build_alignment_data,
-            build_author_cluster_graph,
+            build_precomputed_api_graph,
             cluster_alignments,
         )
 
@@ -87,13 +87,10 @@ Examples:
         print("\n" + "="*60)
         print("CLUSTERING ALIGNMENTS")
         print("="*60)
-        cluster_labels = cluster_alignments(data, output_path)
+        cluster_labels = cluster_alignments(data, output_path, args.alignments_file, alignment_counts)
 
-        # Build full corpus graph
-        print("\n" + "="*60)
-        print("BUILDING FULL CORPUS GRAPH")
-        print("="*60)
-        G = build_author_cluster_graph(args.alignments_file, output_path)
+        # Build precomputed graph for API
+        build_precomputed_api_graph(args.alignments_file, output_path)
 
         print("\n✓ Graph model built successfully!")
         print(f"   Graph data saved to: {output_path}/")

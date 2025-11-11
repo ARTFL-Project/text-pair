@@ -99,7 +99,7 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
     # Encode passages if not cached
     if passage_embeddings_memmap is None:
         print(f"Computing embeddings (will be cached to {embeddings_cache_path})...")
-        sbert_model = SentenceTransformer(sbert_model_name, device=device)
+        sbert_model = SentenceTransformer(sbert_model_name, device=device, model_kwargs={"dtype": torch.float32})
         sbert_dim = sbert_model.get_sentence_embedding_dimension()
 
         # Create memmap for cache
@@ -161,7 +161,7 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
     }
 
 
-@jit(nopython=True, cache=True)
+# @jit(nopython=True, cache=True)
 def compute_single_author_contributions(alignment_indices, cluster_labels_modified, embeddings_umap, cluster_centroids_umap, total_clusters):
     """
     Numba-optimized computation of a single author's cluster contributions.
@@ -216,13 +216,40 @@ def compute_single_author_contributions(alignment_indices, cluster_labels_modifi
     return contributions
 
 
-def cluster_alignments(data, output_path):
+def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     """
     Cluster all alignments using HDBSCAN on SBERT embeddings.
+    Uses passage length filtering: fit UMAP/HDBSCAN on long passages (≥50 chars),
+    then transform/predict short passages.
     Returns cluster labels for direct lookup at runtime.
     """
     print("\n=== Clustering alignments ===")
     print(f"Using {'GPU-accelerated cuML' if USE_GPU else 'CPU-based'} implementations")
+
+    # Extract passage lengths (character count excluding whitespace)
+    print("Extracting passage lengths...")
+    passage_lengths = []
+
+    with lz4.frame.open(alignments_file, "rb") as f:
+        for line in tqdm(f, total=alignment_counts, desc="Reading passage lengths", leave=False):
+            alignment = orjson.loads(line)
+            passage = alignment["source_passage"]
+            # Count characters excluding whitespace
+            char_count = len(passage.replace(' ', '').replace('\n', '').replace('\t', ''))
+            passage_lengths.append(char_count)
+
+    passage_lengths = np.array(passage_lengths)
+
+    # Filter by length threshold (≥50 chars without whitespace)
+    length_threshold = 50
+    long_passage_mask = passage_lengths >= length_threshold
+    n_long = long_passage_mask.sum()
+    n_short = (~long_passage_mask).sum()
+
+    print(f"Passage length filtering (threshold: {length_threshold} chars):")
+    print(f"  Long passages (≥{length_threshold} chars): {n_long} ({100*n_long/len(passage_lengths):.1f}%)")
+    print(f"  Short passages (<{length_threshold} chars): {n_short} ({100*n_short/len(passage_lengths):.1f}%)")
+    print(f"  Compute savings: ~{100*n_short/len(passage_lengths):.0f}% fewer passages for clustering")
 
     # Load all SBERT embeddings (from memmap, so no RAM issue)
     print("Loading SBERT embeddings...")
@@ -231,71 +258,114 @@ def cluster_alignments(data, output_path):
     print(f"Embeddings shape: {all_embeddings.shape}")
     sbert_dim = all_embeddings.shape[1]
 
-    # Convert to GPU array if using GPU
-    embeddings_array = array_lib.asarray(all_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
+    # Split embeddings into long and short passages
+    long_embeddings = all_embeddings[long_passage_mask]
+    short_embeddings = all_embeddings[~long_passage_mask]
+
+    print(f"Long embeddings shape: {long_embeddings.shape}")
+    print(f"Short embeddings shape: {short_embeddings.shape}")
+
+    # Convert to GPU array if using GPU (only long passages for fitting)
+    long_embeddings_array = array_lib.asarray(long_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
 
     # UMAP dimensionality reduction #1: 768 → 100 dims (for clustering)
+    # FIT ONLY ON LONG PASSAGES
     umap_dim_100 = 100
-    print(f"Reducing dimensionality with UMAP for clustering ({sbert_dim} → {umap_dim_100} dims)...")
+    # We want the neighbors to be between 15 and 100, but based on dataset size: a cluster should cover ~0.5% of data
+    n_neighbors = max(15, min(100, int(0.005 * len(long_embeddings_array))))
+
+    print(f"Fitting UMAP for clustering on long passages ({sbert_dim} → {umap_dim_100} dims)...")
     reducer_100d = UMAP(
         n_components=umap_dim_100,
         n_neighbors=15,
         min_dist=0.0,
-        metric='euclidean',
+        metric='cosine',
         random_state=42
     )
-    embeddings_reduced_100d = reducer_100d.fit_transform(embeddings_array)
+    long_embeddings_reduced_100d = reducer_100d.fit_transform(long_embeddings_array)
 
     # Convert back to numpy if using GPU
     if USE_GPU:
-        embeddings_reduced_100d = array_lib.asnumpy(embeddings_reduced_100d)
+        long_embeddings_reduced_100d = array_lib.asnumpy(long_embeddings_reduced_100d)
 
-    print(f"UMAP 100D done! Reduced shape: {embeddings_reduced_100d.shape}")
+    print(f"UMAP 100D fit done! Reduced long embeddings shape: {long_embeddings_reduced_100d.shape}")
 
-    # UMAP dimensionality reduction #2: 768 → 2 dims (for visualization)
-    umap_dim_2 = 2
-    print(f"Reducing dimensionality with UMAP for visualization ({sbert_dim} → {umap_dim_2} dims)...")
-    reducer_2d = UMAP(
-        n_components=umap_dim_2,
-        n_neighbors=50,
-        min_dist=0.3,
-        metric='euclidean',
-        random_state=42
-    )
-    embeddings_reduced_2d = reducer_2d.fit_transform(embeddings_array)
+    # TRANSFORM short passages into the fitted 100D space
+    print(f"Transforming short passages to 100D space...")
+    if n_short > 0:
+        short_embeddings_array = array_lib.asarray(short_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
+        short_embeddings_reduced_100d = reducer_100d.transform(short_embeddings_array)
 
-    # Convert back to numpy if using GPU
-    if USE_GPU:
-        embeddings_reduced_2d = array_lib.asnumpy(embeddings_reduced_2d)
+        if USE_GPU:
+            short_embeddings_reduced_100d = array_lib.asnumpy(short_embeddings_reduced_100d)
 
-    print(f"UMAP 2D done! Reduced shape: {embeddings_reduced_2d.shape}")
+        print(f"✓ Transformed short embeddings shape: {short_embeddings_reduced_100d.shape}")
+    else:
+        short_embeddings_reduced_100d = np.zeros((0, umap_dim_100), dtype=np.float32)
 
-    # HDBSCAN clustering (using 100D embeddings)
-    print("Running HDBSCAN clustering...")
+    # HDBSCAN clustering (FIT ONLY ON LONG PASSAGES)
+    print("Running HDBSCAN clustering on long passages...")
 
     # Convert to appropriate array type for clustering
-    cluster_input = array_lib.asarray(embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
+    cluster_input = array_lib.asarray(long_embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
+    print(f"Using min_cluster_size={n_neighbors}")
 
-    density_fraction = 0.005 # a cluster should cover at least 0.5% of data
-    min_cluster_size = max(15, int(density_fraction * len(cluster_input)))  # At least 0.5% of data or 15 points
-    print(f"Using min_cluster_size={min_cluster_size} based on density fraction of {density_fraction*100}%")
+    # Set leaf size based on dataset size to avoid memory issues
+    leaf_size = max(40, min(250, int(len(cluster_input) / 10000))) # between 40 and 250
+    print(f"Using leaf_size={leaf_size}")
 
     clusterer = HDBSCAN(
-        min_cluster_size=min_cluster_size,
+        min_cluster_size=n_neighbors, # we correlate min_cluster_size with n_neighbors for better results
         min_samples=2,
         metric='euclidean',
         cluster_selection_method='eom',
         prediction_data=True
     )
-    cluster_labels = clusterer.fit_predict(cluster_input)
+    long_cluster_labels = clusterer.fit_predict(cluster_input)
 
     # Convert to numpy if using GPU
     if USE_GPU:
-        cluster_labels = array_lib.asnumpy(cluster_labels).astype(np.int32)
+        long_cluster_labels = array_lib.asnumpy(long_cluster_labels).astype(np.int32)
 
-    n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-    n_noise = (cluster_labels == -1).sum()
-    print(f"Found {n_clusters} clusters with {n_noise} noise points")
+    n_clusters = len(set(long_cluster_labels)) - (1 if -1 in long_cluster_labels else 0)
+    n_noise_long = (long_cluster_labels == -1).sum()
+    print(f"Found {n_clusters} clusters with {n_noise_long} noise points in long passages")
+
+    # PREDICT cluster assignments for short passages using approximate_predict
+    if n_short > 0:
+        print(f"Predicting cluster assignments for {n_short} short passages...")
+
+        # Convert short embeddings to appropriate array type
+        short_embeddings_for_predict = array_lib.asarray(short_embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
+
+        if USE_GPU:
+            # cuML: approximate_predict is a standalone function
+            short_cluster_labels, _ = cuml.cluster.hdbscan.approximate_predict(clusterer, short_embeddings_for_predict)
+            short_cluster_labels = array_lib.asnumpy(short_cluster_labels).astype(np.int32)
+        else:
+            # CPU hdbscan: approximate_predict is a module-level function
+            short_cluster_labels, _ = hdbscan.approximate_predict(clusterer, short_embeddings_for_predict)
+
+        n_noise_short = (short_cluster_labels == -1).sum()
+        print(f"  Predicted {n_short - n_noise_short} short passages to clusters, {n_noise_short} marked as noise")
+    else:
+        short_cluster_labels = np.array([], dtype=np.int32)
+        n_noise_short = 0
+
+    # Combine cluster labels (long first, then short) to match original order
+    cluster_labels = np.zeros(len(passage_lengths), dtype=np.int32)
+    cluster_labels[long_passage_mask] = long_cluster_labels
+    cluster_labels[~long_passage_mask] = short_cluster_labels
+
+    n_noise = n_noise_long + n_noise_short
+    print(f"Total: {n_clusters} clusters with {n_noise} noise points ({n_noise_long} long + {n_noise_short} short)")
+
+    # Combine 100D embeddings (long first, then short) to match original order
+    embeddings_reduced_100d = np.zeros((len(passage_lengths), umap_dim_100), dtype=np.float32)
+    embeddings_reduced_100d[long_passage_mask] = long_embeddings_reduced_100d
+    embeddings_reduced_100d[~long_passage_mask] = short_embeddings_reduced_100d
+
+    print(f"Combined 100D embeddings shape: {embeddings_reduced_100d.shape}")
 
     # Handle noise cluster: treat each noise point as its own singleton cluster
     print("\nHandling noise cluster (-1)...")
@@ -343,11 +413,34 @@ def cluster_alignments(data, output_path):
     centroids_array = np.array([cluster_centroids[i] for i in range(total_clusters)])
     centroids_umap_array = np.array([cluster_centroids_umap[i] for i in range(total_clusters)])
 
-    np.save(os.path.join(output_path, 'cluster_centroids.npy'), centroids_array)
-    np.save(os.path.join(output_path, 'cluster_centroids_umap.npy'), centroids_umap_array)
-    np.save(os.path.join(output_path, 'embeddings_umap_100d.npy'), embeddings_reduced_100d)  # Save 100D UMAP embeddings
+    # Save files needed by API and label_clusters
+    np.save(os.path.join(output_path, 'cluster_labels_modified.npy'), modified_cluster_labels)  # API needs this
+    np.save(os.path.join(output_path, 'cluster_centroids.npy'), centroids_array)  # label_clusters needs this
+    # Note: cluster_centroids_umap.npy, embeddings_umap_100d.npy are NOT saved - not needed
+
+    # UMAP dimensionality reduction #2: 100D → 2 dims (for visualization)
+    # CRITICAL: Build from 100D space to match clustering structure, include ALL passages
+    print(f"Reducing dimensionality with UMAP for visualization (100D → 2 dims, all passages)...")
+
+    # Convert 100D embeddings to GPU array if needed
+    embeddings_100d_array = array_lib.asarray(embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
+
+    reducer_2d = UMAP(
+        n_components=2,
+        n_neighbors=15,
+        min_dist=0.3,
+        metric='euclidean',  # Use euclidean for 100D space (already in UMAP manifold)
+        random_state=42
+    )
+    embeddings_reduced_2d = reducer_2d.fit_transform(embeddings_100d_array)
+
+    # Convert back to numpy if using GPU
+    if USE_GPU:
+        embeddings_reduced_2d = array_lib.asnumpy(embeddings_reduced_2d)
+
+    print(f"UMAP 2D done! Reduced shape: {embeddings_reduced_2d.shape}")
     np.save(os.path.join(output_path, 'embeddings_umap_2d.npy'), embeddings_reduced_2d)  # Save 2D UMAP embeddings
-    np.save(os.path.join(output_path, 'cluster_labels_modified.npy'), modified_cluster_labels)  # Save modified labels
+
 
     # Compute cluster-to-cluster similarity matrix (cosine similarity) - only for real clusters
     print("\nComputing cluster similarity matrix (real clusters only, excluding singletons)...")
@@ -359,30 +452,25 @@ def cluster_alignments(data, output_path):
     np.save(os.path.join(output_path, 'cluster_similarity_matrix.npy'), similarity_matrix)
     print(f"✓ Saved cluster similarity matrix (shape: {similarity_matrix.shape}) - real clusters only")
 
-    # Save human-readable similarity stats
-    if n_clusters > 1:
-        print("\nCluster similarity statistics:")
-        upper_tri = similarity_matrix[np.triu_indices_from(similarity_matrix, k=1)]
-        print(f"  Mean similarity: {upper_tri.mean():.4f}")
-        print(f"  Min similarity: {upper_tri.min():.4f}")
-        print(f"  Max similarity: {upper_tri.max():.4f}")
-        print(f"  Std similarity: {upper_tri.std():.4f}")
-        mean_similarity = float(upper_tri.mean())
-    else:
-        mean_similarity = 0.0
+    # Note: cluster_labels.npy NOT saved - API uses cluster_labels_modified.npy instead
 
-    # Save cluster labels for direct lookup
-    np.save(os.path.join(output_path, 'cluster_labels.npy'), cluster_labels)
-
-    # Save metadata
+    # Save metadata (including filtering statistics)
     metadata = {
         'n_clusters': int(n_clusters),
         'n_noise': int(n_noise),
         'total_clusters': int(total_clusters),
         'total_alignments': int(len(cluster_labels)),
-        'metric': 'euclidean',
+        'metric': 'cosine',
         'centroid_dim': int(centroids_array.shape[1]),
-        'mean_cluster_similarity': mean_similarity,
+        'filtering': {
+            'length_threshold': int(length_threshold),
+            'n_long_passages': int(n_long),
+            'n_short_passages': int(n_short),
+            'long_percentage': float(100 * n_long / len(passage_lengths)),
+            'short_percentage': float(100 * n_short / len(passage_lengths)),
+            'n_noise_long': int(n_noise_long),
+            'n_noise_short': int(n_noise_short),
+        }
     }
     with open(os.path.join(output_path, 'cluster_metadata.json'), 'wb') as f:
         f.write(orjson.dumps(metadata))
@@ -390,26 +478,20 @@ def cluster_alignments(data, output_path):
     return cluster_labels
 
 
-def build_author_cluster_graph(alignments_file: str, output_path: str):
+def build_precomputed_api_graph(alignments_file: str, output_path: str):
     """
-    Build a force-directed graph combining cluster similarity and author contributions.
+    Build precomputed graph for API in the same format as get_semantic_graph_data.
 
-    Creates:
-    1. Author-Cluster contribution vectors (inverse distance to centroids in UMAP space)
-    2. Combined similarity matrix (clusters + authors)
-    3. Force-directed graph visualization
+    Creates precomputed_graph_api.json with (author, cluster) pair nodes and edges.
     """
     print("\n" + "="*60)
-    print("BUILDING AUTHOR-CLUSTER GRAPH")
+    print("BUILDING PRECOMPUTED API GRAPH")
     print("="*60)
 
     # Load necessary data
     print("Loading data...")
-    cluster_labels = np.load(os.path.join(output_path, 'cluster_labels.npy'))
-    cluster_labels_modified = np.load(os.path.join(output_path, 'cluster_labels_modified.npy'))  # With singletons
-    cluster_centroids_umap = np.load(os.path.join(output_path, 'cluster_centroids_umap.npy'))
-    embeddings_umap_100d = np.load(os.path.join(output_path, 'embeddings_umap_100d.npy'))  # 100D for clustering
-    embeddings_umap_2d = np.load(os.path.join(output_path, 'embeddings_umap_2d.npy'))  # 2D for visualization
+    cluster_labels_modified = np.load(os.path.join(output_path, 'cluster_labels_modified.npy'))
+    embeddings_umap_2d = np.load(os.path.join(output_path, 'embeddings_umap_2d.npy'))
     cluster_similarity = np.load(os.path.join(output_path, 'cluster_similarity_matrix.npy'))
 
     with open(os.path.join(output_path, 'author_to_id.json'), 'rb') as f:
@@ -418,8 +500,8 @@ def build_author_cluster_graph(alignments_file: str, output_path: str):
     with open(os.path.join(output_path, 'cluster_metadata.json'), 'rb') as f:
         metadata = orjson.loads(f.read())
 
-    n_clusters = metadata['n_clusters']  # Original clusters (excluding noise)
-    total_clusters = metadata['total_clusters']  # Includes singletons
+    n_clusters = metadata['n_clusters']
+    total_clusters = metadata['total_clusters']
     num_authors = len(author_to_id)
     alignment_counts = metadata['total_alignments']
 
@@ -427,73 +509,13 @@ def build_author_cluster_graph(alignments_file: str, output_path: str):
     print(f"  {num_authors} authors")
     print(f"  {alignment_counts} alignments")
 
-
-
-    # Build author to alignments mapping
-    print("\nMapping authors to alignments...")
-    author_alignments = {author_id: [] for author_id in range(num_authors)}
-
-    alignment_idx = 0
-    with lz4.frame.open(alignments_file, "rb") as f:
-        for line in tqdm(f, total=alignment_counts, desc="Reading alignments", leave=False):
-            alignment = orjson.loads(line)
-            source_author_id = author_to_id[alignment["source_author"]]
-            target_author_id = author_to_id[alignment["target_author"]]
-
-            author_alignments[source_author_id].append(alignment_idx)
-            author_alignments[target_author_id].append(alignment_idx)
-            alignment_idx += 1
-
-    # Compute author cluster contribution vectors
-    print("\nComputing author-cluster contributions (inverse distance to centroids)...")
-    print("  Computing per-cluster average embeddings for quality measurement...")
-
-    # Prepare data as numpy arrays for Numba
-    embeddings_umap_array = embeddings_umap_100d.astype(np.float32)  # Use 100D for contribution calculations
-    cluster_labels_modified_array = cluster_labels_modified.astype(np.int32)
-    cluster_centroids_umap_array = cluster_centroids_umap.astype(np.float32)
-
-    # Compute contributions for each author using Numba-optimized function
-    author_cluster_contributions = np.zeros((num_authors, total_clusters), dtype=np.float32)
-
-    for author_id in tqdm(range(num_authors), desc="Processing authors"):
-        alignment_indices = np.array(author_alignments[author_id], dtype=np.int32)
-
-        if len(alignment_indices) == 0:
-            continue
-
-        # Use Numba-optimized function for the inner computation
-        contributions = compute_single_author_contributions(
-            alignment_indices,
-            cluster_labels_modified_array,
-            embeddings_umap_array,
-            cluster_centroids_umap_array,
-            total_clusters
-        )
-
-        author_cluster_contributions[author_id] = contributions
-
-    # Normalize author contributions (softmax-like, per author)
-    print("Normalizing author contributions...")
-    row_sums = author_cluster_contributions.sum(axis=1, keepdims=True)
-    row_sums[row_sums == 0] = 1  # Avoid division by zero for authors with no alignments
-    author_cluster_contributions = author_cluster_contributions / row_sums
-
-    np.save(os.path.join(output_path, 'author_cluster_contributions.npy'), author_cluster_contributions)
-    print(f"✓ Saved author-cluster contributions (shape: {author_cluster_contributions.shape})")
-
-    # Build (author, cluster) pair nodes
-    print("\n" + "="*60)
-    print("BUILDING (AUTHOR, CLUSTER) PAIR GRAPH")
-    print("="*60)
-
+    # Build (author, cluster) pair nodes directly from alignments
     print("\nEnumerating (author, cluster) pairs from alignments...")
-    import itertools
     from collections import defaultdict
 
     # Track (author, cluster) pairs and their passage counts and 2D positions
     pair_passage_counts = defaultdict(int)
-    pair_embeddings_2d = defaultdict(list)  # Collect all 2D embeddings for each pair
+    pair_embeddings_2d = defaultdict(list)
 
     alignment_idx = 0
     with lz4.frame.open(alignments_file, "rb") as f:
@@ -502,10 +524,7 @@ def build_author_cluster_graph(alignments_file: str, output_path: str):
             source_author_id = author_to_id[alignment["source_author"]]
             target_author_id = author_to_id[alignment["target_author"]]
 
-            # Get cluster for this alignment
             cluster_id = int(cluster_labels_modified[alignment_idx])
-
-            # Get 2D position for this alignment
             embedding_2d = embeddings_umap_2d[alignment_idx]
 
             # Track both source and target authors
@@ -525,289 +544,129 @@ def build_author_cluster_graph(alignments_file: str, output_path: str):
         mean_position = np.mean(embeddings_list, axis=0)
         pair_positions[pair_key] = mean_position
 
-    # Build NetworkX graph
-    print("\nBuilding graph with (author, cluster) pair nodes...")
-    if USE_GPU:
-        print("  Using GPU-accelerated graph operations")
+    # Build precomputed graph in API format (matches get_semantic_graph_data output)
+    print("\nCreating precomputed graph for API...")
 
-    G = nx.Graph()
-
-    # Add (author, cluster) pair nodes
     id_to_author = {v: k for k, v in author_to_id.items()}
 
+    # Build API-format graph with threshold filtering
+    MIN_PASSAGES_THRESHOLD = 5
+    api_nodes = []
+    api_cluster_nodes = defaultdict(list)
+
     for (author_id, cluster_id), passage_count in pair_passage_counts.items():
+        if passage_count < MIN_PASSAGES_THRESHOLD:
+            continue
+
         node_id = f"author_{author_id}_cluster_{cluster_id}"
         position = pair_positions[(author_id, cluster_id)]
 
-        G.add_node(node_id,
-                   node_type='author_cluster_pair',
-                   author_id=author_id,
-                   author_name=id_to_author[author_id],
-                   cluster_id=cluster_id,
-                   cluster_label="",
-                   size=int(passage_count),
-                   x=float(position[0]),
-                   y=float(position[1]))
+        api_nodes.append({
+            'id': node_id,
+            'label': id_to_author[author_id],
+            'author_id': author_id,
+            'author_name': id_to_author[author_id],
+            'cluster_id': cluster_id,
+            'cluster_label': '',
+            'passages': int(passage_count),
+            'size': int(passage_count),
+            'x': float(position[0]),
+            'y': float(position[1])
+        })
+        api_cluster_nodes[cluster_id].append(node_id)
 
-    print(f"✓ Added {G.number_of_nodes()} (author, cluster) pair nodes")
-
-    # Add invisible cluster anchor nodes (centroids)
-
-    # Load 2D UMAP embeddings to compute centroid positions
-    cluster_centroid_positions_2d = {}
-
-    # Compute 2D centroids for each cluster from the pair embeddings
-    for cluster_id in range(total_clusters):
-        # Get all 2D positions for nodes in this cluster
+    # Add cluster anchor nodes
+    api_cluster_centroid_positions = {}
+    for cluster_id in api_cluster_nodes.keys():
         cluster_2d_positions = []
         for pair_key, position in pair_positions.items():
-            if pair_key[1] == cluster_id:
+            if pair_key[1] == cluster_id and pair_passage_counts[pair_key] >= MIN_PASSAGES_THRESHOLD:
                 cluster_2d_positions.append(position)
 
         if cluster_2d_positions:
-            # Mean of all 2D positions in this cluster
             mean_2d_position = np.mean(cluster_2d_positions, axis=0)
-            cluster_centroid_positions_2d[cluster_id] = mean_2d_position
+            api_cluster_centroid_positions[cluster_id] = mean_2d_position
 
-    # Add cluster anchor nodes (invisible, at centroid positions)
-    for cluster_id, position_2d in cluster_centroid_positions_2d.items():
+    for cluster_id, position_2d in api_cluster_centroid_positions.items():
         anchor_node_id = f"anchor_cluster_{cluster_id}"
+        api_nodes.append({
+            'id': anchor_node_id,
+            'label': '',
+            'node_type': 'cluster_anchor',
+            'cluster_id': cluster_id,
+            'cluster_label': '',
+            'size': 0.01,
+            'x': float(position_2d[0]),
+            'y': float(position_2d[1]),
+            'hidden': True
+        })
 
-        G.add_node(anchor_node_id,
-                   node_type='cluster_anchor',
-                   cluster_id=cluster_id,
-                   cluster_label="",
-                   size=0.01,  # Very small, nearly invisible
-                   x=float(position_2d[0]),
-                   y=float(position_2d[1]),
-                   hidden=True)
+    # Build API-format edges
+    api_edges = []
 
+    # 1. Intra-cluster edges (star topology: nodes to anchors)
+    for cluster_id, node_ids in api_cluster_nodes.items():
+        if len(node_ids) > 1:
+            anchor_id = f"anchor_cluster_{cluster_id}"
+            for node_id in node_ids:
+                api_edges.append({
+                    'source': node_id,
+                    'target': anchor_id,
+                    'weight': 1.0,
+                    'edge_type': 'intra_cluster',
+                    'color': '#666666',
+                    'size': 0.5
+                })
 
-    # Group nodes by cluster
-    cluster_nodes = defaultdict(list)
-    for node_id in G.nodes():
-        if G.nodes[node_id]['node_type'] == 'author_cluster_pair':
-            cluster_id = G.nodes[node_id]['cluster_id']
-            cluster_nodes[cluster_id].append(node_id)
-
-    # Add intra-cluster edges: complete subgraphs within each cluster
-    intra_edges = 0
-    intra_weight = 100.0  # High constant weight for intra-cluster cohesion
-
-    # Create complete subgraphs for each cluster
-    for cluster_id, nodes in cluster_nodes.items():
-        if len(nodes) > 1:
-            # Add edges between all pairs of nodes in this cluster
-            for node1, node2 in itertools.combinations(nodes, 2):
-                G.add_edge(node1, node2, weight=intra_weight, edge_type='intra_cluster')
-                intra_edges += 1
-
-
-    # Add inter-cluster edges: centroid-to-centroid based on cluster similarity
-    centroid_edges = 0
-
-    # Use similarity threshold to avoid too many edges
-    similarity_threshold = np.percentile(cluster_similarity[np.triu_indices_from(cluster_similarity, k=1)], 75)
-
-    # For each pair of real clusters with high similarity
+    # 2. Centroid similarity edges
+    filtered_cluster_ids = set(api_cluster_nodes.keys())
     for cluster_i in range(n_clusters):
+        if cluster_i not in filtered_cluster_ids:
+            continue
+
         for cluster_j in range(cluster_i + 1, n_clusters):
+            if cluster_j not in filtered_cluster_ids:
+                continue
+
             similarity = cluster_similarity[cluster_i, cluster_j]
 
-            if similarity > similarity_threshold:
+            if similarity > 0:  # No threshold - include all edges
                 anchor_i = f"anchor_cluster_{cluster_i}"
                 anchor_j = f"anchor_cluster_{cluster_j}"
 
-                # Only add edge if both anchors exist
-                if anchor_i in G.nodes() and anchor_j in G.nodes():
-                    G.add_edge(anchor_i, anchor_j, weight=float(similarity * 10), edge_type='centroid_similarity')
-                    centroid_edges += 1
+                api_edges.append({
+                    'source': anchor_i,
+                    'target': anchor_j,
+                    'weight': float(similarity * 10),
+                    'edge_type': 'centroid_similarity',
+                    'color': '#999999',
+                    'size': 1.0
+                })
 
-
-    # Save graph as pickle
-    import pickle
-    with open(os.path.join(output_path, 'author_cluster_pair_graph.pkl'), 'wb') as f:
-        pickle.dump(G, f)
-
-    # Save graph as JSON for API consumption
-    print("\nConverting graph to JSON format...")
-    nodes_json = []
-    edges_json = []
-
-    for node_id in G.nodes():
-        attrs = G.nodes[node_id]
-        # Skip invisible cluster anchor nodes in JSON output
-        if attrs.get('node_type') == 'cluster_anchor':
-            continue
-
-        node_data = {
-            'id': node_id,
-            'label': attrs.get('author_name', ''),
-            'cluster_label': attrs.get('cluster_label', ''),
-            'x': float(attrs.get('x', 0)),
-            'y': float(attrs.get('y', 0)),
-            'size': int(attrs.get('size', 1)),
-            'cluster_id': int(attrs.get('cluster_id', 0)),
-            'author_id': int(attrs.get('author_id', 0)),
+    api_graph = {
+        'nodes': api_nodes,
+        'edges': api_edges,
+        'metadata': {
+            'n_clusters': n_clusters,
+            'total_nodes': len(api_nodes),
+            'total_edges': len(api_edges),
+            'min_passages_threshold': MIN_PASSAGES_THRESHOLD
         }
-        nodes_json.append(node_data)
-
-    for source, target, attrs in G.edges(data=True):
-        # Skip edges connected to anchor nodes (they're invisible)
-        if G.nodes[source].get('node_type') == 'cluster_anchor' or G.nodes[target].get('node_type') == 'cluster_anchor':
-            continue
-
-        edge_data = {
-            'source': source,
-            'target': target,
-            'weight': float(attrs.get('weight', 1.0)),
-            'edge_type': attrs.get('edge_type', 'default'),
-        }
-        edges_json.append(edge_data)
-
-    graph_json = {
-        'nodes': nodes_json,
-        'edges': edges_json,
-        'metadata': metadata  # Include cluster metadata (n_clusters, n_noise, etc)
     }
 
-    with open(os.path.join(output_path, 'full_graph.json'), 'wb') as f:
-        f.write(orjson.dumps(graph_json))
+    with open(os.path.join(output_path, 'precomputed_graph_api.json'), 'wb') as f:
+        f.write(orjson.dumps(api_graph))
 
-    print(f"✓ Saved full graph as JSON: {len(nodes_json)} nodes, {len(edges_json)} edges")
-
-    # Save in Graphology format for efficient Sigma.js loading
-    print("\nConverting to Graphology format for Sigma.js...")
-    graphology_format = {
-        'attributes': {
-            'n_clusters': int(n_clusters)  # For client-side mini-cluster detection
-        },
-        'options': {
-            'type': 'undirected',
-            'multi': False,
-            'allowSelfLoops': False
-        },
-        'nodes': [],
-        'edges': []
-    }
-
-    # Add all nodes (including anchors for proper graph structure)
-    for node_id in G.nodes():
-        attrs = G.nodes[node_id]
-        node_type = attrs.get('node_type', 'default')
-
-        # Generate color based on cluster
-        cluster_id = attrs.get('cluster_id', 0)
-        hue = (cluster_id * 360 / total_clusters) % 360
-        color = f'hsl({hue}, 70%, 60%)'
-
-        node_entry = {
-            'key': node_id,
-            'attributes': {
-                'label': attrs.get('author_name', ''),
-                'cluster_label': attrs.get('cluster_label', ''),
-                'x': float(attrs.get('x', 0)),
-                'y': float(attrs.get('y', 0)),
-                'size': float(attrs.get('size', 1)),
-                'mass': 1.0,  # Uniform mass for all nodes
-                'color': color,
-                'cluster_id': int(cluster_id),
-                'node_type': node_type,
-            }
-        }
-
-        # Make anchor nodes nearly invisible
-        if node_type == 'cluster_anchor':
-            node_entry['attributes']['size'] = 0.01
-            node_entry['attributes']['hidden'] = True
-            node_entry['attributes']['color'] = '#00000000'  # Transparent
-
-        graphology_format['nodes'].append(node_entry)
-
-    # Add edges with visual attributes (EXCLUDE anchor_connection edges to reduce redundancy)
-    # Keep intra_cluster (complete subgraphs) and centroid_similarity (inter-cluster) edges
-    edge_id = 0
-    for source, target, attrs in G.edges(data=True):
-        edge_type = attrs.get('edge_type', 'default')
-        weight = attrs.get('weight', 1.0)
-
-        # Skip anchor_connection edges - they're redundant with intra_cluster complete subgraphs
-        if edge_type == 'anchor_connection':
-            continue
-
-        # Different colors and sizes for different edge types
-        if edge_type == 'intra_cluster':
-            color = '#666666'
-            size = 2.0
-        elif edge_type == 'centroid_similarity':
-            color = '#999999'
-            size = 1.5
-        else:
-            color = '#cccccc'
-            size = 1.0
-
-        edge_entry = {
-            'key': f'edge_{edge_id}',
-            'source': source,
-            'target': target,
-            'attributes': {
-                'weight': float(weight),
-                'edge_type': edge_type,
-                'size': size,
-                'color': color,
-            }
-        }
-        graphology_format['edges'].append(edge_entry)
-        edge_id += 1
-
-    with open(os.path.join(output_path, 'full_graph_graphology.json'), 'wb') as f:
-        f.write(orjson.dumps(graphology_format))
-
-    print(f"✓ Saved Graphology format: {len(graphology_format['nodes'])} nodes, {len(graphology_format['edges'])} edges")
-
-    # Compute graph statistics
-    total_degree = sum(G.degree[node] for node in G.nodes())
-    avg_degree = total_degree / G.number_of_nodes() if G.number_of_nodes() > 0 else 0
-
-    # Count nodes per cluster
-    nodes_per_cluster = {cluster_id: len(nodes) for cluster_id, nodes in cluster_nodes.items()}
-    avg_nodes_per_cluster = np.mean(list(nodes_per_cluster.values()))
-
-    graph_stats = {
-        'num_nodes': G.number_of_nodes(),
-        'num_author_cluster_nodes': len([n for n in G.nodes() if G.nodes[n]['node_type'] == 'author_cluster_pair']),
-        'num_anchor_nodes': len([n for n in G.nodes() if G.nodes[n]['node_type'] == 'cluster_anchor']),
-        'num_real_clusters': n_clusters,
-        'num_singleton_clusters': total_clusters - n_clusters,
-        'total_clusters': total_clusters,
-        'num_authors': num_authors,
-        'num_edges': G.number_of_edges(),
-        'num_intra_cluster_edges': intra_edges,
-        'num_centroid_edges': centroid_edges,
-        'avg_degree': avg_degree,
-        'avg_nodes_per_cluster': float(avg_nodes_per_cluster),
-        'graph_type': 'author_cluster_pairs_with_centroids',
-    }
-
-    with open(os.path.join(output_path, 'graph_stats.json'), 'wb') as f:
-        f.write(orjson.dumps(graph_stats))
+    print(f"✓ Saved precomputed API graph: {len(api_nodes)} nodes, {len(api_edges)} edges")
 
     print("\n" + "="*60)
-    print("(AUTHOR, CLUSTER) PAIR GRAPH STATISTICS:")
-    print(f"  Total nodes: {G.number_of_nodes()}")
-    print(f"    - Author-cluster pairs: {len([n for n in G.nodes() if G.nodes[n]['node_type'] == 'author_cluster_pair'])}")
-    print(f"    - Cluster anchors (invisible): {len([n for n in G.nodes() if G.nodes[n]['node_type'] == 'cluster_anchor'])}")
-    print(f"  Clusters: {total_clusters} ({n_clusters} real + {total_clusters - n_clusters} singletons)")
+    print("PRECOMPUTED API GRAPH STATISTICS:")
+    print(f"  Total nodes: {len(api_nodes)}")
+    print(f"  Clusters represented: {len(api_cluster_nodes)}")
     print(f"  Authors: {num_authors}")
-    print(f"  Edges:")
-    print(f"    - Intra-cluster (complete subgraphs): {intra_edges}")
-    print(f"    - Centroid similarity: {centroid_edges}")
-    print(f"    - Total: {G.number_of_edges()}")
-    print(f"  Avg degree: {avg_degree:.2f}")
-    print(f"  Avg author-cluster nodes per cluster: {avg_nodes_per_cluster:.2f}")
+    print(f"  Total edges: {len(api_edges)}")
+    print(f"  Min passages threshold: {MIN_PASSAGES_THRESHOLD}")
     print("="*60)
-
-    return G
 
 
 def main():
@@ -829,15 +688,12 @@ def main():
     print("\n" + "="*60)
     print("CLUSTERING ALIGNMENTS")
     print("="*60)
-    cluster_labels = cluster_alignments(data, output_path)
+    cluster_labels = cluster_alignments(data, output_path, alignments_file, alignment_counts)
 
-    # Build full corpus graph
-    print("\n" + "="*60)
-    print("BUILDING FULL CORPUS GRAPH")
-    print("="*60)
-    G = build_author_cluster_graph(alignments_file, output_path)
+    # Build precomputed graph for API
+    build_precomputed_api_graph(alignments_file, output_path)
 
-    print("\n✓ Full graph preprocessing complete!")
+    print("\n✓ Graph preprocessing complete!")
     print(f"  All files saved to: {output_path}/")
 
 
