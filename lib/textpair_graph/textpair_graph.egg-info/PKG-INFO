@@ -19,6 +19,7 @@ Requires-Dist: lz4
 Requires-Dist: orjson
 Requires-Dist: tqdm
 Requires-Dist: textpair_llm
+Requires-Dist: faiss-cpu
 Provides-Extra: cuda
 Requires-Dist: cuml-cu12==25.10.*; extra == "cuda"
 Requires-Dist: cugraph-cu12==25.10.*; extra == "cuda"

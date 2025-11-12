@@ -23,7 +23,7 @@ def create_cluster_labeling_prompt(top_passages: list[str]) -> str:
     Create prompt for cluster labeling using LLM.
     Passages are the most representative texts in the cluster (closest to centroid).
     """
-    passages_text = "\n---\n".join([f"Passage {i+1}: {p[:500]}"
+    passages_text = "\n---\n".join([f"Passage {i+1}: {p[:1000]}..."
                                      for i, p in enumerate(top_passages)])
 
     prompt = f"""You are analyzing a thematic cluster of historical text reuse passages.
@@ -31,7 +31,7 @@ Below are the most representative passages from this cluster.
 
 Your task is two-fold:
     1. **Rationale:** Briefly (in one sentence) explain the common action or subject matter shared across the passages.
-    2. **Label:** Generate a concise thematic label (2-5 words) based on your rationale.
+    2. **Label:** Generate a concise thematic label (1-3 words) based on your rationale.
 
 Guidelines:
 - Focus on the specific topic, not generic terms
@@ -54,7 +54,7 @@ Representative Passages:
 
 Output Format:
     RATIONALE: [Your one-sentence explanation.]
-    LABEL: [Your 2-5 word final label.]
+    LABEL: [Your 1-3 word final label.]
 
     Answer with ONLY the RATIONALE and LABEL lines in the specified format, nothing else:"""
 
@@ -106,9 +106,33 @@ async def generate_cluster_labels_async(
         # Calculate similarity to centroid
         similarities = cosine_similarity(cluster_embeddings, centroid).flatten()
 
-        # Get top-k most similar passages
-        top_indices_in_cluster = np.argsort(similarities)[-top_k:][::-1]
-        top_alignment_indices = cluster_indices[top_indices_in_cluster]
+        # Evenly spread sampling across top 75% of cluster by similarity
+        # This captures diversity while avoiding the noisy bottom 25%
+
+        # 1. Sort all passages in the cluster by similarity (high to low)
+        sorted_indices_in_cluster = np.argsort(similarities)[::-1]
+        num_in_cluster = len(sorted_indices_in_cluster)
+
+        # 2. Define the relevant pool (e.g., top 75% of passages)
+        # This avoids sampling from the "noisy" bottom 25%
+        pool_size = max(1, int(num_in_cluster * 0.75))
+        indices_to_sample_from = sorted_indices_in_cluster[:pool_size]
+
+        # 3. Get top_k evenly spaced indices from this pool
+        # This gives a perfect spread from 100th percentile down to 75th
+        n_samples = min(top_k, len(indices_to_sample_from))
+        spread_indices = np.linspace(
+            0,                                    # The very best passage
+            len(indices_to_sample_from) - 1,     # The last passage in our 75% pool
+            num=n_samples,                        # The number of passages we want
+            dtype=int
+        )
+
+        # 4. Get the final indices (linspace already gives unique)
+        spread_indices_in_cluster = indices_to_sample_from[spread_indices]
+
+        # 5. Map back to original alignment indices
+        top_alignment_indices = cluster_indices[spread_indices_in_cluster]
 
         # Extract passage texts from alignments file (fetch all at once)
         all_passages = []
@@ -177,7 +201,7 @@ async def generate_cluster_labels_async(
                     if label and any(pattern in label.lower() for pattern in invalid_patterns):
                         print(f"\n  Cluster {cluster_id}: Invalid label detected (template response), retrying...")
                         label = ""
-                        passages_to_use = max(min_passages, passages_to_use - 5)  # Try with fewer passages
+                        passages_to_use = max(min_passages, passages_to_use - 1)  # Try with one fewer passage
                         continue
 
                 break  # Success, exit retry loop
@@ -196,14 +220,14 @@ async def generate_cluster_labels_async(
                         n_ctx = error_data.get("error", {}).get("n_ctx", 1)
 
                         if n_prompt and n_ctx:
-                            # Reduce proportionally with safety margin
-                            passages_to_use = int(passages_to_use * (n_ctx / n_prompt) * 0.85)
+                            # Reduce proportionally to exact fit (100% of available context)
+                            passages_to_use = int(passages_to_use * (n_ctx / n_prompt))
                         else:
-                            # Couldn't parse, reduce by half
-                            passages_to_use = passages_to_use // 2
+                            # Couldn't parse, reduce by 20%
+                            passages_to_use = int(passages_to_use * 0.80)
                     except:
-                        # JSON parsing failed, reduce by half
-                        passages_to_use = passages_to_use // 2
+                        # JSON parsing failed, reduce by 20%
+                        passages_to_use = int(passages_to_use * 0.80)
 
                     passages_to_use = max(min_passages, passages_to_use)
                     print(f"\n  Cluster {cluster_id}: Context error, retrying with {passages_to_use} passages")

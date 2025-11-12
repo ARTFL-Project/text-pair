@@ -11,6 +11,7 @@ lz4
 orjson
 tqdm
 textpair_llm
+faiss-cpu
 
 [cuda]
 cuml-cu12==25.10.*

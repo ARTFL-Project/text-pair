@@ -57,7 +57,6 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
     embeddings_cache_path = os.path.join(embeddings_cache_dir, "passage_embeddings.dat")
     embeddings_meta_path = os.path.join(embeddings_cache_dir, "metadata.json")
 
-    # Build author mapping (for metadata/analysis purposes only)
     author_to_id = {}
     current_id = 0
 
@@ -66,7 +65,6 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
         for line in tqdm(f, total=alignment_counts, desc="Mapping authors", leave=False):
             alignment = orjson.loads(line)
 
-            # Map authors to IDs
             if alignment["source_author"] not in author_to_id:
                 author_to_id[alignment["source_author"]] = current_id
                 current_id += 1
@@ -89,24 +87,20 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
             os.remove(embeddings_meta_path)
             passage_embeddings_memmap = None
         else:
-            # Use memmap to read cached embeddings without loading into RAM
             passage_embeddings_memmap = np.memmap(embeddings_cache_path, dtype='float32', mode='r',
                                                   shape=(alignment_counts, sbert_dim))
             print(f"✓ Loaded cached embeddings as memmap: shape={passage_embeddings_memmap.shape}")
     else:
         passage_embeddings_memmap = None
 
-    # Encode passages if not cached
     if passage_embeddings_memmap is None:
         print(f"Computing embeddings (will be cached to {embeddings_cache_path})...")
         sbert_model = SentenceTransformer(sbert_model_name, device=device, model_kwargs={"dtype": torch.float32})
         sbert_dim = sbert_model.get_sentence_embedding_dimension()
 
-        # Create memmap for cache
         passage_embeddings_memmap = np.memmap(embeddings_cache_path, dtype='float32', mode='w+',
                                              shape=(alignment_counts, sbert_dim))
 
-        # Encode passages in batches (streaming approach - never load all passages into memory)
         print("Encoding passages with SBERT...")
         passages_batch = []
         batch_idx = 0
@@ -121,7 +115,6 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
                 passage = alignment["source_passage"]
                 passages_batch.append(passage)
 
-                # Encode when batch is full
                 if len(passages_batch) >= BATCH_SIZE:
                     embeddings = sbert_model.encode(passages_batch, normalize_embeddings=True, convert_to_tensor=True, show_progress_bar=False)
                     start = batch_idx * BATCH_SIZE
@@ -130,7 +123,6 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
                     passages_batch = []
                     batch_idx += 1
 
-        # Encode remaining passages
         if len(passages_batch) > 0:
             embeddings = sbert_model.encode(passages_batch, normalize_embeddings=True, convert_to_tensor=True, show_progress_bar=False)
             start = batch_idx * BATCH_SIZE
@@ -139,7 +131,6 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
 
         passage_embeddings_memmap.flush()
 
-        # Save metadata
         metadata = {
             'sbert_dim': sbert_dim,
             'alignment_counts': alignment_counts,
@@ -154,7 +145,7 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
             torch.cuda.empty_cache()
 
     return {
-        'passage_embeddings_memmap': passage_embeddings_memmap,  # Keep as memmap
+        'passage_embeddings_memmap': passage_embeddings_memmap,
         'author_to_id': author_to_id,
         'sbert_dim': sbert_dim,
         'num_authors': len(author_to_id)
@@ -234,47 +225,133 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         for line in tqdm(f, total=alignment_counts, desc="Reading passage lengths", leave=False):
             alignment = orjson.loads(line)
             passage = alignment["source_passage"]
-            # Count characters excluding whitespace
             char_count = len(passage.replace(' ', '').replace('\n', '').replace('\t', ''))
             passage_lengths.append(char_count)
 
     passage_lengths = np.array(passage_lengths)
 
-    # Filter by length threshold (≥50 chars without whitespace)
-    length_threshold = 50
-    long_passage_mask = passage_lengths >= length_threshold
-    n_long = long_passage_mask.sum()
-    n_short = (~long_passage_mask).sum()
+    # Filter by length thresholds (50-5000 chars without whitespace)
+    # Upper bound: SBERT truncates at ~512 tokens, very long passages likely clipped
+    min_length = 50
+    max_length = 5000
+    length_mask = (passage_lengths >= min_length) & (passage_lengths <= max_length)
+    n_good_length = length_mask.sum()
+    n_too_short = (passage_lengths < min_length).sum()
+    n_too_long = (passage_lengths > max_length).sum()
 
-    print(f"Passage length filtering (threshold: {length_threshold} chars):")
-    print(f"  Long passages (≥{length_threshold} chars): {n_long} ({100*n_long/len(passage_lengths):.1f}%)")
-    print(f"  Short passages (<{length_threshold} chars): {n_short} ({100*n_short/len(passage_lengths):.1f}%)")
-    print(f"  Compute savings: ~{100*n_short/len(passage_lengths):.0f}% fewer passages for clustering")
+    print(f"Passage length filtering (range: {min_length}-{max_length} chars):")
+    print(f"  Good length ({min_length}-{max_length} chars): {n_good_length} ({100*n_good_length/len(passage_lengths):.1f}%)")
+    print(f"  Too short (<{min_length} chars): {n_too_short} ({100*n_too_short/len(passage_lengths):.1f}%)")
+    print(f"  Too long (>{max_length} chars): {n_too_long} ({100*n_too_long/len(passage_lengths):.1f}%)")
+    print(f"  Compute savings: ~{100*(n_too_short+n_too_long)/len(passage_lengths):.0f}% fewer passages for clustering")
 
-    # Load all SBERT embeddings (from memmap, so no RAM issue)
     print("Loading SBERT embeddings...")
     all_embeddings = data['passage_embeddings_memmap'][:]
 
     print(f"Embeddings shape: {all_embeddings.shape}")
     sbert_dim = all_embeddings.shape[1]
 
-    # Split embeddings into long and short passages
-    long_embeddings = all_embeddings[long_passage_mask]
-    short_embeddings = all_embeddings[~long_passage_mask]
+    # Filter semantic outliers using FAISS ANN
+    print("\nFiltering semantic outliers (passages with no nearby neighbors)...")
+    try:
+        import faiss
 
-    print(f"Long embeddings shape: {long_embeddings.shape}")
-    print(f"Short embeddings shape: {short_embeddings.shape}")
+        # For small datasets (<1M), use exact search without quantization
+        # For large datasets, use IVF+PQ compression
+        if len(all_embeddings) < 1_000_000:
+            print("  Building exact FAISS index (dataset < 1M)...")
+            index = faiss.IndexFlatIP(sbert_dim)  # Exact inner product search
+            index.add(all_embeddings)
+        else:
+            print("  Building FAISS index with IVF+PQ compression...")
 
-    # Convert to GPU array if using GPU (only long passages for fitting)
-    long_embeddings_array = array_lib.asarray(long_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
+            # IVF + PQ index for compression and speed
+            nlist = min(4096, len(all_embeddings) // 1000)  # Voronoi cells for coarse quantization
+            m = 192  # Number of subquantizers (768D / 192 = 4D per subquantizer)
+            nbits = 8  # Bits per subquantizer (256 codebook entries)
 
-    # UMAP dimensionality reduction #1: 768 → 100 dims (for clustering)
-    # FIT ONLY ON LONG PASSAGES
+            # Calculate required training samples for PQ
+            # Each subquantizer needs 256 centroids, FAISS recommends 39 points per centroid
+            min_training_for_pq = m * 256 * 39  # ~1.9M for m=192
+            # Also need samples for IVF centroids
+            min_training_for_ivf = nlist * 256  # 256 points per IVF cluster
+            required_training = max(min_training_for_pq, min_training_for_ivf)
+
+            # Use all data for training if we don't have enough, otherwise sample
+            train_sample_size = min(required_training, len(all_embeddings))
+
+            if train_sample_size < required_training:
+                print(f"  WARNING: Dataset too small for optimal PQ training")
+                print(f"  Need {required_training} samples, have {len(all_embeddings)}")
+                print(f"  Consider using exact search for datasets < 2M embeddings")
+
+            quantizer = faiss.IndexFlatIP(sbert_dim)  # Inner product for cosine similarity
+            index = faiss.IndexIVFPQ(quantizer, sbert_dim, nlist, m, nbits)
+
+            # Set nprobe: number of cells to search (default=1, higher=more accurate but slower)
+            index.nprobe = 10  # Search 10 nearest cells for better recall
+
+            # Train on sample
+            if train_sample_size < len(all_embeddings):
+                train_indices = np.random.choice(len(all_embeddings), train_sample_size, replace=False)
+                train_sample = all_embeddings[train_indices]
+            else:
+                train_sample = all_embeddings
+
+            print(f"  Training on {train_sample_size} samples (nlist={nlist}, m={m}, nbits={nbits})...")
+            index.train(train_sample)
+
+            # Add all embeddings at once
+            print(f"  Adding {len(all_embeddings)} embeddings to index...")
+            index.add(all_embeddings)
+
+        # Search for k nearest neighbors
+        k = 6
+        print(f"  Finding {k} nearest neighbors for each passage...")
+        distances, indices = index.search(all_embeddings, k)
+
+        # distances[:, 0] is self (similarity = 1.0), distances[:, 1] is closest other passage
+        closest_similarity = distances[:, 1]
+
+        # Filter passages where closest neighbor is too far (low similarity)
+        # Use 0.5th percentile as adaptive threshold based on data distribution
+        similarity_threshold = np.percentile(closest_similarity, 0.5)
+        is_semantic_outlier = closest_similarity < similarity_threshold
+        n_outliers = is_semantic_outlier.sum()
+
+        print(f"  Semantic outliers (closest similarity < {similarity_threshold:.3f}): {n_outliers} ({100*n_outliers/len(all_embeddings):.1f}%)")
+        print(f"  Additional compute savings: ~{100*n_outliers/len(all_embeddings):.0f}%")
+
+    except ImportError:
+        print("  FAISS not available, skipping semantic outlier filtering")
+        is_semantic_outlier = np.zeros(len(all_embeddings), dtype=bool)
+    except Exception as e:
+        print(f"  Error during semantic outlier filtering: {e}")
+        print("  Continuing without semantic filtering")
+        is_semantic_outlier = np.zeros(len(all_embeddings), dtype=bool)
+
+    # Combine length filter and semantic outlier filter
+    clusterable_mask = length_mask & ~is_semantic_outlier
+    n_clusterable = clusterable_mask.sum()
+    n_filtered_total = len(all_embeddings) - n_clusterable
+
+    print(f"\nTotal filtering:")
+    print(f"  Clusterable passages: {n_clusterable} ({100*n_clusterable/len(all_embeddings):.1f}%)")
+    print(f"  Filtered out (short + outliers): {n_filtered_total} ({100*n_filtered_total/len(all_embeddings):.1f}%)")
+    print(f"  Total compute savings: ~{100*n_filtered_total/len(all_embeddings):.0f}%")
+
+    # Split into clusterable and non-clusterable
+    clusterable_embeddings = all_embeddings[clusterable_mask]
+    non_clusterable_embeddings = all_embeddings[~clusterable_mask]
+
+    print(f"Clusterable embeddings shape: {clusterable_embeddings.shape}")
+    print(f"Non-clusterable embeddings shape: {non_clusterable_embeddings.shape}")
+
+    clusterable_embeddings_array = array_lib.asarray(clusterable_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
+
     umap_dim_100 = 100
-    # We want the neighbors to be between 15 and 100, but based on dataset size: a cluster should cover ~0.5% of data
-    n_neighbors = max(15, min(100, int(0.005 * len(long_embeddings_array))))
 
-    print(f"Fitting UMAP for clustering on long passages ({sbert_dim} → {umap_dim_100} dims)...")
+    print(f"Fitting UMAP for clustering on clusterable passages ({sbert_dim} → {umap_dim_100} dims)...")
     reducer_100d = UMAP(
         n_components=umap_dim_100,
         n_neighbors=15,
@@ -282,88 +359,79 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         metric='cosine',
         random_state=42
     )
-    long_embeddings_reduced_100d = reducer_100d.fit_transform(long_embeddings_array)
+    clusterable_embeddings_reduced_100d = reducer_100d.fit_transform(clusterable_embeddings_array)
 
-    # Convert back to numpy if using GPU
     if USE_GPU:
-        long_embeddings_reduced_100d = array_lib.asnumpy(long_embeddings_reduced_100d)
+        clusterable_embeddings_reduced_100d = array_lib.asnumpy(clusterable_embeddings_reduced_100d)
 
-    print(f"UMAP 100D fit done! Reduced long embeddings shape: {long_embeddings_reduced_100d.shape}")
+    print(f"UMAP 100D fit done! Reduced clusterable embeddings shape: {clusterable_embeddings_reduced_100d.shape}")
 
-    # TRANSFORM short passages into the fitted 100D space
-    print(f"Transforming short passages to 100D space...")
-    if n_short > 0:
-        short_embeddings_array = array_lib.asarray(short_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
-        short_embeddings_reduced_100d = reducer_100d.transform(short_embeddings_array)
+    print(f"Transforming non-clusterable passages to 100D space...")
+    if non_clusterable_embeddings.shape[0] > 0:
+        non_clusterable_embeddings_array = array_lib.asarray(non_clusterable_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
+        non_clusterable_embeddings_reduced_100d = reducer_100d.transform(non_clusterable_embeddings_array)
 
         if USE_GPU:
-            short_embeddings_reduced_100d = array_lib.asnumpy(short_embeddings_reduced_100d)
+            non_clusterable_embeddings_reduced_100d = array_lib.asnumpy(non_clusterable_embeddings_reduced_100d)
 
-        print(f"✓ Transformed short embeddings shape: {short_embeddings_reduced_100d.shape}")
+        print(f"✓ Transformed non-clusterable embeddings shape: {non_clusterable_embeddings_reduced_100d.shape}")
     else:
-        short_embeddings_reduced_100d = np.zeros((0, umap_dim_100), dtype=np.float32)
+        non_clusterable_embeddings_reduced_100d = np.zeros((0, umap_dim_100), dtype=np.float32)
 
-    # HDBSCAN clustering (FIT ONLY ON LONG PASSAGES)
-    print("Running HDBSCAN clustering on long passages...")
+    print("Running HDBSCAN clustering on clusterable passages...")
 
-    # Convert to appropriate array type for clustering
-    cluster_input = array_lib.asarray(long_embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
-    print(f"Using min_cluster_size={n_neighbors}")
+    cluster_input = array_lib.asarray(clusterable_embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
 
-    # Set leaf size based on dataset size to avoid memory issues
-    leaf_size = max(40, min(250, int(len(cluster_input) / 10000))) # between 40 and 250
+    leaf_size = max(40, min(250, int(len(cluster_input) / 10000)))
     print(f"Using leaf_size={leaf_size}")
 
+    min_cluster_size = max(15, min(100, int(0.005 * len(clusterable_embeddings))))
     clusterer = HDBSCAN(
-        min_cluster_size=n_neighbors, # we correlate min_cluster_size with n_neighbors for better results
+        min_cluster_size=min_cluster_size,
         min_samples=2,
         metric='euclidean',
         cluster_selection_method='eom',
         prediction_data=True
     )
-    long_cluster_labels = clusterer.fit_predict(cluster_input)
+    clusterable_cluster_labels = clusterer.fit_predict(cluster_input)
 
-    # Convert to numpy if using GPU
     if USE_GPU:
-        long_cluster_labels = array_lib.asnumpy(long_cluster_labels).astype(np.int32)
+        clusterable_cluster_labels = array_lib.asnumpy(clusterable_cluster_labels).astype(np.int32)
 
-    n_clusters = len(set(long_cluster_labels)) - (1 if -1 in long_cluster_labels else 0)
-    n_noise_long = (long_cluster_labels == -1).sum()
-    print(f"Found {n_clusters} clusters with {n_noise_long} noise points in long passages")
+    n_clusters = len(set(clusterable_cluster_labels)) - (1 if -1 in clusterable_cluster_labels else 0)
+    n_noise_clusterable = (clusterable_cluster_labels == -1).sum()
+    print(f"Found {n_clusters} clusters with {n_noise_clusterable} noise points in clusterable passages")
 
-    # PREDICT cluster assignments for short passages using approximate_predict
-    if n_short > 0:
-        print(f"Predicting cluster assignments for {n_short} short passages...")
+    n_non_clusterable = (~clusterable_mask).sum()
+    if n_non_clusterable > 0:
+        print(f"Predicting cluster assignments for {n_non_clusterable} non-clusterable passages...")
 
-        # Convert short embeddings to appropriate array type
-        short_embeddings_for_predict = array_lib.asarray(short_embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
+        non_clusterable_for_predict = array_lib.asarray(non_clusterable_embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
 
         if USE_GPU:
-            # cuML: approximate_predict is a standalone function
-            short_cluster_labels, _ = cuml.cluster.hdbscan.approximate_predict(clusterer, short_embeddings_for_predict)
-            short_cluster_labels = array_lib.asnumpy(short_cluster_labels).astype(np.int32)
+            non_clusterable_cluster_labels, _ = cuml.cluster.hdbscan.approximate_predict(clusterer, non_clusterable_for_predict)
+            non_clusterable_cluster_labels = array_lib.asnumpy(non_clusterable_cluster_labels).astype(np.int32)
         else:
-            # CPU hdbscan: approximate_predict is a module-level function
-            short_cluster_labels, _ = hdbscan.approximate_predict(clusterer, short_embeddings_for_predict)
+            non_clusterable_cluster_labels, _ = hdbscan.approximate_predict(clusterer, non_clusterable_for_predict)
 
-        n_noise_short = (short_cluster_labels == -1).sum()
-        print(f"  Predicted {n_short - n_noise_short} short passages to clusters, {n_noise_short} marked as noise")
+        n_noise_non_clusterable = (non_clusterable_cluster_labels == -1).sum()
+        print(f"  Predicted {n_non_clusterable - n_noise_non_clusterable} passages to clusters, {n_noise_non_clusterable} marked as noise")
     else:
-        short_cluster_labels = np.array([], dtype=np.int32)
-        n_noise_short = 0
+        non_clusterable_cluster_labels = np.array([], dtype=np.int32)
+        n_noise_non_clusterable = 0
 
-    # Combine cluster labels (long first, then short) to match original order
+    # Combine cluster labels (clusterable first, then non-clusterable) to match original order
     cluster_labels = np.zeros(len(passage_lengths), dtype=np.int32)
-    cluster_labels[long_passage_mask] = long_cluster_labels
-    cluster_labels[~long_passage_mask] = short_cluster_labels
+    cluster_labels[clusterable_mask] = clusterable_cluster_labels
+    cluster_labels[~clusterable_mask] = non_clusterable_cluster_labels
 
-    n_noise = n_noise_long + n_noise_short
-    print(f"Total: {n_clusters} clusters with {n_noise} noise points ({n_noise_long} long + {n_noise_short} short)")
+    n_noise = n_noise_clusterable + n_noise_non_clusterable
+    print(f"Total: {n_clusters} clusters with {n_noise} noise points ({n_noise_clusterable} clusterable + {n_noise_non_clusterable} non-clusterable)")
 
-    # Combine 100D embeddings (long first, then short) to match original order
+    # Combine 100D embeddings (clusterable first, then non-clusterable) to match original order
     embeddings_reduced_100d = np.zeros((len(passage_lengths), umap_dim_100), dtype=np.float32)
-    embeddings_reduced_100d[long_passage_mask] = long_embeddings_reduced_100d
-    embeddings_reduced_100d[~long_passage_mask] = short_embeddings_reduced_100d
+    embeddings_reduced_100d[clusterable_mask] = clusterable_embeddings_reduced_100d
+    embeddings_reduced_100d[~clusterable_mask] = non_clusterable_embeddings_reduced_100d
 
     print(f"Combined 100D embeddings shape: {embeddings_reduced_100d.shape}")
 
@@ -379,82 +447,63 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         modified_cluster_labels[noise_idx] = next_cluster_id
         next_cluster_id += 1
 
-    # Update cluster count to include singleton clusters
     total_clusters = n_clusters + n_noise
     print(f"  Created {n_noise} singleton clusters from noise points")
     print(f"  Total clusters (including singletons): {total_clusters}")
 
-    # Compute cluster centroids (mean of all embeddings in each cluster)
     print("\nComputing cluster centroids...")
     cluster_centroids = {}
-    cluster_centroids_umap = {}  # Also compute centroids in UMAP space
+    cluster_centroids_umap = {}
 
-    # Real clusters (0 to n_clusters-1)
     for cluster_id in range(n_clusters):
         mask = cluster_labels == cluster_id
         if mask.sum() > 0:
-            # Use original SBERT embeddings for centroids
             cluster_embeddings = all_embeddings[mask]
             centroid = cluster_embeddings.mean(axis=0)
             cluster_centroids[cluster_id] = centroid
 
-            # Also compute centroid in UMAP space (100D)
             cluster_embeddings_umap = embeddings_reduced_100d[mask]
             centroid_umap = cluster_embeddings_umap.mean(axis=0)
             cluster_centroids_umap[cluster_id] = centroid_umap
 
-    # Singleton clusters (noise points - each is its own centroid)
     for i, noise_idx in enumerate(noise_indices):
         singleton_cluster_id = n_clusters + i
         cluster_centroids[singleton_cluster_id] = all_embeddings[noise_idx]
         cluster_centroids_umap[singleton_cluster_id] = embeddings_reduced_100d[noise_idx]
 
-    # Convert to arrays for easy saving
     centroids_array = np.array([cluster_centroids[i] for i in range(total_clusters)])
     centroids_umap_array = np.array([cluster_centroids_umap[i] for i in range(total_clusters)])
 
-    # Save files needed by API and label_clusters
-    np.save(os.path.join(output_path, 'cluster_labels_modified.npy'), modified_cluster_labels)  # API needs this
-    np.save(os.path.join(output_path, 'cluster_centroids.npy'), centroids_array)  # label_clusters needs this
-    # Note: cluster_centroids_umap.npy, embeddings_umap_100d.npy are NOT saved - not needed
+    np.save(os.path.join(output_path, 'cluster_labels_modified.npy'), modified_cluster_labels)
+    np.save(os.path.join(output_path, 'cluster_centroids.npy'), centroids_array)
 
-    # UMAP dimensionality reduction #2: 100D → 2 dims (for visualization)
-    # CRITICAL: Build from 100D space to match clustering structure, include ALL passages
     print(f"Reducing dimensionality with UMAP for visualization (100D → 2 dims, all passages)...")
 
-    # Convert 100D embeddings to GPU array if needed
     embeddings_100d_array = array_lib.asarray(embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
 
     reducer_2d = UMAP(
         n_components=2,
         n_neighbors=15,
         min_dist=0.3,
-        metric='euclidean',  # Use euclidean for 100D space (already in UMAP manifold)
+        metric='euclidean',
         random_state=42
     )
     embeddings_reduced_2d = reducer_2d.fit_transform(embeddings_100d_array)
 
-    # Convert back to numpy if using GPU
     if USE_GPU:
         embeddings_reduced_2d = array_lib.asnumpy(embeddings_reduced_2d)
 
     print(f"UMAP 2D done! Reduced shape: {embeddings_reduced_2d.shape}")
-    np.save(os.path.join(output_path, 'embeddings_umap_2d.npy'), embeddings_reduced_2d)  # Save 2D UMAP embeddings
+    np.save(os.path.join(output_path, 'embeddings_umap_2d.npy'), embeddings_reduced_2d)
 
-
-    # Compute cluster-to-cluster similarity matrix (cosine similarity) - only for real clusters
     print("\nComputing cluster similarity matrix (real clusters only, excluding singletons)...")
     from sklearn.metrics.pairwise import cosine_similarity
 
-    # Only compute similarity for real clusters (not singletons)
     real_centroids = centroids_array[:n_clusters]
     similarity_matrix = cosine_similarity(real_centroids)
     np.save(os.path.join(output_path, 'cluster_similarity_matrix.npy'), similarity_matrix)
     print(f"✓ Saved cluster similarity matrix (shape: {similarity_matrix.shape}) - real clusters only")
 
-    # Note: cluster_labels.npy NOT saved - API uses cluster_labels_modified.npy instead
-
-    # Save metadata (including filtering statistics)
     metadata = {
         'n_clusters': int(n_clusters),
         'n_noise': int(n_noise),
@@ -463,13 +512,14 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         'metric': 'cosine',
         'centroid_dim': int(centroids_array.shape[1]),
         'filtering': {
-            'length_threshold': int(length_threshold),
-            'n_long_passages': int(n_long),
-            'n_short_passages': int(n_short),
-            'long_percentage': float(100 * n_long / len(passage_lengths)),
-            'short_percentage': float(100 * n_short / len(passage_lengths)),
-            'n_noise_long': int(n_noise_long),
-            'n_noise_short': int(n_noise_short),
+            'min_length': int(min_length),
+            'max_length': int(max_length),
+            'n_good_length': int(n_good_length),
+            'n_too_short': int(n_too_short),
+            'n_too_long': int(n_too_long),
+            'good_length_percentage': float(100 * n_good_length / len(passage_lengths)),
+            'n_noise_clusterable': int(n_noise_clusterable),
+            'n_noise_non_clusterable': int(n_noise_non_clusterable),
         }
     }
     with open(os.path.join(output_path, 'cluster_metadata.json'), 'wb') as f:
@@ -488,7 +538,6 @@ def build_precomputed_api_graph(alignments_file: str, output_path: str):
     print("BUILDING PRECOMPUTED API GRAPH")
     print("="*60)
 
-    # Load necessary data
     print("Loading data...")
     cluster_labels_modified = np.load(os.path.join(output_path, 'cluster_labels_modified.npy'))
     embeddings_umap_2d = np.load(os.path.join(output_path, 'embeddings_umap_2d.npy'))
@@ -509,11 +558,9 @@ def build_precomputed_api_graph(alignments_file: str, output_path: str):
     print(f"  {num_authors} authors")
     print(f"  {alignment_counts} alignments")
 
-    # Build (author, cluster) pair nodes directly from alignments
     print("\nEnumerating (author, cluster) pairs from alignments...")
     from collections import defaultdict
 
-    # Track (author, cluster) pairs and their passage counts and 2D positions
     pair_passage_counts = defaultdict(int)
     pair_embeddings_2d = defaultdict(list)
 
@@ -527,7 +574,6 @@ def build_precomputed_api_graph(alignments_file: str, output_path: str):
             cluster_id = int(cluster_labels_modified[alignment_idx])
             embedding_2d = embeddings_umap_2d[alignment_idx]
 
-            # Track both source and target authors
             for author_id in [source_author_id, target_author_id]:
                 pair_key = (author_id, cluster_id)
                 pair_passage_counts[pair_key] += 1
