@@ -3,6 +3,7 @@
 import os
 import sys
 
+import faiss
 import lz4.frame
 import networkx as nx
 import numpy as np
@@ -10,24 +11,30 @@ import orjson
 import torch
 from numba import jit
 from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+threads = os.cpu_count()-1
+faiss.omp_set_num_threads(threads)
 
 # Check for GPU acceleration libraries and assign implementations
 try:
+    import cuml
     import cuml.cluster
     import cuml.manifold
     import cupy as cp
     import nx_cugraph as nxcg
 
+    # Configure cuML to return numpy arrays automatically
+    cuml.set_global_output_type('numpy')
+
     # Use GPU implementations
     UMAP = cuml.manifold.UMAP
     HDBSCAN = cuml.cluster.HDBSCAN
-    array_lib = cp  # cupy for GPU arrays
     # Register nx-cugraph as backend (it auto-dispatches for supported algorithms)
     USE_GPU = True
-    print("✓ cuML and nx-cugraph detected - GPU acceleration enabled")
+    print("✓ cuML and nx-cugraph detected - GPU acceleration enabled (output type: numpy)")
 except ImportError:
     import hdbscan
     import umap
@@ -35,7 +42,6 @@ except ImportError:
     # Use CPU implementations
     UMAP = umap.UMAP
     HDBSCAN = hdbscan.HDBSCAN
-    array_lib = np  # numpy for CPU arrays
     USE_GPU = False
     print("✓ cuML not available - using CPU implementations")
 
@@ -46,7 +52,7 @@ BATCH_SIZE = 4096  # For SBERT encoding
 def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_model_name: str):
     """Preprocess alignments and encode passages."""
 
-    print("Building author mapping and encoding passages...")
+    print("Building author mapping...", end=' ')
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -60,7 +66,6 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
     author_to_id = {}
     current_id = 0
 
-    print("Building author mapping...")
     with lz4.frame.open(alignments_file, "rb") as f:
         for line in tqdm(f, total=alignment_counts, desc="Mapping authors", leave=False):
             alignment = orjson.loads(line)
@@ -71,10 +76,10 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
             if alignment["target_author"] not in author_to_id:
                 author_to_id[alignment["target_author"]] = current_id
                 current_id += 1
+    print(f"done. Total authors: {len(author_to_id)}")
 
     # Check if embeddings are cached
     if os.path.exists(embeddings_cache_path) and os.path.exists(embeddings_meta_path):
-        print(f"Loading cached embeddings from {embeddings_cache_path}...")
         with open(embeddings_meta_path, 'rb') as f:
             metadata = orjson.loads(f.read())
 
@@ -89,19 +94,17 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
         else:
             passage_embeddings_memmap = np.memmap(embeddings_cache_path, dtype='float32', mode='r',
                                                   shape=(alignment_counts, sbert_dim))
-            print(f"✓ Loaded cached embeddings as memmap: shape={passage_embeddings_memmap.shape}")
     else:
         passage_embeddings_memmap = None
 
     if passage_embeddings_memmap is None:
-        print(f"Computing embeddings (will be cached to {embeddings_cache_path})...")
         sbert_model = SentenceTransformer(sbert_model_name, device=device, model_kwargs={"dtype": torch.float32})
         sbert_dim = sbert_model.get_sentence_embedding_dimension()
 
         passage_embeddings_memmap = np.memmap(embeddings_cache_path, dtype='float32', mode='w+',
                                              shape=(alignment_counts, sbert_dim))
 
-        print("Encoding passages with SBERT...")
+        print("Embedding passages...", end=' ')
         passages_batch = []
         batch_idx = 0
 
@@ -144,6 +147,8 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    print("done.")
+
     return {
         'passage_embeddings_memmap': passage_embeddings_memmap,
         'author_to_id': author_to_id,
@@ -152,7 +157,6 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
     }
 
 
-# @jit(nopython=True, cache=True)
 def compute_single_author_contributions(alignment_indices, cluster_labels_modified, embeddings_umap, cluster_centroids_umap, total_clusters):
     """
     Numba-optimized computation of a single author's cluster contributions.
@@ -214,11 +218,7 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     then transform/predict short passages.
     Returns cluster labels for direct lookup at runtime.
     """
-    print("\n=== Clustering alignments ===")
-    print(f"Using {'GPU-accelerated cuML' if USE_GPU else 'CPU-based'} implementations")
-
     # Extract passage lengths (character count excluding whitespace)
-    print("Extracting passage lengths...")
     passage_lengths = []
 
     with lz4.frame.open(alignments_file, "rb") as f:
@@ -238,32 +238,58 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     n_good_length = length_mask.sum()
     n_too_short = (passage_lengths < min_length).sum()
     n_too_long = (passage_lengths > max_length).sum()
+    total_filtered = n_too_short + n_too_long
+    print(f"Total passages filtered out due to length: {total_filtered} ({total_filtered/len(passage_lengths):.2%}%)")
 
-    print(f"Passage length filtering (range: {min_length}-{max_length} chars):")
-    print(f"  Good length ({min_length}-{max_length} chars): {n_good_length} ({100*n_good_length/len(passage_lengths):.1f}%)")
-    print(f"  Too short (<{min_length} chars): {n_too_short} ({100*n_too_short/len(passage_lengths):.1f}%)")
-    print(f"  Too long (>{max_length} chars): {n_too_long} ({100*n_too_long/len(passage_lengths):.1f}%)")
-    print(f"  Compute savings: ~{100*(n_too_short+n_too_long)/len(passage_lengths):.0f}% fewer passages for clustering")
-
-    print("Loading SBERT embeddings...")
-    all_embeddings = data['passage_embeddings_memmap'][:]
-
-    print(f"Embeddings shape: {all_embeddings.shape}")
+    all_embeddings = data['passage_embeddings_memmap']
     sbert_dim = all_embeddings.shape[1]
 
     # Filter semantic outliers using FAISS ANN
-    print("\nFiltering semantic outliers (passages with no nearby neighbors)...")
+    print("Filtering semantic outliers...", end=' ')
     try:
-        import faiss
-
-        # For small datasets (<1M), use exact search without quantization
-        # For large datasets, use IVF+PQ compression
-        if len(all_embeddings) < 1_000_000:
-            print("  Building exact FAISS index (dataset < 1M)...")
+        if len(all_embeddings) < 2_000_000:
+            print("\rFiltering semantic outliers... building exact index", end=' ')
             index = faiss.IndexFlatIP(sbert_dim)  # Exact inner product search
-            index.add(all_embeddings)
+
+            # Add in batches for better performance
+            batch_size = 100000
+            if len(all_embeddings) > batch_size:
+                for i in tqdm(range(0, len(all_embeddings), batch_size), desc="Adding to index", leave=False):
+                    batch = all_embeddings[i:i+batch_size]
+                    index.add(batch)
+            else:
+                index.add(all_embeddings)
+
+        elif len(all_embeddings) < 20_000_000:
+            print("\rFiltering semantic outliers... building IVFFlat index", end=' ')
+            # IVF without compression - fast search, exact vectors
+            nlist = min(4096, len(all_embeddings) // 1000)  # Voronoi cells
+            quantizer = faiss.IndexFlatIP(sbert_dim)
+            index = faiss.IndexIVFFlat(quantizer, sbert_dim, nlist)
+
+            # Set nprobe for search quality
+            index.nprobe = 10  # Search 10 nearest cells
+
+            # Train IVF clustering
+            # Use more training samples to trigger parallel k-means (min 500k for good parallelization)
+            train_sample_size = min(max(nlist * 256, 500000), len(all_embeddings))
+            if train_sample_size < len(all_embeddings):
+                train_indices = np.random.choice(len(all_embeddings), train_sample_size, replace=False)
+                train_sample = all_embeddings[train_indices]
+            else:
+                train_sample = all_embeddings
+            print(f"\rFiltering semantic outliers... training on {train_sample_size} samples (nlist={nlist})", end=' ')
+            index.train(train_sample)
+
+            # Add in batches for better performance
+            print(f"\rFiltering semantic outliers... adding {len(all_embeddings)} embeddings to index", end=' ')
+            batch_size = 100000
+            for i in tqdm(range(0, len(all_embeddings), batch_size), desc="Adding to index", leave=False):
+                batch = all_embeddings[i:i+batch_size]
+                index.add(batch)
+
         else:
-            print("  Building FAISS index with IVF+PQ compression...")
+            print("\rFiltering semantic outliers... building exact quantized index", end=' ')
 
             # IVF + PQ index for compression and speed
             nlist = min(4096, len(all_embeddings) // 1000)  # Voronoi cells for coarse quantization
@@ -280,11 +306,6 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
             # Use all data for training if we don't have enough, otherwise sample
             train_sample_size = min(required_training, len(all_embeddings))
 
-            if train_sample_size < required_training:
-                print(f"  WARNING: Dataset too small for optimal PQ training")
-                print(f"  Need {required_training} samples, have {len(all_embeddings)}")
-                print(f"  Consider using exact search for datasets < 2M embeddings")
-
             quantizer = faiss.IndexFlatIP(sbert_dim)  # Inner product for cosine similarity
             index = faiss.IndexIVFPQ(quantizer, sbert_dim, nlist, m, nbits)
 
@@ -298,17 +319,32 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
             else:
                 train_sample = all_embeddings
 
-            print(f"  Training on {train_sample_size} samples (nlist={nlist}, m={m}, nbits={nbits})...")
+            print(f"\rFiltering semantic outliers... training on {train_sample_size} samples (nlist={nlist})", end=' ')
             index.train(train_sample)
 
-            # Add all embeddings at once
-            print(f"  Adding {len(all_embeddings)} embeddings to index...")
-            index.add(all_embeddings)
+            # Add in batches for better performance
+            print(f"\rFiltering semantic outliers... adding {len(all_embeddings)} embeddings to index", end=' ')
+            batch_size = 100000
+            for i in tqdm(range(0, len(all_embeddings), batch_size), desc="Adding to index", leave=False):
+                batch = all_embeddings[i:i+batch_size]
+                index.add(batch)
 
         # Search for k nearest neighbors
         k = 6
-        print(f"  Finding {k} nearest neighbors for each passage...")
-        distances, indices = index.search(all_embeddings, k)
+        print("\rFiltering semantic outliers... searching for nearest neighbors", end=' ')
+
+        # Search in batches to show progress without slowing down too much
+        search_batch_size = 50000  # Balance between progress updates and overhead
+        n_batches = (len(all_embeddings) + search_batch_size - 1) // search_batch_size
+
+        distances = np.zeros((len(all_embeddings), k), dtype=np.float32)
+        indices = np.zeros((len(all_embeddings), k), dtype=np.int64)
+
+        for i in tqdm(range(0, len(all_embeddings), search_batch_size),
+                      desc="Searching neighbors", total=n_batches, leave=False):
+            end_idx = min(i + search_batch_size, len(all_embeddings))
+            batch = all_embeddings[i:end_idx]
+            distances[i:end_idx], indices[i:end_idx] = index.search(batch, k)
 
         # distances[:, 0] is self (similarity = 1.0), distances[:, 1] is closest other passage
         closest_similarity = distances[:, 1]
@@ -318,13 +354,8 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         similarity_threshold = np.percentile(closest_similarity, 0.5)
         is_semantic_outlier = closest_similarity < similarity_threshold
         n_outliers = is_semantic_outlier.sum()
+        print(f"done. {n_outliers} outliers found.")
 
-        print(f"  Semantic outliers (closest similarity < {similarity_threshold:.3f}): {n_outliers} ({100*n_outliers/len(all_embeddings):.1f}%)")
-        print(f"  Additional compute savings: ~{100*n_outliers/len(all_embeddings):.0f}%")
-
-    except ImportError:
-        print("  FAISS not available, skipping semantic outlier filtering")
-        is_semantic_outlier = np.zeros(len(all_embeddings), dtype=bool)
     except Exception as e:
         print(f"  Error during semantic outlier filtering: {e}")
         print("  Continuing without semantic filtering")
@@ -334,24 +365,14 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     clusterable_mask = length_mask & ~is_semantic_outlier
     n_clusterable = clusterable_mask.sum()
     n_filtered_total = len(all_embeddings) - n_clusterable
-
-    print(f"\nTotal filtering:")
-    print(f"  Clusterable passages: {n_clusterable} ({100*n_clusterable/len(all_embeddings):.1f}%)")
-    print(f"  Filtered out (short + outliers): {n_filtered_total} ({100*n_filtered_total/len(all_embeddings):.1f}%)")
-    print(f"  Total compute savings: ~{100*n_filtered_total/len(all_embeddings):.0f}%")
+    print(f"Total filtering: {n_filtered_total} passages filtered ({100*n_filtered_total/len(all_embeddings):.1f}% of total)")
 
     # Split into clusterable and non-clusterable
     clusterable_embeddings = all_embeddings[clusterable_mask]
     non_clusterable_embeddings = all_embeddings[~clusterable_mask]
 
-    print(f"Clusterable embeddings shape: {clusterable_embeddings.shape}")
-    print(f"Non-clusterable embeddings shape: {non_clusterable_embeddings.shape}")
-
-    clusterable_embeddings_array = array_lib.asarray(clusterable_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
-
     umap_dim_100 = 100
-
-    print(f"Fitting UMAP for clustering on clusterable passages ({sbert_dim} → {umap_dim_100} dims)...")
+    print(f"Reducing embeddings dimensionality ({sbert_dim} to {umap_dim_100} for clustering...", end=' ')
     reducer_100d = UMAP(
         n_components=umap_dim_100,
         n_neighbors=15,
@@ -359,32 +380,23 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         metric='cosine',
         random_state=42
     )
-    clusterable_embeddings_reduced_100d = reducer_100d.fit_transform(clusterable_embeddings_array)
+    # cuML UMAP handles GPU transfer internally and returns numpy arrays (set via global output type)
+    clusterable_embeddings_reduced_100d = reducer_100d.fit_transform(clusterable_embeddings)
 
+    # Free VRAM after transform
     if USE_GPU:
-        clusterable_embeddings_reduced_100d = array_lib.asnumpy(clusterable_embeddings_reduced_100d)
+        cp.get_default_memory_pool().free_all_blocks()
 
-    print(f"UMAP 100D fit done! Reduced clusterable embeddings shape: {clusterable_embeddings_reduced_100d.shape}")
-
-    print(f"Transforming non-clusterable passages to 100D space...")
     if non_clusterable_embeddings.shape[0] > 0:
-        non_clusterable_embeddings_array = array_lib.asarray(non_clusterable_embeddings, dtype=array_lib.float32 if USE_GPU else np.float32)
-        non_clusterable_embeddings_reduced_100d = reducer_100d.transform(non_clusterable_embeddings_array)
-
+        non_clusterable_embeddings_reduced_100d = reducer_100d.transform(non_clusterable_embeddings)
         if USE_GPU:
-            non_clusterable_embeddings_reduced_100d = array_lib.asnumpy(non_clusterable_embeddings_reduced_100d)
-
-        print(f"✓ Transformed non-clusterable embeddings shape: {non_clusterable_embeddings_reduced_100d.shape}")
+            cp.get_default_memory_pool().free_all_blocks()
     else:
         non_clusterable_embeddings_reduced_100d = np.zeros((0, umap_dim_100), dtype=np.float32)
 
-    print("Running HDBSCAN clustering on clusterable passages...")
-
-    cluster_input = array_lib.asarray(clusterable_embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
-
-    leaf_size = max(40, min(250, int(len(cluster_input) / 10000)))
-    print(f"Using leaf_size={leaf_size}")
-
+    print("Clustering passages with HDBSCAN...", end=' ')
+    # cuML HDBSCAN handles GPU transfer internally and returns numpy arrays (set via global output type)
+    leaf_size = max(40, min(250, int(len(clusterable_embeddings_reduced_100d) / 10000)))
     min_cluster_size = max(15, min(100, int(0.005 * len(clusterable_embeddings))))
     clusterer = HDBSCAN(
         min_cluster_size=min_cluster_size,
@@ -393,29 +405,26 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         cluster_selection_method='eom',
         prediction_data=True
     )
-    clusterable_cluster_labels = clusterer.fit_predict(cluster_input)
+    clusterable_cluster_labels = clusterer.fit_predict(clusterable_embeddings_reduced_100d)
 
+    # Ensure correct dtype and free VRAM
+    clusterable_cluster_labels = clusterable_cluster_labels.astype(np.int32)
     if USE_GPU:
-        clusterable_cluster_labels = array_lib.asnumpy(clusterable_cluster_labels).astype(np.int32)
+        cp.get_default_memory_pool().free_all_blocks()
 
     n_clusters = len(set(clusterable_cluster_labels)) - (1 if -1 in clusterable_cluster_labels else 0)
     n_noise_clusterable = (clusterable_cluster_labels == -1).sum()
-    print(f"Found {n_clusters} clusters with {n_noise_clusterable} noise points in clusterable passages")
-
     n_non_clusterable = (~clusterable_mask).sum()
     if n_non_clusterable > 0:
-        print(f"Predicting cluster assignments for {n_non_clusterable} non-clusterable passages...")
-
-        non_clusterable_for_predict = array_lib.asarray(non_clusterable_embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
-
+        # cuML approximate_predict handles GPU transfer internally and returns numpy arrays
         if USE_GPU:
-            non_clusterable_cluster_labels, _ = cuml.cluster.hdbscan.approximate_predict(clusterer, non_clusterable_for_predict)
-            non_clusterable_cluster_labels = array_lib.asnumpy(non_clusterable_cluster_labels).astype(np.int32)
+            non_clusterable_cluster_labels, _ = cuml.cluster.hdbscan.approximate_predict(clusterer, non_clusterable_embeddings_reduced_100d)
+            non_clusterable_cluster_labels = non_clusterable_cluster_labels.astype(np.int32)
+            cp.get_default_memory_pool().free_all_blocks()
         else:
-            non_clusterable_cluster_labels, _ = hdbscan.approximate_predict(clusterer, non_clusterable_for_predict)
+            non_clusterable_cluster_labels, _ = hdbscan.approximate_predict(clusterer, non_clusterable_embeddings_reduced_100d)
 
         n_noise_non_clusterable = (non_clusterable_cluster_labels == -1).sum()
-        print(f"  Predicted {n_non_clusterable - n_noise_non_clusterable} passages to clusters, {n_noise_non_clusterable} marked as noise")
     else:
         non_clusterable_cluster_labels = np.array([], dtype=np.int32)
         n_noise_non_clusterable = 0
@@ -424,19 +433,16 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     cluster_labels = np.zeros(len(passage_lengths), dtype=np.int32)
     cluster_labels[clusterable_mask] = clusterable_cluster_labels
     cluster_labels[~clusterable_mask] = non_clusterable_cluster_labels
-
     n_noise = n_noise_clusterable + n_noise_non_clusterable
-    print(f"Total: {n_clusters} clusters with {n_noise} noise points ({n_noise_clusterable} clusterable + {n_noise_non_clusterable} non-clusterable)")
+    print(f"\rClustering passages with HDBSCAN... done. Found {n_clusters} clusters with {n_noise} noise points")
+
 
     # Combine 100D embeddings (clusterable first, then non-clusterable) to match original order
     embeddings_reduced_100d = np.zeros((len(passage_lengths), umap_dim_100), dtype=np.float32)
     embeddings_reduced_100d[clusterable_mask] = clusterable_embeddings_reduced_100d
     embeddings_reduced_100d[~clusterable_mask] = non_clusterable_embeddings_reduced_100d
 
-    print(f"Combined 100D embeddings shape: {embeddings_reduced_100d.shape}")
-
     # Handle noise cluster: treat each noise point as its own singleton cluster
-    print("\nHandling noise cluster (-1)...")
     noise_indices = np.where(cluster_labels == -1)[0]
 
     # Reassign noise points to singleton clusters starting after the real clusters
@@ -446,12 +452,9 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     for noise_idx in noise_indices:
         modified_cluster_labels[noise_idx] = next_cluster_id
         next_cluster_id += 1
-
     total_clusters = n_clusters + n_noise
-    print(f"  Created {n_noise} singleton clusters from noise points")
-    print(f"  Total clusters (including singletons): {total_clusters}")
 
-    print("\nComputing cluster centroids...")
+    print("Computing cluster centroids...", end=" ")
     cluster_centroids = {}
     cluster_centroids_umap = {}
 
@@ -476,40 +479,41 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
 
     np.save(os.path.join(output_path, 'cluster_labels_modified.npy'), modified_cluster_labels)
     np.save(os.path.join(output_path, 'cluster_centroids.npy'), centroids_array)
+    print("done.")
 
-    print(f"Reducing dimensionality with UMAP for visualization (100D → 2 dims, all passages)...")
+    print(f"Reducing dimensionality with UMAP for visualization (100D → 2 dims)...", end=' ')
 
-    embeddings_100d_array = array_lib.asarray(embeddings_reduced_100d, dtype=array_lib.float32 if USE_GPU else np.float32)
-
+    # cuML UMAP handles GPU transfer internally and returns numpy arrays (set via global output type)
     reducer_2d = UMAP(
         n_components=2,
         n_neighbors=15,
-        min_dist=0.3,
+        min_dist=0.0,
         metric='euclidean',
         random_state=42
     )
-    embeddings_reduced_2d = reducer_2d.fit_transform(embeddings_100d_array)
+    embeddings_reduced_2d = reducer_2d.fit_transform(embeddings_reduced_100d)
 
+    # Free VRAM after transform
     if USE_GPU:
-        embeddings_reduced_2d = array_lib.asnumpy(embeddings_reduced_2d)
+        cp.get_default_memory_pool().free_all_blocks()
 
-    print(f"UMAP 2D done! Reduced shape: {embeddings_reduced_2d.shape}")
     np.save(os.path.join(output_path, 'embeddings_umap_2d.npy'), embeddings_reduced_2d)
 
-    print("\nComputing cluster similarity matrix (real clusters only, excluding singletons)...")
-    from sklearn.metrics.pairwise import cosine_similarity
+    print("done.")
 
-    real_centroids = centroids_array[:n_clusters]
-    similarity_matrix = cosine_similarity(real_centroids)
+    # Use 100D UMAP centroids (same space where clustering happened) instead of original 768D
+    print("Computing cluster similarity matrix...", end=' ')
+    real_centroids_umap = centroids_umap_array[:n_clusters]
+    similarity_matrix = cosine_similarity(real_centroids_umap)
     np.save(os.path.join(output_path, 'cluster_similarity_matrix.npy'), similarity_matrix)
-    print(f"✓ Saved cluster similarity matrix (shape: {similarity_matrix.shape}) - real clusters only")
+    print("done.")
 
     metadata = {
         'n_clusters': int(n_clusters),
         'n_noise': int(n_noise),
         'total_clusters': int(total_clusters),
         'total_alignments': int(len(cluster_labels)),
-        'metric': 'cosine',
+        'metric': 'cosine_100d_umap',  # Updated to reflect actual computation
         'centroid_dim': int(centroids_array.shape[1]),
         'filtering': {
             'min_length': int(min_length),
@@ -731,16 +735,12 @@ def main():
         f.write(orjson.dumps(data['author_to_id']))
 
     # Cluster alignments by content similarity
-    print("\n" + "="*60)
-    print("CLUSTERING ALIGNMENTS")
-    print("="*60)
     cluster_labels = cluster_alignments(data, output_path, alignments_file, alignment_counts)
 
     # Build precomputed graph for API
     build_precomputed_api_graph(alignments_file, output_path)
 
-    print("\n✓ Graph preprocessing complete!")
-    print(f"  All files saved to: {output_path}/")
+    print("\nThematic Identify Graph done.")
 
 
 if __name__ == "__main__":

@@ -23,40 +23,42 @@ def create_cluster_labeling_prompt(top_passages: list[str]) -> str:
     Create prompt for cluster labeling using LLM.
     Passages are the most representative texts in the cluster (closest to centroid).
     """
-    passages_text = "\n---\n".join([f"Passage {i+1}: {p[:1000]}..."
-                                     for i, p in enumerate(top_passages)])
+    # Truncate passages at sentence boundaries, not mid-word
+    def truncate_passage(text: str, max_chars: int = 800) -> str:
+        if len(text) <= max_chars:
+            return text
+        # Find last sentence ending before max_chars
+        truncated = text[:max_chars]
+        for delimiter in ['. ', '! ', '? ', '.\n', '!\n', '?\n']:
+            last_pos = truncated.rfind(delimiter)
+            if last_pos > max_chars * 0.5:  # Keep at least 50% of text
+                return truncated[:last_pos + 1]
+        # No sentence boundary found, truncate at word
+        return truncated.rsplit(' ', 1)[0] + '...'
 
-    prompt = f"""You are analyzing a thematic cluster of historical text reuse passages.
-Below are the most representative passages from this cluster.
+    passages_text = "\n\n".join([f"[{i+1}] {truncate_passage(p)}"
+                                  for i, p in enumerate(top_passages)])
 
-Your task is two-fold:
-    1. **Rationale:** Briefly (in one sentence) explain the common action or subject matter shared across the passages.
-    2. **Label:** Generate a concise thematic label (1-3 words) based on your rationale.
+    prompt = f"""Analyze these text passages that were algorithmically grouped together and create a concise thematic label.
 
-Guidelines:
-- Focus on the specific topic, not generic terms
-- Use concrete concepts when possible
-- Prefer noun phrases
-- Be precise but concise
+TASK:
+1. Identify the common theme, topic, or subject matter
+2. Provide a brief one-sentence rationale
+3. Generate a precise 1-3 word label (noun phrase preferred)
 
-Examples of good labels for reference only:
-- "Politics"
-- "Geography"
-- "Philosophy"
+REQUIREMENTS:
+- Be specific, not generic (avoid "Various Topics", "Text", "Content")
+- Use concrete concepts when identifiable (e.g., "Military Strategy" not "Actions")
+- Keep label under 4 words
 
-Examples of bad labels:
-- "Various Topics" (too generic)
-- "The complex interrelation..." (too verbose)
-- "Text" (not descriptive)
-
-Representative Passages:
+PASSAGES:
 {passages_text}
 
-Output Format:
-    RATIONALE: [Your one-sentence explanation.]
-    LABEL: [Your 1-3 word final label.]
+OUTPUT FORMAT:
+RATIONALE: [One sentence explaining the shared theme]
+LABEL: [1-3 word label]
 
-    Answer with ONLY the RATIONALE and LABEL lines in the specified format, nothing else:"""
+Answer ONLY in the specified OUTPUT FORMAT. Do not include any additional text."""
 
     return prompt
 
@@ -154,10 +156,15 @@ async def generate_cluster_labels_async(
         passages_to_use = len(all_passages)
         min_passages = 5
         label = ""
+        retry_count = 0
+        max_retries = 10
 
-        while passages_to_use >= min_passages:
+        while passages_to_use >= min_passages and retry_count < max_retries:
+            retry_count += 1
             # Generate prompt with current number of passages
             prompt = create_cluster_labeling_prompt(all_passages[:passages_to_use])
+
+            print(f"\n  Cluster {cluster_id} - Attempt {retry_count} with {passages_to_use} passages...")
 
             try:
                 llm_params = {
@@ -171,7 +178,9 @@ async def generate_cluster_labels_async(
                     response_text = result["choices"][0].get("text", "").strip()
 
                     if not response_text:
-                        break
+                        print(f"    ❌ Empty response from LLM (context likely full), retrying with fewer passages")
+                        passages_to_use = max(min_passages, int(passages_to_use * 0.9))  # Aggressive reduction
+                        continue
 
                     # Parse the LABEL line from the response
                     for line in response_text.split('\n'):
@@ -187,6 +196,11 @@ async def generate_cluster_labels_async(
                     # Clean up the label
                     label = label.replace('"', '').replace("'", "").strip()
 
+                    # Debug: Print what we parsed
+                    print(f"\n  Cluster {cluster_id} (using {passages_to_use} passages):")
+                    print(f"    Raw response: {response_text[:300]}")
+                    print(f"    Parsed label: '{label}'")
+
                     # Validate: reject template/placeholder responses
                     invalid_patterns = [
                         'your',
@@ -199,11 +213,18 @@ async def generate_cluster_labels_async(
                     ]
 
                     if label and any(pattern in label.lower() for pattern in invalid_patterns):
-                        print(f"\n  Cluster {cluster_id}: Invalid label detected (template response), retrying...")
+                        print(f"    ❌ Invalid label detected (template response), retrying...")
                         label = ""
                         passages_to_use = max(min_passages, passages_to_use - 1)  # Try with one fewer passage
                         continue
 
+                    # Check if we got a valid label
+                    if not label:
+                        print(f"    ❌ No label parsed from response, retrying with fewer passages...")
+                        passages_to_use = max(min_passages, passages_to_use - 1)
+                        continue
+
+                    print(f"    ✓ Valid label found")
                 break  # Success, exit retry loop
 
             except Exception as e:
@@ -223,24 +244,24 @@ async def generate_cluster_labels_async(
                             # Reduce proportionally to exact fit (100% of available context)
                             passages_to_use = int(passages_to_use * (n_ctx / n_prompt))
                         else:
-                            # Couldn't parse, reduce by 20%
-                            passages_to_use = int(passages_to_use * 0.80)
+                            # Couldn't parse, reduce by 10%
+                            passages_to_use = int(passages_to_use * 0.90)
                     except:
-                        # JSON parsing failed, reduce by 20%
-                        passages_to_use = int(passages_to_use * 0.80)
+                        # JSON parsing failed, reduce by 10%
+                        passages_to_use = int(passages_to_use * 0.90)
 
                     passages_to_use = max(min_passages, passages_to_use)
-                    print(f"\n  Cluster {cluster_id}: Context error, retrying with {passages_to_use} passages")
+                    print(f"\n  Cluster {cluster_id}: ❌ Context exceeded, retrying with {passages_to_use} passages")
                     continue
                 else:
                     # Different error, don't retry
-                    print(f"\n  Error generating label for cluster {cluster_id}: {e}")
+                    print(f"\n  Cluster {cluster_id}: ❌ Error: {e}")
                     break
 
         # Ensure uniqueness
         if label:
             original_label = label
-            counter = 1
+            counter = 2
             while label in used_labels:
                 label = f"{original_label} ({counter})"
                 counter += 1
@@ -420,4 +441,5 @@ if __name__ == "__main__":
         model_path=args.model_path,
         top_k=args.top_k,
         port=args.port,
+        context_window=args.context_window,
     ))

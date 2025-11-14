@@ -270,6 +270,7 @@ async def run_alignment(params):
 
     if params.web_app_config["skip_web_app"] is False:
         # Build graph model and generate cluster labels
+        print(f"\n### Building Thematic Identity Graph model ###")
         embedding_model = params.preprocessing_params["source"]["embedding_model"]
         build_graph_and_labels(results_file, embedding_model, params.llm_params)
 
