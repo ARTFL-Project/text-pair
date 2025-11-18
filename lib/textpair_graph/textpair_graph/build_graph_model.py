@@ -1,5 +1,6 @@
 """ Building a Thematic Identity Graph Model combining cluster similarity and author contributions."""
 
+import gc
 import os
 import sys
 
@@ -12,6 +13,7 @@ import torch
 from numba import jit
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -23,27 +25,16 @@ try:
     import cuml
     import cuml.cluster
     import cuml.manifold
-    import cupy as cp
-    import nx_cugraph as nxcg
-
-    # Configure cuML to return numpy arrays automatically
     cuml.set_global_output_type('numpy')
-
-    # Use GPU implementations
     UMAP = cuml.manifold.UMAP
     HDBSCAN = cuml.cluster.HDBSCAN
-    # Register nx-cugraph as backend (it auto-dispatches for supported algorithms)
     USE_GPU = True
-    print("✓ cuML and nx-cugraph detected - GPU acceleration enabled (output type: numpy)")
 except ImportError:
     import hdbscan
     import umap
-
-    # Use CPU implementations
     UMAP = umap.UMAP
     HDBSCAN = hdbscan.HDBSCAN
     USE_GPU = False
-    print("✓ cuML not available - using CPU implementations")
 
 # Model Hyperparameters
 BATCH_SIZE = 4096  # For SBERT encoding
@@ -156,291 +147,115 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
         'num_authors': len(author_to_id)
     }
 
-
-def compute_single_author_contributions(alignment_indices, cluster_labels_modified, embeddings_umap, cluster_centroids_umap, total_clusters):
-    """
-    Numba-optimized computation of a single author's cluster contributions.
-    For each cluster the author contributes to, compute the inverse distance
-    from the author's average embedding (in that cluster) to the cluster centroid.
-    """
-    contributions = np.zeros(total_clusters, dtype=np.float32)
-
-    if len(alignment_indices) == 0:
-        return contributions
-
-    # Get cluster labels for this author's alignments
-    author_cluster_labels = cluster_labels_modified[alignment_indices]
-
-    # Find unique clusters (manual since np.unique not supported in nopython mode)
-    unique_clusters = []
-    for cluster_id in author_cluster_labels:
-        if cluster_id not in unique_clusters:
-            unique_clusters.append(cluster_id)
-
-    # For each cluster, compute contribution
-    for cluster_id in unique_clusters:
-        # Count alignments in this cluster and collect their embeddings
-        cluster_count = 0
-        embedding_dim = embeddings_umap.shape[1]
-        cluster_sum = np.zeros(embedding_dim, dtype=np.float32)
-
-        for i in range(len(alignment_indices)):
-            if author_cluster_labels[i] == cluster_id:
-                alignment_idx = alignment_indices[i]
-                cluster_sum += embeddings_umap[alignment_idx]
-                cluster_count += 1
-
-        if cluster_count == 0:
-            continue
-
-        # Average embedding for this author in this cluster
-        cluster_mean = cluster_sum / cluster_count
-
-        # Distance to centroid
-        centroid = cluster_centroids_umap[cluster_id]
-        distance = 0.0
-        for d in range(embedding_dim):
-            diff = cluster_mean[d] - centroid[d]
-            distance += diff * diff
-        distance = np.sqrt(distance)
-
-        # Inverse distance (quality measure)
-        inv_distance = 1.0 / (distance + 1e-6)
-        contributions[cluster_id] = inv_distance
-
-    return contributions
-
-
 def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     """
     Cluster all alignments using HDBSCAN on SBERT embeddings.
-    Uses passage length filtering: fit UMAP/HDBSCAN on long passages (≥50 chars),
-    then transform/predict short passages.
     Returns cluster labels for direct lookup at runtime.
     """
-    # Extract passage lengths (character count excluding whitespace)
-    passage_lengths = []
-
-    with lz4.frame.open(alignments_file, "rb") as f:
-        for line in tqdm(f, total=alignment_counts, desc="Reading passage lengths", leave=False):
-            alignment = orjson.loads(line)
-            passage = alignment["source_passage"]
-            char_count = len(passage.replace(' ', '').replace('\n', '').replace('\t', ''))
-            passage_lengths.append(char_count)
-
-    passage_lengths = np.array(passage_lengths)
-
-    # Filter by length thresholds (50-5000 chars without whitespace)
-    # Upper bound: SBERT truncates at ~512 tokens, very long passages likely clipped
-    min_length = 50
-    max_length = 5000
-    length_mask = (passage_lengths >= min_length) & (passage_lengths <= max_length)
-    n_good_length = length_mask.sum()
-    n_too_short = (passage_lengths < min_length).sum()
-    n_too_long = (passage_lengths > max_length).sum()
-    total_filtered = n_too_short + n_too_long
-    print(f"Total passages filtered out due to length: {total_filtered} ({total_filtered/len(passage_lengths):.2%}%)")
-
     all_embeddings = data['passage_embeddings_memmap']
     sbert_dim = all_embeddings.shape[1]
 
-    # Filter semantic outliers using FAISS ANN
-    print("Filtering semantic outliers...", end=' ')
-    try:
-        if len(all_embeddings) < 2_000_000:
-            print("\rFiltering semantic outliers... building exact index", end=' ')
-            index = faiss.IndexFlatIP(sbert_dim)  # Exact inner product search
-
-            # Add in batches for better performance
-            batch_size = 100000
-            if len(all_embeddings) > batch_size:
-                for i in tqdm(range(0, len(all_embeddings), batch_size), desc="Adding to index", leave=False):
-                    batch = all_embeddings[i:i+batch_size]
-                    index.add(batch)
-            else:
-                index.add(all_embeddings)
-
-        elif len(all_embeddings) < 20_000_000:
-            print("\rFiltering semantic outliers... building IVFFlat index", end=' ')
-            # IVF without compression - fast search, exact vectors
-            nlist = min(4096, len(all_embeddings) // 1000)  # Voronoi cells
-            quantizer = faiss.IndexFlatIP(sbert_dim)
-            index = faiss.IndexIVFFlat(quantizer, sbert_dim, nlist)
-
-            # Set nprobe for search quality
-            index.nprobe = 10  # Search 10 nearest cells
-
-            # Train IVF clustering
-            # Use more training samples to trigger parallel k-means (min 500k for good parallelization)
-            train_sample_size = min(max(nlist * 256, 500000), len(all_embeddings))
-            if train_sample_size < len(all_embeddings):
-                train_indices = np.random.choice(len(all_embeddings), train_sample_size, replace=False)
-                train_sample = all_embeddings[train_indices]
-            else:
-                train_sample = all_embeddings
-            print(f"\rFiltering semantic outliers... training on {train_sample_size} samples (nlist={nlist})", end=' ')
-            index.train(train_sample)
-
-            # Add in batches for better performance
-            print(f"\rFiltering semantic outliers... adding {len(all_embeddings)} embeddings to index", end=' ')
-            batch_size = 100000
-            for i in tqdm(range(0, len(all_embeddings), batch_size), desc="Adding to index", leave=False):
-                batch = all_embeddings[i:i+batch_size]
-                index.add(batch)
-
-        else:
-            print("\rFiltering semantic outliers... building exact quantized index", end=' ')
-
-            # IVF + PQ index for compression and speed
-            nlist = min(4096, len(all_embeddings) // 1000)  # Voronoi cells for coarse quantization
-            m = 192  # Number of subquantizers (768D / 192 = 4D per subquantizer)
-            nbits = 8  # Bits per subquantizer (256 codebook entries)
-
-            # Calculate required training samples for PQ
-            # Each subquantizer needs 256 centroids, FAISS recommends 39 points per centroid
-            min_training_for_pq = m * 256 * 39  # ~1.9M for m=192
-            # Also need samples for IVF centroids
-            min_training_for_ivf = nlist * 256  # 256 points per IVF cluster
-            required_training = max(min_training_for_pq, min_training_for_ivf)
-
-            # Use all data for training if we don't have enough, otherwise sample
-            train_sample_size = min(required_training, len(all_embeddings))
-
-            quantizer = faiss.IndexFlatIP(sbert_dim)  # Inner product for cosine similarity
-            index = faiss.IndexIVFPQ(quantizer, sbert_dim, nlist, m, nbits)
-
-            # Set nprobe: number of cells to search (default=1, higher=more accurate but slower)
-            index.nprobe = 10  # Search 10 nearest cells for better recall
-
-            # Train on sample
-            if train_sample_size < len(all_embeddings):
-                train_indices = np.random.choice(len(all_embeddings), train_sample_size, replace=False)
-                train_sample = all_embeddings[train_indices]
-            else:
-                train_sample = all_embeddings
-
-            print(f"\rFiltering semantic outliers... training on {train_sample_size} samples (nlist={nlist})", end=' ')
-            index.train(train_sample)
-
-            # Add in batches for better performance
-            print(f"\rFiltering semantic outliers... adding {len(all_embeddings)} embeddings to index", end=' ')
-            batch_size = 100000
-            for i in tqdm(range(0, len(all_embeddings), batch_size), desc="Adding to index", leave=False):
-                batch = all_embeddings[i:i+batch_size]
-                index.add(batch)
-
-        # Search for k nearest neighbors
-        k = 6
-        print("\rFiltering semantic outliers... searching for nearest neighbors", end=' ')
-
-        # Search in batches to show progress without slowing down too much
-        search_batch_size = 50000  # Balance between progress updates and overhead
-        n_batches = (len(all_embeddings) + search_batch_size - 1) // search_batch_size
-
-        distances = np.zeros((len(all_embeddings), k), dtype=np.float32)
-        indices = np.zeros((len(all_embeddings), k), dtype=np.int64)
-
-        for i in tqdm(range(0, len(all_embeddings), search_batch_size),
-                      desc="Searching neighbors", total=n_batches, leave=False):
-            end_idx = min(i + search_batch_size, len(all_embeddings))
-            batch = all_embeddings[i:end_idx]
-            distances[i:end_idx], indices[i:end_idx] = index.search(batch, k)
-
-        # distances[:, 0] is self (similarity = 1.0), distances[:, 1] is closest other passage
-        closest_similarity = distances[:, 1]
-
-        # Filter passages where closest neighbor is too far (low similarity)
-        # Use 0.5th percentile as adaptive threshold based on data distribution
-        similarity_threshold = np.percentile(closest_similarity, 0.5)
-        is_semantic_outlier = closest_similarity < similarity_threshold
-        n_outliers = is_semantic_outlier.sum()
-        print(f"done. {n_outliers} outliers found.")
-
-    except Exception as e:
-        print(f"  Error during semantic outlier filtering: {e}")
-        print("  Continuing without semantic filtering")
-        is_semantic_outlier = np.zeros(len(all_embeddings), dtype=bool)
-
-    # Combine length filter and semantic outlier filter
-    clusterable_mask = length_mask & ~is_semantic_outlier
-    n_clusterable = clusterable_mask.sum()
-    n_filtered_total = len(all_embeddings) - n_clusterable
-    print(f"Total filtering: {n_filtered_total} passages filtered ({100*n_filtered_total/len(all_embeddings):.1f}% of total)")
-
-    # Split into clusterable and non-clusterable
-    clusterable_embeddings = all_embeddings[clusterable_mask]
-    non_clusterable_embeddings = all_embeddings[~clusterable_mask]
-
-    umap_dim_100 = 100
-    print(f"Reducing embeddings dimensionality ({sbert_dim} to {umap_dim_100} for clustering...", end=' ')
-    reducer_100d = UMAP(
-        n_components=umap_dim_100,
-        n_neighbors=15,
+    low_dim = 32
+    n_neighbors = min(100, max(15, alignment_counts // 10000))
+    print(f"Reducing embeddings dimensionality ({sbert_dim} to {low_dim}D)...", end=' ')
+    reducer_low_dim = UMAP(
+        n_components=low_dim,
+        n_neighbors=n_neighbors,
         min_dist=0.0,
         metric='cosine',
         random_state=42
     )
-    # cuML UMAP handles GPU transfer internally and returns numpy arrays (set via global output type)
-    clusterable_embeddings_reduced_100d = reducer_100d.fit_transform(clusterable_embeddings)
+    low_dim_embeddings = reducer_low_dim.fit_transform(all_embeddings)
+    print("done.")
+    gc.collect()
 
-    # Free VRAM after transform
-    if USE_GPU:
-        cp.get_default_memory_pool().free_all_blocks()
+    n_total = len(low_dim_embeddings)
 
-    if non_clusterable_embeddings.shape[0] > 0:
-        non_clusterable_embeddings_reduced_100d = reducer_100d.transform(non_clusterable_embeddings)
-        if USE_GPU:
-            cp.get_default_memory_pool().free_all_blocks()
+    # Adaptive train size: cap training set at 1M for large datasets
+    if n_total >= 1_000_000:
+        train_size = min(1_000_000, n_total)  # Cap at 1M for training
+        train_ratio = train_size / n_total
+        print(f"Splitting data: {train_size:,} train ({train_ratio*100:.1f}%), {n_total - train_size:,} test")
+        train_indices, test_indices = train_test_split(
+            np.arange(n_total),
+            train_size=train_size,
+            shuffle=True,
+            random_state=42
+        )
+
+        train_embeddings = low_dim_embeddings[train_indices]
+        test_embeddings = low_dim_embeddings[test_indices]
+
+        print(f"Clustering with HDBSCAN on {len(train_embeddings):,} training passages...", end=' ')
+        min_cluster_size = max(15, int(0.005 * len(train_embeddings)))
+        clusterer = HDBSCAN(
+            min_cluster_size=min_cluster_size,
+            min_samples=2,
+            metric='euclidean',
+            cluster_selection_method='eom',
+            prediction_data=True
+        )
+        train_labels = clusterer.fit_predict(train_embeddings)
+        train_labels = train_labels.astype(np.int32)
+
+        n_clusters = len(set(train_labels)) - (1 if -1 in train_labels else 0)
+        n_noise_train = (train_labels == -1).sum()
+        print(f"done. Found {n_clusters} clusters with {n_noise_train} noise points in training set")
+
+        # Predict test set in batches to avoid OOM
+        print(f"Predicting labels for {len(test_embeddings):,} test passages in batches...")
+        predict_batch_size = 100000
+        test_labels = np.zeros(len(test_embeddings), dtype=np.int32)
+        n_test_batches = (len(test_embeddings) + predict_batch_size - 1) // predict_batch_size
+
+        for i in tqdm(range(0, len(test_embeddings), predict_batch_size),
+                      desc="Predicting test batches", total=n_test_batches, leave=False):
+            end_idx = min(i + predict_batch_size, len(test_embeddings))
+            batch = test_embeddings[i:end_idx]
+
+            if USE_GPU:
+                batch_labels, _ = cuml.cluster.hdbscan.approximate_predict(clusterer, batch)
+            else:
+                batch_labels, _ = hdbscan.approximate_predict(clusterer, batch)
+
+            test_labels[i:end_idx] = batch_labels.astype(np.int32)
+
+        n_noise_test = (test_labels == -1).sum()
+        print(f"done. {n_noise_test:,} noise points in test set")
+
+        # Combine labels in original order
+        cluster_labels = np.zeros(n_total, dtype=np.int32)
+        cluster_labels[train_indices] = train_labels
+        cluster_labels[test_indices] = test_labels
+
+        del train_embeddings, test_embeddings, train_labels, test_labels
+        gc.collect()
     else:
-        non_clusterable_embeddings_reduced_100d = np.zeros((0, umap_dim_100), dtype=np.float32)
+        print(f"Clustering all {n_total:,} passages with HDBSCAN...", end=' ')
+        min_cluster_size = max(15, int(0.005 * n_total))
+        clusterer = HDBSCAN(
+            min_cluster_size=min_cluster_size,
+            min_samples=2,
+            metric='euclidean',
+            cluster_selection_method='eom',
+            cluster_selection_epsilon=0.3,
+            prediction_data=True
+        )
+        cluster_labels = clusterer.fit_predict(low_dim_embeddings)
+        cluster_labels = cluster_labels.astype(np.int32)
+        n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+        print(f"done. Found {n_clusters} clusters")
+        gc.collect()
 
-    print("Clustering passages with HDBSCAN...", end=' ')
-    # cuML HDBSCAN handles GPU transfer internally and returns numpy arrays (set via global output type)
-    leaf_size = max(40, min(250, int(len(clusterable_embeddings_reduced_100d) / 10000)))
-    min_cluster_size = max(15, min(100, int(0.005 * len(clusterable_embeddings))))
-    clusterer = HDBSCAN(
-        min_cluster_size=min_cluster_size,
-        min_samples=2,
-        metric='euclidean',
-        cluster_selection_method='eom',
-        prediction_data=True
-    )
-    clusterable_cluster_labels = clusterer.fit_predict(clusterable_embeddings_reduced_100d)
+    del clusterer, reducer_low_dim
+    gc.collect()
 
-    # Ensure correct dtype and free VRAM
-    clusterable_cluster_labels = clusterable_cluster_labels.astype(np.int32)
-    if USE_GPU:
-        cp.get_default_memory_pool().free_all_blocks()
-
-    n_clusters = len(set(clusterable_cluster_labels)) - (1 if -1 in clusterable_cluster_labels else 0)
-    n_noise_clusterable = (clusterable_cluster_labels == -1).sum()
-    n_non_clusterable = (~clusterable_mask).sum()
-    if n_non_clusterable > 0:
-        # cuML approximate_predict handles GPU transfer internally and returns numpy arrays
-        if USE_GPU:
-            non_clusterable_cluster_labels, _ = cuml.cluster.hdbscan.approximate_predict(clusterer, non_clusterable_embeddings_reduced_100d)
-            non_clusterable_cluster_labels = non_clusterable_cluster_labels.astype(np.int32)
-            cp.get_default_memory_pool().free_all_blocks()
-        else:
-            non_clusterable_cluster_labels, _ = hdbscan.approximate_predict(clusterer, non_clusterable_embeddings_reduced_100d)
-
-        n_noise_non_clusterable = (non_clusterable_cluster_labels == -1).sum()
-    else:
-        non_clusterable_cluster_labels = np.array([], dtype=np.int32)
-        n_noise_non_clusterable = 0
-
-    # Combine cluster labels (clusterable first, then non-clusterable) to match original order
-    cluster_labels = np.zeros(len(passage_lengths), dtype=np.int32)
-    cluster_labels[clusterable_mask] = clusterable_cluster_labels
-    cluster_labels[~clusterable_mask] = non_clusterable_cluster_labels
-    n_noise = n_noise_clusterable + n_noise_non_clusterable
-    print(f"\rClustering passages with HDBSCAN... done. Found {n_clusters} clusters with {n_noise} noise points")
+    n_noise = (cluster_labels == -1).sum()
+    n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+    print(f"Final: {n_clusters} clusters with {n_noise} total outliers ({100*n_noise/len(cluster_labels):.1f}%)")
 
 
-    # Combine 100D embeddings (clusterable first, then non-clusterable) to match original order
-    embeddings_reduced_100d = np.zeros((len(passage_lengths), umap_dim_100), dtype=np.float32)
-    embeddings_reduced_100d[clusterable_mask] = clusterable_embeddings_reduced_100d
-    embeddings_reduced_100d[~clusterable_mask] = non_clusterable_embeddings_reduced_100d
+
 
     # Handle noise cluster: treat each noise point as its own singleton cluster
     noise_indices = np.where(cluster_labels == -1)[0]
@@ -456,7 +271,7 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
 
     print("Computing cluster centroids...", end=" ")
     cluster_centroids = {}
-    cluster_centroids_umap = {}
+    cluster_centroids_low_dim = {}
 
     for cluster_id in range(n_clusters):
         mask = cluster_labels == cluster_id
@@ -465,25 +280,24 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
             centroid = cluster_embeddings.mean(axis=0)
             cluster_centroids[cluster_id] = centroid
 
-            cluster_embeddings_umap = embeddings_reduced_100d[mask]
-            centroid_umap = cluster_embeddings_umap.mean(axis=0)
-            cluster_centroids_umap[cluster_id] = centroid_umap
+            cluster_low_dim_embeddings = low_dim_embeddings[mask]
+            centroid_low_dim = cluster_low_dim_embeddings.mean(axis=0)
+            cluster_centroids_low_dim[cluster_id] = centroid_low_dim
 
     for i, noise_idx in enumerate(noise_indices):
         singleton_cluster_id = n_clusters + i
         cluster_centroids[singleton_cluster_id] = all_embeddings[noise_idx]
-        cluster_centroids_umap[singleton_cluster_id] = embeddings_reduced_100d[noise_idx]
+        cluster_centroids_low_dim[singleton_cluster_id] = low_dim_embeddings[noise_idx]
 
     centroids_array = np.array([cluster_centroids[i] for i in range(total_clusters)])
-    centroids_umap_array = np.array([cluster_centroids_umap[i] for i in range(total_clusters)])
+    centroids_low_dim_array = np.array([cluster_centroids_low_dim[i] for i in range(total_clusters)])
 
     np.save(os.path.join(output_path, 'cluster_labels_modified.npy'), modified_cluster_labels)
     np.save(os.path.join(output_path, 'cluster_centroids.npy'), centroids_array)
     print("done.")
 
-    print(f"Reducing dimensionality with UMAP for visualization (100D → 2 dims)...", end=' ')
+    print(f"Reducing dimensionality with UMAP for visualization ({low_dim}D → 2D)...", end=' ')
 
-    # cuML UMAP handles GPU transfer internally and returns numpy arrays (set via global output type)
     reducer_2d = UMAP(
         n_components=2,
         n_neighbors=15,
@@ -491,20 +305,18 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         metric='euclidean',
         random_state=42
     )
-    embeddings_reduced_2d = reducer_2d.fit_transform(embeddings_reduced_100d)
+    embeddings_2d = reducer_2d.fit_transform(low_dim_embeddings)
 
-    # Free VRAM after transform
-    if USE_GPU:
-        cp.get_default_memory_pool().free_all_blocks()
+    del reducer_2d
+    gc.collect()
 
-    np.save(os.path.join(output_path, 'embeddings_umap_2d.npy'), embeddings_reduced_2d)
+    np.save(os.path.join(output_path, 'embeddings_umap_2d.npy'), embeddings_2d)
 
     print("done.")
 
-    # Use 100D UMAP centroids (same space where clustering happened) instead of original 768D
     print("Computing cluster similarity matrix...", end=' ')
-    real_centroids_umap = centroids_umap_array[:n_clusters]
-    similarity_matrix = cosine_similarity(real_centroids_umap)
+    real_centroids_low_dim = centroids_low_dim_array[:n_clusters]
+    similarity_matrix = cosine_similarity(real_centroids_low_dim)
     np.save(os.path.join(output_path, 'cluster_similarity_matrix.npy'), similarity_matrix)
     print("done.")
 
@@ -513,18 +325,10 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         'n_noise': int(n_noise),
         'total_clusters': int(total_clusters),
         'total_alignments': int(len(cluster_labels)),
-        'metric': 'cosine_100d_umap',  # Updated to reflect actual computation
+        'metric': 'cosine',
         'centroid_dim': int(centroids_array.shape[1]),
-        'filtering': {
-            'min_length': int(min_length),
-            'max_length': int(max_length),
-            'n_good_length': int(n_good_length),
-            'n_too_short': int(n_too_short),
-            'n_too_long': int(n_too_long),
-            'good_length_percentage': float(100 * n_good_length / len(passage_lengths)),
-            'n_noise_clusterable': int(n_noise_clusterable),
-            'n_noise_non_clusterable': int(n_noise_non_clusterable),
-        }
+        'n_outliers': int(n_noise),
+        'outlier_percentage': float(100 * n_noise / len(cluster_labels)),
     }
     with open(os.path.join(output_path, 'cluster_metadata.json'), 'wb') as f:
         f.write(orjson.dumps(metadata))
@@ -538,10 +342,6 @@ def build_precomputed_api_graph(alignments_file: str, output_path: str):
 
     Creates precomputed_graph_api.json with (author, cluster) pair nodes and edges.
     """
-    print("\n" + "="*60)
-    print("BUILDING PRECOMPUTED API GRAPH")
-    print("="*60)
-
     print("Loading data...")
     cluster_labels_modified = np.load(os.path.join(output_path, 'cluster_labels_modified.npy'))
     embeddings_umap_2d = np.load(os.path.join(output_path, 'embeddings_umap_2d.npy'))
@@ -707,16 +507,7 @@ def build_precomputed_api_graph(alignments_file: str, output_path: str):
     with open(os.path.join(output_path, 'precomputed_graph_api.json'), 'wb') as f:
         f.write(orjson.dumps(api_graph))
 
-    print(f"✓ Saved precomputed API graph: {len(api_nodes)} nodes, {len(api_edges)} edges")
-
-    print("\n" + "="*60)
-    print("PRECOMPUTED API GRAPH STATISTICS:")
-    print(f"  Total nodes: {len(api_nodes)}")
-    print(f"  Clusters represented: {len(api_cluster_nodes)}")
-    print(f"  Authors: {num_authors}")
-    print(f"  Total edges: {len(api_edges)}")
-    print(f"  Min passages threshold: {MIN_PASSAGES_THRESHOLD}")
-    print("="*60)
+    print(f"✓ Saved precomputed full graph: {len(api_nodes)} nodes, {len(api_edges)} edges")
 
 
 def main():
