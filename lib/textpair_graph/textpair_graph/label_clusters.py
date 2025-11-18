@@ -7,6 +7,7 @@ with the labels.
 """
 
 import asyncio
+import json
 import os
 
 import lz4.frame
@@ -18,44 +19,77 @@ from tqdm import tqdm
 from textpair_llm import AsyncLLMEvaluator
 
 
-def create_cluster_labeling_prompt(top_passages: list[str]) -> str:
-    """
-    Create prompt for cluster labeling using LLM.
-    Passages are the most representative texts in the cluster (closest to centroid).
-    """
-    # Truncate passages at sentence boundaries, not mid-word
-    def truncate_passage(text: str, max_chars: int = 800) -> str:
-        if len(text) <= max_chars:
-            return text
-        # Find last sentence ending before max_chars
-        truncated = text[:max_chars]
-        for delimiter in ['. ', '! ', '? ', '.\n', '!\n', '?\n']:
-            last_pos = truncated.rfind(delimiter)
-            if last_pos > max_chars * 0.5:  # Keep at least 50% of text
-                return truncated[:last_pos + 1]
-        # No sentence boundary found, truncate at word
-        return truncated.rsplit(' ', 1)[0] + '...'
+def truncate_passage(text: str, max_chars: int = 600) -> str:
+    """Truncate passage at sentence boundaries, not mid-word."""
+    if len(text) <= max_chars:
+        return text
+    # Find last sentence ending before max_chars
+    truncated = text[:max_chars]
+    for delimiter in ['. ', '! ', '? ', '.\n', '!\n', '?\n']:
+        last_pos = truncated.rfind(delimiter)
+        if last_pos > max_chars * 0.5:  # Keep at least 50% of text
+            return truncated[:last_pos + 1]
+    # No sentence boundary found, truncate at word
+    return truncated.rsplit(' ', 1)[0] + '...'
 
+
+def create_batch_summary_prompt(passages: list[str]) -> str:
+    """
+    Stage 1: Create prompt for summarizing a batch of passages.
+    Returns a 2-3 sentence thematic summary.
+    """
     passages_text = "\n\n".join([f"[{i+1}] {truncate_passage(p)}"
-                                  for i, p in enumerate(top_passages)])
+                                  for i, p in enumerate(passages)])
 
-    prompt = f"""Analyze these text passages that were algorithmically grouped together and create a concise thematic label.
+    prompt = f"""Read these text passages that were grouped together by algorithmic similarity and summarize their common themes.
 
 TASK:
-1. Identify the common theme, topic, or subject matter
-2. Provide a brief one-sentence rationale
+Write a 2-3 sentence summary that captures:
+1. The main topic or subject matter shared across these passages
+2. Key themes, concepts, or patterns that appear multiple times
+3. Any notable subtopics or variations within the main theme
+
+REQUIREMENTS:
+- Focus on WHAT the passages discuss, not HOW they're written
+- Be specific and concrete (avoid vague terms like "various topics")
+- Capture both the main theme AND any important variations
+- Write in clear, complete sentences
+
+PASSAGES:
+{passages_text}
+
+SUMMARY:"""
+
+    return prompt
+
+
+def create_final_label_prompt(batch_summaries: list[str]) -> str:
+    """
+    Stage 2: Create prompt for generating final label from batch summaries.
+    Takes multiple thematic summaries and produces a concise label.
+    """
+    summaries_text = "\n\n".join([f"[Batch {i+1}] {summary}"
+                                   for i, summary in enumerate(batch_summaries)])
+
+    prompt = f"""Below are thematic summaries from different batches of text passages that belong to the same cluster. Your task is to create a single unified label.
+
+THEMATIC SUMMARIES:
+{summaries_text}
+
+TASK:
+1. Identify the overarching theme that connects ALL these summaries
+2. Provide a brief one-sentence rationale explaining the connection
 3. Generate a precise 1-3 word label (noun phrase preferred)
 
 REQUIREMENTS:
 - Be specific, not generic (avoid "Various Topics", "Text", "Content")
 - Use concrete concepts when identifiable (e.g., "Military Strategy" not "Actions")
+- The label should encompass the main themes from ALL summaries
+- Do not be overly focused on format or medium
 - Keep label under 4 words
 
-PASSAGES:
-{passages_text}
-
 OUTPUT FORMAT:
-RATIONALE: [One sentence explaining the shared theme]
+RATIONALE: [One sentence explaining the overarching theme]
 LABEL: [1-3 word label]
 
 Answer ONLY in the specified OUTPUT FORMAT. Do not include any additional text."""
@@ -70,10 +104,14 @@ async def generate_cluster_labels_async(
     embeddings: np.ndarray,
     n_clusters: int,
     evaluator,
-    top_k: int = 25,
+    num_batches: int = 5,
+    batch_size: int = 20,
 ) -> dict:
     """
-    Generate thematic labels for each cluster using LLM.
+    Generate thematic labels for each cluster using LLM with two-stage approach.
+
+    Stage 1: Select diverse passages using MMR, divide into batches, generate summaries
+    Stage 2: Combine summaries to create final label
 
     Args:
         alignments_file: Path to alignments file
@@ -82,12 +120,14 @@ async def generate_cluster_labels_async(
         embeddings: All passage embeddings in SBERT space
         n_clusters: Number of real clusters (excluding singletons)
         evaluator: AsyncLLMEvaluator instance
-        top_k: Number of top passages to use per cluster
+        num_batches: Number of batches to create (default: 5)
+        batch_size: Number of passages per batch (default: 20, so 5*20=100 total)
 
     Returns:
         Dictionary mapping cluster_id -> label
     """
-    print(f"\nGenerating labels for {n_clusters} clusters using top {top_k} passages per cluster...")
+    total_passages = num_batches * batch_size
+    print(f"\nGenerating labels for {n_clusters} clusters using {num_batches} batches of {batch_size} passages ({total_passages} total per cluster)...")
 
     cluster_label_map = {}
     used_labels = set()  # Track labels to ensure uniqueness
@@ -105,40 +145,42 @@ async def generate_cluster_labels_async(
         cluster_embeddings = embeddings[cluster_indices]
         centroid = cluster_centroids[cluster_id].reshape(1, -1)
 
-        # Calculate similarity to centroid
+        # Calculate similarity to centroid for initial ranking
         similarities = cosine_similarity(cluster_embeddings, centroid).flatten()
 
-        # Evenly spread sampling across top 75% of cluster by similarity
-        # This captures diversity while avoiding the noisy bottom 25%
+        # Use Maximal Marginal Relevance (MMR) to select diverse, representative passages
+        # Select total_passages = num_batches * batch_size passages
+        total_passages = num_batches * batch_size
+        lambda_param = 0.5  # Balance between relevance and diversity
+        n_samples = min(total_passages, len(cluster_indices))
 
-        # 1. Sort all passages in the cluster by similarity (high to low)
-        sorted_indices_in_cluster = np.argsort(similarities)[::-1]
-        num_in_cluster = len(sorted_indices_in_cluster)
+        # Start with the most relevant passage (highest similarity to centroid)
+        selected_indices = [np.argmax(similarities)]
+        selected_embeddings = [cluster_embeddings[selected_indices[0]]]
 
-        # 2. Define the relevant pool (e.g., top 75% of passages)
-        # This avoids sampling from the "noisy" bottom 25%
-        pool_size = max(1, int(num_in_cluster * 0.75))
-        indices_to_sample_from = sorted_indices_in_cluster[:pool_size]
+        # Iteratively select passages that maximize MMR score
+        while len(selected_indices) < n_samples:
+            relevance_scores = similarities.copy()
 
-        # 3. Get top_k evenly spaced indices from this pool
-        # This gives a perfect spread from 100th percentile down to 75th
-        n_samples = min(top_k, len(indices_to_sample_from))
-        spread_indices = np.linspace(
-            0,                                    # The very best passage
-            len(indices_to_sample_from) - 1,     # The last passage in our 75% pool
-            num=n_samples,                        # The number of passages we want
-            dtype=int
-        )
+            # Calculate diversity: maximum similarity to already selected passages
+            sim_to_selected = cosine_similarity(cluster_embeddings, np.array(selected_embeddings))
+            max_sim_to_selected = np.max(sim_to_selected, axis=1)
 
-        # 4. Get the final indices (linspace already gives unique)
-        spread_indices_in_cluster = indices_to_sample_from[spread_indices]
+            # MMR score: relevance - diversity penalty
+            mmr_scores = lambda_param * relevance_scores - (1 - lambda_param) * max_sim_to_selected
+            mmr_scores[selected_indices] = -np.inf  # Don't re-select
 
-        # 5. Map back to original alignment indices
-        top_alignment_indices = cluster_indices[spread_indices_in_cluster]
+            # Select passage with highest MMR score
+            next_idx = np.argmax(mmr_scores)
+            selected_indices.append(next_idx)
+            selected_embeddings.append(cluster_embeddings[next_idx])
 
-        # Extract passage texts from alignments file (fetch all at once)
+        # Map back to original alignment indices
+        selected_alignment_indices = cluster_indices[np.array(selected_indices)]
+
+        # Extract passage texts from alignments file
         all_passages = []
-        indices_to_fetch = set(int(i) for i in top_alignment_indices)
+        indices_to_fetch = set(int(i) for i in selected_alignment_indices)
         max_index = max(indices_to_fetch)
         min_index = min(indices_to_fetch)
         with lz4.frame.open(alignments_file, "rb") as f:
@@ -152,19 +194,68 @@ async def generate_cluster_labels_async(
                     if i == max_index:
                         break
 
-        # Try with progressively fewer passages if context limit exceeded
-        passages_to_use = len(all_passages)
-        min_passages = 5
-        label = ""
-        retry_count = 0
-        max_retries = 10
+        # Stage 1: Generate summaries for each batch (concurrently)
+        print(f"\n  Cluster {cluster_id}: Stage 1 - Generating {num_batches} batch summaries (concurrent)...")
 
-        while passages_to_use >= min_passages and retry_count < max_retries:
-            retry_count += 1
-            # Generate prompt with current number of passages
-            prompt = create_cluster_labeling_prompt(all_passages[:passages_to_use])
+        # Create all batch tasks
+        async def process_batch(batch_idx: int):
+            """Process a single batch and return (batch_idx, summary or None)"""
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(all_passages))
+            batch_passages = all_passages[start_idx:end_idx]
 
-            print(f"\n  Cluster {cluster_id} - Attempt {retry_count} with {passages_to_use} passages...")
+            if len(batch_passages) == 0:
+                return (batch_idx, None)
+
+            prompt = create_batch_summary_prompt(batch_passages)
+
+            try:
+                llm_params = {
+                    "temperature": 0.0,
+                    "max_tokens": 150,
+                }
+
+                result = await evaluator._make_completion_request(prompt, llm_params)
+
+                if result.get("choices") and len(result["choices"]) > 0:
+                    summary = result["choices"][0].get("text", "").strip()
+                    if summary:
+                        return (batch_idx, summary)
+                    else:
+                        print(f"    Batch {batch_idx + 1}/{num_batches}: ❌ Empty response")
+                        return (batch_idx, None)
+                else:
+                    return (batch_idx, None)
+
+            except Exception as e:
+                print(f"    Batch {batch_idx + 1}/{num_batches}: ❌ Error: {e}")
+                return (batch_idx, None)
+
+        # Execute all batches concurrently
+        batch_tasks = [process_batch(i) for i in range(num_batches)]
+        results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+        # Collect summaries in order
+        batch_summaries = []
+        for result in results:
+            if isinstance(result, Exception):
+                print(f"    ❌ Batch error: {result}")
+                continue
+            if result is not None and isinstance(result, tuple):
+                batch_idx, summary = result
+                if summary:
+                    batch_summaries.append(summary)
+                    print(f"    Batch {batch_idx + 1}/{num_batches}: ✓")
+
+        print(f"    Generated {len(batch_summaries)}/{num_batches} summaries")
+
+        if len(batch_summaries) == 0:
+            print(f"    ❌ No summaries generated, skipping cluster")
+            label = ""
+        else:
+            # Stage 2: Generate final label from summaries
+            print(f"  Cluster {cluster_id}: Stage 2 - Generating final label from {len(batch_summaries)} summaries...")
+            prompt = create_final_label_prompt(batch_summaries)
 
             try:
                 llm_params = {
@@ -177,88 +268,25 @@ async def generate_cluster_labels_async(
                 if result.get("choices") and len(result["choices"]) > 0:
                     response_text = result["choices"][0].get("text", "").strip()
 
-                    if not response_text:
-                        print(f"    ❌ Empty response from LLM (context likely full), retrying with fewer passages")
-                        passages_to_use = max(min_passages, int(passages_to_use * 0.9))  # Aggressive reduction
-                        continue
-
                     # Parse the LABEL line from the response
+                    label = ""
                     for line in response_text.split('\n'):
                         line = line.strip()
                         if line.startswith("LABEL:"):
                             label = line.replace("LABEL:", "").strip()
                             break
 
-                    # If no LABEL: line found, try to extract from full response
-                    if not label and len(response_text) < 50 and '\n' not in response_text:
-                        label = response_text
-
                     # Clean up the label
                     label = label.replace('"', '').replace("'", "").strip()
 
-                    # Debug: Print what we parsed
-                    print(f"\n  Cluster {cluster_id} (using {passages_to_use} passages):")
-                    print(f"    Raw response: {response_text[:300]}")
-                    print(f"    Parsed label: '{label}'")
-
-                    # Validate: reject template/placeholder responses
-                    invalid_patterns = [
-                        'your',
-                        'word final label',
-                        '[',
-                        ']',
-                        'insert',
-                        'replace',
-                        'fill in',
-                    ]
-
-                    if label and any(pattern in label.lower() for pattern in invalid_patterns):
-                        print(f"    ❌ Invalid label detected (template response), retrying...")
-                        label = ""
-                        passages_to_use = max(min_passages, passages_to_use - 1)  # Try with one fewer passage
-                        continue
-
-                    # Check if we got a valid label
-                    if not label:
-                        print(f"    ❌ No label parsed from response, retrying with fewer passages...")
-                        passages_to_use = max(min_passages, passages_to_use - 1)
-                        continue
-
-                    print(f"    ✓ Valid label found")
-                break  # Success, exit retry loop
+                    print(f"    Final label: '{label}'")
+                else:
+                    print(f"    ❌ No response from LLM")
+                    label = ""
 
             except Exception as e:
-                error_str = str(e)
-
-                # Check for context overflow error
-                if "exceed_context_size" in error_str:
-                    # Try to parse token counts for proportional reduction
-                    import json
-                    try:
-                        json_part = error_str.split("HTTP 400:", 1)[1].strip() if "HTTP 400:" in error_str else error_str
-                        error_data = json.loads(json_part)
-                        n_prompt = error_data.get("error", {}).get("n_prompt_tokens", 0)
-                        n_ctx = error_data.get("error", {}).get("n_ctx", 1)
-
-                        if n_prompt and n_ctx:
-                            # Reduce proportionally to exact fit (100% of available context)
-                            passages_to_use = int(passages_to_use * (n_ctx / n_prompt))
-                        else:
-                            # Couldn't parse, reduce by 10%
-                            passages_to_use = int(passages_to_use * 0.90)
-                    except:
-                        # JSON parsing failed, reduce by 10%
-                        passages_to_use = int(passages_to_use * 0.90)
-
-                    passages_to_use = max(min_passages, passages_to_use)
-                    print(f"\n  Cluster {cluster_id}: ❌ Context exceeded, retrying with {passages_to_use} passages")
-                    continue
-                else:
-                    # Different error, don't retry
-                    print(f"\n  Cluster {cluster_id}: ❌ Error: {e}")
-                    break
-
-        # Ensure uniqueness
+                print(f"    ❌ Error generating final label: {e}")
+                label = ""        # Ensure uniqueness
         if label:
             original_label = label
             counter = 2
@@ -302,16 +330,20 @@ async def generate_and_update_cluster_labels(
     graph_data_path: str,
     model_path: str = "unsloth/gemma-3-4b-it-qat-GGUF",
     context_window: int = 8192,
-    top_k: int = 25,
+    num_batches: int = 5,
+    batch_size: int = 20,
     port: int = 8080,
 ) -> dict:
     """
     Generate thematic labels for each cluster using LLM and update graph JSON files.
 
     Args:
+        alignments_file: Path to alignments file
         graph_data_path: Path to graph_data directory (output from build_graph_model.py)
         model_path: LLM model path or HuggingFace model ID
-        top_k: Number of top passages to use per cluster
+        context_window: Context window size for LLM
+        num_batches: Number of batches to create per cluster (default: 5)
+        batch_size: Number of passages per batch (default: 20, so 5*20=100 total)
         port: Port for llama-server
 
     Returns:
@@ -385,7 +417,8 @@ async def generate_and_update_cluster_labels(
             embeddings=all_embeddings,
             n_clusters=n_clusters,
             evaluator=evaluator,
-            top_k=top_k,
+            num_batches=num_batches,
+            batch_size=batch_size,
         )
 
         # Save cluster labels
@@ -430,7 +463,8 @@ if __name__ == "__main__":
     parser.add_argument("--graph_data_path", type=str, required=True, help="Path to graph_data directory")
     parser.add_argument("--model_path", type=str, default="unsloth/gemma-3-4b-it-qat-GGUF", help="LLM model path or HuggingFace model ID")
     parser.add_argument("--context_window", type=int, default=8192, help="Context window size for LLM")
-    parser.add_argument("--top_k", type=int, default=50, help="Number of top passages to use per cluster")
+    parser.add_argument("--num_batches", type=int, default=25, help="Number of batches per cluster")
+    parser.add_argument("--batch_size", type=int, default=20, help="Number of passages per batch")
     parser.add_argument("--port", type=int, default=8080, help="Port for llama-server")
 
     args = parser.parse_args()
@@ -439,7 +473,8 @@ if __name__ == "__main__":
         alignments_file=args.alignments_file,
         graph_data_path=args.graph_data_path,
         model_path=args.model_path,
-        top_k=args.top_k,
+        num_batches=args.num_batches,
+        batch_size=args.batch_size,
         port=args.port,
         context_window=args.context_window,
     ))
