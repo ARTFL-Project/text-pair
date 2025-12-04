@@ -3,10 +3,10 @@
 import gc
 import os
 import sys
+from collections import defaultdict
 
 import faiss
 import lz4.frame
-import networkx as nx
 import numpy as np
 import orjson
 import torch
@@ -40,7 +40,7 @@ except ImportError:
 BATCH_SIZE = 4096  # For SBERT encoding
 
 
-def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_model_name: str):
+def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_model_name: str) -> dict:
     """Preprocess alignments and encode passages."""
 
     print("Building author mapping...", end=' ')
@@ -147,7 +147,7 @@ def build_alignment_data(alignments_file: str, alignment_counts: int, sbert_mode
         'num_authors': len(author_to_id)
     }
 
-def cluster_alignments(data, output_path, alignments_file, alignment_counts):
+def cluster_alignments(data: dict, output_path: str, alignment_counts: int) -> tuple[np.ndarray, np.ndarray]:
     """
     Cluster all alignments using HDBSCAN on SBERT embeddings.
     Returns cluster labels for direct lookup at runtime.
@@ -156,16 +156,57 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     sbert_dim = all_embeddings.shape[1]
 
     low_dim = 32
-    n_neighbors = min(100, max(15, alignment_counts // 10000))
+    n_neighbors = min(30, max(15, alignment_counts // 10000))
     print(f"Reducing embeddings dimensionality ({sbert_dim} to {low_dim}D)...", end=' ')
-    reducer_low_dim = UMAP(
-        n_components=low_dim,
-        n_neighbors=n_neighbors,
-        min_dist=0.0,
-        metric='cosine',
-        random_state=42
-    )
-    low_dim_embeddings = reducer_low_dim.fit_transform(all_embeddings)
+
+    # Optimization for large datasets: Train UMAP on a subset, transform the rest
+    umap_train_limit = 1_000_000
+    n_total_embeddings = all_embeddings.shape[0]
+
+    if n_total_embeddings > umap_train_limit:
+        print(f"\nLarge dataset ({n_total_embeddings:,} items). Training UMAP on random {umap_train_limit:,} subset...")
+
+        # Random sample for training
+        rng = np.random.default_rng(42)
+        train_indices = rng.choice(n_total_embeddings, size=umap_train_limit, replace=False)
+        train_indices.sort()
+
+        # Load training data into memory
+        X_train = all_embeddings[train_indices]
+
+        reducer_low_dim = UMAP(
+            n_components=low_dim,
+            n_neighbors=n_neighbors,
+            min_dist=0.0,
+            metric='cosine',
+            random_state=42
+        )
+        reducer_low_dim.fit(X_train)
+
+        del X_train
+        gc.collect()
+
+        print(f"Transforming all {n_total_embeddings:,} embeddings in batches...")
+        low_dim_embeddings = np.zeros((n_total_embeddings, low_dim), dtype=np.float32)
+
+        batch_size = 1000000
+        n_batches = (n_total_embeddings + batch_size - 1) // batch_size
+
+        for i in tqdm(range(0, n_total_embeddings, batch_size), desc="UMAP Transform", total=n_batches):
+            end_idx = min(i + batch_size, n_total_embeddings)
+            batch = all_embeddings[i:end_idx]
+            low_dim_embeddings[i:end_idx] = reducer_low_dim.transform(batch)
+
+    else:
+        reducer_low_dim = UMAP(
+            n_components=low_dim,
+            n_neighbors=n_neighbors,
+            min_dist=0.0,
+            metric='cosine',
+            random_state=42
+        )
+        low_dim_embeddings = reducer_low_dim.fit_transform(all_embeddings)
+
     print("done.")
     gc.collect()
 
@@ -187,10 +228,10 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         test_embeddings = low_dim_embeddings[test_indices]
 
         print(f"Clustering with HDBSCAN on {len(train_embeddings):,} training passages...", end=' ')
-        min_cluster_size = max(15, int(0.005 * len(train_embeddings)))
+        min_cluster_size = max(15, int(0.001 * len(train_embeddings)))
         clusterer = HDBSCAN(
             min_cluster_size=min_cluster_size,
-            min_samples=2,
+            min_samples=15,
             metric='euclidean',
             cluster_selection_method='eom',
             prediction_data=True
@@ -232,13 +273,13 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         gc.collect()
     else:
         print(f"Clustering all {n_total:,} passages with HDBSCAN...", end=' ')
-        min_cluster_size = max(15, int(0.005 * n_total))
+        min_cluster_size = max(15, int(0.0001 * n_total))
         clusterer = HDBSCAN(
             min_cluster_size=min_cluster_size,
-            min_samples=2,
+            min_samples=15,
             metric='euclidean',
             cluster_selection_method='eom',
-            cluster_selection_epsilon=0.3,
+            cluster_selection_epsilon=0.0,
             prediction_data=True
         )
         cluster_labels = clusterer.fit_predict(low_dim_embeddings)
@@ -253,9 +294,6 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     n_noise = (cluster_labels == -1).sum()
     n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
     print(f"Final: {n_clusters} clusters with {n_noise} total outliers ({100*n_noise/len(cluster_labels):.1f}%)")
-
-
-
 
     # Handle noise cluster: treat each noise point as its own singleton cluster
     noise_indices = np.where(cluster_labels == -1)[0]
@@ -305,7 +343,7 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
         metric='euclidean',
         random_state=42
     )
-    embeddings_2d = reducer_2d.fit_transform(low_dim_embeddings)
+    embeddings_2d: np.ndarray = reducer_2d.fit_transform(low_dim_embeddings) # type: ignore
 
     del reducer_2d
     gc.collect()
@@ -333,22 +371,21 @@ def cluster_alignments(data, output_path, alignments_file, alignment_counts):
     with open(os.path.join(output_path, 'cluster_metadata.json'), 'wb') as f:
         f.write(orjson.dumps(metadata))
 
-    return cluster_labels
+    return modified_cluster_labels, embeddings_2d
 
 
-def build_precomputed_api_graph(alignments_file: str, output_path: str):
+def build_precomputed_api_graph(alignments_file: str, output_path: str, author_to_id: dict,
+                                 cluster_labels_modified: np.ndarray, embeddings_2d: np.ndarray,
+                                 alignment_counts: int) -> None:
     """
     Build precomputed graph for API in the same format as get_semantic_graph_data.
 
     Creates precomputed_graph_api.json with (author, cluster) pair nodes and edges.
     """
-    print("Loading data...")
-    cluster_labels_modified = np.load(os.path.join(output_path, 'cluster_labels_modified.npy'))
-    embeddings_umap_2d = np.load(os.path.join(output_path, 'embeddings_umap_2d.npy'))
-    cluster_similarity = np.load(os.path.join(output_path, 'cluster_similarity_matrix.npy'))
+    print("Building precomputed graph...")
 
-    with open(os.path.join(output_path, 'author_to_id.json'), 'rb') as f:
-        author_to_id = orjson.loads(f.read())
+    # Load only cluster similarity matrix and metadata
+    cluster_similarity = np.load(os.path.join(output_path, 'cluster_similarity_matrix.npy'))
 
     with open(os.path.join(output_path, 'cluster_metadata.json'), 'rb') as f:
         metadata = orjson.loads(f.read())
@@ -363,10 +400,9 @@ def build_precomputed_api_graph(alignments_file: str, output_path: str):
     print(f"  {alignment_counts} alignments")
 
     print("\nEnumerating (author, cluster) pairs from alignments...")
-    from collections import defaultdict
 
     pair_passage_counts = defaultdict(int)
-    pair_embeddings_2d = defaultdict(list)
+    pair_position_sums = defaultdict(lambda: np.zeros(2, dtype=np.float64))
 
     alignment_idx = 0
     with lz4.frame.open(alignments_file, "rb") as f:
@@ -376,12 +412,12 @@ def build_precomputed_api_graph(alignments_file: str, output_path: str):
             target_author_id = author_to_id[alignment["target_author"]]
 
             cluster_id = int(cluster_labels_modified[alignment_idx])
-            embedding_2d = embeddings_umap_2d[alignment_idx]
+            embedding_2d = embeddings_2d[alignment_idx]
 
             for author_id in [source_author_id, target_author_id]:
                 pair_key = (author_id, cluster_id)
                 pair_passage_counts[pair_key] += 1
-                pair_embeddings_2d[pair_key].append(embedding_2d)
+                pair_position_sums[pair_key] += embedding_2d
 
             alignment_idx += 1
 
@@ -390,9 +426,11 @@ def build_precomputed_api_graph(alignments_file: str, output_path: str):
     # Calculate mean 2D positions for each pair
     print("\nComputing mean 2D positions for each pair...")
     pair_positions = {}
-    for pair_key, embeddings_list in pair_embeddings_2d.items():
-        mean_position = np.mean(embeddings_list, axis=0)
-        pair_positions[pair_key] = mean_position
+    for pair_key, count in pair_passage_counts.items():
+        pair_positions[pair_key] = pair_position_sums[pair_key] / count
+
+    del pair_position_sums
+    gc.collect()
 
     # Build precomputed graph in API format (matches get_semantic_graph_data output)
     print("\nCreating precomputed graph for API...")
@@ -526,10 +564,11 @@ def main():
         f.write(orjson.dumps(data['author_to_id']))
 
     # Cluster alignments by content similarity
-    cluster_labels = cluster_alignments(data, output_path, alignments_file, alignment_counts)
+    modified_cluster_labels, embeddings_2d = cluster_alignments(data, output_path, alignment_counts)
 
     # Build precomputed graph for API
-    build_precomputed_api_graph(alignments_file, output_path)
+    build_precomputed_api_graph(alignments_file, output_path, data['author_to_id'],
+                                modified_cluster_labels, embeddings_2d, alignment_counts)
 
     print("\nThematic Identify Graph done.")
 

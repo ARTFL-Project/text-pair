@@ -48,6 +48,7 @@ Write a 2-3 sentence summary that captures:
 1. The main topic or subject matter shared across these passages
 2. Key themes, concepts, or patterns that appear multiple times
 3. Any notable subtopics or variations within the main theme
+4. Do not make assumptions beyond what is present in the passages (e.g. who wrote them, when, where, or why)
 
 REQUIREMENTS:
 - Focus on WHAT the passages discuss, not HOW they're written
@@ -97,6 +98,37 @@ Answer ONLY in the specified OUTPUT FORMAT. Do not include any additional text."
     return prompt
 
 
+def extract_passages_from_file(alignments_file: str, indices_to_fetch: set[int]) -> dict[int, str]:
+    """
+    Efficiently extract specific passages from the LZ4 alignments file in a single pass.
+
+    Args:
+        alignments_file: Path to the LZ4 compressed alignments file
+        indices_to_fetch: Set of 0-based line indices to extract
+
+    Returns:
+        Dictionary mapping line_index -> passage_text
+    """
+    if not indices_to_fetch:
+        return {}
+
+    print(f"Extracting {len(indices_to_fetch)} passages from disk in one pass...")
+    index_to_text = {}
+    max_index = max(indices_to_fetch)
+
+    with lz4.frame.open(alignments_file, "rb") as f:
+        for i, line in tqdm(enumerate(f), total=max_index+1, desc="Reading file", leave=False):
+            if i in indices_to_fetch:
+                alignment = orjson.loads(line)
+                index_to_text[i] = alignment["source_passage"]
+
+            if i >= max_index:
+                break
+
+    print(f"✓ Extracted {len(index_to_text)} passages")
+    return index_to_text
+
+
 async def generate_cluster_labels_async(
     alignments_file: str,
     cluster_labels_modified: np.ndarray,
@@ -132,25 +164,33 @@ async def generate_cluster_labels_async(
     cluster_label_map = {}
     used_labels = set()  # Track labels to ensure uniqueness
 
+    # --- Phase 1: Selection (MMR) ---
+    print("\nPhase 1: Selecting representative passages (MMR)...")
+    cluster_selected_indices = {}
+    all_indices_to_fetch = set()
+
     # Process only real clusters (not singletons)
-    for cluster_id in tqdm(range(n_clusters), desc="Processing clusters", leave=False):
+    for cluster_id in tqdm(range(n_clusters), desc="Selecting passages", leave=False):
         # Find all passages in this cluster
         cluster_mask = cluster_labels_modified == cluster_id
         cluster_indices = np.where(cluster_mask)[0]
 
         if len(cluster_indices) == 0:
-            raise ValueError(f"Cluster {cluster_id} has no passages - data integrity issue!")
+            # raise ValueError(f"Cluster {cluster_id} has no passages - data integrity issue!")
+            print(f"Warning: Cluster {cluster_id} has no passages, skipping.")
+            continue
 
         # Get embeddings for this cluster
         cluster_embeddings = embeddings[cluster_indices]
         centroid = cluster_centroids[cluster_id].reshape(1, -1)
 
         # Calculate similarity to centroid for initial ranking
-        similarities = cosine_similarity(cluster_embeddings, centroid).flatten()
+        # Since embeddings are normalized, dot product is equivalent to cosine similarity
+        # and much faster (no norm re-calculation)
+        similarities = np.dot(cluster_embeddings, centroid.T).flatten()
 
         # Use Maximal Marginal Relevance (MMR) to select diverse, representative passages
         # Select total_passages = num_batches * batch_size passages
-        total_passages = num_batches * batch_size
         lambda_param = 0.5  # Balance between relevance and diversity
         n_samples = min(total_passages, len(cluster_indices))
 
@@ -163,7 +203,9 @@ async def generate_cluster_labels_async(
             relevance_scores = similarities.copy()
 
             # Calculate diversity: maximum similarity to already selected passages
-            sim_to_selected = cosine_similarity(cluster_embeddings, np.array(selected_embeddings))
+            # Using dot product for speed
+            selected_matrix = np.array(selected_embeddings)
+            sim_to_selected = np.dot(cluster_embeddings, selected_matrix.T)
             max_sim_to_selected = np.max(sim_to_selected, axis=1)
 
             # MMR score: relevance - diversity penalty
@@ -178,24 +220,35 @@ async def generate_cluster_labels_async(
         # Map back to original alignment indices
         selected_alignment_indices = cluster_indices[np.array(selected_indices)]
 
-        # Extract passage texts from alignments file
+        cluster_selected_indices[cluster_id] = selected_alignment_indices
+        all_indices_to_fetch.update(selected_alignment_indices)
+
+    # --- Phase 2: Extraction (Read File Once) ---
+    index_to_text = extract_passages_from_file(alignments_file, all_indices_to_fetch)
+
+    # --- Phase 3: Generation (LLM) ---
+    print("\nPhase 3: Generating labels with LLM...")
+
+    for cluster_id in tqdm(range(n_clusters), desc="Generating labels"):
+        if cluster_id not in cluster_selected_indices:
+            cluster_label_map[cluster_id] = ""
+            continue
+
+        selected_indices = cluster_selected_indices[cluster_id]
+
+        # Retrieve text from cache
         all_passages = []
-        indices_to_fetch = set(int(i) for i in selected_alignment_indices)
-        max_index = max(indices_to_fetch)
-        min_index = min(indices_to_fetch)
-        with lz4.frame.open(alignments_file, "rb") as f:
-            for i, line in enumerate(f):
-                if i < min_index:
-                    continue
-                if i in indices_to_fetch:
-                    alignment = orjson.loads(line)
-                    passage = alignment["source_passage"]
-                    all_passages.append(passage)
-                    if i == max_index:
-                        break
+        for idx in selected_indices:
+            if idx in index_to_text:
+                all_passages.append(index_to_text[idx])
+
+        if not all_passages:
+            print(f"  Cluster {cluster_id}: ❌ No passages found in cache")
+            cluster_label_map[cluster_id] = ""
+            continue
 
         # Stage 1: Generate summaries for each batch (concurrently)
-        print(f"\n  Cluster {cluster_id}: Stage 1 - Generating {num_batches} batch summaries (concurrent)...")
+        # print(f"\n  Cluster {cluster_id}: Stage 1 - Generating {num_batches} batch summaries (concurrent)...")
 
         # Create all batch tasks
         async def process_batch(batch_idx: int):
@@ -245,16 +298,16 @@ async def generate_cluster_labels_async(
                 batch_idx, summary = result
                 if summary:
                     batch_summaries.append(summary)
-                    print(f"    Batch {batch_idx + 1}/{num_batches}: ✓")
+                    # print(f"    Batch {batch_idx + 1}/{num_batches}: ✓")
 
-        print(f"    Generated {len(batch_summaries)}/{num_batches} summaries")
+        # print(f"    Generated {len(batch_summaries)}/{num_batches} summaries")
 
         if len(batch_summaries) == 0:
             print(f"    ❌ No summaries generated, skipping cluster")
             label = ""
         else:
             # Stage 2: Generate final label from summaries
-            print(f"  Cluster {cluster_id}: Stage 2 - Generating final label from {len(batch_summaries)} summaries...")
+            # print(f"  Cluster {cluster_id}: Stage 2 - Generating final label from {len(batch_summaries)} summaries...")
             prompt = create_final_label_prompt(batch_summaries)
 
             try:
@@ -268,18 +321,45 @@ async def generate_cluster_labels_async(
                 if result.get("choices") and len(result["choices"]) > 0:
                     response_text = result["choices"][0].get("text", "").strip()
 
-                    # Parse the LABEL line from the response
+                    # Robust Parsing Strategy
                     label = ""
-                    for line in response_text.split('\n'):
+
+                    # Normalize newlines
+                    response_text = response_text.replace('\\n', '\n')
+                    lines = response_text.split('\n')
+
+                    # 1. Look for explicit "LABEL:" prefix (case-insensitive)
+                    for line in lines:
                         line = line.strip()
-                        if line.startswith("LABEL:"):
-                            label = line.replace("LABEL:", "").strip()
-                            break
+                        if "LABEL:" in line.upper():
+                            # Split on LABEL: and take the second part
+                            parts = line.upper().split("LABEL:", 1)
+                            if len(parts) > 1:
+                                # We need to get the original case back, so find the index
+                                idx = line.upper().find("LABEL:")
+                                label = line[idx + 6:].strip()
+                                break
+
+                    # 2. Fallback: If response is short (likely just the label), use it all
+                    if not label and len(response_text) < 60:
+                        label = response_text.strip()
+
+                    # 3. Fallback: Use the last non-empty line (often the label in CoT)
+                    if not label and lines:
+                        # Filter out empty lines
+                        non_empty_lines = [l.strip() for l in lines if l.strip()]
+                        if non_empty_lines:
+                            last_line = non_empty_lines[-1]
+                            if len(last_line) < 60:
+                                label = last_line
 
                     # Clean up the label
                     label = label.replace('"', '').replace("'", "").strip()
 
-                    print(f"    Final label: '{label}'")
+                    if not label:
+                        print(f"    ⚠️ Failed to parse label from response: '{response_text[:50]}...'")
+                    else:
+                        print(f"    Final label: '{label}'")
                 else:
                     print(f"    ❌ No response from LLM")
                     label = ""
@@ -383,13 +463,12 @@ async def generate_and_update_cluster_labels(
         alignment_counts = metadata['alignment_counts']
 
         print(f"\rLoading embeddings from memmap...", end="", flush=True)
-        embeddings_memmap = np.memmap(
+        all_embeddings = np.memmap(
             embeddings_cache_path,
             dtype='float32',
             mode='r',
             shape=(alignment_counts, sbert_dim)
         )
-        all_embeddings = embeddings_memmap[:]
     else:
         print("Error: Could not find embeddings directory")
         raise FileNotFoundError("Embeddings directory not found")
