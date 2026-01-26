@@ -7,7 +7,7 @@ import os
 import psycopg2
 
 from . import (Ngrams, banality_auto_detect, create_web_app, get_config,
-               merge_alignments, parse_files, phrase_matcher, run_vsa)
+               merge_alignments, parse_files, phrase_matcher)
 
 
 def delete_database(dbname: str) -> None:
@@ -203,65 +203,6 @@ def run_alignment(params):
         )
 
 
-
-def run_vsa_similarity(params) -> None:
-    """Run vsa similarity"""
-    if params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
-        params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
-    if params.text_parsing["parse_source_files"] is True:
-        print("\n### Parsing source files ###")
-        parse_files(
-            params.paths["source"]["input_files"],
-            params.text_parsing["source_file_type"],
-            params.paths["source"]["input_source_metadata"],
-            params.paths["source"]["parse_output"],
-            params.text_parsing["source_words_to_keep"],
-            params.preprocessing_params["source"]["text_object_type"],
-            params.preprocessing_params["source"]["lowercase"],
-            params.workers,
-            params.debug,
-        )
-    if params.text_parsing["parse_target_files"] is True:
-        print("\n### Parsing target files ###")
-        parse_files(
-            params.paths["target"]["input_files"],
-            params.text_parsing["target_file_type"],
-            params.paths["target"]["input_target_metadata"],
-            params.paths["target"]["parse_output"],
-            params.text_parsing["target_words_to_keep"],
-            params.preprocessing_params["target"]["text_object_type"],
-            params.preprocessing_params["target"]["lowercase"],
-            params.workers,
-            params.debug,
-        )
-    print("\n### Starting vector space alignment ###")
-    run_vsa(
-        params.paths["source"]["input_files_for_ngrams"],
-        params.paths["target"]["input_files_for_ngrams"],
-        params.workers,
-        {**params.preprocessing_params, **params.matching_params},
-        params.output_path
-    )
-    if params.web_app_config["skip_web_app"] is False:
-        output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
-        count = get_count(os.path.join(params.output_path, "results/counts.txt"))
-        create_web_app(
-            output_file,
-            params.paths["source"]["metadata_path"],
-            params.paths["target"]["metadata_path"],
-            count,
-            params.dbname,
-            params.web_app_config["web_application_directory"],
-            params.web_app_config["api_server"],
-            params.web_app_config["source_url"],
-            params.web_app_config["target_url"],
-            params.web_app_config["source_philo_db_path"],
-            params.web_app_config["target_philo_db_path"],
-            params.matching_params["matching_algorithm"],
-            params
-        )
-
-
 if __name__ == "__main__":
     params = get_config()
     if params.delete is True:
@@ -313,7 +254,5 @@ if __name__ == "__main__":
             groups_file=groups_file,
             store_banalities=params.matching_params["store_banalities"],
         )
-    elif params.matching_params["matching_algorithm"] == "sa":
+    else:
         run_alignment(params)
-    elif params.matching_params["matching_algorithm"] == "vsa":
-        run_vsa_similarity(params)
