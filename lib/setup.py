@@ -31,7 +31,7 @@ dependencies = [
 
 setup(
     name="textpair",
-    version="2.2",
+    version="2.3.0",
     author="The ARTFL Project",
     author_email="clovisgladstone@gmail.com",
     python_requires=">=3.10",
