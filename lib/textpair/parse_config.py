@@ -22,16 +22,18 @@ class TextPairConfig:
             self.matching_params["matching_algorithm"] = "sa"
             self.web_app_config: dict[str, Any] = {"skip_web_app": self.__cli_args["skip_web_app"]}
             self.only_web_app = self.__cli_args["load_only_web_app"]
-            self.paths: dict[str, dict[str, Any]] = {"source": {}, "target": defaultdict(str)}
+            self.paths: dict[str, dict[str, Any]] = {
+                "source": {},
+                "target": defaultdict(str),
+            }
             self.source_against_source = False
             self.llm_params: dict[str, Any] = {}
             self.passage_classification: dict[str, Any] = {
                 "classify_passage": False,
-                "classes": {}
+                "classes": {},
             }
             self.__parse_config()
             self.__set_params()
-
 
     def __getattr__(self, attr):
         return self.__cli_args[attr]
@@ -48,10 +50,20 @@ class TextPairConfig:
         self.web_app_config["target_url"] = config["TEXT_SOURCES"]["target_url"]
         if self.__cli_args["is_philo_db"] is True:
             self.web_app_config["source_philo_db_path"] = config["TEXT_SOURCES"]["source_file_path"]
-            self.web_app_config["target_philo_db_path"] = config["TEXT_SOURCES"]["target_file_path"] or config["TEXT_SOURCES"]["source_file_path"]
+            self.web_app_config["target_philo_db_path"] = (
+                config["TEXT_SOURCES"]["target_file_path"] or config["TEXT_SOURCES"]["source_file_path"]
+            )
         else:
-            self.web_app_config["source_philo_db_path"] = os.path.join(global_config["WEB_APP"]["web_app_path"], self.__cli_args["dbname"], "source_data")
-            self.web_app_config["target_philo_db_path"] = os.path.join(global_config["WEB_APP"]["web_app_path"], self.__cli_args["dbname"], "target_data")
+            self.web_app_config["source_philo_db_path"] = os.path.join(
+                global_config["WEB_APP"]["web_app_path"],
+                self.__cli_args["dbname"],
+                "source_data",
+            )
+            self.web_app_config["target_philo_db_path"] = os.path.join(
+                global_config["WEB_APP"]["web_app_path"],
+                self.__cli_args["dbname"],
+                "target_data",
+            )
         if self.only_align is False:
             self.__file_paths = {
                 "source_files": config["TEXT_SOURCES"]["source_file_path"] or "",
@@ -118,9 +130,15 @@ class TextPairConfig:
                         self.preprocessing_params["target"]["embedding_model"] = value
                     else:
                         # Default to small, fast multilingual model if not specified
-                        self.preprocessing_params["source"]["embedding_model"] = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                        self.preprocessing_params["target"]["embedding_model"] = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                        print("\nWARNING: Using default embedding model 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'")
+                        self.preprocessing_params["source"]["embedding_model"] = (
+                            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                        )
+                        self.preprocessing_params["target"]["embedding_model"] = (
+                            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                        )
+                        print(
+                            "\nWARNING: Using default embedding model 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'"
+                        )
                         print("This is a small, fast multilingual model suitable for many languages.")
                         print("For better quality results in specific languages, consider using a specialized model.")
                         print("See: https://huggingface.co/models?library=sentence-transformers&sort=downloads")
@@ -131,12 +149,24 @@ class TextPairConfig:
         for key, value in dict(config["MATCHING"]).items():
             if value or key not in self.matching_params:
                 match key:
-                    case "flex_gap" | "banality_auto_detection" | "store_banalities" | "llm_debug" | "llm_eval" | "banality_llm_post_eval":
+                    case (
+                        "flex_gap"
+                        | "banality_auto_detection"
+                        | "store_banalities"
+                        | "llm_debug"
+                        | "llm_eval"
+                        | "banality_llm_post_eval"
+                    ):
                         if value.lower() == "yes" or value.lower() == "true":
                             value = True
                         else:
                             value = False
-                    case "min_similarity" | "most_common_ngram_proportion" | "common_ngram_threshold" | "llm_similarity_threshold":
+                    case (
+                        "min_similarity"
+                        | "most_common_ngram_proportion"
+                        | "common_ngram_threshold"
+                        | "llm_similarity_threshold"
+                    ):
                         value = float(value)
                     case "min_matching_words" | "source_batch" | "target_batch":
                         value = int(value)
@@ -211,7 +241,8 @@ class TextPairConfig:
                 else:
                     if self.__cli_args["is_philo_db"] is True:
                         self.paths["target"]["input_files_for_ngrams"] = os.path.join(
-                            self.__file_paths["target_files"], "data/words_and_philo_ids"
+                            self.__file_paths["target_files"],
+                            "data/words_and_philo_ids",
                         )
                     else:
                         self.paths["target"]["input_files_for_ngrams"] = self.__file_paths["target_files"]
@@ -226,7 +257,7 @@ class TextPairConfig:
         elif self.__cli_args["update_db"] is True:
             self.paths["source"]["metadata_path"] = self.__cli_args["source_metadata"]
             self.paths["target"]["metadata_path"] = self.__cli_args["target_metadata"]
-        else: # only_align is True
+        else:  # only_align is True
             self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source")
             self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
             self.paths["source"]["common_ngrams"] = os.path.join(
@@ -252,10 +283,16 @@ def get_config() -> TextPairConfig:
     )
     parser.add_argument("--delete", help="delete database", action="store_true", default=False)
     parser.add_argument(
-        "--config", help="configuration file used to override defaults", type=str, default=""
+        "--config",
+        help="configuration file used to override defaults",
+        type=str,
+        default="",
     )
     parser.add_argument(
-        "--is_philo_db", help="define if files are from a PhiloLogic instance", action="store_true", default=False
+        "--is_philo_db",
+        help="define if files are from a PhiloLogic instance",
+        action="store_true",
+        default=False,
     )
     parser.add_argument(
         "--only_align",
@@ -276,7 +313,10 @@ def get_config() -> TextPairConfig:
         default=False,
     )
     parser.add_argument(
-        "--update_db", help="update database without rebuilding web_app", action="store_true", default=False
+        "--update_db",
+        help="update database without rebuilding web_app",
+        action="store_true",
+        default=False,
     )
     parser.add_argument("--file", help="alignment file to load", type=str, default=None)
     parser.add_argument(
@@ -292,10 +332,16 @@ def get_config() -> TextPairConfig:
         default=None,
     )
     parser.add_argument(
-        "--output_path", help="output path for ngrams and sequence alignment", type=str, default="output"
+        "--output_path",
+        help="output path for ngrams and sequence alignment",
+        type=str,
+        default="output",
     )
     parser.add_argument(
-        "--workers", help="How many threads or cores to use for preprocessing and matching", type=int, default=4
+        "--workers",
+        help="How many threads or cores to use for preprocessing and matching",
+        type=int,
+        default=4,
     )
     parser.add_argument("--debug", help="add debugging", action="store_true", default=False)
     args = vars(parser.parse_args())

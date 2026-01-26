@@ -8,7 +8,15 @@ from philologic.loadtime import Parser as XMLParser
 from philologic.loadtime import PlainTextParser
 from philologic.loadtime.Loader import Loader, setup_db_dir
 
-PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
+PHILO_TEXT_OBJECT_LEVELS = {
+    "doc": 1,
+    "div1": 2,
+    "div2": 3,
+    "div3": 4,
+    "para": 5,
+    "sent": 6,
+    "word": 7,
+}
 
 
 def parse_files(
@@ -61,7 +69,7 @@ def parse_files(
                 "load_config": "",
                 "lemma_file": None,
                 "spacy_model": "",
-                "suppress_word_attributes": []
+                "suppress_word_attributes": [],
             }
         )
     else:
@@ -88,7 +96,7 @@ def parse_files(
                 "load_config": "",
                 "lemma_file": None,
                 "spacy_model": "",
-                "suppress_word_attributes": []
+                "suppress_word_attributes": [],
             }
         )
     loader.tables = ["toms"]  # We just want the toms (metadata) table.

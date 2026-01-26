@@ -25,3 +25,7 @@ textpair_llama_server = "textpair_llm.llama_server_manager:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["textpair_llm*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"

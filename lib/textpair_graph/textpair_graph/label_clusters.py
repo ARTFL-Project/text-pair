@@ -25,12 +25,12 @@ def truncate_passage(text: str, max_chars: int = 600) -> str:
         return text
     # Find last sentence ending before max_chars
     truncated = text[:max_chars]
-    for delimiter in ['. ', '! ', '? ', '.\n', '!\n', '?\n']:
+    for delimiter in [". ", "! ", "? ", ".\n", "!\n", "?\n"]:
         last_pos = truncated.rfind(delimiter)
         if last_pos > max_chars * 0.5:  # Keep at least 50% of text
-            return truncated[:last_pos + 1]
+            return truncated[: last_pos + 1]
     # No sentence boundary found, truncate at word
-    return truncated.rsplit(' ', 1)[0] + '...'
+    return truncated.rsplit(" ", 1)[0] + "..."
 
 
 def create_batch_summary_prompt(passages: list[str]) -> str:
@@ -38,8 +38,7 @@ def create_batch_summary_prompt(passages: list[str]) -> str:
     Stage 1: Create prompt for summarizing a batch of passages.
     Returns a 2-3 sentence thematic summary.
     """
-    passages_text = "\n\n".join([f"[{i+1}] {truncate_passage(p)}"
-                                  for i, p in enumerate(passages)])
+    passages_text = "\n\n".join([f"[{i + 1}] {truncate_passage(p)}" for i, p in enumerate(passages)])
 
     prompt = f"""Read these text passages that were grouped together by algorithmic similarity and summarize their common themes.
 
@@ -69,8 +68,7 @@ def create_final_label_prompt(batch_summaries: list[str]) -> str:
     Stage 2: Create prompt for generating final label from batch summaries.
     Takes multiple thematic summaries and produces a concise label.
     """
-    summaries_text = "\n\n".join([f"[Batch {i+1}] {summary}"
-                                   for i, summary in enumerate(batch_summaries)])
+    summaries_text = "\n\n".join([f"[Batch {i + 1}] {summary}" for i, summary in enumerate(batch_summaries)])
 
     prompt = f"""Below are thematic summaries from different batches of text passages that belong to the same cluster. Your task is to create a single unified label.
 
@@ -117,7 +115,7 @@ def extract_passages_from_file(alignments_file: str, indices_to_fetch: set[int])
     max_index = max(indices_to_fetch)
 
     with lz4.frame.open(alignments_file, "rb") as f:
-        for i, line in tqdm(enumerate(f), total=max_index+1, desc="Reading file", leave=False):
+        for i, line in tqdm(enumerate(f), total=max_index + 1, desc="Reading file", leave=False):
             if i in indices_to_fetch:
                 alignment = orjson.loads(line)
                 index_to_text[i] = alignment["source_passage"]
@@ -159,7 +157,9 @@ async def generate_cluster_labels_async(
         Dictionary mapping cluster_id -> label
     """
     total_passages = num_batches * batch_size
-    print(f"\nGenerating labels for {n_clusters} clusters using {num_batches} batches of {batch_size} passages ({total_passages} total per cluster)...")
+    print(
+        f"\nGenerating labels for {n_clusters} clusters using {num_batches} batches of {batch_size} passages ({total_passages} total per cluster)..."
+    )
 
     cluster_label_map = {}
     used_labels = set()  # Track labels to ensure uniqueness
@@ -325,8 +325,8 @@ async def generate_cluster_labels_async(
                     label = ""
 
                     # Normalize newlines
-                    response_text = response_text.replace('\\n', '\n')
-                    lines = response_text.split('\n')
+                    response_text = response_text.replace("\\n", "\n")
+                    lines = response_text.split("\n")
 
                     # 1. Look for explicit "LABEL:" prefix (case-insensitive)
                     for line in lines:
@@ -337,7 +337,7 @@ async def generate_cluster_labels_async(
                             if len(parts) > 1:
                                 # We need to get the original case back, so find the index
                                 idx = line.upper().find("LABEL:")
-                                label = line[idx + 6:].strip()
+                                label = line[idx + 6 :].strip()
                                 break
 
                     # 2. Fallback: If response is short (likely just the label), use it all
@@ -354,7 +354,7 @@ async def generate_cluster_labels_async(
                                 label = last_line
 
                     # Clean up the label
-                    label = label.replace('"', '').replace("'", "").strip()
+                    label = label.replace('"', "").replace("'", "").strip()
 
                     if not label:
                         print(f"    ⚠️ Failed to parse label from response: '{response_text[:50]}...'")
@@ -366,7 +366,7 @@ async def generate_cluster_labels_async(
 
             except Exception as e:
                 print(f"    ❌ Error generating final label: {e}")
-                label = ""        # Ensure uniqueness
+                label = ""  # Ensure uniqueness
         if label:
             original_label = label
             counter = 2
@@ -390,17 +390,17 @@ def update_graph_json_files(graph_data_path: str, cluster_label_map: dict):
         cluster_label_map: Dictionary mapping cluster_id -> label
     """
     # Update precomputed_graph_api.json (for fast API loading)
-    precomputed_api_path = os.path.join(graph_data_path, 'precomputed_graph_api.json')
+    precomputed_api_path = os.path.join(graph_data_path, "precomputed_graph_api.json")
     if os.path.exists(precomputed_api_path):
-        with open(precomputed_api_path, 'rb') as f:
+        with open(precomputed_api_path, "rb") as f:
             graph_data = orjson.loads(f.read())
 
         # Add cluster_label to nodes
-        for node in graph_data['nodes']:
-            cluster_id = node.get('cluster_id', 0)
-            node['cluster_label'] = cluster_label_map.get(cluster_id, '')
+        for node in graph_data["nodes"]:
+            cluster_id = node.get("cluster_id", 0)
+            node["cluster_label"] = cluster_label_map.get(cluster_id, "")
 
-        with open(precomputed_api_path, 'wb') as f:
+        with open(precomputed_api_path, "wb") as f:
             f.write(orjson.dumps(graph_data))
         print(f"✓ Updated precomputed_graph_api.json")
 
@@ -440,15 +440,16 @@ async def generate_and_update_cluster_labels(
 
     # Load necessary data
     print("\rLoading graph data...", end="", flush=True)
-    cluster_labels_modified = np.load(os.path.join(graph_data_path, 'cluster_labels_modified.npy'))
-    cluster_centroids = np.load(os.path.join(graph_data_path, 'cluster_centroids.npy'))
+    cluster_labels_modified = np.load(os.path.join(graph_data_path, "cluster_labels_modified.npy"))
+    cluster_centroids = np.load(os.path.join(graph_data_path, "cluster_centroids.npy"))
 
-    with open(os.path.join(graph_data_path, 'cluster_metadata.json'), 'rb') as f:
+    with open(os.path.join(graph_data_path, "cluster_metadata.json"), "rb") as f:
         cluster_metadata = orjson.loads(f.read())
-    n_clusters = cluster_metadata['n_clusters']
+    n_clusters = cluster_metadata["n_clusters"]
 
     # Load embeddings (check for memmap first, then regular npy)
     import glob
+
     embeddings_dirs = glob.glob(os.path.join(parent_dir, "*_embeddings"))
     print(f"\rFound embeddings directories: {embeddings_dirs}")
 
@@ -456,18 +457,18 @@ async def generate_and_update_cluster_labels(
         embeddings_cache_path = os.path.join(embeddings_dirs[0], "passage_embeddings.dat")
         embeddings_meta_path = os.path.join(embeddings_dirs[0], "metadata.json")
 
-        with open(embeddings_meta_path, 'rb') as f:
+        with open(embeddings_meta_path, "rb") as f:
             metadata = orjson.loads(f.read())
 
-        sbert_dim = metadata['sbert_dim']
-        alignment_counts = metadata['alignment_counts']
+        sbert_dim = metadata["sbert_dim"]
+        alignment_counts = metadata["alignment_counts"]
 
         print(f"\rLoading embeddings from memmap...", end="", flush=True)
         all_embeddings = np.memmap(
             embeddings_cache_path,
-            dtype='float32',
-            mode='r',
-            shape=(alignment_counts, sbert_dim)
+            dtype="float32",
+            mode="r",
+            shape=(alignment_counts, sbert_dim),
         )
     else:
         print("Error: Could not find embeddings directory")
@@ -481,7 +482,7 @@ async def generate_and_update_cluster_labels(
         model_path=model_path,
         port=port,
         context_window=context_window,
-        concurrency_limit=4
+        concurrency_limit=4,
     )
 
     try:
@@ -501,10 +502,10 @@ async def generate_and_update_cluster_labels(
         )
 
         # Save cluster labels
-        labels_path = os.path.join(graph_data_path, 'cluster_labels.json')
+        labels_path = os.path.join(graph_data_path, "cluster_labels.json")
         # Convert integer keys to strings for JSON
         cluster_label_map_str = {str(k): v for k, v in cluster_label_map.items()}
-        with open(labels_path, 'wb') as f:
+        with open(labels_path, "wb") as f:
             f.write(orjson.dumps(cluster_label_map_str))
         print(f"\n✓ Saved cluster labels to {labels_path}")
 
@@ -524,6 +525,7 @@ async def generate_and_update_cluster_labels(
     except Exception as e:
         print(f"Error during cluster labeling: {e}")
         import traceback
+
         traceback.print_exc()
         raise
     finally:
@@ -539,8 +541,18 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate and update cluster labels using LLM.")
     parser.add_argument("--alignments_file", type=str, required=True, help="Path to alignments file")
-    parser.add_argument("--graph_data_path", type=str, required=True, help="Path to graph_data directory")
-    parser.add_argument("--model_path", type=str, default="unsloth/gemma-3-4b-it-qat-GGUF", help="LLM model path or HuggingFace model ID")
+    parser.add_argument(
+        "--graph_data_path",
+        type=str,
+        required=True,
+        help="Path to graph_data directory",
+    )
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default="unsloth/gemma-3-4b-it-qat-GGUF",
+        help="LLM model path or HuggingFace model ID",
+    )
     parser.add_argument("--context_window", type=int, default=8192, help="Context window size for LLM")
     parser.add_argument("--num_batches", type=int, default=25, help="Number of batches per cluster")
     parser.add_argument("--batch_size", type=int, default=20, help="Number of passages per batch")
@@ -548,12 +560,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    asyncio.run(generate_and_update_cluster_labels(
-        alignments_file=args.alignments_file,
-        graph_data_path=args.graph_data_path,
-        model_path=args.model_path,
-        num_batches=args.num_batches,
-        batch_size=args.batch_size,
-        port=args.port,
-        context_window=args.context_window,
-    ))
+    asyncio.run(
+        generate_and_update_cluster_labels(
+            alignments_file=args.alignments_file,
+            graph_data_path=args.graph_data_path,
+            model_path=args.model_path,
+            num_batches=args.num_batches,
+            batch_size=args.batch_size,
+            port=args.port,
+            context_window=args.context_window,
+        )
+    )

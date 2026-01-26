@@ -21,7 +21,7 @@ def check_database_connection(user, password):
         conn = psycopg2.connect(
             database=GLOBAL_CONFIG.get("DATABASE", "database_name"),
             user=user,
-            password=password
+            password=password,
         )
         conn.close()
         return True
@@ -48,28 +48,28 @@ def update_app_config(web_app_path):
 
         # Update the apiServer value
         api_server = GLOBAL_CONFIG.get("WEB_APP", "api_server")
-        config['apiServer'] = api_server
+        config["apiServer"] = api_server
 
         # Update PhiloLogic paths to point to the restored data
         source_data_path = web_app_path / "source_data"
         if source_data_path.exists():
-            config['sourcePhiloDBPath'] = str(source_data_path.absolute())
+            config["sourcePhiloDBPath"] = str(source_data_path.absolute())
 
         target_data_path = web_app_path / "target_data"
         if target_data_path.exists():
-            config['targetPhiloDBPath'] = str(target_data_path.absolute())
-        elif 'targetPhiloDBPath' in config:
+            config["targetPhiloDBPath"] = str(target_data_path.absolute())
+        elif "targetPhiloDBPath" in config:
             # If target_data doesn't exist and there was a target path, remove it
-            config['targetPhiloDBPath'] = ""
+            config["targetPhiloDBPath"] = ""
 
         # Write the updated config back
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
         print(f"Updated appConfig.json:")
         print(f"  - apiServer: {api_server}")
         print(f"  - sourcePhiloDBPath: {config['sourcePhiloDBPath']}")
-        if config.get('targetPhiloDBPath'):
+        if config.get("targetPhiloDBPath"):
             print(f"  - targetPhiloDBPath: {config['targetPhiloDBPath']}")
 
         return True
@@ -91,11 +91,11 @@ def run_npm_build(web_app_path):
 
         # Run npm install
         print("Running npm install...")
-        subprocess.run(['npm', 'install'], check=True)
+        subprocess.run(["npm", "install"], check=True)
 
         # Run npm build
         print("Running npm run build...")
-        subprocess.run(['npm', 'run', 'build'], check=True)
+        subprocess.run(["npm", "run", "build"], check=True)
 
         return True
 
@@ -117,12 +117,12 @@ def check_existing_resources(db_name, db_user, db_password, web_app_dest, backup
     # Check for existing tables
     sql_files = list(backup_dir.glob("textpair_*.sql"))
     for sql_file in sql_files:
-        table_name = sql_file.stem.replace('textpair_', '')
+        table_name = sql_file.stem.replace("textpair_", "")
         with psycopg2.connect(database=db_name, user=db_user, password=db_password) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     "SELECT 1 FROM information_schema.tables WHERE table_name = %s",
-                    (table_name,)
+                    (table_name,),
                 )
                 if cursor.fetchone() is not None:
                     existing_resources.append(f"database table '{table_name}'")
@@ -176,12 +176,12 @@ def restore_textpair_database(backup_path, web_app_dest=None, force=False):
         # Extract the tarball using lz4 module
         print("\nExtracting backup archive...")
         print("  - Decompressing with LZ4...")
-        with open(backup_path, 'rb') as f:
+        with open(backup_path, "rb") as f:
             compressed_data = f.read()
         decompressed_data = lz4.frame.decompress(compressed_data)
         print("  - Extracting files...")
         temp_tar = temp_dir / "temp.tar"
-        with open(temp_tar, 'wb') as f:
+        with open(temp_tar, "wb") as f:
             f.write(decompressed_data)
         os.system(f"tar xf {temp_tar} -C {temp_dir}")
         os.remove(temp_tar)
@@ -209,8 +209,10 @@ def restore_textpair_database(backup_path, web_app_dest=None, force=False):
                 print("\nWARNING: The following resources will be overwritten:")
                 for resource in existing:
                     print(f"  - {resource}")
-                response = input("\nDo you want to proceed with the restoration? This will replace all existing resources (y/n): ")
-                if response.lower() != 'y':
+                response = input(
+                    "\nDo you want to proceed with the restoration? This will replace all existing resources (y/n): "
+                )
+                if response.lower() != "y":
                     print("Restoration cancelled")
                     return
                 print("")  # Empty line for better readability
@@ -224,7 +226,7 @@ def restore_textpair_database(backup_path, web_app_dest=None, force=False):
         print(f"Found {len(sql_files)} tables to restore")
 
         for sql_file in sql_files:
-            table_name = sql_file.stem.replace('textpair_', '')
+            table_name = sql_file.stem.replace("textpair_", "")
 
             # Drop existing table if it exists
             print(f"  - Processing {table_name}:")
@@ -236,7 +238,7 @@ def restore_textpair_database(backup_path, web_app_dest=None, force=False):
 
             # Restore table
             print(f"    • Restoring table data...")
-            os.system(f'PGPASSWORD={db_password} psql -U {db_user} -d {db_name} -f {sql_file}')
+            os.system(f"PGPASSWORD={db_password} psql -U {db_user} -d {db_name} -f {sql_file}")
             print(f"    ✓ Table {table_name} restored")
 
         print("✓ Database restoration complete")
@@ -290,10 +292,17 @@ def restore_textpair_database(backup_path, web_app_dest=None, force=False):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("backup_path", type=str, help="Path to the backup tarball file")
-    parser.add_argument("--web_app_dest", type=str, default="",
-                      help="Optional destination path for web app files")
-    parser.add_argument("--force", action="store_true",
-                      help="Overwrite existing files/tables without prompting")
+    parser.add_argument(
+        "--web_app_dest",
+        type=str,
+        default="",
+        help="Optional destination path for web app files",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing files/tables without prompting",
+    )
     args = parser.parse_args()
 
     restore_textpair_database(args.backup_path, args.web_app_dest, args.force)

@@ -69,7 +69,7 @@ async def classify_passages(
     classification_classes: dict[str, str],
     min_confidence: float = 0.7,
     top_k: int = 3,
-    batch_size: int = 32
+    batch_size: int = 32,
 ) -> int:
     """
     Classify passages into thematic categories using zero-shot classification.
@@ -96,7 +96,7 @@ async def classify_passages(
     classifier = pipeline(
         "zero-shot-classification",
         model=zero_shot_model,
-        device=0  # Use GPU if available
+        device=0,  # Use GPU if available
     )
 
     # Extract class labels and their descriptions
@@ -114,10 +114,11 @@ async def classify_passages(
         return 0
 
     classified_count = 0
-    with (lz4.frame.open(temp_output_path, "wb") as output_file,
-          lz4.frame.open(input_path, "rb") as f_in,
-          tqdm(total=num_lines, desc="Passage classification") as pbar):
-
+    with (
+        lz4.frame.open(temp_output_path, "wb") as output_file,
+        lz4.frame.open(input_path, "rb") as f_in,
+        tqdm(total=num_lines, desc="Passage classification") as pbar,
+    ):
         batch = []
         batch_alignments = []
 
@@ -136,7 +137,7 @@ async def classify_passages(
                     batch,
                     candidate_labels,
                     multi_label=True,  # Allow multiple labels per passage
-                    batch_size=batch_size
+                    batch_size=batch_size,
                 )
 
                 for alignment, result in zip(batch_alignments, results):
@@ -164,12 +165,7 @@ async def classify_passages(
 
         # Process remaining batch
         if batch:
-            results = classifier(
-                batch,
-                candidate_labels,
-                multi_label=True,
-                batch_size=len(batch)
-            )
+            results = classifier(batch, candidate_labels, multi_label=True, batch_size=len(batch))
 
             for alignment, result in zip(batch_alignments, results):
                 labels_and_scores = list(zip(result["labels"], result["scores"]))
@@ -187,6 +183,7 @@ async def classify_passages(
 
     # Replace original with classified version
     import os
+
     os.replace(temp_output_path, input_path)
 
     print(f"Classification complete: {classified_count}/{num_lines} passages received category labels")
@@ -212,11 +209,13 @@ if __name__ == "__main__":
         "Philosophy": "Speech about morality, ethics, virtue, reason, metaphysics",
     }
 
-    total = asyncio.run(classify_passages(
-        file_path,
-        "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
-        test_classes,
-        min_confidence=0.3,
-        top_k=3
-    ))
+    total = asyncio.run(
+        classify_passages(
+            file_path,
+            "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+            test_classes,
+            min_confidence=0.3,
+            top_k=3,
+        )
+    )
     print(f"Total passages processed: {total}")

@@ -118,7 +118,11 @@ class Corpus(ABC):
                     text_chunk = self.__build_text_chunk(chunk_group)
                     if text_chunk:  # make sure this chunk is not empty
                         chunks_done += 1
-                        print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
+                        print(
+                            f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...",
+                            end="",
+                            flush=True,
+                        )
                         yield text_chunk
                 chunk_group.clear()
             current_text_level_id = text_level_id
@@ -126,7 +130,11 @@ class Corpus(ABC):
             text_length = len(text)
             if current_chunk_group_length + text_length > self.max_tokens and current_chunk_group_length:
                 chunks_done += 1
-                print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
+                print(
+                    f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...",
+                    end="",
+                    flush=True,
+                )
                 yield self.__build_text_chunk(chunk_group)
             if text_length < self.min_text_obj_length:
                 try:
@@ -139,7 +147,11 @@ class Corpus(ABC):
                 current_chunk_group_length = sum([len(t) for t in chunk_group])
                 if current_chunk_group_length >= min_chunk_length:
                     chunks_done += 1
-                    print(f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...", end="", flush=True)
+                    print(
+                        f"\rProcessing {self.direction} texts... {chunks_done} text chunks extracted...",
+                        end="",
+                        flush=True,
+                    )
                     yield self.__build_text_chunk(chunk_group)
             current_doc_id = doc_id
         save_tokens(full_doc, full_doc.metadata["parsed_filename"])
@@ -183,11 +195,22 @@ class Corpus(ABC):
                     target_embeddings = target_corpus.docs[inner_start_index:inner_end_index]
                     partial_results: np.ndarray = self.similarity(source_embeddings, target_embeddings)
                     if inner_compare is False:
-                        processed_results = self.process_outer_compare(partial_results, target_corpus, min_similarity, outer_start_index=outer_start_index, inner_start_index=inner_start_index)
+                        processed_results = self.process_outer_compare(
+                            partial_results,
+                            target_corpus,
+                            min_similarity,
+                            outer_start_index=outer_start_index,
+                            inner_start_index=inner_start_index,
+                        )
                     else:
-                        processed_results = self.process_inner_compare(partial_results, min_similarity, outer_start_index=outer_start_index, inner_start_index=inner_start_index)
+                        processed_results = self.process_inner_compare(
+                            partial_results,
+                            min_similarity,
+                            outer_start_index=outer_start_index,
+                            inner_start_index=inner_start_index,
+                        )
                     matches.extend(processed_results)
-                    pbar.update(source_batch_size*target_batch_size)
+                    pbar.update(source_batch_size * target_batch_size)
         matches.done()
         return matches
 
@@ -207,7 +230,9 @@ class Corpus(ABC):
             return Matches(self.process_outer_compare(results, target_corpus, min_similarity))
         return self.__batched_compare(min_similarity, target_corpus=target_corpus)
 
-    def process_inner_compare(self, results, min_similarity: float, outer_start_index=0, inner_start_index=0) -> Iterable[MergedGroup]:
+    def process_inner_compare(
+        self, results, min_similarity: float, outer_start_index=0, inner_start_index=0
+    ) -> Iterable[MergedGroup]:
         """Compare corpus with itself"""
         print("Processing similarity results...", flush=True, end=" ")
         for outer_doc_id, inner_doc_id in np.argwhere(results >= min_similarity):
@@ -234,7 +259,12 @@ class Corpus(ABC):
                 )
 
     def process_outer_compare(
-        self, results: np.ndarray, target_corpus: Corpus, min_similarity, outer_start_index=0, inner_start_index=0
+        self,
+        results: np.ndarray,
+        target_corpus: Corpus,
+        min_similarity,
+        outer_start_index=0,
+        inner_start_index=0,
     ) -> Iterable[MergedGroup]:
         """Compare corpus with another corpus"""
         print("Processing similarity results...", flush=True, end=" ")
@@ -299,7 +329,10 @@ class TfIdfCorpus(Corpus):
         return self.vectors[item]  # type: ignore
 
     def __filter_by_jaccard_sim(
-        self, similarity_matrix: np.ndarray, min_similarity: float, other_vectors: csr_matrix | None = None
+        self,
+        similarity_matrix: np.ndarray,
+        min_similarity: float,
+        other_vectors: csr_matrix | None = None,
     ) -> np.ndarray:
         """Give a score of 0 for all matches where the Jaccard similarity score is under 75% of the min score"""
         for outer_doc_id, inner_doc_id in np.argwhere(similarity_matrix >= min_similarity):
@@ -393,9 +426,9 @@ class TransformerCorpus(Corpus):
     ):
         def sim_function(x, y):
             # Handle BFloat16 conversion issues
-            if hasattr(x, 'dtype') and x.dtype == torch.bfloat16:
+            if hasattr(x, "dtype") and x.dtype == torch.bfloat16:
                 x = x.to(torch.float32)
-            if hasattr(y, 'dtype') and y.dtype == torch.bfloat16:
+            if hasattr(y, "dtype") and y.dtype == torch.bfloat16:
                 y = y.to(torch.float32)
 
             sim = util.cos_sim(x, y).cpu()
@@ -424,7 +457,7 @@ class TransformerCorpus(Corpus):
         else:
             self.model = model
 
-        self.model.max_seq_length = self.model.get_max_seq_length() - 2 # needed to enable truncating long sequences
+        self.model.max_seq_length = self.model.get_max_seq_length() - 2  # needed to enable truncating long sequences
         self.max_tokens: int = int(self.model.max_seq_length / 2)
 
         self.docs = DocumentChunks(
@@ -435,7 +468,7 @@ class TransformerCorpus(Corpus):
         self.length = len(self.docs)
 
         if torch.cuda.is_available():
-            torch.cuda.empty_cache() # clear GPU cache after creating embeddings
+            torch.cuda.empty_cache()  # clear GPU cache after creating embeddings
             self.device = torch.device("cuda:0")
         else:
             self.device = torch.device("cpu")
@@ -447,26 +480,31 @@ class TransformerCorpus(Corpus):
         return self.length
 
     def create_embeddings(self, text_chunks) -> torch.Tensor:
-        """Create document embedding"""
-        tensor = self.model.encode(list(text_chunks), convert_to_tensor=True)
+        """Create document embeddings for a batch of text chunks"""
+        tensor = self.model.encode(
+            list(text_chunks),
+            convert_to_tensor=True,
+            batch_size=512,
+            show_progress_bar=False,
+            normalize_embeddings=True,
+        )
         return tensor  # type: ignore
 
     def vectordb_compare(self, target_corpus, min_similarity: float) -> Matches:
         """Compare using FAISS vector database for efficient similarity search"""
-        print(f"Building FAISS index for {target_corpus.length} target embeddings...", flush=True)
+        print(
+            f"Building FAISS index for {target_corpus.length} target embeddings...",
+            flush=True,
+        )
 
         # Get all target embeddings as a batch (2D tensor)
-        target_embeddings_tensor = target_corpus.docs[0:target_corpus.length]
+        target_embeddings_tensor = target_corpus.docs[0 : target_corpus.length]
 
-        # Handle tensor conversion
-        if hasattr(target_embeddings_tensor, 'cpu'):  # PyTorch tensor
+        # Handle tensor conversion (embeddings already normalized during encoding)
+        if hasattr(target_embeddings_tensor, "cpu"):  # PyTorch tensor
             target_embeddings = target_embeddings_tensor.cpu().numpy()
         else:  # Already numpy array
             target_embeddings = np.array(target_embeddings_tensor, dtype=np.float32)
-
-        # Normalize for cosine similarity (each row is an embedding)
-        norms = np.linalg.norm(target_embeddings, axis=1, keepdims=True)
-        target_embeddings = target_embeddings / norms
 
         # Create FAISS index for cosine similarity
         dimension = target_embeddings.shape[1]
@@ -476,17 +514,13 @@ class TransformerCorpus(Corpus):
         print(f"Searching for matches above {min_similarity} similarity...", flush=True)
 
         # Get all source embeddings as a batch (2D tensor)
-        source_embeddings_tensor = self.docs[0:self.length]
+        source_embeddings_tensor = self.docs[0 : self.length]
 
-        # Handle tensor conversion
-        if hasattr(source_embeddings_tensor, 'cpu'):  # PyTorch tensor
+        # Handle tensor conversion (embeddings already normalized during encoding)
+        if hasattr(source_embeddings_tensor, "cpu"):  # PyTorch tensor
             source_embeddings = source_embeddings_tensor.cpu().numpy()
         else:  # Already numpy array
             source_embeddings = np.array(source_embeddings_tensor, dtype=np.float32)
-
-        # Normalize for cosine similarity (each row is an embedding)
-        norms = np.linalg.norm(source_embeddings, axis=1, keepdims=True)
-        source_embeddings = source_embeddings / norms
 
         # Search for matches above threshold
         def process_vectordb_matches():
@@ -522,16 +556,16 @@ class TransformerCorpus(Corpus):
                                 self.metadata[source_idx]["start_byte"],
                                 self.metadata[source_idx]["end_byte"],
                                 self.metadata[source_idx]["filename"],
-                                    self.metadata[source_idx],
-                                ),
-                                PassageGroup(
-                                    target_corpus.metadata[target_idx]["start_byte"],
-                                    target_corpus.metadata[target_idx]["end_byte"],
-                                    target_corpus.metadata[target_idx]["filename"],
-                                    target_corpus.metadata[target_idx],
-                                ),
-                                similarity
-                            )
+                                self.metadata[source_idx],
+                            ),
+                            PassageGroup(
+                                target_corpus.metadata[target_idx]["start_byte"],
+                                target_corpus.metadata[target_idx]["end_byte"],
+                                target_corpus.metadata[target_idx]["filename"],
+                                target_corpus.metadata[target_idx],
+                            ),
+                            similarity,
+                        )
 
                     pbar.update(1)
 

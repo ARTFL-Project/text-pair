@@ -15,7 +15,11 @@ GLOBAL_CONFIG.read("/etc/text-pair/global_settings.ini")
 
 
 def table_exists(user, password, table_name):
-    conn = psycopg2.connect(database=GLOBAL_CONFIG.get("DATABASE", "database_name"), user=user, password=password)
+    conn = psycopg2.connect(
+        database=GLOBAL_CONFIG.get("DATABASE", "database_name"),
+        user=user,
+        password=password,
+    )
     with conn.cursor() as cursor:
         cursor.execute("SELECT 1 FROM information_schema.tables WHERE table_name=%s", (table_name,))
         result = cursor.fetchone()
@@ -31,13 +35,13 @@ def back_up_philo_db_data(philo_db_path, output_path):
     text_path = output_path / "TEXT"
     text_path.mkdir()
     print("    - Copying TEXT files...")
-    for file in os.scandir(philo_db_path / 'data/TEXT/'):
+    for file in os.scandir(philo_db_path / "data/TEXT/"):
         shutil.copy(file.path, text_path)
 
     # Copy db related files:
     print("    - Copying database files...")
-    shutil.copy(philo_db_path / 'data/toms.db', output_path)
-    shutil.copy(philo_db_path / 'data/db.locals.py', output_path)
+    shutil.copy(philo_db_path / "data/toms.db", output_path)
+    shutil.copy(philo_db_path / "data/db.locals.py", output_path)
     print("    ✓ PhiloLogic database backup complete")
 
 
@@ -112,12 +116,12 @@ def extract_textpair_database(table, web_app_path, output_path):
 
         print("  - Compressing with LZ4...")
         # Read the tar file and compress with lz4
-        with open(temp_tar, 'rb') as f:
+        with open(temp_tar, "rb") as f:
             tar_data = f.read()
         compressed_data = lz4.frame.compress(tar_data, compression_level=3)
 
         # Write the compressed data
-        with open(tar_path, 'wb') as f:
+        with open(tar_path, "wb") as f:
             f.write(compressed_data)
 
         # Clean up temporary tar file

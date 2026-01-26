@@ -28,6 +28,7 @@ class SourcePassageGroup:
 @dataclass(slots=True)
 class PassageGroup:
     "A passage group representation"
+
     filename: str
     start_byte: int
     end_byte: int
@@ -103,7 +104,10 @@ class AlignmentGroups:
     ):
         """Merge passages that are aligned to the same source passage"""
         passages.sort(
-            key=lambda x: (x["source_start_byte"], x["source_start_byte"] - x["source_end_byte"])
+            key=lambda x: (
+                x["source_start_byte"],
+                x["source_start_byte"] - x["source_end_byte"],
+            )
         )  # sort by smaller start byte and bigger end_byte
         current_group = None
         for passage in passages:
@@ -126,12 +130,17 @@ class AlignmentGroups:
                 if new_pair["target_doc_id"] not in self.merged_target_passages:
                     self.merged_target_passages[new_pair["target_doc_id"]] = []
                 self.merged_target_passages[new_pair["target_doc_id"]].append(
-                    PassagePosition(new_pair["target_start_byte"], new_pair["target_end_byte"], local_target.group_id)
+                    PassagePosition(
+                        new_pair["target_start_byte"],
+                        new_pair["target_end_byte"],
+                        local_target.group_id,
+                    )
                 )
                 self.group_map[new_pair["passage_id"]] = local_target.group_id
                 match = True
                 break
         return match
+
 
 @dataclass(slots=True)
 class AlignmentRefineInfo:
@@ -140,11 +149,13 @@ class AlignmentRefineInfo:
     source_start_byte: int
     source_end_byte: int
 
+
 @dataclass(slots=True)
 class RefinedGroupInfo:
     """Stores info for a refined group during Pass 2"""
+
     id: int
-    source_filename: str # Groups are file-specific in Pass 2
+    source_filename: str  # Groups are file-specific in Pass 2
     intersect_start: int
     intersect_end: int
     member_ids: set = field(default_factory=set)
@@ -156,6 +167,7 @@ def read_alignment(line: bytes, passage_id: int):
     alignment["passage_id"] = passage_id
     return alignment
 
+
 def first_step_merge(results_file: str, count: int) -> tuple[dict[int, int], dict[int, SourcePassageGroup]]:
     """Merge passages that are aligned to the same source passage"""
     passages: list[dict[str, str]] = []
@@ -163,7 +175,10 @@ def first_step_merge(results_file: str, count: int) -> tuple[dict[int, int], dic
     doc_id = None
     with lz4.frame.open(results_file) as input_file:
         for passage_id, line in tqdm(
-            enumerate(input_file), total=count, desc="Identifying passages groups...", leave=False
+            enumerate(input_file),
+            total=count,
+            desc="Identifying passages groups...",
+            leave=False,
         ):
             new_pair = read_alignment(line, passage_id)
             source_doc_id: str = new_pair["source_doc_id"]
@@ -204,7 +219,10 @@ def first_step_merge(results_file: str, count: int) -> tuple[dict[int, int], dic
     # os.rename(f"{results_file}.groups.lz4", f"{results_file}")
     # return alignment_groups, group_id_count
 
-def refine_groups_strict_intersection(results_file: str, initial_group_map: dict[int, int], count: int) -> tuple[dict[int, int], dict[int, dict]]:
+
+def refine_groups_strict_intersection(
+    results_file: str, initial_group_map: dict[int, int], count: int
+) -> tuple[dict[int, int], dict[int, dict]]:
     """
     Pass 2: Split initial groups based purely on direct source passage overlap
             using the shrinking intersection logic. Assigns each passage to ONE refined group.
@@ -214,12 +232,10 @@ def refine_groups_strict_intersection(results_file: str, initial_group_map: dict
                                       {'start': int, 'end': int, 'source_filename': str}.
     """
     # 1. Group alignments by the *initial* group_id and source_filename
-    groups_data = defaultdict(lambda: defaultdict(list)) # initial_group_id -> source_filename -> [AlignmentRefineInfo]
+    groups_data = defaultdict(lambda: defaultdict(list))  # initial_group_id -> source_filename -> [AlignmentRefineInfo]
     print("Starting Pass 2: Refining Groups by Strict Intersection...")
     with lz4.frame.open(results_file) as input_file:
-        for passage_id, line in tqdm(
-            enumerate(input_file), total=count, desc="Pass 2 Reading...", leave=False
-        ):
+        for passage_id, line in tqdm(enumerate(input_file), total=count, desc="Pass 2 Reading...", leave=False):
             alignment = read_alignment(line, passage_id)
             initial_group_id = initial_group_map.get(passage_id)
             if initial_group_id is not None:
@@ -233,7 +249,7 @@ def refine_groups_strict_intersection(results_file: str, initial_group_map: dict
 
     # 2. Process each initial group's alignments per source file
     refined_group_map = {}
-    refined_group_definitions_temp = {} # Store temp group info {refined_id: RefinedGroupInfo}
+    refined_group_definitions_temp = {}  # Store temp group info {refined_id: RefinedGroupInfo}
     next_refined_group_id = 0
 
     print("Processing initial groups for refinement...")
@@ -243,7 +259,7 @@ def refine_groups_strict_intersection(results_file: str, initial_group_map: dict
             alignments_in_file.sort(key=lambda x: x.source_start_byte)
 
             # Track active refined groups *for this specific file* within the initial group
-            active_refined_groups_for_file = [] # List[RefinedGroupInfo]
+            active_refined_groups_for_file = []  # List[RefinedGroupInfo]
 
             for align_info in alignments_in_file:
                 p_id = align_info.passage_id
@@ -257,7 +273,7 @@ def refine_groups_strict_intersection(results_file: str, initial_group_map: dict
                     # Check overlap with current intersection
                     if p_start < current_refined_group.intersect_end and p_end > current_refined_group.intersect_start:
                         best_fit_group = current_refined_group
-                        break # First fit
+                        break  # First fit
 
                 if best_fit_group:
                     # --- Join Existing Refined Group ---
@@ -276,11 +292,11 @@ def refine_groups_strict_intersection(results_file: str, initial_group_map: dict
                         source_filename=source_filename,
                         intersect_start=p_start,
                         intersect_end=p_end,
-                        member_ids={p_id}
+                        member_ids={p_id},
                     )
                     active_refined_groups_for_file.append(new_group_info)
                     refined_group_map[p_id] = new_id
-                    refined_group_definitions_temp[new_id] = new_group_info # Store initial info
+                    refined_group_definitions_temp[new_id] = new_group_info  # Store initial info
 
                 # --- Cleanup invalid groups within this file context ---
                 groups_to_remove_indices = set()
@@ -289,27 +305,31 @@ def refine_groups_strict_intersection(results_file: str, initial_group_map: dict
                         groups_to_remove_indices.add(i)
                         # Remove definition if it becomes invalid
                         if group.id in refined_group_definitions_temp:
-                             del refined_group_definitions_temp[group.id]
+                            del refined_group_definitions_temp[group.id]
 
                 if groups_to_remove_indices:
-                     active_refined_groups_for_file = [g for i, g in enumerate(active_refined_groups_for_file) if i not in groups_to_remove_indices]
-
+                    active_refined_groups_for_file = [
+                        g for i, g in enumerate(active_refined_groups_for_file) if i not in groups_to_remove_indices
+                    ]
 
     # Finalize definitions for valid groups
     refined_group_definitions = {}
     for group_id, group_info in refined_group_definitions_temp.items():
-         if group_info.intersect_start < group_info.intersect_end and group_info.member_ids:
-              refined_group_definitions[group_id] = {
-                  'start': group_info.intersect_start,
-                  'end': group_info.intersect_end,
-                  'source_filename': group_info.source_filename # Include filename
-                  }
+        if group_info.intersect_start < group_info.intersect_end and group_info.member_ids:
+            refined_group_definitions[group_id] = {
+                "start": group_info.intersect_start,
+                "end": group_info.intersect_end,
+                "source_filename": group_info.source_filename,  # Include filename
+            }
 
     print(f"Pass 2 finished. Refined into {len(refined_group_definitions)} groups.")
     return refined_group_map, refined_group_definitions
 
+
 # --- Pass 3: Assign Multiple Memberships ---
-def assign_multiple_memberships(results_file: str, refined_group_definitions: dict[int, dict], count: int) -> tuple[dict[int, list[int]], Counter]:
+def assign_multiple_memberships(
+    results_file: str, refined_group_definitions: dict[int, dict], count: int
+) -> tuple[dict[int, list[int]], Counter]:
     """
     Pass 3: Assign passages to potentially multiple refined groups if their
             original source span overlaps a group's final intersection span.
@@ -322,21 +342,19 @@ def assign_multiple_memberships(results_file: str, refined_group_definitions: di
     print("Starting Pass 3: Assigning Multiple Memberships...")
 
     with lz4.frame.open(results_file) as input_file:
-        for passage_id, line in tqdm(
-            enumerate(input_file), total=count, desc="Pass 3 Checking...", leave=False
-        ):
+        for passage_id, line in tqdm(enumerate(input_file), total=count, desc="Pass 3 Checking...", leave=False):
             alignment = read_alignment(line, passage_id)
             p_start = alignment["source_start_byte"]
             p_end = alignment["source_end_byte"]
-            p_filename = alignment["source_filename"] # Get source filename
+            p_filename = alignment["source_filename"]  # Get source filename
             assigned_groups = set()
 
             # Check against all final intersections from Pass 2
             for group_id, definition in refined_group_definitions.items():
                 # Check filename first for efficiency
-                if p_filename == definition['source_filename']:
-                    intersect_start = definition['start']
-                    intersect_end = definition['end']
+                if p_filename == definition["source_filename"]:
+                    intersect_start = definition["start"]
+                    intersect_end = definition["end"]
 
                     # Check if passage's *original* span overlaps the group's *final* intersection
                     if p_start < intersect_end and p_end > intersect_start:
@@ -363,19 +381,23 @@ def merge_alignments(results_file: str, count: int):
     initial_group_map, initial_group_sources = first_step_merge(results_file, count)
 
     if not initial_group_map:
-         print("Aborting: No initial groups found in Pass 1.")
-         return None # Indicate failure
+        print("Aborting: No initial groups found in Pass 1.")
+        return None  # Indicate failure
 
     # Step 2: Refine groups by strict intersection
-    refined_group_map, refined_group_definitions = refine_groups_strict_intersection(results_file, initial_group_map, count)
+    refined_group_map, refined_group_definitions = refine_groups_strict_intersection(
+        results_file, initial_group_map, count
+    )
 
     if not refined_group_definitions:
         print("Aborting: No valid refined groups found in Pass 2.")
         # Optionally, clean up intermediate files if needed
-        return None # Indicate failure
+        return None  # Indicate failure
 
     # Step 3: Assign multiple memberships
-    final_passage_to_groups, final_group_counts = assign_multiple_memberships(results_file, refined_group_definitions, count)
+    final_passage_to_groups, final_group_counts = assign_multiple_memberships(
+        results_file, refined_group_definitions, count
+    )
 
     # Step 4: Rewrite the results file with the final GROUP LIST
     temp_results_file = f"{results_file}.temp_final.lz4"
@@ -384,22 +406,20 @@ def merge_alignments(results_file: str, count: int):
         lz4.frame.open(temp_results_file, mode="wb") as output_file,
         lz4.frame.open(results_file) as input_file,
     ):
-        for passage_id, line in tqdm(
-            enumerate(input_file), total=count, desc="Rewriting results...", leave=False
-        ):
+        for passage_id, line in tqdm(enumerate(input_file), total=count, desc="Rewriting results...", leave=False):
             fields = orjson.loads(line)
-            final_groups = final_passage_to_groups.get(passage_id, []) # Get list, default empty
+            final_groups = final_passage_to_groups.get(passage_id, [])  # Get list, default empty
             # Update field to store an array/list of group IDs
             fields["group_id"] = final_groups
             # Remove old 'count' field if it exists, use final_group_counts later
-            if "count" in fields: del fields["count"]
+            if "count" in fields:
+                del fields["count"]
             output_file.write(orjson.dumps(fields) + b"\n")
 
     # Replace original file with the new one
     os.remove(results_file)
     os.rename(temp_results_file, results_file)
     print("Results file rewritten successfully.")
-
 
     # Step 5: Write the final source passage group file
     groups_file = os.path.join(os.path.dirname(results_file), "passage_group_source.jsonl")
@@ -408,10 +428,12 @@ def merge_alignments(results_file: str, count: int):
         # Find representative metadata (use first passage found for each initial group)
         group_to_first_passage_id_initial = {}
         for passage_id, init_group_id in initial_group_map.items():
-             if init_group_id not in group_to_first_passage_id_initial:
-                  group_to_first_passage_id_initial[init_group_id] = passage_id
-             else:
-                  group_to_first_passage_id_initial[init_group_id] = min(passage_id, group_to_first_passage_id_initial[init_group_id])
+            if init_group_id not in group_to_first_passage_id_initial:
+                group_to_first_passage_id_initial[init_group_id] = passage_id
+            else:
+                group_to_first_passage_id_initial[init_group_id] = min(
+                    passage_id, group_to_first_passage_id_initial[init_group_id]
+                )
 
         representative_metadata = {}
         for init_group_id, passage_id in group_to_first_passage_id_initial.items():
@@ -426,8 +448,7 @@ def merge_alignments(results_file: str, count: int):
             if refined_id not in refined_to_initial_map:
                 initial_id = initial_group_map.get(passage_id)
                 if initial_id is not None:
-                     refined_to_initial_map[refined_id] = initial_id
-
+                    refined_to_initial_map[refined_id] = initial_id
 
         # Now write the final source file using refined definitions and counts
         for group_id, definition in tqdm(
@@ -441,17 +462,17 @@ def merge_alignments(results_file: str, count: int):
             metadata_to_use = representative_metadata.get(initial_group_id_for_meta, {})
 
             # Get the actual source text using the final intersection span
-            source_passage = get_text(definition['start'], definition['end'], definition['source_filename'])
+            source_passage = get_text(definition["start"], definition["end"], definition["source_filename"])
 
             output_file.write(
                 orjson.dumps(
                     {
-                        **metadata_to_use, # Use metadata from representative initial group
-                        "source_filename": definition['source_filename'], # Use correct filename
+                        **metadata_to_use,  # Use metadata from representative initial group
+                        "source_filename": definition["source_filename"],  # Use correct filename
                         "source_passage": source_passage,
                         "group_id": group_id,
-                        "source_start_byte": definition['start'],
-                        "source_end_byte": definition['end'],
+                        "source_start_byte": definition["start"],
+                        "source_end_byte": definition["end"],
                         "count": final_group_counts[group_id],
                     }
                 )

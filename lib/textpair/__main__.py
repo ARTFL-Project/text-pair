@@ -34,14 +34,25 @@ def build_graph_and_labels(alignments_file: str, embedding_model: str, llm_param
     # Run graph building in separate environment
     try:
         result = subprocess.run(
-            [graph_python, "-m", "textpair_graph", "build",
-             alignments_file, output_dir, "--model", embedding_model],
+            [
+                graph_python,
+                "-m",
+                "textpair_graph",
+                "build",
+                alignments_file,
+                output_dir,
+                "--model",
+                embedding_model,
+            ],
             check=True,
-            capture_output=False
+            capture_output=False,
         )
         print("✓ Graph model built successfully!")
     except subprocess.CalledProcessError as e:
-        print(f"ERROR: Graph model generation failed with exit code {e.returncode}", file=sys.stderr)
+        print(
+            f"ERROR: Graph model generation failed with exit code {e.returncode}",
+            file=sys.stderr,
+        )
         return
     except FileNotFoundError:
         print(f"ERROR: Graph environment not found at {graph_python}", file=sys.stderr)
@@ -55,15 +66,27 @@ def build_graph_and_labels(alignments_file: str, embedding_model: str, llm_param
         if os.path.exists(graph_data_path):
             try:
                 result = subprocess.run(
-                    [graph_python, "-m", "textpair_graph", "label",
-                     graph_data_path, "--model", llm_params["llm_model"],
-                     "--context_window", str(llm_params["llm_context_window"]),
-                     "--port", str(llm_params["llm_port"])],
+                    [
+                        graph_python,
+                        "-m",
+                        "textpair_graph",
+                        "label",
+                        graph_data_path,
+                        "--model",
+                        llm_params["llm_model"],
+                        "--context_window",
+                        str(llm_params["llm_context_window"]),
+                        "--port",
+                        str(llm_params["llm_port"]),
+                    ],
                     check=True,
-                    capture_output=False
+                    capture_output=False,
                 )
             except subprocess.CalledProcessError as e:
-                print(f"WARNING: Cluster labeling failed with exit code {e.returncode}", file=sys.stderr)
+                print(
+                    f"WARNING: Cluster labeling failed with exit code {e.returncode}",
+                    file=sys.stderr,
+                )
 
 
 def delete_database(dbname: str) -> None:
@@ -200,14 +223,24 @@ async def run_alignment(params):
         filename = os.listdir(result_batch_path)[0]
         os.system(f"mv {result_batch_path}/{filename} {results_file} && rm -rf {result_batch_path}")
     else:
-        print("Merging alignments into one file (this may take a while)... ", end="", flush=True)
+        print(
+            "Merging alignments into one file (this may take a while)... ",
+            end="",
+            flush=True,
+        )
         merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {results_file}; rm -rf {result_batch_path}"
         os.system(merge_command)
         print("done.")
     count = get_count(os.path.join(params.output_path, "results/count.txt"))
 
     # Postprocessing steps
-    if any([params.matching_params["phrase_filter"], params.matching_params["banality_auto_detection"], params.matching_params["banality_llm_eval"]]):
+    if any(
+        [
+            params.matching_params["phrase_filter"],
+            params.matching_params["banality_auto_detection"],
+            params.matching_params["banality_llm_eval"],
+        ]
+    ):
         print(f"\n### Postprocessing {count} pairwise alignments ###")
         if params.matching_params["phrase_filter"]:
             filtered_passages = phrase_matcher(results_file, params.matching_params["phrase_filter"], count)
@@ -219,7 +252,7 @@ async def run_alignment(params):
             banalities_found = banality_auto_detect(
                 results_file,
                 params.paths["source"]["common_ngrams"],
-                f'{params.paths["source"]["ngram_output_path"]}/ngrams_in_order',
+                f"{params.paths['source']['ngram_output_path']}/ngrams_in_order",
                 params.matching_params["store_banalities"],
                 count,
                 params.matching_params["most_common_ngram_proportion"],
@@ -261,7 +294,7 @@ async def run_alignment(params):
             params.passage_classification["classes"],
             min_confidence=0.3,
             top_k=3,
-            batch_size=32
+            batch_size=32,
         )
 
     # Passage merger
@@ -291,7 +324,6 @@ async def run_alignment(params):
             groups_file=groups_file,
             store_banalities=params.matching_params["store_banalities"],
         )
-
 
 
 async def run_vsa_similarity(params) -> None:
@@ -331,7 +363,7 @@ async def run_vsa_similarity(params) -> None:
         params.workers,
         {**params.preprocessing_params, **params.matching_params},
         params.output_path,
-        params.llm_params
+        params.llm_params,
     )
 
     # Passage classification (if enabled)
@@ -344,7 +376,7 @@ async def run_vsa_similarity(params) -> None:
             params.passage_classification["classes"],
             min_confidence=0.5,
             top_k=3,
-            batch_size=32
+            batch_size=32,
         )
 
     if params.web_app_config["skip_web_app"] is False:
@@ -368,7 +400,7 @@ async def run_vsa_similarity(params) -> None:
             params.web_app_config["source_philo_db_path"],
             params.web_app_config["target_philo_db_path"],
             params.matching_params["matching_algorithm"],
-            params
+            params,
         )
 
 
@@ -432,4 +464,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

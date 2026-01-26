@@ -15,7 +15,15 @@ from tqdm import tqdm
 
 # https://github.com/tqdm/tqdm/issues/481
 tqdm.monitor_interval = 0
-PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
+PHILO_TEXT_OBJECT_LEVELS = {
+    "doc": 1,
+    "div1": 2,
+    "div2": 3,
+    "div3": 4,
+    "para": 5,
+    "sent": 6,
+    "word": 7,
+}
 
 
 class Ngrams:
@@ -123,7 +131,10 @@ class Ngrams:
                 combined_metadata.update(local_metadata)  # type: ignore
                 pbar.update()
 
-        print("Saving ngram index and most common ngrams (this can take a while)...", flush=True)
+        print(
+            "Saving ngram index and most common ngrams (this can take a while)...",
+            flush=True,
+        )
         os.system(
             rf"""for i in {output_path}/temp/*; do cat $i; done | sort -T {output_path} -S 25% | uniq -c |
             sort -rn -T {output_path} -S 25% | awk '{{print $2"\t"$3}}' | tee {output_path}/index/index.tab |
@@ -170,6 +181,9 @@ class Ngrams:
         philo_db_path: str = os.path.abspath(os.path.join(text, os.pardir, os.pardir, "toms.db"))
         toms_db = sqlite3.connect(philo_db_path)
         cursor = toms_db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM toms WHERE philo_type = ?", (self.config["text_object_type"],))
+        cursor.execute(
+            "SELECT COUNT(*) FROM toms WHERE philo_type = ?",
+            (self.config["text_object_type"],),
+        )
         philo_type_count = cursor.fetchone()[0]
         return philo_type_count

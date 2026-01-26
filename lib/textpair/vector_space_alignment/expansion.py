@@ -29,7 +29,7 @@ def count_sentences_from_tokens(filepath: str, start_byte: int, end_byte: int) -
         start_index, end_index = end_index, start_index
 
     # Slice the sentence IDs and count the unique ones
-    seen_sentence_ids = set(token_data.sentence_ids[start_index:end_index + 1])
+    seen_sentence_ids = set(token_data.sentence_ids[start_index : end_index + 1])
     return len(seen_sentence_ids)
 
 
@@ -51,7 +51,7 @@ def get_previous_sentences_from_tokens(filepath: str, start_byte: int, count: in
             return ([], start_byte, first_token_index)
 
         current_sentence_id = token_data.sentence_ids[current_match_start_index - 1]
-        for i in range(current_match_start_index - 1, -1, -1): # Iterate backwards
+        for i in range(current_match_start_index - 1, -1, -1):  # Iterate backwards
             if token_data.sentence_ids[i] == current_sentence_id:
                 sentence.append(token_data.surface_forms[i])
                 start_byte_of_sentence = token_data.start_bytes[i]
@@ -73,6 +73,7 @@ def get_previous_sentences_from_tokens(filepath: str, start_byte: int, count: in
 
     return sentences
 
+
 def get_next_sentences_from_tokens(filepath: str, end_byte: int, count: int) -> list[tuple[str, int]]:
     """
     Gets next N sentences.
@@ -89,7 +90,7 @@ def get_next_sentences_from_tokens(filepath: str, end_byte: int, count: int) -> 
 
         if current_match_end_index + 1 >= len(token_data.sentence_ids):
             return ([], end_byte, last_token_index)
-        current_sentence_id = token_data.sentence_ids[current_match_end_index +1]
+        current_sentence_id = token_data.sentence_ids[current_match_end_index + 1]
         for i in range(current_match_end_index + 1, len(token_data.end_bytes)):
             if token_data.sentence_ids[i] == current_sentence_id:
                 sentence.append(token_data.surface_forms[i])
@@ -97,7 +98,9 @@ def get_next_sentences_from_tokens(filepath: str, end_byte: int, count: int) -> 
                 #     end_byte_of_sentence = token_data.end_bytes[i]
                 last_token_index = i
             else:
-                end_byte_of_sentence = token_data.start_bytes[i] # Assume sentence ends at start of next token: works around bug in PhiloLogic where punct start/end bytes are incorrect when sentence terminator
+                end_byte_of_sentence = token_data.start_bytes[
+                    i
+                ]  # Assume sentence ends at start of next token: works around bug in PhiloLogic where punct start/end bytes are incorrect when sentence terminator
                 break
         return (sentence, end_byte_of_sentence, last_token_index)
 
@@ -130,28 +133,101 @@ def _build_expanded_text(
     return " ".join(s for s in parts if s)
 
 
+def _prepare_expansion_step(match: MergedGroup, step: int, direction: str) -> dict:
+    """
+    Prepare a single expansion for progressive evaluation.
+
+    Args:
+        match: The match to expand
+        step: How many sentences to add (1 or 2)
+        direction: 'prev', 'next', or 'both'
+    """
+    original_source_text = get_text(match.source.start_byte, match.source.end_byte, match.source.filename)
+    original_target_text = get_text(match.target.start_byte, match.target.end_byte, match.target.filename)
+
+    # Get contextual sentences
+    source_prev = (
+        get_previous_sentences_from_tokens(match.source.metadata["parsed_filename"], match.source.start_byte, step)
+        if direction in ["prev", "both"]
+        else []
+    )
+    source_next = (
+        get_next_sentences_from_tokens(match.source.metadata["parsed_filename"], match.source.end_byte, step)
+        if direction in ["next", "both"]
+        else []
+    )
+    target_prev = (
+        get_previous_sentences_from_tokens(match.target.metadata["parsed_filename"], match.target.start_byte, step)
+        if direction in ["prev", "both"]
+        else []
+    )
+    target_next = (
+        get_next_sentences_from_tokens(match.target.metadata["parsed_filename"], match.target.end_byte, step)
+        if direction in ["next", "both"]
+        else []
+    )
+
+    # Build expanded text
+    expanded_source = _build_expanded_text(
+        original_source_text,
+        prev_sents=[text for text, _ in source_prev],
+        next_sents=[text for text, _ in source_next],
+    )
+    expanded_target = _build_expanded_text(
+        original_target_text,
+        prev_sents=[text for text, _ in target_prev],
+        next_sents=[text for text, _ in target_next],
+    )
+
+    # Update byte boundaries
+    config = copy.deepcopy(match)
+    if source_prev:
+        config.source.start_byte = source_prev[-1][1]
+    if source_next:
+        config.source.end_byte = source_next[-1][1]
+    if target_prev:
+        config.target.start_byte = target_prev[-1][1]
+    if target_next:
+        config.target.end_byte = target_next[-1][1]
+
+    return {
+        "match_config": config,
+        "source_text": expanded_source,
+        "target_text": expanded_target,
+    }
+
+
 def _prepare_expansion_combinations(
     match: MergedGroup,
     source_sents_count: int,
     target_sents_count: int,
-    strategy: str = 'all'
+    strategy: str = "all",
 ) -> list[dict]:
     """
-    Prepare expansion combinations for a single match based on a dynamic strategy.
+    DEPRECATED: Old expansion logic, kept for compatibility.
+    Use progressive expansion via expand_validated_matches instead.
     """
     # Read all necessary text and boundary components exactly ONCE
     original_source_text = get_text(match.source.start_byte, match.source.end_byte, match.source.filename)
     original_target_text = get_text(match.target.start_byte, match.target.end_byte, match.target.filename)
 
-    # Determine how many sentences to add based on the dynamic strategy (max 2)
-    s_to_add = 1 if source_sents_count == 4 else (2 if source_sents_count < 4 else 0)
-    t_to_add = 1 if target_sents_count == 4 else (2 if target_sents_count < 4 else 0)
+    # Determine how many sentences to add based on the dynamic strategy (max 1 for progressive)
+    s_to_add = 1 if source_sents_count < 5 else 0
+    t_to_add = 1 if target_sents_count < 5 else 0
 
     # Fetch the maximum number of contextual sentences we might need
-    source_prev_sents_data = get_previous_sentences_from_tokens(match.source.metadata["parsed_filename"], match.source.start_byte, s_to_add)
-    source_next_sents_data = get_next_sentences_from_tokens(match.source.metadata["parsed_filename"], match.source.end_byte, s_to_add)
-    target_prev_sents_data = get_previous_sentences_from_tokens(match.target.metadata["parsed_filename"], match.target.start_byte, t_to_add)
-    target_next_sents_data = get_next_sentences_from_tokens(match.target.metadata["parsed_filename"], match.target.end_byte, t_to_add)
+    source_prev_sents_data = get_previous_sentences_from_tokens(
+        match.source.metadata["parsed_filename"], match.source.start_byte, s_to_add
+    )
+    source_next_sents_data = get_next_sentences_from_tokens(
+        match.source.metadata["parsed_filename"], match.source.end_byte, s_to_add
+    )
+    target_prev_sents_data = get_previous_sentences_from_tokens(
+        match.target.metadata["parsed_filename"], match.target.start_byte, t_to_add
+    )
+    target_next_sents_data = get_next_sentences_from_tokens(
+        match.target.metadata["parsed_filename"], match.target.end_byte, t_to_add
+    )
 
     def get_distribution_choices(num_to_add: int, prev_avail: int, next_avail: int) -> list[tuple[int, int]]:
         """Get all (prev, next) combinations that sum to num_to_add."""
@@ -171,12 +247,16 @@ def _prepare_expansion_combinations(
     t_distributions = get_distribution_choices(t_to_add, len(target_prev_sents_data), len(target_next_sents_data))
 
     # Include smaller expansions as well
-    s_choices = [(0,0)] + s_distributions
-    t_choices = [(0,0)] + t_distributions
+    s_choices = [(0, 0)] + s_distributions
+    t_choices = [(0, 0)] + t_distributions
     if s_to_add > 1:
-        s_choices.extend(get_distribution_choices(s_to_add - 1, len(source_prev_sents_data), len(source_next_sents_data)))
+        s_choices.extend(
+            get_distribution_choices(s_to_add - 1, len(source_prev_sents_data), len(source_next_sents_data))
+        )
     if t_to_add > 1:
-        t_choices.extend(get_distribution_choices(t_to_add - 1, len(target_prev_sents_data), len(target_next_sents_data)))
+        t_choices.extend(
+            get_distribution_choices(t_to_add - 1, len(target_prev_sents_data), len(target_next_sents_data))
+        )
 
     # Remove duplicates and sort
     s_choices = sorted(list(set(s_choices)))
@@ -188,11 +268,11 @@ def _prepare_expansion_combinations(
     # In a sorted list of tuples, this will be the last element.
     maximal_combo = all_combinations[-1] if len(all_combinations) > 1 else None
 
-    if strategy == 'maximal':
+    if strategy == "maximal":
         combinations = [maximal_combo] if maximal_combo else []
-    elif strategy == 'fallback':
+    elif strategy == "fallback":
         # Exclude original (0,0) and maximal
-        combinations = [c for c in all_combinations if c != ((0,0),(0,0)) and c != maximal_combo]
+        combinations = [c for c in all_combinations if c != ((0, 0), (0, 0)) and c != maximal_combo]
     else:  # 'all'
         combinations = all_combinations
 
@@ -206,25 +286,31 @@ def _prepare_expansion_combinations(
         current_source_text = _build_expanded_text(
             original_source_text,
             prev_sents=[text for text, _ in s_prev],
-            next_sents=[text for text, _ in s_next]
+            next_sents=[text for text, _ in s_next],
         )
         current_target_text = _build_expanded_text(
             original_target_text,
             prev_sents=[text for text, _ in t_prev],
-            next_sents=[text for text, _ in t_next]
+            next_sents=[text for text, _ in t_next],
         )
 
         config = copy.deepcopy(match)
-        if s_prev: config.source.start_byte = s_prev[-1][1]
-        if s_next: config.source.end_byte = s_next[-1][1]
-        if t_prev: config.target.start_byte = t_prev[-1][1]
-        if t_next: config.target.end_byte = t_next[-1][1]
+        if s_prev:
+            config.source.start_byte = s_prev[-1][1]
+        if s_next:
+            config.source.end_byte = s_next[-1][1]
+        if t_prev:
+            config.target.start_byte = t_prev[-1][1]
+        if t_next:
+            config.target.end_byte = t_next[-1][1]
 
-        passage_data_list.append({
-            'match_config': config,
-            'source_text': current_source_text,
-            'target_text': current_target_text,
-        })
+        passage_data_list.append(
+            {
+                "match_config": config,
+                "source_text": current_source_text,
+                "target_text": current_target_text,
+            }
+        )
 
     return passage_data_list
 
@@ -245,8 +331,16 @@ async def expand_validated_matches(
     print("Identifying expansion candidates...", flush=True)
 
     for match in matches:
-        source_sents = count_sentences_from_tokens(match.source.metadata["parsed_filename"], match.source.start_byte, match.source.end_byte)
-        target_sents = count_sentences_from_tokens(match.target.metadata["parsed_filename"], match.target.start_byte, match.target.end_byte)
+        source_sents = count_sentences_from_tokens(
+            match.source.metadata["parsed_filename"],
+            match.source.start_byte,
+            match.source.end_byte,
+        )
+        target_sents = count_sentences_from_tokens(
+            match.target.metadata["parsed_filename"],
+            match.target.start_byte,
+            match.target.end_byte,
+        )
 
         # If at least one side is shorter than 5 sentences, it's eligible for expansion.
         if source_sents < 5 or target_sents < 5:
@@ -260,11 +354,18 @@ async def expand_validated_matches(
     total_candidates = len(expansion_candidates)
 
     if expansion_candidates:
-        print(f"Processing {total_candidates} expansion candidates in chunks of {chunk_size}...", flush=True)
+        print(
+            f"Processing {total_candidates} expansion candidates in chunks of {chunk_size}...",
+            flush=True,
+        )
 
-        with tqdm(total=total_candidates, desc="Looking for potential passage expansions", leave=False) as pbar:
+        with tqdm(
+            total=total_candidates,
+            desc="Looking for potential passage expansions",
+            leave=False,
+        ) as pbar:
             for i in range(0, total_candidates, chunk_size):
-                chunk = expansion_candidates[i:i + chunk_size]
+                chunk = expansion_candidates[i : i + chunk_size]
                 chunk_expansion_count = await _process_expansion_chunk(chunk, evaluator)
                 expansion_count += chunk_expansion_count
 
@@ -274,124 +375,111 @@ async def expand_validated_matches(
 
                 pbar.update(len(chunk))
 
-    print(f"Looking for potential passage expansions: expanded {expansion_count} passages.", flush=True)
+    print(
+        f"Looking for potential passage expansions: expanded {expansion_count} passages.",
+        flush=True,
+    )
 
     return final_matches
 
 
-async def _process_expansion_chunk(
-    chunk: list[tuple[MergedGroup, int, int]],
-    evaluator
-) -> int:
-    """Process a chunk of expansion candidates using the dynamic two-step greedy strategy."""
+async def _process_expansion_chunk(chunk: list[tuple[MergedGroup, int, int]], evaluator) -> int:
+    """Process a chunk of expansion candidates using progressive expansion strategy."""
     expansion_count = 0
 
-    # --- Step 1: Greedy evaluation of maximal expansions ---
-    maximal_expansions = []
-    match_map = []  # Use a list to keep order
+    # --- Step 1: Try +1 sentence in both directions ---
+    step1_prev_expansions = []
+    step1_next_expansions = []
+    match_map = []
+
     for match, source_sents_count, target_sents_count in chunk:
-        maximal_combo = _prepare_expansion_combinations(
-            match, source_sents_count, target_sents_count, strategy='maximal'
-        )
-        if maximal_combo:
-            maximal_expansions.append(maximal_combo[0])
-            match_map.append(match)
-
-    if not maximal_expansions:
-        return 0
-
-    maximal_pairs = [(combo['source_text'], combo['target_text']) for combo in maximal_expansions]
-    maximal_results = await evaluator.evaluate_batch(maximal_pairs, batch_size=8)
-
-    # --- Step 2: Process results and prepare fallback evaluation ---
-    fallback_candidates = []
-    for i, (score, _) in enumerate(maximal_results):
-        original_match = match_map[i]
-        if score >= original_match.similarity:
-            winner = maximal_expansions[i]['match_config']
-            winner.similarity = score
-            original_match.source = winner.source
-            original_match.target = winner.target
-            original_match.similarity = winner.similarity
-            expansion_count += 1
-        else:
-            fallback_candidates.append(original_match)
-
-    if not fallback_candidates:
-        return expansion_count
-
-    # --- Step 3: Evaluate fallback combinations for failed matches ---
-    fallback_batches = []
-    fallback_batch_info = {}
-    for original_match in fallback_candidates:
-        _, source_sents_count, target_sents_count = next(m for m in chunk if m[0] is original_match)
-        fallback_combos = _prepare_expansion_combinations(
-            original_match, source_sents_count, target_sents_count, strategy='fallback'
-        )
-        if fallback_combos:
-            start_index = len(fallback_batches)
-            fallback_batches.extend([(c['source_text'], c['target_text']) for c in fallback_combos])
-            end_index = len(fallback_batches)
-            fallback_batch_info[id(original_match)] = {
-                'combinations': fallback_combos,
-                'slice': slice(start_index, end_index)
-            }
-
-    if not fallback_batches:
-        return expansion_count
-
-    fallback_results = await evaluator.evaluate_batch(fallback_batches, batch_size=8)
-
-    # --- Step 4: Process fallback results and select the best ---
-    for original_match in fallback_candidates:
-        match_info = fallback_batch_info.get(id(original_match))
-        if not match_info:
+        # Only expand if at least one side is short
+        if source_sents_count >= 5 and target_sents_count >= 5:
             continue
 
-        results_slice = match_info['slice']
-        match_results = fallback_results[results_slice]
+        step1_prev_expansions.append(_prepare_expansion_step(match, step=1, direction="prev"))
+        step1_next_expansions.append(_prepare_expansion_step(match, step=1, direction="next"))
+        match_map.append(match)
 
-        valid_candidates = [{
-            'score': original_match.similarity,
-            'size': count_sentences_from_tokens(original_match.source.metadata["parsed_filename"], original_match.source.start_byte, original_match.source.end_byte) + \
-                    count_sentences_from_tokens(original_match.target.metadata["parsed_filename"], original_match.target.start_byte, original_match.target.end_byte),
-            'match': original_match
-        }]
+    if not match_map:
+        return 0
 
-        for i, (score, _) in enumerate(match_results):
-            if score >= original_match.similarity:
-                combo_data = match_info['combinations'][i]
-                s_sents = count_sentences_from_tokens(
-                    combo_data['match_config'].source.metadata['parsed_filename'],
-                    combo_data['match_config'].source.start_byte,
-                    combo_data['match_config'].source.end_byte
-                )
-                t_sents = count_sentences_from_tokens(
-                    combo_data['match_config'].target.metadata['parsed_filename'],
-                    combo_data['match_config'].target.start_byte,
-                    combo_data['match_config'].target.end_byte
-                )
-                valid_candidates.append({
-                    'score': score,
-                    'size': s_sents + t_sents,
-                    'match': combo_data['match_config']
-                })
+    # Evaluate both directions
+    prev_pairs = [(exp["source_text"], exp["target_text"]) for exp in step1_prev_expansions]
+    next_pairs = [(exp["source_text"], exp["target_text"]) for exp in step1_next_expansions]
 
-        if valid_candidates:
-            valid_candidates.sort(key=lambda x: (x['size'], x['score']), reverse=True)
-            winner_data = valid_candidates[0]
-            winner = winner_data['match']
+    prev_results = await evaluator.evaluate_batch(prev_pairs, batch_size=8)
+    next_results = await evaluator.evaluate_batch(next_pairs, batch_size=8)
 
-            was_expanded = (winner.source.start_byte != original_match.source.start_byte or
-                          winner.source.end_byte != original_match.source.end_byte or
-                          winner.target.start_byte != original_match.target.start_byte or
-                          winner.target.end_byte != original_match.target.end_byte)
+    # --- Step 2: Determine winners and prepare next step ---
+    step2_candidates = []
+    step2_directions = []
+    step2_match_map = []
 
-            if was_expanded:
-                expansion_count += 1
+    for i, original_match in enumerate(match_map):
+        prev_score, _, _ = prev_results[i]
+        next_score, _, _ = next_results[i]
+        original_score = original_match.similarity
 
-            original_match.source = winner.source
-            original_match.target = winner.target
-            original_match.similarity = winner_data['score']
+        # Check if either direction improves
+        prev_improves = prev_score >= original_score
+        next_improves = next_score >= original_score
+
+        if not prev_improves and not next_improves:
+            # No improvement, keep original
+            continue
+
+        # Determine best direction(s)
+        if prev_improves and next_improves:
+            if abs(prev_score - next_score) < 0.001:  # Tied (within floating point tolerance)
+                # Both help equally - add both directions
+                step1_winner = _prepare_expansion_step(original_match, step=1, direction="both")
+                step2_direction = "both"
+            elif prev_score > next_score:
+                step1_winner = step1_prev_expansions[i]
+                step2_direction = "prev"
+            else:
+                step1_winner = step1_next_expansions[i]
+                step2_direction = "next"
+        elif prev_improves:
+            step1_winner = step1_prev_expansions[i]
+            step2_direction = "prev"
+        else:
+            step1_winner = step1_next_expansions[i]
+            step2_direction = "next"
+
+        # Update match with step 1 result
+        step1_config = step1_winner["match_config"]
+        original_match.source = step1_config.source
+        original_match.target = step1_config.target
+        original_match.similarity = (
+            max(prev_score, next_score)
+            if prev_improves and next_improves
+            else (prev_score if prev_improves else next_score)
+        )
+        expansion_count += 1
+
+        # Prepare step 2 expansion
+        step2_candidates.append(_prepare_expansion_step(original_match, step=2, direction=step2_direction))
+        step2_directions.append(step2_direction)
+        step2_match_map.append(original_match)
+
+    if not step2_candidates:
+        return expansion_count
+
+    # --- Step 3: Evaluate step 2 expansions ---
+    step2_pairs = [(exp["source_text"], exp["target_text"]) for exp in step2_candidates]
+    step2_results = await evaluator.evaluate_batch(step2_pairs, batch_size=8)
+
+    for i, (step2_score, _, _) in enumerate(step2_results):
+        original_match = step2_match_map[i]
+        step1_score = original_match.similarity
+
+        # Accept step 2 if it improves over step 1
+        if step2_score >= step1_score:
+            step2_config = step2_candidates[i]["match_config"]
+            original_match.source = step2_config.source
+            original_match.target = step2_config.target
+            original_match.similarity = step2_score
 
     return expansion_count

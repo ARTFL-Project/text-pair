@@ -74,7 +74,12 @@ def banality_auto_detect(
         lz4.frame.open(filepath) as input_file,
     ):
         source_ngram_doc = None
-        for line in tqdm(input_file, total=count, desc="Running banality auto-detection...", leave=False):
+        for line in tqdm(
+            input_file,
+            total=count,
+            desc="Running banality auto-detection...",
+            leave=False,
+        ):
             alignment: dict[str, Any] = orjson.loads(line)
             if source_ngram_doc is None or source_ngram_doc.name != alignment["source_ngrams"]:
                 source_ngram_doc = NgramDoc(os.path.join(ngram_doc_path, alignment["source_ngrams"]))
@@ -116,7 +121,12 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
         lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
         lz4.frame.open(filepath) as input_file,
     ):
-        for line in tqdm(input_file, total=count, desc="Running phrase-based banality detection...", leave=False):
+        for line in tqdm(
+            input_file,
+            total=count,
+            desc="Running phrase-based banality detection...",
+            leave=False,
+        ):
             alignment: dict[str, Any] = orjson.loads(line)
             banality = False
             if ac.find_matches_as_strings(clean_text(alignment["source_passage"])):
@@ -193,7 +203,7 @@ async def banality_llm_post_eval(
         model_path=model_path,
         port=port,
         context_window=context_window,
-        concurrency_limit=concurrency_limit
+        concurrency_limit=concurrency_limit,
     )
 
     try:
@@ -234,9 +244,10 @@ async def banality_llm_post_eval(
         banal_set = set(banal_indices)  # For fast lookup
         next_banal_pos = 0  # Position in banal_indices list
 
-        with lz4.frame.open(input_path, "rb") as f_in, \
-             tqdm(total=num_banal, desc="LLM evaluation of banal passages") as pbar:
-
+        with (
+            lz4.frame.open(input_path, "rb") as f_in,
+            tqdm(total=num_banal, desc="LLM evaluation of banal passages") as pbar,
+        ):
             for idx, line_b in enumerate(f_in):
                 # Check if this is a banal passage
                 if idx in banal_set:
@@ -251,7 +262,7 @@ async def banality_llm_post_eval(
                         results = await evaluator.score_scholarly_interest_batch(
                             passages=banal_passages,
                             batch_size=batch_size,
-                            show_progress=False
+                            show_progress=False,
                         )
 
                         # Process results
@@ -273,7 +284,7 @@ async def banality_llm_post_eval(
                 results = await evaluator.score_scholarly_interest_batch(
                     passages=banal_passages,
                     batch_size=len(banal_passages),
-                    show_progress=False
+                    show_progress=False,
                 )
 
                 for batch_idx, (score, is_banal) in enumerate(results):
@@ -295,10 +306,11 @@ async def banality_llm_post_eval(
         # PASS 3: Re-read file, update flags, write output
         lines_written = 0
 
-        with lz4.frame.open(input_path, "rb") as f_in, \
-             lz4.frame.open(temp_output_path, "wb") as output_file, \
-             tqdm(total=num_lines, desc="Writing output") as pbar:
-
+        with (
+            lz4.frame.open(input_path, "rb") as f_in,
+            lz4.frame.open(temp_output_path, "wb") as output_file,
+            tqdm(total=num_lines, desc="Writing output") as pbar,
+        ):
             for idx, line_b in enumerate(f_in):
                 alignment = orjson.loads(line_b)
 
@@ -334,6 +346,7 @@ async def banality_llm_post_eval(
     except Exception as e:
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()
         raise
     finally:

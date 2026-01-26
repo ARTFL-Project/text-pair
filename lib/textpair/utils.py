@@ -1,14 +1,20 @@
 """Various utilities for textpair"""
 
-
 from html import unescape as unescape_html
 from xml.sax.saxutils import unescape as unescape_xml
 
 import regex as re
 
 TAGS = re.compile(r"<[^>]+>")
-PHILO_TEXT_OBJECT_LEVELS = {"doc": 1, "div1": 2, "div2": 3, "div3": 4, "para": 5, "sent": 6, "word": 7}
-
+PHILO_TEXT_OBJECT_LEVELS = {
+    "doc": 1,
+    "div1": 2,
+    "div2": 3,
+    "div3": 4,
+    "para": 5,
+    "sent": 6,
+    "word": 7,
+}
 
 
 def clean_text(text: str) -> str:

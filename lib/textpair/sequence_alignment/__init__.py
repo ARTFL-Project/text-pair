@@ -10,10 +10,10 @@ from .banality_finder import (
 from .generate_ngrams import Ngrams
 
 __all__ = [
-    'merge_alignments',
-    'banality_auto_detect',
-    'banality_llm_post_eval',
-    'phrase_matcher',
-    'separate_banalities',
-    'Ngrams',
+    "merge_alignments",
+    "banality_auto_detect",
+    "banality_llm_post_eval",
+    "phrase_matcher",
+    "separate_banalities",
+    "Ngrams",
 ]

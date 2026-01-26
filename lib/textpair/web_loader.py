@@ -57,7 +57,7 @@ DEFAULT_FIELD_TYPES = {
     "source_passage_length": "INTEGER",
     "target_passage_length": "INTEGER",
     "similarity": "FLOAT",
-    "group_id": "INTEGER[]", # Define directly as INTEGER[]
+    "group_id": "INTEGER[]",  # Define directly as INTEGER[]
     "count": "INTEGER",
 }
 
@@ -85,9 +85,19 @@ CONTROL_CHARS = dict.fromkeys(range(32))
 class WebAppConfig:
     """Web app config class"""
 
-    def __init__(self, db_name: str, api_server: str, source_database_link: str, target_database_link: str,
-    source_philo_db_path: str, target_philo_db_path: str, algorithm: str, store_banalities: bool,
-    source_against_source: bool, textpair_params=None):
+    def __init__(
+        self,
+        db_name: str,
+        api_server: str,
+        source_database_link: str,
+        target_database_link: str,
+        source_philo_db_path: str,
+        target_philo_db_path: str,
+        algorithm: str,
+        store_banalities: bool,
+        source_against_source: bool,
+        textpair_params=None,
+    ):
         with open("/var/lib/text-pair/config/appConfig.json", encoding="utf8") as app_config:
             self.options: OrderedDict = json.load(app_config, object_pairs_hook=OrderedDict)
         self.options["apiServer"] = api_server
@@ -107,12 +117,11 @@ class WebAppConfig:
         self.options["banalitiesStored"] = store_banalities
 
         # Populate passage classification if available
-        if textpair_params and hasattr(textpair_params, 'passage_classification'):
+        if textpair_params and hasattr(textpair_params, "passage_classification"):
             classes = textpair_params.passage_classification.get("classes", {})
             if classes:
                 self.options["passageClassification"] = [
-                    {"label": label, "description": desc}
-                    for label, desc in classes.items()
+                    {"label": label, "description": desc} for label, desc in classes.items()
                 ]
             else:
                 self.options["passageClassification"] = []
@@ -169,19 +178,30 @@ class WebAppConfig:
         self.options["sourceCitation"] = source_fields
         self.options["targetCitation"] = target_fields
 
+
 def copy_data(params, direction):
     """Copy files and database file to web app directory"""
     print(f"Copying {direction} text files to web app directory...", end="", flush=True)
     if os.path.exists(f"{params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data"):
         os.system(f"rm -rf {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data")
-    os.makedirs(f"{params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/TEXT", exist_ok=True)
-    os.system(f"cp {params.output_path}/{direction}/db.locals.py {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/")
+    os.makedirs(
+        f"{params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/TEXT",
+        exist_ok=True,
+    )
+    os.system(
+        f"cp {params.output_path}/{direction}/db.locals.py {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/"
+    )
     with open(params.paths[direction]["metadata_path"], encoding="utf8") as metadata_file:
         metadata = json.load(metadata_file)
     for file in metadata.values():
-        os.system(f"cp {file['filename']} {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/TEXT/")
-    os.system(f"cp {params.output_path}/{direction}/toms.db {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/")
+        os.system(
+            f"cp {file['filename']} {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/TEXT/"
+        )
+    os.system(
+        f"cp {params.output_path}/{direction}/toms.db {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/"
+    )
     print("done")
+
 
 def parse_file(file):
     """Parse tab delimited file and insert into table"""
@@ -203,12 +223,12 @@ def validate_field_type(fields, field_types, field_names, groups_file=False):
     for field in field_names:
         if field in FILTERED_FIELDS:
             continue
-        value = fields.get(field) # Use get without default "" initially
+        value = fields.get(field)  # Use get without default "" initially
 
         if field == "group_id":
             if groups_file is False:
                 if value is None:
-                    value = [] # Default to empty list if missing
+                    value = []  # Default to empty list if missing
                 elif not isinstance(value, list):
                     try:
                         value = [int(value)]
@@ -219,18 +239,18 @@ def validate_field_type(fields, field_types, field_names, groups_file=False):
 
         # Default value handling for other fields
         if value is None:
-             field_type = field_types.get(field, "TEXT").upper()
-             if field_type == "INTEGER" or field_type == "FLOAT":
-                 value = None
-             else:
-                 value = ""
+            field_type = field_types.get(field, "TEXT").upper()
+            if field_type == "INTEGER" or field_type == "FLOAT":
+                value = None
+            else:
+                value = ""
 
         field_type = field_types.get(field, "TEXT")
         # ... rest of validate_field_type remains the same ...
         if field_type.upper() == "INTEGER" and not field.endswith("passage_length") and field != "rowid":
             if value is None:
-                 values.append(value)
-                 continue
+                values.append(value)
+                continue
             if isinstance(value, int):
                 value = str(value)
             year_match = YEAR_FINDER.search(str(value))
@@ -246,7 +266,7 @@ def validate_field_type(fields, field_types, field_names, groups_file=False):
                     try:
                         value = int(year_match.groups()[0])
                     except ValueError:
-                         value = None
+                        value = None
             else:
                 value = None
         elif field_type == "TEXT" and isinstance(value, str):
@@ -268,7 +288,17 @@ def get_metadata_fields(metadata_file, direction):
     return fields
 
 
-def load_db(file, source_metadata, target_metadata, table_name, searchable_fields, count, algorithm, banalities_stored, textpair_params=None):
+def load_db(
+    file,
+    source_metadata,
+    target_metadata,
+    table_name,
+    searchable_fields,
+    count,
+    algorithm,
+    banalities_stored,
+    textpair_params=None,
+):
     """Load SQL table"""
     import numpy as np
 
@@ -292,7 +322,7 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     alignments_dir = os.path.dirname(file)
 
     # Get embedding model name from params or use default
-    if textpair_params and hasattr(textpair_params, 'preprocessing_params'):
+    if textpair_params and hasattr(textpair_params, "preprocessing_params"):
         embedding_model = textpair_params.preprocessing_params["source"]["embedding_model"]
     else:
         embedding_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -303,12 +333,16 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     embeddings_meta_path = os.path.join(alignments_dir, f"{safe_model_name}_embeddings", "metadata.json")
 
     if os.path.exists(embeddings_cache_path) and os.path.exists(embeddings_meta_path):
-        with open(embeddings_meta_path, 'rb') as f:
+        with open(embeddings_meta_path, "rb") as f:
             metadata = orjson.loads(f.read())
-        sbert_dim = metadata['sbert_dim']
-        alignment_counts = metadata['alignment_counts']
-        embeddings_memmap = np.memmap(embeddings_cache_path, dtype='float32', mode='r',
-                                      shape=(alignment_counts, sbert_dim))
+        sbert_dim = metadata["sbert_dim"]
+        alignment_counts = metadata["alignment_counts"]
+        embeddings_memmap = np.memmap(
+            embeddings_cache_path,
+            dtype="float32",
+            mode="r",
+            shape=(alignment_counts, sbert_dim),
+        )
 
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = DEFAULT_FIELDS
@@ -328,7 +362,9 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
         fields_in_table.append(f"embedding vector({sbert_dim})")
         field_names.add("embedding")
 
-    fields_and_types = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f not in ("rowid", "embedding")]
+    fields_and_types = [
+        f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f not in ("rowid", "embedding")
+    ]
     fields_in_table.extend(fields_and_types)
     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
     cursor.execute(f"CREATE TABLE {table_name} ({', '.join(fields_in_table)})")
@@ -402,7 +438,7 @@ def load_db(file, source_metadata, target_metadata, table_name, searchable_field
     cursor.execute(f"CREATE INDEX target_end_byte_{table_name}_idx ON {table_name} USING BTREE(target_end_byte)")
     cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
     cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
-    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING GIN(group_id)") # GIN index
+    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING GIN(group_id)")  # GIN index
 
     # Create vector similarity index if embeddings were added
     if embeddings_memmap is not None:
@@ -502,6 +538,7 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
     database.commit()
     database.close()
 
+
 def generate_database_stats(table_name, algorithm):
     """Generate statistics for the database"""
     print("Generating database statistics (this could take a while)...")
@@ -536,6 +573,7 @@ def generate_database_stats(table_name, algorithm):
     stats["pairs_count"] = cursor.fetchone()[0]
     return stats
 
+
 def set_up_app(web_config, db_path, table, algorithm):
     """Copy and build web application with correct configuration"""
     os.system(f"rm -rf {db_path}")
@@ -548,7 +586,6 @@ def set_up_app(web_config, db_path, table, algorithm):
     with open(os.path.join(db_path, "appConfig.json"), "w", encoding="utf8") as config_file:
         json.dump(web_config(), config_file, indent=4)
     os.system(f"""cd {db_path}; npm install --silent; npm run build > "/dev/null" 2>&1;""")
-
 
 
 def create_web_app(
@@ -571,9 +608,16 @@ def create_web_app(
 ):
     """Main routine"""
     web_config = WebAppConfig(
-        table, api_server, source_database_link, target_database_link, source_philo_db_path,
-        target_philo_db_path, algorithm, store_banalities, textpair_params.source_against_source,
-        textpair_params
+        table,
+        api_server,
+        source_database_link,
+        target_database_link,
+        source_philo_db_path,
+        target_philo_db_path,
+        algorithm,
+        store_banalities,
+        textpair_params.source_against_source,
+        textpair_params,
     )
 
     print("\n### Storing results in database ###", flush=True)
@@ -615,7 +659,9 @@ def create_web_app(
     if textpair_params.is_philo_db is False:
         if textpair_params.source_against_source is True:
             copy_data(textpair_params, "source")
-            os.system(f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data")
+            os.system(
+                f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data"
+            )
         else:
             copy_data(textpair_params, "source")
             copy_data(textpair_params, "target")
@@ -626,6 +672,7 @@ def create_web_app(
     print(
         f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
     )
+
 
 if __name__ == "__main__":
     load_groups_file(

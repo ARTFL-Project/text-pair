@@ -16,7 +16,15 @@ import requests
 
 
 class LlamaServerManager:
-    def __init__(self, model_path, port=8080, context_window=8192, concurrency_limit=8, max_retries=30, retry_delay=1):
+    def __init__(
+        self,
+        model_path,
+        port=8080,
+        context_window=8192,
+        concurrency_limit=8,
+        max_retries=30,
+        retry_delay=1,
+    ):
         self.model_path = model_path
         self.port = port
         self.context_window = context_window
@@ -44,6 +52,7 @@ class LlamaServerManager:
 
         # Try to find in PATH
         import shutil
+
         if shutil.which("llama-server"):
             return "llama-server"
 
@@ -60,19 +69,25 @@ class LlamaServerManager:
         # So we need to multiply the desired context window by the parallel value
         total_context_size = self.context_window * self.concurrency_limit
 
-        cmd = [
-            llama_server,
-            "--host", "127.0.0.1",
-            "--port", str(self.port),
-            "--ctx-size", str(total_context_size),
-            "--n-gpu-layers", "99",
-            "--parallel", str(self.concurrency_limit),  # Handle multiple concurrent requests
-            "--log-disable",    # Reduce log noise
-            "--threads", "4",   # CPU threads
-            "--mlock",           # Enable memory locking
-            "--cont-batching",   # Enable continuous batching
-            "-fa", "on"        # Enable fast attention
-        ]
+        # Define parameters as a dictionary first for clarity
+        params = {
+            "--host": "127.0.0.1",
+            "--port": str(self.port),
+            "--ctx-size": str(total_context_size),
+            "--n-gpu-layers": "99",
+            "--parallel": str(self.concurrency_limit),  # Handle multiple concurrent requests
+            "--log-disable": "",  # Reduce log noise
+            "--threads": "4",  # CPU threads
+            "--mlock": "",  # Enable memory locking
+            "--cont-batching": "",  # Enable continuous batching
+            "-fa": "on",  # Enable fast attention
+        }
+
+        cmd = [llama_server]
+        for key, value in params.items():
+            cmd.append(key)
+            if value:
+                cmd.append(value)
 
         # If file exists locally, use --model, otherwise assume HF repo
         if os.path.exists(self.model_path):
@@ -82,16 +97,13 @@ class LlamaServerManager:
             cmd.extend(["-hf", self.model_path])
             print(f"Starting llama-server with HF repo: {self.model_path}")
 
-        print(f"Context window per slot: {self.context_window}, Parallel slots: {self.concurrency_limit}, Total context: {total_context_size}")
+        print(
+            f"Context window per slot: {self.context_window}, Parallel slots: {self.concurrency_limit}, Total context: {total_context_size}"
+        )
 
         self.llama_server_cmd = cmd
         try:
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except FileNotFoundError:
             raise RuntimeError(f"Failed to start llama-server. Binary not found: {llama_server}")
 
@@ -116,11 +128,13 @@ class LlamaServerManager:
                 response = requests.get(f"{self.base_url}/health", timeout=2)
                 if response.status_code == 200:
                     return  # Server is ready
-            except (requests.exceptions.RequestException, requests.exceptions.ConnectionError):
+            except (
+                requests.exceptions.RequestException,
+                requests.exceptions.ConnectionError,
+            ):
                 pass  # Server not ready yet
 
             time.sleep(self.retry_delay)
-
 
         raise RuntimeError(
             f"Server failed to become ready after {self.max_retries} attempts.\n"

@@ -22,11 +22,12 @@ from textpair_llm.llm_evaluation import AsyncLLMEvaluator, LLMDebugLogger
 
 from .corpus import TfIdfCorpus, TransformerCorpus, Word2VecEmbeddingCorpus
 from .expansion import expand_validated_matches
-from .structures import Matches, MergedGroup, PassageGroup
+from .structures import TEMP_DIR, Matches, MergedGroup, PassageGroup
 
 # ============================================================================
 # Helper Functions for Text Processing and Post-processing
 # ============================================================================
+
 
 def get_passage(doc: Tokens, start_byte: int, end_byte: int) -> list[Token]:
     """Get passage within Tokens object"""
@@ -99,6 +100,7 @@ def post_process_passages(
 # Passage Merging and Similarity Computation
 # ============================================================================
 
+
 def merge_passages(
     matches: Matches,
     min_score: float,
@@ -110,7 +112,9 @@ def merge_passages(
     last_count = len(matches)
     current_count = last_count + 1
     iteration = 1
-    merged_matches: list[MergedGroup] = Matches.load().matches  # type:ignore
+
+    # Stream from the original matches database instead of loading into memory
+    current_db = "matches.db"
 
     print(f"Merging matches: {last_count} matches before iteration 1", end="", flush=True)
 
@@ -130,12 +134,12 @@ def merge_passages(
             source_text = get_text(
                 merged_group.source.start_byte,
                 merged_group.source.end_byte,
-                merged_group.source.filename
+                merged_group.source.filename,
             )
             target_text = get_text(
                 merged_group.target.start_byte,
                 merged_group.target.end_byte,
-                merged_group.target.filename
+                merged_group.target.filename,
             )
 
             # Compute the baseline similarity using embeddings (no LLM evaluation here)
@@ -151,7 +155,7 @@ def merge_passages(
                     target_doc = model.model(" ".join(target_text.split()))  # type: ignore
                     target_vector = (target_doc.vector / target_doc.vector_norm).reshape(1, -1)
                     similarity_result = linear_kernel(source_vector, target_vector, dense_output=False)
-                    if hasattr(similarity_result, 'toarray'):
+                    if hasattr(similarity_result, "toarray"):
                         computed_similarity = similarity_result.toarray()[0][0]  # type: ignore
                     else:
                         computed_similarity = similarity_result[0][0]  # type: ignore
@@ -162,7 +166,7 @@ def merge_passages(
                     source_vector = model.vectorizer.transform([source_text])  # type: ignore
                     target_vector = model.vectorizer.transform([target_text])  # type: ignore
                     similarity_result = linear_kernel(source_vector, target_vector, dense_output=False)
-                    if hasattr(similarity_result, 'toarray'):
+                    if hasattr(similarity_result, "toarray"):
                         computed_similarity = similarity_result.toarray()[0][0]  # type: ignore
                     else:
                         computed_similarity = similarity_result[0][0]  # type: ignore
@@ -174,79 +178,118 @@ def merge_passages(
             # Fallback to min_score if computation fails
             return min_score
 
-    while last_count / current_count <= 1.0:  # we stop iterating if there are minimal change between iterations
-        last_count = current_count
-        merged_matches = sorted(
-            merged_matches,
-            key=lambda x: (
-                x.source.filename,
-                x.target.filename,
-                x.source.start_byte,
-                x.source.start_byte - x.source.end_byte,
-                x.target.start_byte,
-                x.target.start_byte - x.target.end_byte,
-            ),
-        )  # sort by smaller start byte and bigger end_byte
-        merged_group: MergedGroup = MergedGroup()
-        saved_groups: list[MergedGroup] = []
-        total_matches: int = len(matches)  # Use original matches count like the working version
-        start_score: float = min_score
-        merged_pairs: list[float] = []
+    def merge_iteration_streaming(input_db: str, output_db: str) -> int:
+        """Perform one merge iteration, streaming from input_db and writing to output_db"""
+        # Load matches from database for streaming
+        matches_stream = Matches.load_streaming(input_db)
 
-        for pos, match in enumerate(merged_matches):
-            merged_source: bool = False
-            merged_target: bool = False
-            if merged_group.source.filename == "":
-                merged_pairs.append(match.similarity)
-                merged_group = MergedGroup(match.source, match.target, start_score)
-                continue
-            if (
-                match.source.filename != merged_group.source.filename
-                or match.target.filename != merged_group.target.filename
-            ):
-                # Recompute similarity for the merged group
-                merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
-                saved_groups.append(merged_group)
-                merged_pairs = [match.similarity]
-                merged_group = MergedGroup(match.source, match.target, start_score)
-                continue
-            if match.source.start_byte <= merged_group.source.end_byte:
-                if match.source.end_byte > merged_group.source.end_byte:
-                    merged_group.source.end_byte = match.source.end_byte
-                    merged_group.source.metadata["end_byte"] = match.source.end_byte
-                    merged_source = True
-                elif match.source.end_byte == merged_group.source.end_byte:
-                    merged_source = True
-            if match.target.start_byte <= merged_group.target.end_byte:
-                if match.target.end_byte > merged_group.target.end_byte:
-                    merged_group.target.end_byte = match.target.end_byte
-                    merged_group.target.metadata["end_byte"] = match.target.end_byte
-                    merged_target = True
-                elif match.target.end_byte == merged_group.target.end_byte:
-                    merged_target = True
-            if any((merged_source, merged_target)):
-                merged_pairs.append(match.similarity)
-            if merged_source is False and merged_target is False:
-                # Recompute similarity for the current merged group
-                merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
-                saved_groups.append(merged_group)
-                merged_pairs = [match.similarity]
-                merged_group = MergedGroup(match.source, match.target, match.similarity)
-            if pos + 1 == total_matches:
-                # Recompute similarity for the final merged group
-                merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
-                saved_groups.append(merged_group)
-        merged_matches = saved_groups
+        # Process matches and write to new database
+        def generate_merged_groups():
+            merged_group: MergedGroup = MergedGroup()
+            start_score: float = min_score
+            merged_pairs: list[float] = []
+            total_matches = matches_stream.count  # Use the actual count from the input database
+
+            for pos, match in enumerate(matches_stream.iter_sorted()):
+                merged_source: bool = False
+                merged_target: bool = False
+                if merged_group.source.filename == "":
+                    merged_pairs.append(match.similarity)
+                    merged_group = MergedGroup(match.source, match.target, start_score)
+                    continue
+                if (
+                    match.source.filename != merged_group.source.filename
+                    or match.target.filename != merged_group.target.filename
+                ):
+                    # Recompute similarity for the merged group
+                    merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
+                    yield merged_group
+                    merged_pairs = [match.similarity]
+                    merged_group = MergedGroup(match.source, match.target, start_score)
+                    continue
+                if match.source.start_byte <= merged_group.source.end_byte:
+                    if match.source.end_byte > merged_group.source.end_byte:
+                        merged_group.source.end_byte = match.source.end_byte
+                        merged_group.source.metadata["end_byte"] = match.source.end_byte
+                        merged_source = True
+                    elif match.source.end_byte == merged_group.source.end_byte:
+                        merged_source = True
+                if match.target.start_byte <= merged_group.target.end_byte:
+                    if match.target.end_byte > merged_group.target.end_byte:
+                        merged_group.target.end_byte = match.target.end_byte
+                        merged_group.target.metadata["end_byte"] = match.target.end_byte
+                        merged_target = True
+                    elif match.target.end_byte == merged_group.target.end_byte:
+                        merged_target = True
+                if any((merged_source, merged_target)):
+                    merged_pairs.append(match.similarity)
+                if merged_source is False and merged_target is False:
+                    # Recompute similarity for the current merged group
+                    merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
+                    yield merged_group
+                    merged_pairs = [match.similarity]
+                    merged_group = MergedGroup(match.source, match.target, match.similarity)
+                if pos + 1 == total_matches:
+                    # Recompute similarity for the final merged group
+                    merged_group.similarity = compute_merged_similarity(merged_group, merged_pairs)
+                    yield merged_group
+
+        # Write merged results to output database
+        count = Matches.save_from_iterable(generate_merged_groups(), output_db)
+        matches_stream.close()
+        return count
+
+    # Perform iterative merging with streaming
+    while last_count / current_count <= 1.0:
+        last_count = current_count
+
+        # Alternate between temp databases
+        if iteration == 1:
+            input_db = current_db
+            output_db = "matches_temp1.db"
+        else:
+            # Alternate between temp databases and clean up old one
+            if iteration % 2 == 0:
+                input_db = "matches_temp1.db"
+                output_db = "matches_temp2.db"
+            else:
+                input_db = "matches_temp2.db"
+                output_db = "matches_temp1.db"
+
+        current_count = merge_iteration_streaming(input_db, output_db)
         iteration += 1
-        current_count = len(saved_groups)
-        print(f"\rMerging matches: {current_count} matches after iteration {iteration+1}...", end="", flush=True)
+        print(
+            f"\rMerging matches: {current_count} matches after iteration {iteration}...",
+            end="",
+            flush=True,
+        )
+
     print(flush=True)
-    return merged_matches
+
+    # Load final results into memory (should be much smaller after merging)
+    # Use the last output database that was written
+    final_db = output_db
+    final_matches = Matches.load_streaming(final_db)
+    result = list(final_matches.iter_sorted())
+    final_matches.close()
+
+    # Clean up temporary databases
+    import glob
+
+    matches_path = os.path.join(TEMP_DIR, "output/results/matches")
+    for temp_db in glob.glob(os.path.join(matches_path, "matches_temp*.db")):
+        try:
+            os.remove(temp_db)
+        except Exception:
+            pass  # Ignore cleanup errors
+
+    return result
 
 
 # ============================================================================
 # Similarity Calculation Functions
 # ============================================================================
+
 
 def simple_similarity(
     source_texts: Iterable[Tokens],
@@ -323,7 +366,12 @@ def transformer_similarity(
     else:
         matching_docs = source_corpus.inner_compare(min_similarity)
         target_corpus = source_corpus
-    return matching_docs, source_corpus.metadata, target_corpus.metadata, source_corpus.model
+    return (
+        matching_docs,
+        source_corpus.metadata,
+        target_corpus.metadata,
+        source_corpus.model,
+    )
 
 
 def word2vec_embed_similarity(
@@ -362,6 +410,7 @@ def word2vec_embed_similarity(
         matching_docs = source_corpus.inner_compare(min_similarity)
         target_corpus = source_corpus
     return source_corpus, matching_docs, source_corpus.metadata, target_corpus.metadata
+
 
 async def evaluate_passages_with_llm(
     merged_matches: list[MergedGroup],
@@ -402,12 +451,12 @@ async def evaluate_passages_with_llm(
             source_text = get_text(
                 merged_group.source.start_byte,
                 merged_group.source.end_byte,
-                merged_group.source.filename
+                merged_group.source.filename,
             )
             target_text = get_text(
                 merged_group.target.start_byte,
                 merged_group.target.end_byte,
-                merged_group.target.filename
+                merged_group.target.filename,
             )
             passage_pairs.append((source_text, target_text))
             computed_similarities.append(merged_group.similarity)
@@ -416,7 +465,7 @@ async def evaluate_passages_with_llm(
         llm_results = await llm_evaluator.evaluate_batch(passage_pairs, batch_size=8)
 
         # Update similarities and filter by threshold
-        for i, (merged_group, (llm_similarity, llm_reasoning)) in enumerate(zip(merged_matches, llm_results)):
+        for i, (merged_group, (llm_similarity, llm_reasoning, _)) in enumerate(zip(merged_matches, llm_results)):
             computed_similarity = computed_similarities[i]
 
             # Update the similarity score with LLM evaluation
@@ -424,15 +473,24 @@ async def evaluate_passages_with_llm(
 
             # Debug: Log the LLM evaluation
             debug_logger.log_llm_evaluation(
-                i, computed_similarity, llm_similarity, llm_reasoning,
-                merged_group.source.filename, merged_group.target.filename, passage_pairs[i][0], passage_pairs[i][1]
+                i,
+                computed_similarity,
+                llm_similarity,
+                llm_reasoning,
+                merged_group.source.filename,
+                merged_group.target.filename,
+                passage_pairs[i][0],
+                passage_pairs[i][1],
             )
 
         # Filter out passages below threshold
         original_count = len(merged_matches)
         filtered_matches = [match for match in merged_matches if match.similarity >= min_score]
 
-        print(f"Completed LLM evaluation. Kept {len(filtered_matches)}/{original_count} passages above {min_score} threshold.", flush=True)
+        print(
+            f"Completed LLM evaluation. Kept {len(filtered_matches)}/{original_count} passages above {min_score} threshold.",
+            flush=True,
+        )
 
         return filtered_matches, llm_evaluator
 
@@ -442,9 +500,11 @@ async def evaluate_passages_with_llm(
         debug_logger.log_llm_error(str(llm_error))
         return merged_matches, llm_evaluator
 
+
 # ============================================================================
 # Main Orchestrator Function
 # ============================================================================
+
 
 async def run_vsa(
     source_path: str,
@@ -532,7 +592,7 @@ async def run_vsa(
         )
         # Iteratively expand the boundaries of the validated matches
         try:
-            if matches: # Only run expansion if there are matches left
+            if matches:  # Only run expansion if there are matches left
                 matches = await expand_validated_matches(
                     matches,
                     evaluator=llm_evaluator,
@@ -546,25 +606,39 @@ async def run_vsa(
 
     if source_preproc is None:
         source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
-        target_preproc = PreProcessor(
-            is_philo_db=True, workers=workers, **config["target"]
-        )
+        target_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["target"])
 
     with lz4.frame.open(f"{output_path}/results/alignments.jsonl.lz4", mode="wb", compression_level=3) as output:
         for match in tqdm(matches, total=len(matches), leave=False):
             source_context_before = get_text(
-                match.source.start_byte - 300, match.source.start_byte, match.source.metadata["filename"]
+                match.source.start_byte - 300,
+                match.source.start_byte,
+                match.source.metadata["filename"],
             )
-            source_passage = get_text(match.source.start_byte, match.source.end_byte, match.source.metadata["filename"])
+            source_passage = get_text(
+                match.source.start_byte,
+                match.source.end_byte,
+                match.source.metadata["filename"],
+            )
             source_context_after = get_text(
-                match.source.end_byte, match.source.end_byte + 300, match.source.metadata["filename"]
+                match.source.end_byte,
+                match.source.end_byte + 300,
+                match.source.metadata["filename"],
             )
             target_context_before = get_text(
-                match.target.start_byte - 300, match.target.start_byte, match.target.metadata["filename"]
+                match.target.start_byte - 300,
+                match.target.start_byte,
+                match.target.metadata["filename"],
             )
-            target_passage = get_text(match.target.start_byte, match.target.end_byte, match.target.metadata["filename"])
+            target_passage = get_text(
+                match.target.start_byte,
+                match.target.end_byte,
+                match.target.metadata["filename"],
+            )
             target_context_after = get_text(
-                match.target.end_byte, match.target.end_byte + 300, match.target.metadata["filename"]
+                match.target.end_byte,
+                match.target.end_byte + 300,
+                match.target.metadata["filename"],
             )
             if config["source"]["vectorization"] == "tfidf":
                 source_preproc.strip_tags = False  # type: ignore

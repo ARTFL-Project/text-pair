@@ -38,7 +38,13 @@ APP_PATH = GLOBAL_CONFIG["WEB_APP"]["web_app_path"]
 
 PHILO_REQUEST = namedtuple("PHILO_REQUEST", ["byte", "start_byte", "end_byte", "passages"])
 PHILO_CONFIG = namedtuple(
-    "PHILO_CONFIG", ["db_path", "page_images_url_root", "page_image_extension", "page_external_page_images"]
+    "PHILO_CONFIG",
+    [
+        "db_path",
+        "page_images_url_root",
+        "page_image_extension",
+        "page_external_page_images",
+    ],
 )
 
 BOOLEAN_ARGS = re.compile(r"""(NOT \w+)|(OR \w+)|(\w+)|("")""")
@@ -155,7 +161,13 @@ def parse_args(request):
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
-            if key in ("page", "id_anchor", "timeSeriesInterval", "start_byte", "end_byte"):
+            if key in (
+                "page",
+                "id_anchor",
+                "timeSeriesInterval",
+                "start_byte",
+                "end_byte",
+            ):
                 if value.isdigit():
                     other_args[key] = int(value)
             elif key == "direction":
@@ -210,7 +222,7 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
                 if field_type == "INTEGER":
                     query = f"{field} = %s"
                     sql_values.append(filter_gid)
-                elif field_type == "ARRAY": # Covers INTEGER[]
+                elif field_type == "ARRAY":  # Covers INTEGER[]
                     # Use array containment operator
                     query = f"{field} @> ARRAY[%s]::integer[]"
                     sql_values.append(filter_gid)
@@ -219,18 +231,18 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
                     # Use JSONB containment operator
                     query = f"{field} @> %s::jsonb"
                     # Pass the integer as a JSON array string containing that number
-                    sql_values.append(f'[{filter_gid}]')
-                else: # Fallback to integer equality for unknown types
+                    sql_values.append(f"[{filter_gid}]")
+                else:  # Fallback to integer equality for unknown types
                     query = f"{field} = %s"
                     sql_values.append(filter_gid)
 
-                if query: # Only append if a query was successfully constructed
+                if query:  # Only append if a query was successfully constructed
                     sql_fields.append(query)
 
             except (ValueError, TypeError):
                 # Ignore if the provided group_id filter value is not an integer
-                continue # Skip to the next field
-            continue # Skip the rest of the loop for group_id
+                continue  # Skip to the next field
+            continue  # Skip the rest of the loop for group_id
 
         # --- Existing logic for other types ---
         if field_type == "TEXT":
@@ -253,14 +265,14 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
                 elif value.startswith("NOT "):
                     split_value = " ".join(value.split()[1:]).strip()
                     query = f"{field} !~* %s"
-                    sql_values.append(fr"\m{split_value}\M")
+                    sql_values.append(rf"\m{split_value}\M")
                 # elif value.startswith("OR "):  ## TODO: add support to OR queries by changing the join logic at the end of the function
                 #     split_value = " ".join(value.split()[1:]).strip()
                 #     query = "{} !~* %s".format(field)
                 #     sql_values.append('\m{}\M'.format(split_value))
                 else:
                     query = f"{field} ~* %s"
-                    sql_values.append(fr"\m{value}\M")
+                    sql_values.append(rf"\m{value}\M")
                 sql_fields.append(query)
         elif field_type in ("INTEGER", "FLOAT"):
             value = value.replace('"', "")
@@ -369,15 +381,19 @@ def search_alignments(request: Request):
             query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE {sql_fields} AND o.source_year_target_year=m.rowid and \
                     o.rowid_ordered > {other_args.id_anchor} ORDER BY o.rowid_ordered LIMIT 50"
         else:
-            query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE o.source_year_target_year=m.rowid and \
+            query = (
+                f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered > {other_args.id_anchor} ORDER BY o.rowid_ordered LIMIT 50"
+            )
     else:
         if sql_fields:
             query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE {sql_fields} AND o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {other_args.id_anchor} ORDER BY o.rowid_ordered desc LIMIT 50"
         else:
-            query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE o.source_year_target_year=m.rowid and \
+            query = (
+                f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE o.source_year_target_year=m.rowid and \
                     o.rowid_ordered < {other_args.id_anchor} ORDER BY o.rowid_ordered desc LIMIT 50"
+            )
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
@@ -405,19 +421,27 @@ def search_alignments(request: Request):
         group_ids.reverse()
 
     # Check if groups table exists
-    cursor.execute(f"""SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{other_args.db_table}_groups')""")
+    cursor.execute(
+        f"""SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{other_args.db_table}_groups')"""
+    )
     if cursor.fetchone()[0] is True:
         counts_per_group: dict[int, int] = {}
         for group_id in set(group_ids):
-            cursor.execute(f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""", (group_id,))
+            cursor.execute(
+                f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""",
+                (group_id,),
+            )
             try:
                 source_doc_id = cursor.fetchone()[0]
             except:
-                return {"group_id": group_id, "error": "No source_doc_id found for this group_id"}
+                return {
+                    "group_id": group_id,
+                    "error": "No source_doc_id found for this group_id",
+                }
             if group_id_type == "ARRAY":
                 count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
                 params = (group_id, source_doc_id)
-            else: # Assume INTEGER
+            else:  # Assume INTEGER
                 count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s"
                 params = (group_id, source_doc_id)
             cursor.execute(count_query, params)
@@ -434,9 +458,13 @@ def search_alignments(request: Request):
     previous_url = ""
     current_path = re.sub(r"&(page|id_anchor|direction)=(previous|next|\d*)", "", request.url.path)
     if other_args.page > 1:  # type: ignore
-        previous_url = f"{current_path}&page={other_args.page - 1}&id_anchor={alignments[0]['rowid_ordered']}&direction=previous"  # type: ignore
+        previous_url = (
+            f"{current_path}&page={other_args.page - 1}&id_anchor={alignments[0]['rowid_ordered']}&direction=previous"  # type: ignore
+        )
     try:
-        next_url = f"{current_path}&page={other_args.page + 1}&id_anchor={alignments[-1]['rowid_ordered']}&direction=next"  # type: ignore
+        next_url = (
+            f"{current_path}&page={other_args.page + 1}&id_anchor={alignments[-1]['rowid_ordered']}&direction=next"  # type: ignore
+        )
     except IndexError:
         next_url = ""
     start_position = 0
@@ -498,7 +526,10 @@ def retrieve_all(request: Request):
         cursor.execute(query)
     for row in cursor:
         if row[doc_id] not in docs_found:
-            docs_found[row[doc_id]] = {"count": 0, **{key: row[key] for key in column_names}}
+            docs_found[row[doc_id]] = {
+                "count": 0,
+                **{key: row[key] for key in column_names},
+            }
         docs_found[row[doc_id]]["count"] += 1
     conn.rollback()
     conn.close()
@@ -681,12 +712,11 @@ def get_passage_group(request: Request, group_id: int):
     original_passage_result = cursor.fetchone()
     original_passage = {k: v for k, v in original_passage_result.items()}
 
-
     # Query the main alignment_table using the correct operator based on its group_id type
     if group_id_type == "ARRAY":
         query = f"SELECT * FROM {alignment_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
         params = (group_id, original_passage["source_doc_id"])
-    else: # Backward compatibility for INTEGER type
+    else:  # Backward compatibility for INTEGER type
         query = f"SELECT * FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s"
         params = (group_id, original_passage["source_doc_id"])
 
@@ -738,39 +768,42 @@ def get_sorted_results(request: Request):
 
     # Store potential group IDs and their source docs
     # Check type of retrieved value here
-    potential_groups: dict[int, str] = {} # group_id -> source_doc_id
+    potential_groups: dict[int, str] = {}  # group_id -> source_doc_id
     for row in cursor:
         gid_value = row["group_id"]
         source_doc_id = row["source_doc_id"]
-        if isinstance(gid_value, int): # Check if it's an integer
+        if isinstance(gid_value, int):  # Check if it's an integer
             if gid_value is not None:
-                 potential_groups[gid_value] = source_doc_id
-        elif isinstance(gid_value, list): # Check if it's a list (from ARRAY)
-             for single_gid in gid_value:
-                 if single_gid is not None:
-                     try:
-                         potential_groups[int(single_gid)] = source_doc_id
-                     except (ValueError, TypeError):
-                         continue
+                potential_groups[gid_value] = source_doc_id
+        elif isinstance(gid_value, list):  # Check if it's a list (from ARRAY)
+            for single_gid in gid_value:
+                if single_gid is not None:
+                    try:
+                        potential_groups[int(single_gid)] = source_doc_id
+                    except (ValueError, TypeError):
+                        continue
         elif gid_value is None:
-             continue
+            continue
 
     counts_per_group: dict[int, int] = {}
     groups_table = f"{other_args.db_table}_groups"
 
     for group_id in potential_groups:
         # Verify against the _groups table for the canonical source_doc_id
-        cursor.execute(f"""SELECT source_doc_id FROM {groups_table} WHERE group_id=%s""", (group_id,))
+        cursor.execute(
+            f"""SELECT source_doc_id FROM {groups_table} WHERE group_id=%s""",
+            (group_id,),
+        )
         group_source_result = cursor.fetchone()
         if not group_source_result:
             continue
         group_source_doc_id = group_source_result[0]
 
         # Count occurrences in the main table using the correct query type
-        if group_id_type == "ARRAY": # Check for ARRAY type
+        if group_id_type == "ARRAY":  # Check for ARRAY type
             count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
             params = (group_id, group_source_doc_id)
-        else: # Assume INTEGER if not ARRAY
+        else:  # Assume INTEGER if not ARRAY
             count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s"
             params = (group_id, group_source_doc_id)
 
@@ -846,14 +879,22 @@ def text_view(request: Request):
 
     # Get metadata
     cursor.execute(
-        f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s", (other_args.philo_id,)
+        f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s",
+        (other_args.philo_id,),
     )
     metadata_fields: psycopg2.extras.RealDictCursor = cursor.fetchone()  # type: ignore
 
     # Get metadata for other direction
     other_metadata_fields = []
     for passage_pair in merged_passage_pairs:
-        cursor.execute(f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s", (metadata_fields[f"{other_args.directionSelected}_filename"], passage_pair["start_byte"], passage_pair["end_byte"]))  # type: ignore
+        cursor.execute(
+            f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s",
+            (
+                metadata_fields[f"{other_args.directionSelected}_filename"],
+                passage_pair["start_byte"],
+                passage_pair["end_byte"],
+            ),
+        )  # type: ignore
         other_metadata_fields.append([])
         for row in cursor:
             other_metadata_fields[-1].append(
@@ -894,7 +935,10 @@ def get_passages(request: Request):
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cursor.execute(f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s", (request.query_params["filename"], start_byte, end_byte))
+    cursor.execute(
+        f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s",
+        (request.query_params["filename"], start_byte, end_byte),
+    )
     passages = []
     for row in cursor:
         passages.append({field: value for field, value in row.items()})
@@ -936,7 +980,7 @@ def get_network_data(request: Request):
         conn.close()
         return {
             "error": f"Field '{aggregation_field}' not available in database",
-            "available_fields": list(field_types.keys())
+            "available_fields": list(field_types.keys()),
         }
 
     # Build aggregation query
@@ -995,11 +1039,7 @@ def get_network_data(request: Request):
         if not source or not target:
             continue
 
-        edges.append({
-            "source": source,
-            "target": target,
-            "weight": weight
-        })
+        edges.append({"source": source, "target": target, "weight": weight})
 
         node_set.add(source)
         node_set.add(target)
@@ -1010,7 +1050,13 @@ def get_network_data(request: Request):
 
     # Limit to top N nodes by total weight (most connected)
     if len(node_set) > max_nodes:
-        top_nodes = set(sorted(node_weights_total.keys(), key=lambda x: node_weights_total[x], reverse=True)[:max_nodes])
+        top_nodes = set(
+            sorted(
+                node_weights_total.keys(),
+                key=lambda x: node_weights_total[x],
+                reverse=True,
+            )[:max_nodes]
+        )
         # Filter edges to only include top nodes
         edges = [e for e in edges if e["source"] in top_nodes and e["target"] in top_nodes]
 
@@ -1031,28 +1077,30 @@ def get_network_data(request: Request):
     # Calculate centrality based on mode
     if centrality_mode == "eigenvector":
         try:
-            centrality = nx.eigenvector_centrality(G, max_iter=100, weight='weight')
+            centrality = nx.eigenvector_centrality(G, max_iter=100, weight="weight")
         except:
             # Fall back to degree centrality if eigenvector fails (e.g., disconnected graph)
-            centrality = dict(G.degree(weight='weight'))
+            centrality = dict(G.degree(weight="weight"))
     elif centrality_mode == "betweenness":
-        centrality = nx.betweenness_centrality(G, weight='weight')
+        centrality = nx.betweenness_centrality(G, weight="weight")
     else:  # degree (default)
-        centrality = dict(G.degree(weight='weight'))
+        centrality = dict(G.degree(weight="weight"))
 
     # Create nodes list with metadata
     nodes = []
     for node_id in node_set:
-        nodes.append({
-            "id": node_id,
-            "label": node_id,
-            "size": centrality.get(node_id, 0),  # Size based on centrality metric
-            "centrality": centrality.get(node_id, 0),  # Also keep as separate field for reference
-            "total_alignments": node_weights_total[node_id],
-            "as_source": node_weights_as_source[node_id],
-            "as_target": node_weights_as_target[node_id],
-            "type": aggregation_field
-        })
+        nodes.append(
+            {
+                "id": node_id,
+                "label": node_id,
+                "size": centrality.get(node_id, 0),  # Size based on centrality metric
+                "centrality": centrality.get(node_id, 0),  # Also keep as separate field for reference
+                "total_alignments": node_weights_total[node_id],
+                "as_source": node_weights_as_source[node_id],
+                "as_target": node_weights_as_target[node_id],
+                "type": aggregation_field,
+            }
+        )
 
     conn.rollback()
     conn.close()
@@ -1064,16 +1112,11 @@ def get_network_data(request: Request):
         "centrality_mode": centrality_mode,
         "total_nodes": len(nodes),
         "total_edges": len(edges),
-        "threshold": min_threshold
+        "threshold": min_threshold,
     }
 
 
-
-
 @app.get("/count_by_year/")
-
-
-
 @app.get("/network_data/edge_details/")
 @app.get("/text-pair-api/network_data/edge_details/")
 def get_edge_details(request: Request):
@@ -1141,7 +1184,7 @@ def get_edge_details(request: Request):
         "limit": limit,
         "offset": offset,
         "source": source_node,
-        "target": target_node
+        "target": target_node,
     }
 
 
@@ -1166,13 +1209,15 @@ def get_semantic_graph_data(request: Request):
     # Fast path: if no filters, load precomputed graph
     if not sql_fields:
         print("Loading precomputed full graph from disk...")
-        precomputed_graph_path = os.path.join(graph_data_path, 'precomputed_graph_api.json')
+        precomputed_graph_path = os.path.join(graph_data_path, "precomputed_graph_api.json")
 
         if os.path.exists(precomputed_graph_path):
-            with open(precomputed_graph_path, 'rb') as f:
+            with open(precomputed_graph_path, "rb") as f:
                 graph_data = orjson.loads(f.read())
 
-            print(f"✓ Loaded precomputed graph: {len(graph_data.get('nodes', []))} nodes, {len(graph_data.get('edges', []))} edges")
+            print(
+                f"✓ Loaded precomputed graph: {len(graph_data.get('nodes', []))} nodes, {len(graph_data.get('edges', []))} edges"
+            )
             return graph_data
         else:
             print(f"⚠ Precomputed graph not found at {precomputed_graph_path}, falling back to filtered path")
@@ -1181,25 +1226,25 @@ def get_semantic_graph_data(request: Request):
     print(f"Building filtered graph with query: {sql_fields or '(no filters)'}")
 
     # Load precomputed graph model data
-    cluster_labels_modified = np.load(os.path.join(graph_data_path, 'cluster_labels_modified.npy'))
-    embeddings_umap_2d = np.load(os.path.join(graph_data_path, 'embeddings_umap_2d.npy'))
-    cluster_similarity = np.load(os.path.join(graph_data_path, 'cluster_similarity_matrix.npy'))
+    cluster_labels_modified = np.load(os.path.join(graph_data_path, "cluster_labels_modified.npy"))
+    embeddings_umap_2d = np.load(os.path.join(graph_data_path, "embeddings_umap_2d.npy"))
+    cluster_similarity = np.load(os.path.join(graph_data_path, "cluster_similarity_matrix.npy"))
 
-    with open(os.path.join(graph_data_path, 'author_to_id.json'), 'rb') as f:
+    with open(os.path.join(graph_data_path, "author_to_id.json"), "rb") as f:
         author_to_id = orjson.loads(f.read())
 
-    with open(os.path.join(graph_data_path, 'cluster_metadata.json'), 'rb') as f:
+    with open(os.path.join(graph_data_path, "cluster_metadata.json"), "rb") as f:
         metadata = orjson.loads(f.read())
 
-    n_clusters = metadata['n_clusters']
-    total_clusters = metadata['total_clusters']
+    n_clusters = metadata["n_clusters"]
+    total_clusters = metadata["total_clusters"]
     id_to_author = {v: k for k, v in author_to_id.items()}
 
     # Load cluster labels if available
     cluster_label_map = {}
-    cluster_labels_path = os.path.join(graph_data_path, 'cluster_labels.json')
+    cluster_labels_path = os.path.join(graph_data_path, "cluster_labels.json")
     if os.path.exists(cluster_labels_path):
-        with open(cluster_labels_path, 'rb') as f:
+        with open(cluster_labels_path, "rb") as f:
             labels_data = orjson.loads(f.read())
             # Convert string keys back to integers
             cluster_label_map = {int(k): v for k, v in labels_data.items()}
@@ -1218,16 +1263,16 @@ def get_semantic_graph_data(request: Request):
         query = f"SELECT rowid, source_author, target_author FROM {other_args.db_table}"
     cursor.execute(query, sql_values)
 
-
     # Build (author, cluster) pairs from filtered alignments
     from collections import defaultdict
+
     pair_passage_counts = defaultdict(int)
     pair_embeddings_2d = defaultdict(list)
 
     for row in cursor:
-        rowid = row['rowid']
-        source_author = row['source_author']
-        target_author = row['target_author']
+        rowid = row["rowid"]
+        source_author = row["source_author"]
+        target_author = row["target_author"]
 
         alignment_idx = rowid - 1
         if alignment_idx < 0 or alignment_idx >= len(cluster_labels_modified):
@@ -1265,24 +1310,26 @@ def get_semantic_graph_data(request: Request):
         node_id = f"author_{author_id}_cluster_{cluster_id}"
         position = pair_positions[(author_id, cluster_id)]
 
-        nodes.append({
-            'id': node_id,
-            'label': id_to_author[author_id],
-            'author_id': author_id,
-            'author_name': id_to_author[author_id],
-            'cluster_id': cluster_id,
-            'cluster_label': cluster_label_map.get(cluster_id, ''),
-            'passages': int(passage_count),
-            'size': int(passage_count),
-            'x': float(position[0]),
-            'y': float(position[1])
-        })
+        nodes.append(
+            {
+                "id": node_id,
+                "label": id_to_author[author_id],
+                "author_id": author_id,
+                "author_name": id_to_author[author_id],
+                "cluster_id": cluster_id,
+                "cluster_label": cluster_label_map.get(cluster_id, ""),
+                "passages": int(passage_count),
+                "size": int(passage_count),
+                "x": float(position[0]),
+                "y": float(position[1]),
+            }
+        )
 
     # Group nodes by cluster
     cluster_nodes = defaultdict(list)
     for node in nodes:
-        cluster_id = node['cluster_id']
-        cluster_nodes[cluster_id].append(node['id'])
+        cluster_id = node["cluster_id"]
+        cluster_nodes[cluster_id].append(node["id"])
 
     # Add cluster anchor nodes
     cluster_centroid_positions_2d = {}
@@ -1298,17 +1345,19 @@ def get_semantic_graph_data(request: Request):
 
     for cluster_id, position_2d in cluster_centroid_positions_2d.items():
         anchor_node_id = f"anchor_cluster_{cluster_id}"
-        nodes.append({
-            'id': anchor_node_id,
-            'label': '',
-            'node_type': 'cluster_anchor',
-            'cluster_id': cluster_id,
-            'cluster_label': cluster_label_map.get(cluster_id, ''),
-            'size': 0.01,
-            'x': float(position_2d[0]),
-            'y': float(position_2d[1]),
-            'hidden': True
-        })
+        nodes.append(
+            {
+                "id": anchor_node_id,
+                "label": "",
+                "node_type": "cluster_anchor",
+                "cluster_id": cluster_id,
+                "cluster_label": cluster_label_map.get(cluster_id, ""),
+                "size": 0.01,
+                "x": float(position_2d[0]),
+                "y": float(position_2d[1]),
+                "hidden": True,
+            }
+        )
 
     # Build edges array
     edges = []
@@ -1320,14 +1369,16 @@ def get_semantic_graph_data(request: Request):
             # Connect each node to cluster anchor (star topology, not complete graph)
             anchor_id = f"anchor_cluster_{cluster_id}"
             for node_id in node_ids:
-                edges.append({
-                    'source': node_id,
-                    'target': anchor_id,
-                    'weight': 1.0,
-                    'edge_type': 'intra_cluster',
-                    'color': '#666666',
-                    'size': 0.5
-                })
+                edges.append(
+                    {
+                        "source": node_id,
+                        "target": anchor_id,
+                        "weight": 1.0,
+                        "edge_type": "intra_cluster",
+                        "color": "#666666",
+                        "size": 0.5,
+                    }
+                )
 
     # 2. Add centroid similarity edges (connect cluster anchors)
     # No filtering - send all edges to let ForceAtlas2 see full structure
@@ -1350,24 +1401,26 @@ def get_semantic_graph_data(request: Request):
                 anchor_i = f"anchor_cluster_{cluster_i}"
                 anchor_j = f"anchor_cluster_{cluster_j}"
 
-                edges.append({
-                    'source': anchor_i,
-                    'target': anchor_j,
-                    'weight': float(similarity * 10),
-                    'edge_type': 'centroid_similarity',
-                    'color': '#999999',
-                    'size': 1.0
-                })
+                edges.append(
+                    {
+                        "source": anchor_i,
+                        "target": anchor_j,
+                        "weight": float(similarity * 10),
+                        "edge_type": "centroid_similarity",
+                        "color": "#999999",
+                        "size": 1.0,
+                    }
+                )
 
     return {
-        'nodes': nodes,
-        'edges': edges,
-        'metadata': {
-            'n_clusters': n_clusters,
-            'total_nodes': len(nodes),
-            'total_edges': len(edges),
-            'min_passages_threshold': MIN_PASSAGES_THRESHOLD
-        }
+        "nodes": nodes,
+        "edges": edges,
+        "metadata": {
+            "n_clusters": n_clusters,
+            "total_nodes": len(nodes),
+            "total_edges": len(edges),
+            "min_passages_threshold": MIN_PASSAGES_THRESHOLD,
+        },
     }
 
 

@@ -22,12 +22,14 @@ class LLMDebugLogger:
     Debug logger for LLM operations, providing structured logging for LLM evaluations
     and comparison with computed similarities.
     """
+
     def __init__(self, enabled: bool = False, output_path: str = "output"):
         self.enabled = enabled
         self.output_path = output_path
 
         if self.enabled:
             import os
+
             os.makedirs(self.output_path, exist_ok=True)
             self.llm_file = f"{self.output_path}/llm_debug.log"
         else:
@@ -42,7 +44,7 @@ class LLMDebugLogger:
         source_filename: str,
         target_filename: str,
         source_text: str,
-        target_text: str
+        target_text: str,
     ) -> None:
         """Log an LLM evaluation result with comparison to computed similarity."""
         if not self.enabled or not self.llm_file:
@@ -76,7 +78,7 @@ class LLMDebugLogger:
         end_expansion: int,
         similarity: float,
         reasoning: str,
-        expansion_type: str
+        expansion_type: str,
     ) -> None:
         """Log expansion evaluation details."""
         if not self.enabled or not self.llm_file:
@@ -93,7 +95,13 @@ class LLMDebugLogger:
 class AsyncLLMEvaluator:
     """Async LLM-based similarity evaluator using llama-server via HTTP"""
 
-    def __init__(self, model_path: str, context_window: int = 8192, concurrency_limit: int = 8, port: int = 8080):
+    def __init__(
+        self,
+        model_path: str,
+        context_window: int = 8192,
+        concurrency_limit: int = 8,
+        port: int = 8080,
+    ):
         self.model_path = model_path
         self.context_window = context_window
         self.port = port
@@ -110,7 +118,13 @@ class AsyncLLMEvaluator:
     def start_server(self):
         """Start the llama-server process"""
         # Use the textpair_llama_server command
-        cmd = ["textpair_llama_server", self.model_path, str(self.port), str(self.context_window), str(self.concurrency_limit)]
+        cmd = [
+            "textpair_llama_server",
+            self.model_path,
+            str(self.port),
+            str(self.context_window),
+            str(self.concurrency_limit),
+        ]
         self.server_process = subprocess.Popen(cmd)
 
         # Wait for server to be ready
@@ -141,10 +155,12 @@ class AsyncLLMEvaluator:
                 self.server_process.kill()
             self.server_process = None
 
-    async def evaluate_batch(self, passage_pairs: list[tuple[str, str]], batch_size: int = 8) -> list[tuple[float, str]]:
+    async def evaluate_batch(
+        self, passage_pairs: list[tuple[str, str]], batch_size: int = 8
+    ) -> list[tuple[float, str, str]]:
         """
         Evaluate multiple passage pairs concurrently
-        Returns: List of (similarity_score, reasoning) tuples
+        Returns: List of (similarity_score, reasoning, stance) tuples
         """
 
         async def evaluate_single(session, source_text, target_text):
@@ -155,16 +171,16 @@ class AsyncLLMEvaluator:
                 # Prepare request payload
                 payload = {
                     "prompt": prompt,
-                    "max_tokens": 100,
+                    "max_tokens": 500,
                     "temperature": 0.1,
-                    "stop": []
+                    "stop": [],
                 }
 
                 # Make async HTTP request
                 async with session.post(
                     f"{self.base_url}/v1/completions",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as response:
                     if response.status != 200:
                         raise Exception(f"HTTP {response.status}")
@@ -173,15 +189,15 @@ class AsyncLLMEvaluator:
 
                 # Extract response text
                 response_text = ""
-                if 'choices' in result and len(result['choices']) > 0:
-                    choice = result['choices'][0]
-                    response_text = choice.get('text', '')
+                if "choices" in result and len(result["choices"]) > 0:
+                    choice = result["choices"][0]
+                    response_text = choice.get("text", "")
 
                 response_text = str(response_text).strip()
                 return self._parse_llm_response(response_text)
 
             except Exception as e:
-                return 0.0, f"Error: {str(e)[:100]}..."
+                return 0.0, f"Error: {str(e)[:100]}...", "Unknown"
 
         # Process in batches to avoid overwhelming the server
         results = []
@@ -189,19 +205,16 @@ class AsyncLLMEvaluator:
 
         with tqdm(total=total_pairs, desc="LLM Evaluation", unit="pairs", leave=False) as pbar:
             for i in range(0, len(passage_pairs), batch_size):
-                batch = passage_pairs[i:i + batch_size]
+                batch = passage_pairs[i : i + batch_size]
 
                 async with aiohttp.ClientSession() as session:
-                    tasks = [
-                        evaluate_single(session, source, target)
-                        for source, target in batch
-                    ]
+                    tasks = [evaluate_single(session, source, target) for source, target in batch]
                     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
                     # Handle any exceptions and update progress
                     for j, result in enumerate(batch_results):
                         if isinstance(result, Exception):
-                            results.append((0.0, f"Error: {str(result)[:100]}..."))
+                            results.append((0.0, f"Error: {str(result)[:100]}...", "Unknown"))
                         else:
                             results.append(result)
 
@@ -210,11 +223,7 @@ class AsyncLLMEvaluator:
 
         return results
 
-    async def _make_completion_request(
-        self,
-        prompt: str,
-        llm_params: dict
-    ) -> dict:
+    async def _make_completion_request(self, prompt: str, llm_params: dict) -> dict:
         """
         Helper method to make a completion API request for banality classification.
         """
@@ -223,7 +232,7 @@ class AsyncLLMEvaluator:
 
         payload = {
             "prompt": prompt,
-            **llm_params  # All LLM params passed through
+            **llm_params,  # All LLM params passed through
         }
 
         try:
@@ -235,7 +244,7 @@ class AsyncLLMEvaluator:
             async with self._session.post(
                 f"{self.base_url}/v1/completions",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=60.0)
+                timeout=aiohttp.ClientTimeout(total=60.0),
             ) as response:
                 if response.status != 200:
                     error_text = await response.text()
@@ -251,11 +260,7 @@ class AsyncLLMEvaluator:
                 print(f"DEBUG: Server process alive: {self.server_process.poll() is None}")
             raise
 
-
-    async def score_scholarly_interest(
-        self,
-        passage: str
-    ) -> tuple[int, bool]:
+    async def score_scholarly_interest(self, passage: str) -> tuple[int, bool]:
         """
         Score scholarly interest (1-100) for a single passage.
 
@@ -299,10 +304,7 @@ class AsyncLLMEvaluator:
             return -1, False
 
     async def score_scholarly_interest_batch(
-        self,
-        passages: list[str],
-        batch_size: int = 4,
-        show_progress: bool = True
+        self, passages: list[str], batch_size: int = 4, show_progress: bool = True
     ) -> list[tuple[int, bool]]:
         """
         Batch process passages for scholarly interest scoring.
@@ -315,21 +317,19 @@ class AsyncLLMEvaluator:
         Returns:
             List of (score, is_banal) tuples in same order as input passages
         """
+
         async def score_single(session, passage):
             try:
                 # Create a temporary alignment dict for the prompt
                 temp_alignment = {"target_passage": passage}
                 prompt = create_scoring_prompt(temp_alignment)
 
-                payload = {
-                    "prompt": prompt,
-                    **self.banality_eval_params
-                }
+                payload = {"prompt": prompt, **self.banality_eval_params}
 
                 async with session.post(
                     f"{self.base_url}/v1/completions",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=60.0)
+                    timeout=aiohttp.ClientTimeout(total=60.0),
                 ) as response:
                     if response.status != 200:
                         return -1, False
@@ -362,9 +362,14 @@ class AsyncLLMEvaluator:
         results = []
         total_passages = len(passages)
 
-        with tqdm(total=total_passages, desc="LLM Scholarly Evaluation", unit="passages", disable=not show_progress) as pbar:
+        with tqdm(
+            total=total_passages,
+            desc="LLM Scholarly Evaluation",
+            unit="passages",
+            disable=not show_progress,
+        ) as pbar:
             for i in range(0, total_passages, batch_size):
-                batch = passages[i:i + batch_size]
+                batch = passages[i : i + batch_size]
 
                 async with aiohttp.ClientSession() as session:
                     tasks = [score_single(session, passage) for passage in batch]
@@ -379,16 +384,52 @@ class AsyncLLMEvaluator:
 
         return results
 
-
-
-    def _parse_llm_response(self, response: str) -> tuple[float, str]:
-        """Parse LLM response to extract score and reasoning"""
+    def _parse_llm_response(self, response: str) -> tuple[float, str, str]:
+        """Parse LLM response to extract score, reasoning, and stance (reasoning comes first in new format)"""
         try:
+            # Try to extract reasoning first (now comes before stance and score)
+            reasoning_patterns = [
+                r"Reasoning:\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "Reasoning: explanation" until Stance/Score or end
+                r"reasoning:\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # lowercase variant
+                r"because\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "because explanation"
+                r"since\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "since explanation"
+            ]
+
+            reasoning = "No reasoning provided"
+            for pattern in reasoning_patterns:
+                reasoning_match = re.search(pattern, response, re.IGNORECASE | re.DOTALL)
+                if reasoning_match:
+                    reasoning = reasoning_match.group(1).strip()
+                    # Remove any trailing "Stance:" or "Score:" that might have been captured
+                    reasoning = re.sub(r"\s*(Stance:|Score:)\s*$", "", reasoning, flags=re.IGNORECASE)
+                    break
+
+            # If no specific reasoning found, try to extract text before stance/score
+            if reasoning == "No reasoning provided":
+                stance_or_score_position = re.search(r"(Stance:|Score:)\s*", response, re.IGNORECASE)
+                if stance_or_score_position:
+                    reasoning = response[: stance_or_score_position.start()].strip()
+                elif response.strip():
+                    reasoning = response.strip()
+
+            # Try to extract stance (between reasoning and score)
+            stance_patterns = [
+                r"Stance:\s*(Agree|Disagree|Neutral|Unrelated)",  # "Stance: Agree"
+                r"stance:\s*(agree|disagree|neutral|unrelated)",  # lowercase variant
+            ]
+
+            stance = "Unknown"
+            for pattern in stance_patterns:
+                stance_match = re.search(pattern, response, re.IGNORECASE)
+                if stance_match:
+                    stance = stance_match.group(1).strip().capitalize()
+                    break
+
             # Try multiple score patterns
             score_patterns = [
-                r'Score:\s*([0-9]*\.?[0-9]+)',  # "Score: 0.8"
-                r'score:\s*([0-9]*\.?[0-9]+)',  # "score: 0.8" (lowercase)
-                r'([0-9]*\.?[0-9]+)',  # Just a number anywhere
+                r"Score:\s*([0-9]*\.?[0-9]+)",  # "Score: 0.8"
+                r"score:\s*([0-9]*\.?[0-9]+)",  # "score: 0.8" (lowercase)
+                r"([0-9]*\.?[0-9]+)",  # Just a number anywhere
             ]
 
             score = 0.0
@@ -399,30 +440,10 @@ class AsyncLLMEvaluator:
                     score = max(0.0, min(1.0, score))  # Clamp to valid range
                     break
 
-            # Try multiple reasoning patterns
-            reasoning_patterns = [
-                r'Reasoning:\s*(.+)',  # "Reasoning: explanation"
-                r'reasoning:\s*(.+)',  # "reasoning: explanation" (lowercase)
-                r'because\s*(.+)',     # "because explanation"
-                r'since\s*(.+)',       # "since explanation"
-            ]
-
-            reasoning = "No reasoning provided"
-            for pattern in reasoning_patterns:
-                reasoning_match = re.search(pattern, response, re.IGNORECASE | re.DOTALL)
-                if reasoning_match:
-                    reasoning = reasoning_match.group(1).strip()
-                    reasoning = reasoning
-                    break
-
-            # If no specific reasoning found, use the whole response as reasoning
-            if reasoning == "No reasoning provided" and response.strip():
-                reasoning = response.strip()
-
-            return score, reasoning
+            return score, reasoning, stance
 
         except Exception as e:
-            return 0.0, f"Failed to parse LLM response: {str(e)}"
+            return 0.0, f"Failed to parse LLM response: {str(e)}", "Unknown"
 
 
 # ============================================================================
@@ -480,7 +501,7 @@ def create_scoring_prompt(alignment: dict) -> str:
     Example Output 3:
     45: Common proverb reused without further analysis.
 
-    PASSAGE: "{alignment['target_passage']}"
+    PASSAGE: "{alignment["target_passage"]}"
     """
     return prompt
 
@@ -511,11 +532,16 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
     Your thought process:
     1. What is the broad subject of each passage?
     2. Do they narrow in on the exact same specific argument or point?
-    3. Based on that, which score category do they fall into?
+    3. Determine the Stance:
+       - If they share the specific argument, do they Agree or Disagree?
+       - If they only share the broad subject, mark as Neutral.
+       - Otherwise, mark as Unrelated.
+    4. Based on that, which score category do they fall into?
 
     Provide your answer in this exact format:
+    Reasoning: [Your step-by-step analysis - keep concise, 2-3 sentences]
+    Stance: [Agree, Disagree, Neutral, or Unrelated]
     Score: X.XX
-    Reasoning: [Your step-by-step analysis]
 
     ---
     Passage 1: {source_text}
