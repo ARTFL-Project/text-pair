@@ -1,0 +1,47 @@
+# Trained models and checkpoints
+extras/xlm_roberta_ct_in_batch_negatives/
+extras/camembert_18thc-model/
+extras/xml_roberta_large_simcse/
+extras/antoinelouis/
+
+# Training and debug artifacts
+extras/debug_logs/
+extras/generated_sentences.jsonl*
+extras/sentence_pairs.jsonl
+extras/sentence_processor.log
+extras/training.log
+extras/nohup.out
+extras/backup_up_sentences_eval.jsonl
+extras/comparison_results.json
+extras/*sentences*.txt
+
+# Virtual environments and node modules
+lib/.venv/
+lib/venv/
+lib/env/
+**/__pycache__/
+web-app/node_modules/
+web-app/dist/
+web-app/.next/
+
+# Vendored dependencies (not needed in Docker)
+vendor-text-preprocessing/
+
+# Development files
+*.pyc
+__pycache__/
+*.egg-info/
+.git/
+.gitignore
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
