@@ -3,6 +3,7 @@
 
 import configparser
 import os
+import shutil
 import subprocess
 import sys
 
@@ -302,10 +303,10 @@ async def run_alignment(params):
     groups_file = merge_alignments(results_file, count)
 
     if params.web_app_config["skip_web_app"] is False:
-        # Build graph model and generate cluster labels
-        print(f"\n### Building Thematic Identity Graph model ###")
-        embedding_model = params.preprocessing_params["source"]["embedding_model"]
-        build_graph_and_labels(results_file, embedding_model, params.llm_params)
+        # Graph pipeline disabled for now
+        # print(f"\n### Building Thematic Identity Graph model ###")
+        # embedding_model = params.preprocessing_params["source"]["embedding_model"]
+        # build_graph_and_labels(results_file, embedding_model, params.llm_params)
 
         create_web_app(
             results_file,
@@ -383,9 +384,9 @@ async def run_vsa_similarity(params) -> None:
         output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
         count = get_count(os.path.join(params.output_path, "results/counts.txt"))
 
-        # Build graph model and generate cluster labels
-        embedding_model = params.preprocessing_params["source"]["embedding_model"]
-        build_graph_and_labels(output_file, embedding_model, params.llm_params)
+        # Graph pipeline disabled for now
+        # embedding_model = params.preprocessing_params["source"]["embedding_model"]
+        # build_graph_and_labels(output_file, embedding_model, params.llm_params)
 
         create_web_app(
             output_file,
@@ -407,6 +408,13 @@ async def run_vsa_similarity(params) -> None:
 async def main():
     """Main entry point for the textpair CLI."""
     params = get_config()
+
+    # Save a copy of the config file to the output directory for reproducibility
+    config_file = params.config
+    if config_file and os.path.exists(config_file):
+        os.makedirs(params.output_path, exist_ok=True)
+        shutil.copy2(config_file, os.path.join(params.output_path, f"{params.dbname}_config.ini"))
+
     if params.delete is True:
         delete_database(params.dbname)
     elif params.update_db is True:
@@ -462,7 +470,12 @@ async def main():
         await run_vsa_similarity(params)
 
 
-if __name__ == "__main__":
+def run():
+    """Sync entry point for console_scripts."""
     import asyncio
 
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run()

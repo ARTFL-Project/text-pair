@@ -24,7 +24,8 @@ dependencies = [
     "pystemmer",
     "lxml",
     "namedlist",
-    "sentence-transformers~=5.1",
+    "sentence-transformers~=5.3",
+    "transformers~=4.51.0",
     "lz4",
     "orjson",
     "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.1.1.3#egg=text_preprocessing",
@@ -39,7 +40,6 @@ dependencies = [
     "ahocorasick-rs",
     "msgspec",
     "faiss-cpu",
-    "spacy-transformers",
     "networkx~=3.5",
     "torch-geometric~=2.7.0",
     "umap-learn~=0.5.9",
@@ -54,7 +54,7 @@ Documentation = "https://github.com/ARTFL-Project/text-pair#readme"
 "Bug Tracker" = "https://github.com/ARTFL-Project/text-pair/issues"
 
 [project.scripts]
-textpair = "textpair.__main__:main"
+textpair = "textpair.__main__:run"
 
 [project.optional-dependencies]
 cpu = [

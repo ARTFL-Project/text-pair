@@ -1,2 +1,2 @@
 [console_scripts]
-textpair = textpair.__main__:main
+textpair = textpair.__main__:run

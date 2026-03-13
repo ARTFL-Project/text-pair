@@ -240,7 +240,7 @@ def merge_passages(
         return count
 
     # Perform iterative merging with streaming
-    while last_count / current_count <= 1.0:
+    while last_count / current_count < 1.0:
         last_count = current_count
 
         # Alternate between temp databases

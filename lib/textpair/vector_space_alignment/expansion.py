@@ -328,8 +328,6 @@ async def expand_validated_matches(
     expansion_candidates = []
     final_matches = []
 
-    print("Identifying expansion candidates...", flush=True)
-
     for match in matches:
         source_sents = count_sentences_from_tokens(
             match.source.metadata["parsed_filename"],
@@ -354,31 +352,20 @@ async def expand_validated_matches(
     total_candidates = len(expansion_candidates)
 
     if expansion_candidates:
-        print(
-            f"Processing {total_candidates} expansion candidates in chunks of {chunk_size}...",
-            flush=True,
-        )
-
-        with tqdm(
-            total=total_candidates,
-            desc="Looking for potential passage expansions",
-            leave=False,
-        ) as pbar:
+        with tqdm(total=total_candidates, desc="Expanding short passages", unit="passage") as pbar:
             for i in range(0, total_candidates, chunk_size):
                 chunk = expansion_candidates[i : i + chunk_size]
                 chunk_expansion_count = await _process_expansion_chunk(chunk, evaluator)
                 expansion_count += chunk_expansion_count
+                pbar.update(len(chunk))
 
-                # Add processed matches to final results
                 for match, _, _ in chunk:
                     final_matches.append(match)
 
-                pbar.update(len(chunk))
-
-    print(
-        f"Looking for potential passage expansions: expanded {expansion_count} passages.",
-        flush=True,
-    )
+        print(
+            f"Expansion complete: {expansion_count}/{total_candidates} passages expanded.",
+            flush=True,
+        )
 
     return final_matches
 
@@ -408,8 +395,8 @@ async def _process_expansion_chunk(chunk: list[tuple[MergedGroup, int, int]], ev
     prev_pairs = [(exp["source_text"], exp["target_text"]) for exp in step1_prev_expansions]
     next_pairs = [(exp["source_text"], exp["target_text"]) for exp in step1_next_expansions]
 
-    prev_results = await evaluator.evaluate_batch(prev_pairs, batch_size=8)
-    next_results = await evaluator.evaluate_batch(next_pairs, batch_size=8)
+    prev_results = await evaluator.evaluate_batch(prev_pairs, batch_size=8, show_progress=False)
+    next_results = await evaluator.evaluate_batch(next_pairs, batch_size=8, show_progress=False)
 
     # --- Step 2: Determine winners and prepare next step ---
     step2_candidates = []
@@ -459,8 +446,8 @@ async def _process_expansion_chunk(chunk: list[tuple[MergedGroup, int, int]], ev
         )
         expansion_count += 1
 
-        # Prepare step 2 expansion
-        step2_candidates.append(_prepare_expansion_step(original_match, step=2, direction=step2_direction))
+        # Prepare step 2 expansion (+1 more sentence beyond what step 1 already added)
+        step2_candidates.append(_prepare_expansion_step(original_match, step=1, direction=step2_direction))
         step2_directions.append(step2_direction)
         step2_match_map.append(original_match)
 
@@ -469,7 +456,7 @@ async def _process_expansion_chunk(chunk: list[tuple[MergedGroup, int, int]], ev
 
     # --- Step 3: Evaluate step 2 expansions ---
     step2_pairs = [(exp["source_text"], exp["target_text"]) for exp in step2_candidates]
-    step2_results = await evaluator.evaluate_batch(step2_pairs, batch_size=8)
+    step2_results = await evaluator.evaluate_batch(step2_pairs, batch_size=8, show_progress=False)
 
     for i, (step2_score, _, _) in enumerate(step2_results):
         original_match = step2_match_map[i]

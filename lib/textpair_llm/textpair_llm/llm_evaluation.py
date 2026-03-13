@@ -156,7 +156,7 @@ class AsyncLLMEvaluator:
             self.server_process = None
 
     async def evaluate_batch(
-        self, passage_pairs: list[tuple[str, str]], batch_size: int = 8
+        self, passage_pairs: list[tuple[str, str]], batch_size: int = 8, show_progress: bool = True
     ) -> list[tuple[float, str, str]]:
         """
         Evaluate multiple passage pairs concurrently
@@ -203,7 +203,7 @@ class AsyncLLMEvaluator:
         results = []
         total_pairs = len(passage_pairs)
 
-        with tqdm(total=total_pairs, desc="LLM Evaluation", unit="pairs", leave=False) as pbar:
+        with tqdm(total=total_pairs, desc="LLM Evaluation", unit="pairs", leave=False, disable=not show_progress) as pbar:
             for i in range(0, len(passage_pairs), batch_size):
                 batch = passage_pairs[i : i + batch_size]
 
@@ -425,20 +425,29 @@ class AsyncLLMEvaluator:
                     stance = stance_match.group(1).strip().capitalize()
                     break
 
-            # Try multiple score patterns
+            # Try multiple score patterns — ordered from most to least specific
             score_patterns = [
                 r"Score:\s*([0-9]*\.?[0-9]+)",  # "Score: 0.8"
                 r"score:\s*([0-9]*\.?[0-9]+)",  # "score: 0.8" (lowercase)
-                r"([0-9]*\.?[0-9]+)",  # Just a number anywhere
             ]
 
             score = 0.0
+            score_found = False
             for pattern in score_patterns:
                 score_match = re.search(pattern, response, re.IGNORECASE)
                 if score_match:
                     score = float(score_match.group(1))
                     score = max(0.0, min(1.0, score))  # Clamp to valid range
+                    score_found = True
                     break
+
+            # Last resort: find a decimal number (0.XX) that looks like a score,
+            # but only match numbers with a decimal point to avoid grabbing years or counts
+            if not score_found:
+                fallback_match = re.search(r"\b(0\.\d+|1\.0+)\b", response)
+                if fallback_match:
+                    score = float(fallback_match.group(1))
+                    score = max(0.0, min(1.0, score))
 
             return score, reasoning, stance
 
@@ -521,13 +530,14 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
     First, determine if the passages address the same specific argument. Then, use the score guide below.
 
     IMPORTANT: Direct agreement and direct disagreement on the exact same point are both forms of HIGH similarity.
-    IMPORTANT: Avoid defaulting to the boundary scores of a category (like 0.40, 0.70, or 0.90). Use the full range to show nuance.
 
     Score Guide:
-    • 0.0 - 0.4: Different Subjects. The passages are about completely different topics.
-    • > 0.4 to < 0.7: Shared Subject, Different Focus. The passages are about the same broad subject (e.g., the Roman Empire) but focus on different specific arguments or aspects (e.g., one is about military tactics, the other about trade policy).
-    • 0.7 - 0.9: Shared Subject, Shared Focus. The passages address the exact same specific argument, question, or thesis. They are in direct conversation, whether they agree, disagree, or analyze it in parallel.
-    • > 0.9 - 1.0: Paraphrase. The passages make the exact same point and have nearly identical meaning.
+    • 0.00 - 0.40: Different Subjects. The passages are about completely different topics.
+    • 0.41 - 0.69: Shared Subject, Different Focus. Same broad subject (e.g., the Roman Empire) but different specific arguments (e.g., military tactics vs. trade policy).
+    • 0.70 - 0.79: Same Argument, Loose Connection. The passages address the same question or thesis but from meaningfully different angles, evidence bases, or time periods. The intellectual link is real but indirect.
+    • 0.80 - 0.89: Same Argument, Clear Engagement. The passages directly address the same specific point with overlapping evidence, reasoning, or rhetorical framing. A reader would immediately see they are in conversation.
+    • 0.90 - 0.95: Same Argument, Near-Paraphrase Framing. Very close in both content and rhetorical approach — similar structure, similar evidence, similar conclusions — but not word-for-word identical.
+    • 0.96 - 1.00: True Paraphrase. The passages make the exact same point with nearly identical meaning. Only surface wording differs.
 
     Your thought process:
     1. What is the broad subject of each passage?
@@ -536,7 +546,9 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
        - If they share the specific argument, do they Agree or Disagree?
        - If they only share the broad subject, mark as Neutral.
        - Otherwise, mark as Unrelated.
-    4. Based on that, which score category do they fall into?
+    4. Within the matching score category, calibrate precisely:
+       - Low end of range: weaker fit for that category's description.
+       - High end of range: strong fit, almost belongs in the next category up.
 
     Provide your answer in this exact format:
     Reasoning: [Your step-by-step analysis - keep concise, 2-3 sentences]

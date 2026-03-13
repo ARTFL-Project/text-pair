@@ -453,7 +453,7 @@ class TransformerCorpus(Corpus):
         )
 
         if model is None:
-            self.model = SentenceTransformer(model_name, trust_remote_code=False)
+            self.model = SentenceTransformer(model_name)
         else:
             self.model = model
 
@@ -484,7 +484,7 @@ class TransformerCorpus(Corpus):
         tensor = self.model.encode(
             list(text_chunks),
             convert_to_tensor=True,
-            batch_size=512,
+            batch_size=32,
             show_progress_bar=False,
             normalize_embeddings=True,
         )

@@ -304,13 +304,22 @@ class Matches:
     def match_generator(self, new_matches):
         for match in new_matches:
             dump = ENCODER.encode(match)
-            yield (self.count, dump)
+            yield (
+                self.count,
+                dump,
+                match.source.filename,
+                match.target.filename,
+                match.source.start_byte,
+                match.source.start_byte - match.source.end_byte,
+                match.target.start_byte,
+                match.target.start_byte - match.target.end_byte,
+            )
             self.count += 1
 
     def extend(self, new_matches: Iterable[MergedGroup]):
         """Add new matches to existing matches"""
         encoded_matches = self.match_generator(new_matches)
-        self.cursor.executemany("INSERT INTO matches VALUES (?, ?)", encoded_matches)
+        self.cursor.executemany("INSERT INTO matches VALUES (?, ?, ?, ?, ?, ?, ?, ?)", encoded_matches)
 
     def __save(self, matches):
         count = 0
