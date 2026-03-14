@@ -633,6 +633,12 @@ def create_web_app(
         textpair_params,
     )
     db_dir = os.path.join(web_app_dir, table)
+
+    # Copy the config file used for this run into the web app directory
+    config_file = textpair_params.config
+    if config_file and os.path.exists(config_file):
+        shutil.copy2(config_file, os.path.join(db_dir, f"{table}_config.ini"))
+
     if groups_file is not None:
         load_groups_file(
             groups_file,

@@ -12,6 +12,7 @@ import os
 from typing import Any, Iterable, Optional
 
 import lz4.frame
+import torch
 from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import linear_kernel
 from text_preprocessing import PreProcessor, Token, Tokens
@@ -570,7 +571,7 @@ async def run_vsa(
         exit()
     print(f"{len(matches)} matches found.")
 
-    # First merge passages (now synchronous)
+    # Merge passages (now synchronous)
     matches = merge_passages(
         matches,
         config["min_similarity"],

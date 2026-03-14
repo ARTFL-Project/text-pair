@@ -8,7 +8,6 @@ using Large Language Models (LLMs) via HTTP API endpoints.
 import asyncio
 import atexit
 import json
-import re
 import subprocess
 import time
 
@@ -95,6 +94,26 @@ class LLMDebugLogger:
 class AsyncLLMEvaluator:
     """Async LLM-based similarity evaluator using llama-server via HTTP"""
 
+    # JSON schemas for structured output via llama.cpp grammar-constrained generation
+    SIMILARITY_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "reasoning": {"type": "string"},
+            "stance": {"type": "string", "enum": ["Agree", "Disagree", "Neutral", "Unrelated"]},
+            "score": {"type": "number"},
+        },
+        "required": ["reasoning", "stance", "score"],
+    }
+
+    BANALITY_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "score": {"type": "integer"},
+            "explanation": {"type": "string"},
+        },
+        "required": ["score", "explanation"],
+    }
+
     def __init__(
         self,
         model_path: str,
@@ -113,6 +132,7 @@ class AsyncLLMEvaluator:
         self.banality_eval_params = {
             "temperature": 0.1,
             "max_tokens": 128,
+            "json_schema": self.BANALITY_SCHEMA,
         }
 
     def start_server(self):
@@ -168,12 +188,12 @@ class AsyncLLMEvaluator:
                 # Create evaluation prompt
                 prompt = create_similarity_evaluation_prompt(source_text, target_text, self.context_window)
 
-                # Prepare request payload
+                # Prepare request payload with JSON schema constraint
                 payload = {
                     "prompt": prompt,
                     "max_tokens": 500,
                     "temperature": 0.1,
-                    "stop": [],
+                    "json_schema": self.SIMILARITY_SCHEMA,
                 }
 
                 # Make async HTTP request
@@ -187,13 +207,11 @@ class AsyncLLMEvaluator:
 
                     result = await response.json()
 
-                # Extract response text
+                # Parse structured JSON response
                 response_text = ""
                 if "choices" in result and len(result["choices"]) > 0:
-                    choice = result["choices"][0]
-                    response_text = choice.get("text", "")
+                    response_text = result["choices"][0].get("text", "").strip()
 
-                response_text = str(response_text).strip()
                 return self._parse_llm_response(response_text)
 
             except Exception as e:
@@ -282,17 +300,15 @@ class AsyncLLMEvaluator:
             if result.get("choices") and len(result["choices"]) > 0:
                 generated_text = result["choices"][0].get("text", "").strip()
             else:
-                generated_text = "API_STRUCTURE_ERROR"
+                return -1, True
 
-            score = -1
             try:
-                match = re.search(r"\d+", generated_text)
-                if match:
-                    score = int(match.group(0))
-                    if not (1 <= score <= 100):
-                        score = -1
-            except Exception:
-                pass
+                data = json.loads(generated_text)
+                score = int(data["score"])
+                if not (1 <= score <= 100):
+                    score = -1
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                score = -1
 
             # Score < 40 means banal (not interesting), >= 40 means scholarly/interesting (not banal)
             is_banal = score < 40 if score != -1 else True
@@ -341,15 +357,13 @@ class AsyncLLMEvaluator:
                     else:
                         return -1, False
 
-                    score = -1
                     try:
-                        match = re.search(r"\d+", generated_text)
-                        if match:
-                            score = int(match.group(0))
-                            if not (1 <= score <= 100):
-                                score = -1
-                    except Exception:
-                        pass
+                        data = json.loads(generated_text)
+                        score = int(data["score"])
+                        if not (1 <= score <= 100):
+                            score = -1
+                    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                        score = -1
 
                     # Score < 40 means banal (not interesting), >= 40 means scholarly/interesting (not banal)
                     is_banal = score < 40 if score != -1 else True
@@ -385,73 +399,14 @@ class AsyncLLMEvaluator:
         return results
 
     def _parse_llm_response(self, response: str) -> tuple[float, str, str]:
-        """Parse LLM response to extract score, reasoning, and stance (reasoning comes first in new format)"""
+        """Parse structured JSON response from LLM to extract score, reasoning, and stance"""
         try:
-            # Try to extract reasoning first (now comes before stance and score)
-            reasoning_patterns = [
-                r"Reasoning:\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "Reasoning: explanation" until Stance/Score or end
-                r"reasoning:\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # lowercase variant
-                r"because\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "because explanation"
-                r"since\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "since explanation"
-            ]
-
-            reasoning = "No reasoning provided"
-            for pattern in reasoning_patterns:
-                reasoning_match = re.search(pattern, response, re.IGNORECASE | re.DOTALL)
-                if reasoning_match:
-                    reasoning = reasoning_match.group(1).strip()
-                    # Remove any trailing "Stance:" or "Score:" that might have been captured
-                    reasoning = re.sub(r"\s*(Stance:|Score:)\s*$", "", reasoning, flags=re.IGNORECASE)
-                    break
-
-            # If no specific reasoning found, try to extract text before stance/score
-            if reasoning == "No reasoning provided":
-                stance_or_score_position = re.search(r"(Stance:|Score:)\s*", response, re.IGNORECASE)
-                if stance_or_score_position:
-                    reasoning = response[: stance_or_score_position.start()].strip()
-                elif response.strip():
-                    reasoning = response.strip()
-
-            # Try to extract stance (between reasoning and score)
-            stance_patterns = [
-                r"Stance:\s*(Agree|Disagree|Neutral|Unrelated)",  # "Stance: Agree"
-                r"stance:\s*(agree|disagree|neutral|unrelated)",  # lowercase variant
-            ]
-
-            stance = "Unknown"
-            for pattern in stance_patterns:
-                stance_match = re.search(pattern, response, re.IGNORECASE)
-                if stance_match:
-                    stance = stance_match.group(1).strip().capitalize()
-                    break
-
-            # Try multiple score patterns — ordered from most to least specific
-            score_patterns = [
-                r"Score:\s*([0-9]*\.?[0-9]+)",  # "Score: 0.8"
-                r"score:\s*([0-9]*\.?[0-9]+)",  # "score: 0.8" (lowercase)
-            ]
-
-            score = 0.0
-            score_found = False
-            for pattern in score_patterns:
-                score_match = re.search(pattern, response, re.IGNORECASE)
-                if score_match:
-                    score = float(score_match.group(1))
-                    score = max(0.0, min(1.0, score))  # Clamp to valid range
-                    score_found = True
-                    break
-
-            # Last resort: find a decimal number (0.XX) that looks like a score,
-            # but only match numbers with a decimal point to avoid grabbing years or counts
-            if not score_found:
-                fallback_match = re.search(r"\b(0\.\d+|1\.0+)\b", response)
-                if fallback_match:
-                    score = float(fallback_match.group(1))
-                    score = max(0.0, min(1.0, score))
-
+            data = json.loads(response)
+            score = max(0.0, min(1.0, float(data["score"])))
+            reasoning = data.get("reasoning", "No reasoning provided")
+            stance = data.get("stance", "Unknown")
             return score, reasoning, stance
-
-        except Exception as e:
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             return 0.0, f"Failed to parse LLM response: {str(e)}", "Unknown"
 
 
@@ -500,15 +455,9 @@ def create_scoring_prompt(alignment: dict) -> str:
     1. Provide a score (integer 1-100). Carefully consider all criteria above when assigning the score.
     2. Provide a brief (one sentence) explanation justifying the score based ONLY on the criteria above (substantive vs. conventional/formulaic/structural).
 
-    Answer ONLY in the following specific format:
-    [SCORE]: [Brief explanation]
-
-    Example Output 1:
-    85: Substantive philosophical argument about free will using unique phrasing.
-    Example Output 2:
-    10: Standard correspondence closing formula with no unique content.
-    Example Output 3:
-    45: Common proverb reused without further analysis.
+    Respond with a JSON object containing these fields:
+    - "score": An integer between 1 and 100
+    - "explanation": A brief one-sentence justification
 
     PASSAGE: "{alignment["target_passage"]}"
     """
@@ -550,16 +499,15 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
        - Low end of range: weaker fit for that category's description.
        - High end of range: strong fit, almost belongs in the next category up.
 
-    Provide your answer in this exact format:
-    Reasoning: [Your step-by-step analysis - keep concise, 2-3 sentences]
-    Stance: [Agree, Disagree, Neutral, or Unrelated]
-    Score: X.XX
+    Respond with a JSON object containing these fields:
+    - "reasoning": Your step-by-step analysis (2-3 sentences)
+    - "stance": One of "Agree", "Disagree", "Neutral", or "Unrelated"
+    - "score": A number between 0.00 and 1.00
 
     ---
     Passage 1: {source_text}
     ---
     Passage 2: {target_text}
-    ---
-    Answer:"""
+    ---"""
 
     return prompt

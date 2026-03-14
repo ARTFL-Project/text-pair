@@ -142,7 +142,7 @@ class TextPairConfig:
                         print("This is a small, fast multilingual model suitable for many languages.")
                         print("For better quality results in specific languages, consider using a specialized model.")
                         print("See: https://huggingface.co/models?library=sentence-transformers&sort=downloads")
-                        print("Configure via 'embedding_model' in your config.ini file.\n")
+                        print("Configure via 'embedding_model' in your config file.\n")
                 case _:
                     self.preprocessing_params["source"][key] = value
                     self.preprocessing_params["target"][key] = value
@@ -171,22 +171,24 @@ class TextPairConfig:
                     case "min_matching_words" | "source_batch" | "target_batch":
                         value = int(value)
                 self.matching_params[key] = value
-        for key, value in dict(config["LLM_PARAMS"]).items():
-            if value:
-                if key in ("llm_context_window", "llm_concurrency_limit"):
-                    value = int(value)
-                self.llm_params[key] = value
-        for key, value in dict(config["PASSAGE_CLASSIFICATION"]).items():
-            if value:
-                if key == "classify_passage":
-                    if value.lower() == "yes" or value.lower() == "true":
-                        self.passage_classification["classify_passage"] = True
+        if config.has_section("LLM_PARAMS"):
+            for key, value in dict(config["LLM_PARAMS"]).items():
+                if value:
+                    if key in ("llm_context_window", "llm_concurrency_limit"):
+                        value = int(value)
+                    self.llm_params[key] = value
+        if config.has_section("PASSAGE_CLASSIFICATION"):
+            for key, value in dict(config["PASSAGE_CLASSIFICATION"]).items():
+                if value:
+                    if key == "classify_passage":
+                        if value.lower() == "yes" or value.lower() == "true":
+                            self.passage_classification["classify_passage"] = True
+                        else:
+                            self.passage_classification["classify_passage"] = False
+                    elif key == "zero_shot_model":
+                        self.passage_classification["zero_shot_model"] = value.strip()
                     else:
-                        self.passage_classification["classify_passage"] = False
-                elif key == "zero_shot_model":
-                    self.passage_classification["zero_shot_model"] = value.strip()
-                else:
-                    self.passage_classification["classes"][key] = value.strip()
+                        self.passage_classification["classes"][key] = value.strip()
 
         # Validate passage classification configuration
         if self.passage_classification["classify_passage"] is True:

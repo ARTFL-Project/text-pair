@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from abc import ABC
 from collections import deque
@@ -55,7 +56,7 @@ class Corpus(ABC):
         output_path: str,
         similarity_function: Callable,
         min_text_obj_length: int = 15,
-        n_chunk: int = 3,
+        n_chunk: int = 5,
         text_object_type_split: str = "doc",
         direction="source",
         n_batches=1,
@@ -84,8 +85,14 @@ class Corpus(ABC):
         pass
 
     def get_text_chunks(self) -> Iterable[list[str]]:
-        """Process all texts into smaller text chunks"""
-        chunk_group: deque[Tokens] = deque(maxlen=self.n_chunk)
+        """Process all texts into smaller text chunks using a sliding window.
+
+        Window size is n_chunk, step is ceil(n_chunk / 2). This gives
+        paragraph-scale units with enough overlap that any relationship
+        spanning ceil(n_chunk/2) text objects appears fully in at least one window.
+        """
+        chunk_group: deque[Tokens] = deque()  # no maxlen — we control the slide manually
+        chunk_step: int = math.ceil(self.n_chunk / 2)
         min_chunk_length: int = self.n_chunk * self.min_text_obj_length
         current_text_level_id: str = "0"
         full_doc = Tokens([], {})
@@ -153,7 +160,17 @@ class Corpus(ABC):
                         flush=True,
                     )
                     yield self.__build_text_chunk(chunk_group)
+                # Slide window: remove step items from left, keep the overlap
+                for _ in range(chunk_step):
+                    if chunk_group:
+                        chunk_group.popleft()
             current_doc_id = doc_id
+        # Yield any remaining items in the window
+        if chunk_group:
+            current_chunk_group_length = sum([len(t) for t in chunk_group])
+            if current_chunk_group_length >= min_chunk_length:
+                chunks_done += 1
+                yield self.__build_text_chunk(chunk_group)
         save_tokens(full_doc, full_doc.metadata["parsed_filename"])
         print()
 
@@ -296,7 +313,7 @@ class TfIdfCorpus(Corpus):
         texts: Iterable[Tokens],
         output_path: str,
         min_text_obj_length: int = 15,
-        n_chunk: int = 3,
+        n_chunk: int = 5,
         text_object_type_split: str = "doc",
         vectorizer: Optional[TfidfVectorizer] = None,
         min_freq: int | float = 1,
@@ -372,7 +389,7 @@ class Word2VecEmbeddingCorpus(Corpus):
         model: str | spacy.Language,
         n_batches: int,
         min_text_obj_length: int = 15,
-        n_chunk: int = 3,
+        n_chunk: int = 5,
         text_object_type_split: str = "doc",
         direction: str = "source",
     ):
@@ -419,7 +436,7 @@ class TransformerCorpus(Corpus):
         model_name: str,
         n_batches: int,
         min_text_obj_length: int = 15,
-        n_chunk: int = 3,
+        n_chunk: int = 5,
         text_object_type_split: str = "sent",
         model=None,
         direction="source",
