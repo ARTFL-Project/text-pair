@@ -421,11 +421,18 @@ async def evaluate_passages_with_llm(
     llm_similarity_threshold: float | None = None,
     debug_llm: bool = False,
     output_path: str = "output",
+    llm_base_url: str = "",
+    llm_api_key: str = "",
 ) -> tuple[list[MergedGroup], AsyncLLMEvaluator]:
     """Evaluate merged passages using LLM and filter by threshold. Returns (matches, evaluator)."""
 
     # Initialize LLM evaluator
-    llm_evaluator = AsyncLLMEvaluator(llm_model_path, context_window=llm_context_window)
+    llm_evaluator = AsyncLLMEvaluator(
+        llm_model_path,
+        context_window=llm_context_window,
+        base_url=llm_base_url,
+        api_key=llm_api_key,
+    )
     llm_evaluator.start_server()
 
     # Initialize debug logger (controlled by debug_llm parameter)
@@ -580,27 +587,34 @@ async def run_vsa(
         use_llm_evaluation=config["llm_eval"],  # Use placeholders if LLM will evaluate
     )
 
-    # Then evaluate with LLM if model path is provided
+    # Then evaluate with LLM if enabled
     if config["llm_eval"]:
-        matches, llm_evaluator = await evaluate_passages_with_llm(
-            matches,
-            config["min_similarity"],
-            llm_params["llm_model"],
-            llm_params["llm_context_window"],
-            config["llm_similarity_threshold"],
-            config["llm_debug"],
-            output_path,
-        )
-        # Iteratively expand the boundaries of the validated matches
-        try:
-            if matches:  # Only run expansion if there are matches left
-                matches = await expand_validated_matches(
-                    matches,
-                    evaluator=llm_evaluator,
-                )
-        finally:
-            # Ensure we always stop the server
-            llm_evaluator.stop_server()
+        llm_model = llm_params.get("llm_model", "")
+        llm_base_url = llm_params.get("llm_base_url", "")
+        if not llm_model and not llm_base_url:
+            print("WARNING: llm_eval is enabled but neither llm_model nor llm_base_url is set. Skipping LLM evaluation.")
+        else:
+            matches, llm_evaluator = await evaluate_passages_with_llm(
+                matches,
+                config["min_similarity"],
+                llm_model,
+                llm_params.get("llm_context_window", 8192),
+                config["llm_similarity_threshold"],
+                config["llm_debug"],
+                output_path,
+                llm_base_url=llm_base_url,
+                llm_api_key=llm_params.get("llm_api_key", ""),
+            )
+            # Iteratively expand the boundaries of the validated matches
+            try:
+                if matches:  # Only run expansion if there are matches left
+                    matches = await expand_validated_matches(
+                        matches,
+                        evaluator=llm_evaluator,
+                    )
+            finally:
+                # Ensure we always stop the server
+                llm_evaluator.stop_server()
 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")

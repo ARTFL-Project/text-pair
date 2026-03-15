@@ -174,7 +174,7 @@ class TextPairConfig:
         if config.has_section("LLM_PARAMS"):
             for key, value in dict(config["LLM_PARAMS"]).items():
                 if value:
-                    if key in ("llm_context_window", "llm_concurrency_limit"):
+                    if key in ("llm_context_window", "llm_concurrency_limit", "llm_port"):
                         value = int(value)
                     self.llm_params[key] = value
         if config.has_section("PASSAGE_CLASSIFICATION"):

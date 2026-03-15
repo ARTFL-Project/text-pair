@@ -116,27 +116,32 @@ class AsyncLLMEvaluator:
 
     def __init__(
         self,
-        model_path: str,
+        model_path: str = "",
         context_window: int = 8192,
         concurrency_limit: int = 8,
         port: int = 8080,
+        base_url: str = "",
+        api_key: str = "",
     ):
         self.model_path = model_path
         self.context_window = context_window
         self.port = port
         self.concurrency_limit = concurrency_limit
-        self.base_url = f"http://127.0.0.1:{port}"
         self.server_process = None
         self._session = None
+        self.api_key = api_key
 
-        self.banality_eval_params = {
-            "temperature": 0.1,
-            "max_tokens": 128,
-            "json_schema": self.BANALITY_SCHEMA,
-        }
+        # If base_url is provided, use external server; otherwise build from port
+        self._external = bool(base_url)
+        self.base_url = base_url.rstrip("/") if base_url else f"http://127.0.0.1:{port}"
 
     def start_server(self):
-        """Start the llama-server process"""
+        """Start the llama-server process. Skipped if using an external server."""
+        if self._external:
+            print(f"Using external LLM server at {self.base_url}")
+            self._wait_for_server()
+            return
+
         # Use the textpair_llama_server command
         cmd = [
             "textpair_llama_server",
@@ -153,17 +158,23 @@ class AsyncLLMEvaluator:
 
     def _wait_for_server(self):
         """Wait for server to be ready"""
-        max_retries = 30
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        # Try /health (llama.cpp, vLLM) then /v1/models (any OpenAI-compatible API)
+        health_endpoints = [f"{self.base_url}/health", f"{self.base_url}/v1/models"]
+        max_retries = 5 if self._external else 30
         for attempt in range(max_retries):
-            try:
-                response = requests.get(f"{self.base_url}/health", timeout=2)
-                if response.status_code == 200:
-                    return
-            except requests.exceptions.RequestException:
-                pass
+            for endpoint in health_endpoints:
+                try:
+                    response = requests.get(endpoint, headers=headers, timeout=5)
+                    if response.status_code == 200:
+                        return
+                except requests.exceptions.RequestException:
+                    pass
             time.sleep(1)
 
-        raise RuntimeError("Failed to start llama-server")
+        raise RuntimeError(f"LLM server at {self.base_url} failed to become ready")
 
     def stop_server(self):
         """Stop the llama-server process"""
@@ -175,6 +186,41 @@ class AsyncLLMEvaluator:
                 self.server_process.kill()
             self.server_process = None
 
+    def _build_payload(self, prompt: str, json_schema: dict, max_tokens: int = 500) -> dict:
+        """Build a chat completions payload with structured JSON output."""
+        payload = {
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "strict": True, "schema": json_schema},
+            },
+        }
+        # Only include model when set (required for multi-model routers like OpenRouter,
+        # unnecessary for single-model servers like llama-server or dedicated vLLM)
+        if self.model_path:
+            payload["model"] = self.model_path
+        return payload
+
+    def _get_headers(self) -> dict:
+        """Build request headers."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    @staticmethod
+    def _extract_text(result: dict) -> str:
+        """Extract generated text from a chat completions response."""
+        if "choices" in result and len(result["choices"]) > 0:
+            choice = result["choices"][0]
+            if "message" in choice:
+                return choice["message"].get("content", "").strip()
+            # Fallback for raw completions format
+            return choice.get("text", "").strip()
+        return ""
+
     async def evaluate_batch(
         self, passage_pairs: list[tuple[str, str]], batch_size: int = 8, show_progress: bool = True
     ) -> list[tuple[float, str, str]]:
@@ -185,34 +231,20 @@ class AsyncLLMEvaluator:
 
         async def evaluate_single(session, source_text, target_text):
             try:
-                # Create evaluation prompt
                 prompt = create_similarity_evaluation_prompt(source_text, target_text, self.context_window)
+                payload = self._build_payload(prompt, self.SIMILARITY_SCHEMA, max_tokens=500)
 
-                # Prepare request payload with JSON schema constraint
-                payload = {
-                    "prompt": prompt,
-                    "max_tokens": 500,
-                    "temperature": 0.1,
-                    "json_schema": self.SIMILARITY_SCHEMA,
-                }
-
-                # Make async HTTP request
                 async with session.post(
-                    f"{self.base_url}/v1/completions",
+                    f"{self.base_url}/v1/chat/completions",
                     json=payload,
+                    headers=self._get_headers(),
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as response:
                     if response.status != 200:
                         raise Exception(f"HTTP {response.status}")
-
                     result = await response.json()
 
-                # Parse structured JSON response
-                response_text = ""
-                if "choices" in result and len(result["choices"]) > 0:
-                    response_text = result["choices"][0].get("text", "").strip()
-
-                return self._parse_llm_response(response_text)
+                return self._parse_llm_response(self._extract_text(result))
 
             except Exception as e:
                 return 0.0, f"Error: {str(e)[:100]}...", "Unknown"
@@ -241,27 +273,25 @@ class AsyncLLMEvaluator:
 
         return results
 
-    async def _make_completion_request(self, prompt: str, llm_params: dict) -> dict:
+    async def _make_chat_request(self, prompt: str, json_schema: dict, max_tokens: int = 128) -> dict:
         """
-        Helper method to make a completion API request for banality classification.
+        Make a chat completions request with structured JSON output.
         """
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
 
-        payload = {
-            "prompt": prompt,
-            **llm_params,  # All LLM params passed through
-        }
+        payload = self._build_payload(prompt, json_schema, max_tokens=max_tokens)
 
         try:
-            # Check if server is still running
+            # Check if managed server is still running
             if self.server_process and self.server_process.poll() is not None:
                 print(f"ERROR: LLM server process has died! Exit code: {self.server_process.poll()}")
                 raise Exception("LLM server process is not running")
 
             async with self._session.post(
-                f"{self.base_url}/v1/completions",
+                f"{self.base_url}/v1/chat/completions",
                 json=payload,
+                headers=self._get_headers(),
                 timeout=aiohttp.ClientTimeout(total=60.0),
             ) as response:
                 if response.status != 200:
@@ -270,10 +300,9 @@ class AsyncLLMEvaluator:
                     print(f"DEBUG: Response: {error_text}")
                     raise Exception(f"HTTP {response.status}: {error_text}")
                 return await response.json()
-        except aiohttp.ServerDisconnectedError as e:
-            print(f"DEBUG: Server disconnected during request")
+        except aiohttp.ServerDisconnectedError:
+            print("DEBUG: Server disconnected during request")
             print(f"DEBUG: Prompt length: {len(prompt)} chars")
-            print(f"DEBUG: LLM params: {llm_params}")
             if self.server_process:
                 print(f"DEBUG: Server process alive: {self.server_process.poll() is None}")
             raise
@@ -295,11 +324,9 @@ class AsyncLLMEvaluator:
         prompt = create_scoring_prompt(temp_alignment)
 
         try:
-            result = await self._make_completion_request(prompt, self.banality_eval_params)
-
-            if result.get("choices") and len(result["choices"]) > 0:
-                generated_text = result["choices"][0].get("text", "").strip()
-            else:
+            result = await self._make_chat_request(prompt, self.BANALITY_SCHEMA, max_tokens=128)
+            generated_text = self._extract_text(result)
+            if not generated_text:
                 return -1, True
 
             try:
@@ -336,25 +363,22 @@ class AsyncLLMEvaluator:
 
         async def score_single(session, passage):
             try:
-                # Create a temporary alignment dict for the prompt
                 temp_alignment = {"target_passage": passage}
                 prompt = create_scoring_prompt(temp_alignment)
-
-                payload = {"prompt": prompt, **self.banality_eval_params}
+                payload = self._build_payload(prompt, self.BANALITY_SCHEMA, max_tokens=128)
 
                 async with session.post(
-                    f"{self.base_url}/v1/completions",
+                    f"{self.base_url}/v1/chat/completions",
                     json=payload,
+                    headers=self._get_headers(),
                     timeout=aiohttp.ClientTimeout(total=60.0),
                 ) as response:
                     if response.status != 200:
                         return -1, False
 
                     result = await response.json()
-
-                    if result.get("choices") and len(result["choices"]) > 0:
-                        generated_text = result["choices"][0].get("text", "").strip()
-                    else:
+                    generated_text = self._extract_text(result)
+                    if not generated_text:
                         return -1, False
 
                     try:
@@ -365,9 +389,7 @@ class AsyncLLMEvaluator:
                     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                         score = -1
 
-                    # Score < 40 means banal (not interesting), >= 40 means scholarly/interesting (not banal)
                     is_banal = score < 40 if score != -1 else True
-
                     return score, is_banal
 
             except Exception as e:

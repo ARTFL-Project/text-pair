@@ -267,8 +267,10 @@ async def run_alignment(params):
                     params.llm_params["llm_model"],
                     params.llm_params["llm_context_window"],
                     params.llm_params["llm_concurrency_limit"],
-                    params.llm_params["llm_port"],
+                    params.llm_params.get("llm_port", 8080),
                     params.matching_params["store_banalities"],
+                    base_url=params.llm_params.get("llm_base_url", ""),
+                    api_key=params.llm_params.get("llm_api_key", ""),
                 )
                 if rescued_count > 0:
                     print(f"{rescued_count} passages were rescued (reclassified as substantive) after LLM evaluation.")

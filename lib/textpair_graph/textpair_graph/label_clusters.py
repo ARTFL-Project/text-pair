@@ -413,6 +413,8 @@ async def generate_and_update_cluster_labels(
     num_batches: int = 5,
     batch_size: int = 20,
     port: int = 8080,
+    base_url: str = "",
+    api_key: str = "",
 ) -> dict:
     """
     Generate thematic labels for each cluster using LLM and update graph JSON files.
@@ -483,6 +485,8 @@ async def generate_and_update_cluster_labels(
         port=port,
         context_window=context_window,
         concurrency_limit=4,
+        base_url=base_url,
+        api_key=api_key,
     )
 
     try:

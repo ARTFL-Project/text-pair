@@ -634,11 +634,6 @@ def create_web_app(
     )
     db_dir = os.path.join(web_app_dir, table)
 
-    # Copy the config file used for this run into the web app directory
-    config_file = textpair_params.config
-    if config_file and os.path.exists(config_file):
-        shutil.copy2(config_file, os.path.join(db_dir, f"{table}_config.ini"))
-
     if groups_file is not None:
         load_groups_file(
             groups_file,
@@ -650,6 +645,11 @@ def create_web_app(
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)
         set_up_app(web_config, db_dir, table, algorithm)
+
+    # Copy the config file used for this run into the web app directory
+    config_file = textpair_params.config
+    if config_file and os.path.exists(config_file):
+        shutil.copy2(config_file, os.path.join(db_dir, f"{table}_config.ini"))
 
     # Copy graph_data directory to web app for API access
     source_graph_data = os.path.join(os.path.dirname(file), "graph_data")
