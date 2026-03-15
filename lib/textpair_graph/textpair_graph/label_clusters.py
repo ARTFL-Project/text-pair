@@ -18,6 +18,24 @@ from tqdm import tqdm
 
 from textpair_llm import AsyncLLMEvaluator
 
+# JSON schemas for structured LLM output
+SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+    },
+    "required": ["summary"],
+}
+
+LABEL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "rationale": {"type": "string"},
+        "label": {"type": "string"},
+    },
+    "required": ["rationale", "label"],
+}
+
 
 def truncate_passage(text: str, max_chars: int = 600) -> str:
     """Truncate passage at sentence boundaries, not mid-word."""
@@ -58,7 +76,8 @@ REQUIREMENTS:
 PASSAGES:
 {passages_text}
 
-SUMMARY:"""
+Respond with a JSON object containing a single field:
+- "summary": Your 2-3 sentence thematic summary"""
 
     return prompt
 
@@ -87,11 +106,9 @@ REQUIREMENTS:
 - Do not be overly focused on format or medium
 - Keep label under 4 words
 
-OUTPUT FORMAT:
-RATIONALE: [One sentence explaining the overarching theme]
-LABEL: [1-3 word label]
-
-Answer ONLY in the specified OUTPUT FORMAT. Do not include any additional text."""
+Respond with a JSON object containing these fields:
+- "rationale": One sentence explaining the overarching theme
+- "label": A precise 1-3 word label (noun phrase preferred)"""
 
     return prompt
 
@@ -263,22 +280,15 @@ async def generate_cluster_labels_async(
             prompt = create_batch_summary_prompt(batch_passages)
 
             try:
-                llm_params = {
-                    "temperature": 0.0,
-                    "max_tokens": 150,
-                }
-
-                result = await evaluator._make_completion_request(prompt, llm_params)
-
-                if result.get("choices") and len(result["choices"]) > 0:
-                    summary = result["choices"][0].get("text", "").strip()
+                result = await evaluator._make_chat_request(prompt, SUMMARY_SCHEMA, max_tokens=150)
+                text = evaluator._extract_text(result)
+                if text:
+                    data = json.loads(text)
+                    summary = data.get("summary", "").strip()
                     if summary:
                         return (batch_idx, summary)
-                    else:
-                        print(f"    Batch {batch_idx + 1}/{num_batches}: ❌ Empty response")
-                        return (batch_idx, None)
-                else:
-                    return (batch_idx, None)
+                print(f"    Batch {batch_idx + 1}/{num_batches}: ❌ Empty response")
+                return (batch_idx, None)
 
             except Exception as e:
                 print(f"    Batch {batch_idx + 1}/{num_batches}: ❌ Error: {e}")
@@ -307,66 +317,26 @@ async def generate_cluster_labels_async(
             label = ""
         else:
             # Stage 2: Generate final label from summaries
-            # print(f"  Cluster {cluster_id}: Stage 2 - Generating final label from {len(batch_summaries)} summaries...")
             prompt = create_final_label_prompt(batch_summaries)
 
             try:
-                llm_params = {
-                    "temperature": 0.0,
-                    "max_tokens": 200,
-                }
+                result = await evaluator._make_chat_request(prompt, LABEL_SCHEMA, max_tokens=200)
+                text = evaluator._extract_text(result)
 
-                result = await evaluator._make_completion_request(prompt, llm_params)
-
-                if result.get("choices") and len(result["choices"]) > 0:
-                    response_text = result["choices"][0].get("text", "").strip()
-
-                    # Robust Parsing Strategy
-                    label = ""
-
-                    # Normalize newlines
-                    response_text = response_text.replace("\\n", "\n")
-                    lines = response_text.split("\n")
-
-                    # 1. Look for explicit "LABEL:" prefix (case-insensitive)
-                    for line in lines:
-                        line = line.strip()
-                        if "LABEL:" in line.upper():
-                            # Split on LABEL: and take the second part
-                            parts = line.upper().split("LABEL:", 1)
-                            if len(parts) > 1:
-                                # We need to get the original case back, so find the index
-                                idx = line.upper().find("LABEL:")
-                                label = line[idx + 6 :].strip()
-                                break
-
-                    # 2. Fallback: If response is short (likely just the label), use it all
-                    if not label and len(response_text) < 60:
-                        label = response_text.strip()
-
-                    # 3. Fallback: Use the last non-empty line (often the label in CoT)
-                    if not label and lines:
-                        # Filter out empty lines
-                        non_empty_lines = [l.strip() for l in lines if l.strip()]
-                        if non_empty_lines:
-                            last_line = non_empty_lines[-1]
-                            if len(last_line) < 60:
-                                label = last_line
-
-                    # Clean up the label
-                    label = label.replace('"', "").replace("'", "").strip()
-
-                    if not label:
-                        print(f"    ⚠️ Failed to parse label from response: '{response_text[:50]}...'")
-                    else:
+                if text:
+                    data = json.loads(text)
+                    label = data.get("label", "").replace('"', "").replace("'", "").strip()
+                    if label:
                         print(f"    Final label: '{label}'")
+                    else:
+                        print(f"    ⚠️ Empty label in response")
                 else:
                     print(f"    ❌ No response from LLM")
                     label = ""
 
             except Exception as e:
                 print(f"    ❌ Error generating final label: {e}")
-                label = ""  # Ensure uniqueness
+                label = ""
         if label:
             original_label = label
             counter = 2
