@@ -129,19 +129,13 @@ class TextPairConfig:
                         self.preprocessing_params["source"]["embedding_model"] = value
                         self.preprocessing_params["target"]["embedding_model"] = value
                     else:
-                        # Default to small, fast multilingual model if not specified
-                        self.preprocessing_params["source"]["embedding_model"] = (
-                            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                        )
-                        self.preprocessing_params["target"]["embedding_model"] = (
-                            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                        )
+                        # Default to Qwen3 embedding model
+                        self.preprocessing_params["source"]["embedding_model"] = "Qwen/Qwen3-Embedding-0.6B"
+                        self.preprocessing_params["target"]["embedding_model"] = "Qwen/Qwen3-Embedding-0.6B"
                         print(
-                            "\nWARNING: Using default embedding model 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'"
+                            "\nWARNING: Using default embedding model 'Qwen/Qwen3-Embedding-0.6B'"
                         )
-                        print("This is a small, fast multilingual model suitable for many languages.")
-                        print("For better quality results in specific languages, consider using a specialized model.")
-                        print("See: https://huggingface.co/models?library=sentence-transformers&sort=downloads")
+                        print("For better quality in specific languages, consider using a specialized model.")
                         print("Configure via 'embedding_model' in your config file.\n")
                 case _:
                     self.preprocessing_params["source"][key] = value
