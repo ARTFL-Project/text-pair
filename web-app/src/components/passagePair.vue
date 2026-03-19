@@ -62,7 +62,17 @@
 
         <div class="text-muted text-center mb-2">
             <div v-if="globalConfig.matchingAlgorithm == 'vsa'">
-                <div>{{ alignment.similarity.toFixed(2) * 100 }} % similar</div>
+                <div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+                    <span v-if="alignment.llm_stance && alignment.llm_stance !== 'Unknown'"
+                        :class="stanceClass(alignment.llm_stance)" class="stance-badge">
+                        {{ alignment.llm_stance }}
+                    </span>
+                    <div>{{ alignment.similarity.toFixed(2) * 100 }} % similar</div>
+                </div>
+                <div v-if="alignment.llm_reasoning && !alignment.llm_reasoning.startsWith('Error:')"
+                    class="reasoning-text small px-4 pb-1">
+                    {{ alignment.llm_reasoning }}
+                </div>
                 <a class="diff-btn" diffed="false" @click="showMatches(alignment)">Show matching words</a>
                 <div class="loading position-absolute" style="display: none; left: 50%; transform: translateX(-50%)">
                     <div class="spinner-border"
@@ -189,6 +199,15 @@ export default {
                 diffBtn.textContent = "Show differences";
             }
         },
+        stanceClass(stance) {
+            const map = {
+                Agree: "stance-agree",
+                Disagree: "stance-disagree",
+                Neutral: "stance-neutral",
+                Unrelated: "stance-unrelated",
+            };
+            return map[stance] || "";
+        },
         showMatches: function (alignment, diffBtn) {
             if (diffBtn == undefined) {
                 diffBtn = document.getElementsByClassName("diff-btn")[this.index];
@@ -265,6 +284,29 @@ export default {
 
 .target-passage-container {
     border-right-width: 0 !important;
+}
+
+.stance-badge {
+    display: inline-block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 4px;
+    color: #fff;
+    text-transform: capitalize;
+}
+
+.stance-agree { background-color: #27ae60; }
+.stance-disagree { background-color: #e74c3c; }
+.stance-neutral { background-color: #7f8c8d; }
+.stance-unrelated { background-color: #95a5a6; }
+
+.reasoning-text {
+    font-style: italic;
+    line-height: 1.4;
+    max-width: 90%;
+    margin: 0 auto;
+    color: #6c757d;
 }
 
 /* Classification tag styling */

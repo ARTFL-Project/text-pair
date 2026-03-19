@@ -53,7 +53,7 @@ fi
 
 # Give current user permission to write to /var/lib/textpair
 sudo mkdir -p /var/lib/text-pair
-sudo chown -R $USER:$USER /var/lib/text-pair
+sudo chown -R $USER:$(id -gn) /var/lib/text-pair
 
 # Create the virtual environment using uv
 echo "Creating virtual environment with uv..."
@@ -106,7 +106,7 @@ sudo cp textpair /usr/local/bin/
 arch=$(uname -m)
 if [ "$arch" = "x86_64" ]; then
     binary_path="lib/core/binary/x86_64/compareNgrams"
-elif [ "$arch" = "aarch64" ]; then
+elif [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then
     binary_path="lib/core/binary/aarch64/compareNgrams"
 else
     echo "Only x86_64 and ARM are supported at this time."

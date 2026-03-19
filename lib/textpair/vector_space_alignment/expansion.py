@@ -3,13 +3,24 @@ Passage expansion module for extending matched passages using LLM evaluation.
 """
 
 import copy
-import itertools
 
 from tqdm import tqdm
 
 from textpair.utils import get_text
 
 from .structures import MergedGroup, find_token_index_by_byte, load_token_search_data
+
+
+def _get_parent_id(sentence_id: str) -> str:
+    """Extract the parent text object ID by stripping the last level component.
+
+    For example, if sentence_id is '1 2 0 0 3 4' (doc div1 div2 div3 para sent),
+    the parent (paragraph) id is '1 2 0 0 3'.
+    Returns an empty string if the sentence_id has fewer than 2 components,
+    meaning no boundary can be determined.
+    """
+    parts = sentence_id.split()
+    return " ".join(parts[:-1]) if len(parts) > 1 else ""
 
 
 def count_sentences_from_tokens(filepath: str, start_byte: int, end_byte: int) -> int:
@@ -64,9 +75,17 @@ def get_previous_sentences_from_tokens(filepath: str, start_byte: int, count: in
     match_start_index = find_token_index_by_byte(token_data.start_bytes, start_byte)
     if match_start_index == -1:
         return sentences
+
+    # Determine the parent object boundary (e.g., paragraph when text_object_type=sent).
+    # Expansion must not cross into an adjacent parent object.
+    boundary_parent_id = _get_parent_id(token_data.sentence_ids[match_start_index])
+
     for _ in range(count):
         prev_sentence, start_byte_of_sentence, first_token_index = get_previous_sentence(match_start_index)
         if not prev_sentence:
+            break
+        # Stop if the candidate sentence belongs to a different parent object.
+        if boundary_parent_id and _get_parent_id(token_data.sentence_ids[first_token_index]) != boundary_parent_id:
             break
         sentences.append(("".join(reversed(prev_sentence)), start_byte_of_sentence))
         match_start_index = first_token_index
@@ -108,9 +127,17 @@ def get_next_sentences_from_tokens(filepath: str, end_byte: int, count: int) -> 
     match_end_index = find_token_index_by_byte(token_data.end_bytes, end_byte)
     if match_end_index == -1:
         return sentences
+
+    # Determine the parent object boundary (e.g., paragraph when text_object_type=sent).
+    # Expansion must not cross into an adjacent parent object.
+    boundary_parent_id = _get_parent_id(token_data.sentence_ids[match_end_index])
+
     for _ in range(count):
         next_sentence, end_byte_of_sentence, last_token_index = get_next_sentence(match_end_index)
         if not next_sentence:
+            break
+        # Stop if the candidate sentence belongs to a different parent object.
+        if boundary_parent_id and _get_parent_id(token_data.sentence_ids[last_token_index]) != boundary_parent_id:
             break
         sentences.append(("".join(next_sentence), end_byte_of_sentence))
         match_end_index = last_token_index
@@ -197,123 +224,6 @@ def _prepare_expansion_step(match: MergedGroup, step: int, direction: str) -> di
     }
 
 
-def _prepare_expansion_combinations(
-    match: MergedGroup,
-    source_sents_count: int,
-    target_sents_count: int,
-    strategy: str = "all",
-) -> list[dict]:
-    """
-    DEPRECATED: Old expansion logic, kept for compatibility.
-    Use progressive expansion via expand_validated_matches instead.
-    """
-    # Read all necessary text and boundary components exactly ONCE
-    original_source_text = get_text(match.source.start_byte, match.source.end_byte, match.source.filename)
-    original_target_text = get_text(match.target.start_byte, match.target.end_byte, match.target.filename)
-
-    # Determine how many sentences to add based on the dynamic strategy (max 1 for progressive)
-    s_to_add = 1 if source_sents_count < 5 else 0
-    t_to_add = 1 if target_sents_count < 5 else 0
-
-    # Fetch the maximum number of contextual sentences we might need
-    source_prev_sents_data = get_previous_sentences_from_tokens(
-        match.source.metadata["parsed_filename"], match.source.start_byte, s_to_add
-    )
-    source_next_sents_data = get_next_sentences_from_tokens(
-        match.source.metadata["parsed_filename"], match.source.end_byte, s_to_add
-    )
-    target_prev_sents_data = get_previous_sentences_from_tokens(
-        match.target.metadata["parsed_filename"], match.target.start_byte, t_to_add
-    )
-    target_next_sents_data = get_next_sentences_from_tokens(
-        match.target.metadata["parsed_filename"], match.target.end_byte, t_to_add
-    )
-
-    def get_distribution_choices(num_to_add: int, prev_avail: int, next_avail: int) -> list[tuple[int, int]]:
-        """Get all (prev, next) combinations that sum to num_to_add."""
-        if num_to_add == 0:
-            return [(0, 0)]
-
-        choices = []
-        for i in range(num_to_add + 1):
-            prev_needed = i
-            next_needed = num_to_add - i
-            if prev_needed <= prev_avail and next_needed <= next_avail:
-                choices.append((prev_needed, next_needed))
-        return choices
-
-    # Generate all valid ways to distribute the needed sentences for source and target
-    s_distributions = get_distribution_choices(s_to_add, len(source_prev_sents_data), len(source_next_sents_data))
-    t_distributions = get_distribution_choices(t_to_add, len(target_prev_sents_data), len(target_next_sents_data))
-
-    # Include smaller expansions as well
-    s_choices = [(0, 0)] + s_distributions
-    t_choices = [(0, 0)] + t_distributions
-    if s_to_add > 1:
-        s_choices.extend(
-            get_distribution_choices(s_to_add - 1, len(source_prev_sents_data), len(source_next_sents_data))
-        )
-    if t_to_add > 1:
-        t_choices.extend(
-            get_distribution_choices(t_to_add - 1, len(target_prev_sents_data), len(target_next_sents_data))
-        )
-
-    # Remove duplicates and sort
-    s_choices = sorted(list(set(s_choices)))
-    t_choices = sorted(list(set(t_choices)))
-
-    all_combinations = list(itertools.product(s_choices, t_choices))
-
-    # The maximal combination is the one that adds the most sentences.
-    # In a sorted list of tuples, this will be the last element.
-    maximal_combo = all_combinations[-1] if len(all_combinations) > 1 else None
-
-    if strategy == "maximal":
-        combinations = [maximal_combo] if maximal_combo else []
-    elif strategy == "fallback":
-        # Exclude original (0,0) and maximal
-        combinations = [c for c in all_combinations if c != ((0, 0), (0, 0)) and c != maximal_combo]
-    else:  # 'all'
-        combinations = all_combinations
-
-    passage_data_list = []
-    for (s_prev_count, s_next_count), (t_prev_count, t_next_count) in combinations:
-        s_prev = source_prev_sents_data[:s_prev_count]
-        s_next = source_next_sents_data[:s_next_count]
-        t_prev = target_prev_sents_data[:t_prev_count]
-        t_next = target_next_sents_data[:t_next_count]
-
-        current_source_text = _build_expanded_text(
-            original_source_text,
-            prev_sents=[text for text, _ in s_prev],
-            next_sents=[text for text, _ in s_next],
-        )
-        current_target_text = _build_expanded_text(
-            original_target_text,
-            prev_sents=[text for text, _ in t_prev],
-            next_sents=[text for text, _ in t_next],
-        )
-
-        config = copy.deepcopy(match)
-        if s_prev:
-            config.source.start_byte = s_prev[-1][1]
-        if s_next:
-            config.source.end_byte = s_next[-1][1]
-        if t_prev:
-            config.target.start_byte = t_prev[-1][1]
-        if t_next:
-            config.target.end_byte = t_next[-1][1]
-
-        passage_data_list.append(
-            {
-                "match_config": config,
-                "source_text": current_source_text,
-                "target_text": current_target_text,
-            }
-        )
-
-    return passage_data_list
-
 
 async def expand_validated_matches(
     matches: list[MergedGroup],
@@ -340,8 +250,8 @@ async def expand_validated_matches(
             match.target.end_byte,
         )
 
-        # If at least one side is shorter than 5 sentences, it's eligible for expansion.
-        if source_sents < 5 or target_sents < 5:
+        # If at least one side is shorter than 4 sentences, it's eligible for expansion.
+        if source_sents < 4 or target_sents < 4:
             expansion_candidates.append((match, source_sents, target_sents))
         else:
             # This match is already long enough, so add it directly to the final list.
@@ -381,7 +291,7 @@ async def _process_expansion_chunk(chunk: list[tuple[MergedGroup, int, int]], ev
 
     for match, source_sents_count, target_sents_count in chunk:
         # Only expand if at least one side is short
-        if source_sents_count >= 5 and target_sents_count >= 5:
+        if source_sents_count >= 4 and target_sents_count >= 4:
             continue
 
         step1_prev_expansions.append(_prepare_expansion_step(match, step=1, direction="prev"))
@@ -395,8 +305,8 @@ async def _process_expansion_chunk(chunk: list[tuple[MergedGroup, int, int]], ev
     prev_pairs = [(exp["source_text"], exp["target_text"]) for exp in step1_prev_expansions]
     next_pairs = [(exp["source_text"], exp["target_text"]) for exp in step1_next_expansions]
 
-    prev_results = await evaluator.evaluate_batch(prev_pairs, batch_size=8, show_progress=False)
-    next_results = await evaluator.evaluate_batch(next_pairs, batch_size=8, show_progress=False)
+    prev_results = await evaluator.evaluate_batch(prev_pairs, batch_size=None, show_progress=False)
+    next_results = await evaluator.evaluate_batch(next_pairs, batch_size=None, show_progress=False)
 
     # --- Step 2: Determine winners and prepare next step ---
     step2_candidates = []
@@ -456,7 +366,7 @@ async def _process_expansion_chunk(chunk: list[tuple[MergedGroup, int, int]], ev
 
     # --- Step 3: Evaluate step 2 expansions ---
     step2_pairs = [(exp["source_text"], exp["target_text"]) for exp in step2_candidates]
-    step2_results = await evaluator.evaluate_batch(step2_pairs, batch_size=8, show_progress=False)
+    step2_results = await evaluator.evaluate_batch(step2_pairs, batch_size=None, show_progress=False)
 
     for i, (step2_score, _, _) in enumerate(step2_results):
         original_match = step2_match_map[i]

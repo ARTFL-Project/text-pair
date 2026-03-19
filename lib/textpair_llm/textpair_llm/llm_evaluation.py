@@ -44,21 +44,23 @@ class LLMDebugLogger:
         target_filename: str,
         source_text: str,
         target_text: str,
+        kept: bool = True,
     ) -> None:
         """Log an LLM evaluation result with comparison to computed similarity."""
         if not self.enabled or not self.llm_file:
             return
 
+        status = "KEPT" if kept else "REJECTED"
         with open(self.llm_file, "a", encoding="utf-8") as debug_file:
-            debug_file.write(f"EVALUATION #{index + 1}\n")
+            debug_file.write(f"EVALUATION #{index + 1} [{status}]\n")
             debug_file.write(f"Files: {source_filename} <-> {target_filename}\n")
             debug_file.write(f"Computed Similarity: {computed_similarity:.3f}\n")
             debug_file.write(f"LLM Similarity: {llm_similarity:.3f}\n")
             debug_file.write(f"LLM Reasoning: {llm_reasoning}\n")
             debug_file.write("Source Text:\n")
-            debug_file.write(f"{source_text[:200]}{'...' if len(source_text) > 200 else ''}\n")
+            debug_file.write(f"{source_text}\n")
             debug_file.write("Target Text:\n")
-            debug_file.write(f"{target_text[:200]}{'...' if len(target_text) > 200 else ''}\n")
+            debug_file.write(f"{target_text}\n")
             debug_file.write("-" * 80 + "\n\n")
 
     def log_llm_error(self, error_message: str) -> None:
@@ -191,7 +193,7 @@ class AsyncLLMEvaluator:
         payload = {
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
-            "temperature": 0.1,
+            "temperature": 0.5,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {"name": "response", "strict": True, "schema": json_schema},
@@ -222,7 +224,7 @@ class AsyncLLMEvaluator:
         return ""
 
     async def evaluate_batch(
-        self, passage_pairs: list[tuple[str, str]], batch_size: int = 8, show_progress: bool = True
+        self, passage_pairs: list[tuple[str, str]], batch_size: int | None = None, show_progress: bool = True
     ) -> list[tuple[float, str, str]]:
         """
         Evaluate multiple passage pairs concurrently
@@ -238,7 +240,7 @@ class AsyncLLMEvaluator:
                     f"{self.base_url}/v1/chat/completions",
                     json=payload,
                     headers=self._get_headers(),
-                    timeout=aiohttp.ClientTimeout(total=30),
+                    timeout=aiohttp.ClientTimeout(total=120),
                 ) as response:
                     if response.status != 200:
                         raise Exception(f"HTTP {response.status}")
@@ -246,10 +248,21 @@ class AsyncLLMEvaluator:
 
                 return self._parse_llm_response(self._extract_text(result))
 
+            except asyncio.TimeoutError:
+                print(
+                    f"WARNING: LLM request timed out after 120s. llm_concurrency_limit is set to {self.concurrency_limit},"
+                    f" meaning {self.concurrency_limit} requests are sent to the server simultaneously."
+                    f" Either lower llm_concurrency_limit to match the number of slots your server was started with,"
+                    f" or increase your server's parallel slot count to {self.concurrency_limit}.",
+                    flush=True,
+                )
+                return 0.0, "Error: timeout", "Unknown"
             except Exception as e:
                 return 0.0, f"Error: {str(e)[:100]}...", "Unknown"
 
         # Process in batches to avoid overwhelming the server
+        if batch_size is None:
+            batch_size = self.concurrency_limit
         results = []
         total_pairs = len(passage_pairs)
 
@@ -496,33 +509,33 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
         source_text = source_text[:half_max] + "..."
         target_text = target_text[:half_max] + "..."
 
-    prompt = f"""You are a text analysis expert. Your task is to rate the semantic similarity of two passages.
+    prompt = f"""You are an intellectual history expert. Your task is to measure how closely two passages share the same idea or position — not whether they use the same words, but whether their authors hold the same view on the same specific question.
 
-    First, determine if the passages address the same specific argument. Then, use the score guide below.
+    CRITICAL CALIBRATION: Texts from the same intellectual tradition naturally share broad themes (liberty, sovereignty, social contract, religion, etc.). Shared themes are NOT sufficient for a high score. A high score requires that both passages take a position on the same specific, narrow question — not just that they belong to the same domain.
 
-    IMPORTANT: Direct agreement and direct disagreement on the exact same point are both forms of HIGH similarity.
+    Step 1 — State the core position of each passage in one sentence: what specific claim is each author making?
+
+    Step 2 — Gatekeeping test:
+    Can you identify one specific question that both authors are answering? (e.g. "Can slavery be legitimate?" or "Should religious belief be enforced by the state?")
+    - If NO: they share a broad theme but not a specific question → score 0.41–0.60, stance Neutral. STOP here.
+    - If YES: proceed to Step 3.
+
+    Step 3 — Determine stance:
+    - Agree: both authors answer that specific question the same way.
+    - Disagree: both authors address the same specific question but answer it differently or reach opposite conclusions.
+
+    Step 4 — Calibrate score using the guide below. Note that Agree scores higher than Disagree at equivalent specificity, because shared positions are stronger evidence of intellectual alignment than shared questions.
 
     Score Guide:
-    • 0.00 - 0.40: Different Subjects. The passages are about completely different topics.
-    • 0.41 - 0.69: Shared Subject, Different Focus. Same broad subject (e.g., the Roman Empire) but different specific arguments (e.g., military tactics vs. trade policy).
-    • 0.70 - 0.79: Same Argument, Loose Connection. The passages address the same question or thesis but from meaningfully different angles, evidence bases, or time periods. The intellectual link is real but indirect.
-    • 0.80 - 0.89: Same Argument, Clear Engagement. The passages directly address the same specific point with overlapping evidence, reasoning, or rhetorical framing. A reader would immediately see they are in conversation.
-    • 0.90 - 0.95: Same Argument, Near-Paraphrase Framing. Very close in both content and rhetorical approach — similar structure, similar evidence, similar conclusions — but not word-for-word identical.
-    • 0.96 - 1.00: True Paraphrase. The passages make the exact same point with nearly identical meaning. Only surface wording differs.
-
-    Your thought process:
-    1. What is the broad subject of each passage?
-    2. Do they narrow in on the exact same specific argument or point?
-    3. Determine the Stance:
-       - If they share the specific argument, do they Agree or Disagree?
-       - If they only share the broad subject, mark as Neutral.
-       - Otherwise, mark as Unrelated.
-    4. Within the matching score category, calibrate precisely:
-       - Low end of range: weaker fit for that category's description.
-       - High end of range: strong fit, almost belongs in the next category up.
+    • 0.00 – 0.40: Unrelated. Different subjects or domains entirely. Stance: Unrelated.
+    • 0.41 – 0.60: Shared Domain, Different Questions. Same broad intellectual territory but no shared specific question. This is the EXPECTED range for most thematically related passages. Stance: Neutral.
+    • 0.61 – 0.75: Disagree on the Same Question. Both engage with the same specific question but reach opposite or incompatible conclusions. Intellectually interesting but the authors do not share a position. Stance: Disagree.
+    • 0.66 – 0.79: Agree, Indirect. Both answer the same specific question the same way, but from different angles, evidence, or contexts. The shared position is real but the passages do not closely mirror each other. Stance: Agree.
+    • 0.80 – 0.92: Agree, Direct Engagement. Same specific question, same answer, with overlapping evidence, structure, or framing. A reader would immediately see these passages as intellectually aligned. Stance: Agree.
+    • 0.93 – 1.00: Agree, Near-Identical Position. Virtually the same argument expressed in very similar terms. Stance: Agree.
 
     Respond with a JSON object containing these fields:
-    - "reasoning": Your step-by-step analysis (2-3 sentences)
+    - "reasoning": Your step-by-step analysis following the steps above (2-4 sentences)
     - "stance": One of "Agree", "Disagree", "Neutral", or "Unrelated"
     - "score": A number between 0.00 and 1.00
 

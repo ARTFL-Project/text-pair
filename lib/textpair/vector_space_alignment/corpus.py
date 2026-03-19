@@ -474,7 +474,7 @@ class TransformerCorpus(Corpus):
         else:
             self.model = model
 
-        self.model.max_seq_length = self.model.get_max_seq_length() - 2  # needed to enable truncating long sequences
+        self.model.max_seq_length = min(self.model.get_max_seq_length() - 2, 4096)  # cap at 4K; LLM-based models can report 32K+ which causes memory issues
         self.max_tokens: int = int(self.model.max_seq_length / 2)
 
         self.docs = DocumentChunks(
@@ -487,6 +487,8 @@ class TransformerCorpus(Corpus):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()  # clear GPU cache after creating embeddings
             self.device = torch.device("cuda:0")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
 
@@ -498,14 +500,22 @@ class TransformerCorpus(Corpus):
 
     def create_embeddings(self, text_chunks) -> torch.Tensor:
         """Create document embeddings for a batch of text chunks"""
-        tensor = self.model.encode(
-            list(text_chunks),
-            convert_to_tensor=True,
-            batch_size=32,
-            show_progress_bar=False,
-            normalize_embeddings=True,
-        )
-        return tensor  # type: ignore
+        chunks = list(text_chunks)
+        batch_size = 32
+        while True:
+            try:
+                return self.model.encode(
+                    chunks,
+                    convert_to_tensor=True,
+                    batch_size=batch_size,
+                    show_progress_bar=False,
+                    normalize_embeddings=True,
+                )  # type: ignore
+            except RuntimeError:
+                if batch_size == 1:
+                    raise
+                batch_size //= 2
+                print(f"Encoding failed, retrying with batch_size={batch_size}...", flush=True)
 
     def vectordb_compare(self, target_corpus, min_similarity: float) -> Matches:
         """Compare using FAISS vector database for efficient similarity search"""

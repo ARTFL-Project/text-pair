@@ -57,6 +57,8 @@ DEFAULT_FIELD_TYPES = {
     "source_passage_length": "INTEGER",
     "target_passage_length": "INTEGER",
     "similarity": "FLOAT",
+    "llm_stance": "TEXT",
+    "llm_reasoning": "TEXT",
     "group_id": "INTEGER[]",  # Define directly as INTEGER[]
     "count": "INTEGER",
 }
@@ -349,7 +351,7 @@ def load_db(
     if banalities_stored is True:
         field_names.add("banality")
     if algorithm == "vsa":
-        field_names.update(("similarity", "source_passage_with_matches", "target_passage_with_matches"))
+        field_names.update(("similarity", "llm_stance", "llm_reasoning", "source_passage_with_matches", "target_passage_with_matches"))
     field_names.update(get_metadata_fields(source_metadata, "source"))
     if target_metadata:
         field_names.update(get_metadata_fields(target_metadata, "target"))
@@ -662,15 +664,34 @@ def create_web_app(
     else:
         print(f"Note: No graph data found at {source_graph_data}. Clustering visualization will not be available.")
 
-    if textpair_params.is_philo_db is False:
-        if textpair_params.source_against_source is True:
-            copy_data(textpair_params, "source")
-            os.system(
-                f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data"
-            )
-        else:
-            copy_data(textpair_params, "source")
-            copy_data(textpair_params, "target")
+    if textpair_params.is_philo_db:
+        # Stage db.locals.py and toms.db from the existing PhiloLogic DB into output_path
+        # so copy_data can work uniformly regardless of input type.
+        for direction, philo_path in (
+            ("source", textpair_params.web_app_config["source_philo_db_path"]),
+            ("target", textpair_params.web_app_config["target_philo_db_path"]),
+        ):
+            if textpair_params.source_against_source and direction == "target":
+                continue
+            dest_dir = os.path.join(textpair_params.output_path, direction)
+            os.makedirs(dest_dir, exist_ok=True)
+            shutil.copy2(os.path.join(philo_path, "data/db.locals.py"), dest_dir)
+            shutil.copy2(os.path.join(philo_path, "data/toms.db"), dest_dir)
+
+    if textpair_params.source_against_source is True:
+        copy_data(textpair_params, "source")
+        os.system(
+            f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data"
+        )
+    else:
+        copy_data(textpair_params, "source")
+        copy_data(textpair_params, "target")
+
+    # Remove intermediate source/target directories — data is now in the web app directory
+    for direction in ("source", "target"):
+        intermediate = os.path.join(textpair_params.output_path, direction)
+        if os.path.exists(intermediate):
+            shutil.rmtree(intermediate)
 
     db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
     print("\n### Finished ###", flush=True)

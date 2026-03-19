@@ -470,14 +470,18 @@ async def evaluate_passages_with_llm(
             computed_similarities.append(merged_group.similarity)
 
         # Perform batch async evaluation
-        llm_results = await llm_evaluator.evaluate_batch(passage_pairs, batch_size=8)
+        llm_results = await llm_evaluator.evaluate_batch(passage_pairs)
 
         # Update similarities and filter by threshold
-        for i, (merged_group, (llm_similarity, llm_reasoning, _)) in enumerate(zip(merged_matches, llm_results)):
+        for i, (merged_group, (llm_similarity, llm_reasoning, llm_stance)) in enumerate(zip(merged_matches, llm_results)):
             computed_similarity = computed_similarities[i]
 
             # Update the similarity score with LLM evaluation
             merged_group.similarity = llm_similarity
+
+            # Store stance and reasoning for output
+            merged_group.source.metadata["llm_stance"] = llm_stance
+            merged_group.source.metadata["llm_reasoning"] = llm_reasoning
 
             # Debug: Log the LLM evaluation
             debug_logger.log_llm_evaluation(
@@ -489,6 +493,7 @@ async def evaluate_passages_with_llm(
                 merged_group.target.filename,
                 passage_pairs[i][0],
                 passage_pairs[i][1],
+                kept=llm_similarity >= min_score,
             )
 
         # Filter out passages below threshold
@@ -669,6 +674,9 @@ async def run_vsa(
             else:
                 source_passage_with_matches = source_passage
                 target_passage_with_matches = target_passage
+            # Extract LLM fields before spreading metadata (they are corpus-level, not source/target)
+            llm_stance = match.source.metadata.pop("llm_stance", "")
+            llm_reasoning = match.source.metadata.pop("llm_reasoning", "")
             result_object: str = json.dumps(
                 {
                     "source_doc_id": match.source.metadata["philo_id"].split()[0],
@@ -682,6 +690,8 @@ async def run_vsa(
                     "target_context_after": target_context_after,
                     "target_passage_with_matches": target_passage_with_matches,
                     "similarity": str(match.similarity),
+                    "llm_stance": llm_stance,
+                    "llm_reasoning": llm_reasoning,
                     **{f"source_{field}": value for field, value in match.source.metadata.items()},
                     **{f"target_{field}": value for field, value in match.target.metadata.items()},
                 }

@@ -264,7 +264,7 @@ async def run_alignment(params):
                 print("Running LLM post-evaluation on flagged banalities...")
                 rescued_count = await banality_llm_post_eval(
                     results_file,
-                    params.llm_params["llm_model"],
+                    params.llm_params.get("llm_model", ""),
                     params.llm_params["llm_context_window"],
                     params.llm_params["llm_concurrency_limit"],
                     params.llm_params.get("llm_port", 8080),
