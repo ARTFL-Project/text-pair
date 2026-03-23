@@ -446,9 +446,12 @@ async def evaluate_passages_with_llm(
             debug_file.write("LLM EVALUATION DEBUG LOG\n")
             debug_file.write("=" * 50 + "\n\n")
 
-    # Override min_score if llm_similarity_threshold is provided
+    # Override min_score with llm_similarity_threshold (integer 1-5 scale)
+    # Default to 4 (keep indirect and direct agreement) if not provided
     if llm_similarity_threshold is not None:
         min_score = llm_similarity_threshold
+    else:
+        min_score = 4
 
     try:
         # Prepare passage pairs for batch evaluation

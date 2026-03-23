@@ -164,9 +164,10 @@ class TextPairConfig:
                         "min_similarity"
                         | "most_common_ngram_proportion"
                         | "common_ngram_threshold"
-                        | "llm_similarity_threshold"
                     ):
                         value = float(value)
+                    case "llm_similarity_threshold":
+                        value = int(value)
                     case "min_matching_words" | "source_batch" | "target_batch":
                         value = int(value)
                 self.matching_params[key] = value

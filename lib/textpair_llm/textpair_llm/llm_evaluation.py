@@ -101,10 +101,9 @@ class AsyncLLMEvaluator:
         "type": "object",
         "properties": {
             "reasoning": {"type": "string"},
-            "stance": {"type": "string", "enum": ["Agree", "Disagree", "Neutral", "Unrelated"]},
-            "score": {"type": "number"},
+            "score": {"type": "integer", "enum": [1, 2, 3, 4, 5]},
         },
-        "required": ["reasoning", "stance", "score"],
+        "required": ["reasoning", "score"],
     }
 
     BANALITY_SCHEMA = {
@@ -172,6 +171,9 @@ class AsyncLLMEvaluator:
                     response = requests.get(endpoint, headers=headers, timeout=5)
                     if response.status_code == 200:
                         return
+                    # Accept 401/403/404 as signs the server is reachable
+                    if self._external and response.status_code in (401, 403, 404):
+                        return
                 except requests.exceptions.RequestException:
                     pass
             time.sleep(1)
@@ -188,12 +190,12 @@ class AsyncLLMEvaluator:
                 self.server_process.kill()
             self.server_process = None
 
-    def _build_payload(self, prompt: str, json_schema: dict, max_tokens: int = 500) -> dict:
+    def _build_payload(self, prompt: str, json_schema: dict, max_tokens: int = 5000) -> dict:
         """Build a chat completions payload with structured JSON output."""
         payload = {
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
-            "temperature": 0.5,
+            "temperature": 0.1,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {"name": "response", "strict": True, "schema": json_schema},
@@ -231,10 +233,10 @@ class AsyncLLMEvaluator:
         Returns: List of (similarity_score, reasoning, stance) tuples
         """
 
-        async def evaluate_single(session, source_text, target_text):
+        async def evaluate_single(session, source_text, target_text, retry: bool = True):
             try:
                 prompt = create_similarity_evaluation_prompt(source_text, target_text, self.context_window)
-                payload = self._build_payload(prompt, self.SIMILARITY_SCHEMA, max_tokens=500)
+                payload = self._build_payload(prompt, self.SIMILARITY_SCHEMA)
 
                 async with session.post(
                     f"{self.base_url}/v1/chat/completions",
@@ -243,12 +245,18 @@ class AsyncLLMEvaluator:
                     timeout=aiohttp.ClientTimeout(total=120),
                 ) as response:
                     if response.status != 200:
-                        raise Exception(f"HTTP {response.status}")
+                        error_text = await response.text()
+                        raise Exception(f"HTTP {response.status}: {error_text[:300]}")
                     result = await response.json()
 
-                return self._parse_llm_response(self._extract_text(result))
+                score, reasoning, stance = self._parse_llm_response(self._extract_text(result))
+                if score == 0.0 and retry:
+                    return await evaluate_single(session, source_text, target_text, retry=False)
+                return score, reasoning, stance
 
             except asyncio.TimeoutError:
+                if retry:
+                    return await evaluate_single(session, source_text, target_text, retry=False)
                 print(
                     f"WARNING: LLM request timed out after 120s. llm_concurrency_limit is set to {self.concurrency_limit},"
                     f" meaning {self.concurrency_limit} requests are sent to the server simultaneously."
@@ -258,6 +266,9 @@ class AsyncLLMEvaluator:
                 )
                 return 0.0, "Error: timeout", "Unknown"
             except Exception as e:
+                if retry:
+                    return await evaluate_single(session, source_text, target_text, retry=False)
+                print(f"WARNING: LLM evaluation error: {e}", flush=True)
                 return 0.0, f"Error: {str(e)[:100]}...", "Unknown"
 
         # Process in batches to avoid overwhelming the server
@@ -274,15 +285,14 @@ class AsyncLLMEvaluator:
                     tasks = [evaluate_single(session, source, target) for source, target in batch]
                     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                    # Handle any exceptions and update progress
-                    for j, result in enumerate(batch_results):
+                    # Handle any exceptions
+                    for result in batch_results:
                         if isinstance(result, Exception):
                             results.append((0.0, f"Error: {str(result)[:100]}...", "Unknown"))
                         else:
                             results.append(result)
 
-                        # Update progress bar
-                        pbar.update(1)
+                    pbar.update(len(batch_results))
 
         return results
 
@@ -433,14 +443,20 @@ class AsyncLLMEvaluator:
 
         return results
 
+    _STANCE_MAP = {1: "Unrelated", 2: "Neutral", 3: "Disagree", 4: "Agree", 5: "Agree"}
+
     def _parse_llm_response(self, response: str) -> tuple[float, str, str]:
-        """Parse structured JSON response from LLM to extract score, reasoning, and stance"""
+        """Parse structured JSON response from LLM to extract score, reasoning, and stance.
+
+        Returns (score, reasoning, stance) where score is an integer 1-5:
+            1 = Unrelated, 2 = Neutral, 3 = Disagree, 4 = Agree (indirect), 5 = Agree (direct)
+        """
         try:
             data = json.loads(response)
-            score = max(0.0, min(1.0, float(data["score"])))
             reasoning = data.get("reasoning", "No reasoning provided")
-            stance = data.get("stance", "Unknown")
-            return score, reasoning, stance
+            score = int(data["score"])
+            stance = self._STANCE_MAP.get(score, "Unknown")
+            return float(score), reasoning, stance
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             return 0.0, f"Failed to parse LLM response: {str(e)}", "Unknown"
 
@@ -509,35 +525,39 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
         source_text = source_text[:half_max] + "..."
         target_text = target_text[:half_max] + "..."
 
-    prompt = f"""You are an intellectual history expert. Your task is to measure how closely two passages share the same idea or position — not whether they use the same words, but whether their authors hold the same view on the same specific question.
+    prompt = f"""You are an intellectual history expert. Do these two passages share the same position on the same specific question?
 
-    CRITICAL CALIBRATION: Texts from the same intellectual tradition naturally share broad themes (liberty, sovereignty, social contract, religion, etc.). Shared themes are NOT sufficient for a high score. A high score requires that both passages take a position on the same specific, narrow question — not just that they belong to the same domain.
+    CRITICAL: Texts from the same intellectual tradition naturally share broad themes (liberty, sovereignty, social contract, religion, etc.). Shared themes are NOT enough. Most thematically related passages should score 2. Only score 4 or 5 if both passages argue the same specific claim.
 
-    Step 1 — State the core position of each passage in one sentence: what specific claim is each author making?
+    Follow these steps IN ORDER. Your reasoning must be complete before you assign a score.
 
-    Step 2 — Gatekeeping test:
-    Can you identify one specific question that both authors are answering? (e.g. "Can slavery be legitimate?" or "Should religious belief be enforced by the state?")
-    - If NO: they share a broad theme but not a specific question → score 0.41–0.60, stance Neutral. STOP here.
-    - If YES: proceed to Step 3.
+    Step 1 — What specific claim is each passage making? (one sentence each)
 
-    Step 3 — Determine stance:
-    - Agree: both authors answer that specific question the same way.
-    - Disagree: both authors address the same specific question but answer it differently or reach opposite conclusions.
+    Step 2 — State one specific YES/NO question that BOTH authors are answering. It must be narrow enough that a broad theme cannot satisfy it.
+    Examples of good questions: "Does force create legitimate right?" / "Is hereditary monarchy structurally stable?" / "Should the state enforce religious uniformity?"
+    Examples of bad questions (too broad): "Is liberty important?" / "What is the nature of government?"
+    - Both must be arguing a position, not merely defining or describing.
+    - A shared abstract principle applied to different contexts does NOT count.
+    - If you cannot state such a yes/no question: score 1 or 2. STOP here.
 
-    Step 4 — Calibrate score using the guide below. Note that Agree scores higher than Disagree at equivalent specificity, because shared positions are stronger evidence of intellectual alignment than shared questions.
+    Step 3 — Does Passage 1 answer YES or NO? Does Passage 2 answer YES or NO?
+    - If they give DIFFERENT answers: score 3. STOP here.
+    - If they give the SAME answer: proceed to Step 4.
+
+    Step 4 — Both authors answer the same specific question the same way. How closely do the arguments align?
+    - Same answer but different angles or evidence: score 4.
+    - Same answer with overlapping evidence, structure, or framing: score 5.
 
     Score Guide:
-    • 0.00 – 0.40: Unrelated. Different subjects or domains entirely. Stance: Unrelated.
-    • 0.41 – 0.60: Shared Domain, Different Questions. Same broad intellectual territory but no shared specific question. This is the EXPECTED range for most thematically related passages. Stance: Neutral.
-    • 0.61 – 0.75: Disagree on the Same Question. Both engage with the same specific question but reach opposite or incompatible conclusions. Intellectually interesting but the authors do not share a position. Stance: Disagree.
-    • 0.66 – 0.79: Agree, Indirect. Both answer the same specific question the same way, but from different angles, evidence, or contexts. The shared position is real but the passages do not closely mirror each other. Stance: Agree.
-    • 0.80 – 0.92: Agree, Direct Engagement. Same specific question, same answer, with overlapping evidence, structure, or framing. A reader would immediately see these passages as intellectually aligned. Stance: Agree.
-    • 0.93 – 1.00: Agree, Near-Identical Position. Virtually the same argument expressed in very similar terms. Stance: Agree.
+    1 = Unrelated — different subjects entirely.
+    2 = Shared domain, different questions — same broad territory but different specific questions. This is the EXPECTED score for most thematically related passages.
+    3 = Same question, opposite answer — both engage the same question but one says yes and the other no.
+    4 = Agree, indirect — same question, same answer, different angles.
+    5 = Agree, direct — same question, same answer, overlapping evidence and framing.
 
-    Respond with a JSON object containing these fields:
-    - "reasoning": Your step-by-step analysis following the steps above (2-4 sentences)
-    - "stance": One of "Agree", "Disagree", "Neutral", or "Unrelated"
-    - "score": A number between 0.00 and 1.00
+    Respond with a JSON object. The "reasoning" field MUST come first:
+    - "reasoning": Follow the steps above. For score 4 or 5, you MUST state: the yes/no question, Passage 1's answer, and Passage 2's answer.
+    - "score": An integer from 1 to 5
 
     ---
     Passage 1: {source_text}
