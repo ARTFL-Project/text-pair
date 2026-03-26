@@ -525,38 +525,36 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
         source_text = source_text[:half_max] + "..."
         target_text = target_text[:half_max] + "..."
 
-    prompt = f"""You are an intellectual history expert. Do these two passages share the same position on the same specific question?
+    prompt = f"""You are an intellectual history expert. Would a scholar cite both passages as evidence of the same specific idea shared between these two authors?
 
-    CRITICAL: Texts from the same intellectual tradition naturally share broad themes (liberty, sovereignty, social contract, religion, etc.). Shared themes are NOT enough. Most thematically related passages should score 2. Only score 4 or 5 if both passages argue the same specific claim.
+    CRITICAL: Texts from the same intellectual tradition naturally share broad themes (liberty, sovereignty, social contract, religion, etc.). Shared themes are NOT enough. Most thematically related passages should score 2.
 
-    Follow these steps IN ORDER. Your reasoning must be complete before you assign a score.
+    Follow these steps IN ORDER:
 
-    Step 1 — What specific claim is each passage making? (one sentence each)
+    Step 1 — Summarize each passage's core argument in ONE sentence.
 
-    Step 2 — State one specific YES/NO question that BOTH authors are answering. It must be narrow enough that a broad theme cannot satisfy it.
-    Examples of good questions: "Does force create legitimate right?" / "Is hereditary monarchy structurally stable?" / "Should the state enforce religious uniformity?"
-    Examples of bad questions (too broad): "Is liberty important?" / "What is the nature of government?"
-    - Both must be arguing a position, not merely defining or describing.
-    - A shared abstract principle applied to different contexts does NOT count.
-    - If you cannot state such a yes/no question: score 1 or 2. STOP here.
+    Step 2 — Can you combine both summaries into a SINGLE sentence that accurately captures what both authors argue, without distorting either one?
+    - If you cannot: the passages address different questions. Score 1 or 2. STOP here.
+    - If you can: write that combined sentence, then proceed to Step 3.
 
-    Step 3 — Does Passage 1 answer YES or NO? Does Passage 2 answer YES or NO?
-    - If they give DIFFERENT answers: score 3. STOP here.
-    - If they give the SAME answer: proceed to Step 4.
+    Step 3 — Test the combined sentence: what is LOST from each passage's argument when you reduce it to this shared claim? State what is lost for each passage.
+    - If what is lost is merely stylistic or contextual detail: the core argument is genuinely shared. Proceed to Step 4.
+    - If what is lost is the main point of either passage (its specific mechanism, its target, or its conclusion): the combined sentence is too abstract and the passages address different questions. Score 2. STOP here.
+    - If what is lost reveals that the authors actually disagree: score 3. STOP here.
 
-    Step 4 — Both authors answer the same specific question the same way. How closely do the arguments align?
-    - Same answer but different angles or evidence: score 4.
-    - Same answer with overlapping evidence, structure, or framing: score 5.
+    Step 4 — How closely do the arguments align?
+    - Same claim but different angles or evidence: score 4.
+    - Same claim with overlapping evidence, structure, or framing: score 5.
 
     Score Guide:
     1 = Unrelated — different subjects entirely.
     2 = Shared domain, different questions — same broad territory but different specific questions. This is the EXPECTED score for most thematically related passages.
-    3 = Same question, opposite answer — both engage the same question but one says yes and the other no.
-    4 = Agree, indirect — same question, same answer, different angles.
-    5 = Agree, direct — same question, same answer, overlapping evidence and framing.
+    3 = Same question, opposite answer — both engage the same question but reach different conclusions.
+    4 = Agree, indirect — same claim from different angles.
+    5 = Agree, direct — same claim with overlapping evidence and framing.
 
     Respond with a JSON object. The "reasoning" field MUST come first:
-    - "reasoning": Follow the steps above. For score 4 or 5, you MUST state: the yes/no question, Passage 1's answer, and Passage 2's answer.
+    - "reasoning": Follow the steps above. For score 4 or 5, you MUST include the combined sentence from Step 2.
     - "score": An integer from 1 to 5
 
     ---
