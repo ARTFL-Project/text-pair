@@ -1,9 +1,11 @@
 """Various utilities for textpair"""
 
+import gc
 from html import unescape as unescape_html
 from xml.sax.saxutils import unescape as unescape_xml
 
 import regex as re
+import torch
 
 TAGS = re.compile(r"<[^>]+>")
 PHILO_TEXT_OBJECT_LEVELS = {
@@ -53,3 +55,16 @@ def text_object_upper_bound(config) -> str:
     if text_object_level == 1:
         return "doc"
     return object_type_to_level[text_object_level - 1]
+
+
+def clear_device_cache():
+    """Release cached memory across all backends (CPU, CUDA, MPS, XPU)"""
+    gc.collect()
+    if hasattr(torch, "cpu") and hasattr(torch.cpu, "memory") and hasattr(torch.cpu.memory, "empty_cache"):
+        torch.cpu.memory.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        torch.xpu.empty_cache()

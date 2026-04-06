@@ -423,6 +423,7 @@ async def evaluate_passages_with_llm(
     output_path: str = "output",
     llm_base_url: str = "",
     llm_api_key: str = "",
+    llm_concurrency_limit: int = 8,
 ) -> tuple[list[MergedGroup], AsyncLLMEvaluator]:
     """Evaluate merged passages using LLM and filter by threshold. Returns (matches, evaluator)."""
 
@@ -430,6 +431,7 @@ async def evaluate_passages_with_llm(
     llm_evaluator = AsyncLLMEvaluator(
         llm_model_path,
         context_window=llm_context_window,
+        concurrency_limit=llm_concurrency_limit,
         base_url=llm_base_url,
         api_key=llm_api_key,
     )
@@ -447,11 +449,11 @@ async def evaluate_passages_with_llm(
             debug_file.write("=" * 50 + "\n\n")
 
     # Override min_score with llm_similarity_threshold (integer 1-5 scale)
-    # Default to 4 (keep indirect and direct agreement) if not provided
+    # Default to 3 (keep passages engaging the same overall question) if not provided
     if llm_similarity_threshold is not None:
         min_score = llm_similarity_threshold
     else:
-        min_score = 4
+        min_score = 3
 
     try:
         # Prepare passage pairs for batch evaluation
@@ -612,6 +614,7 @@ async def run_vsa(
                 output_path,
                 llm_base_url=llm_base_url,
                 llm_api_key=llm_params.get("llm_api_key", ""),
+                llm_concurrency_limit=llm_params.get("llm_concurrency_limit", 8),
             )
             # Iteratively expand the boundaries of the validated matches
             try:

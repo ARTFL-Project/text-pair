@@ -16,6 +16,8 @@ import torch
 from msgspec import field
 from text_preprocessing import Tokens
 
+from textpair.utils import clear_device_cache
+
 # Global constants for serialization and path management
 TEMP_DIR = os.getcwd()
 PHILO_TEXT_OBJECT_LEVELS = {
@@ -112,40 +114,51 @@ class DocumentChunks:
                     # Save entire batch as single file
                     batch_filename = os.path.join(
                         self.path,
-                        f"batch_{batch_start_idx}.pt"
-                        if self.corpus_type == "TransformerCorpus"
-                        else f"batch_{batch_start_idx}.npy",
+                        (
+                            f"batch_{batch_start_idx}.pt"
+                            if self.corpus_type == "TransformerCorpus"
+                            else f"batch_{batch_start_idx}.npy"
+                        ),
                     )
                     if self.corpus_type == "TransformerCorpus":
                         torch.save(transformed_batch, batch_filename)
                     else:
                         np.save(batch_filename, transformed_batch)
                     self.batch_files.append((batch_start_idx, len(batch), batch_filename))
+                    del transformed_batch
+                    clear_device_cache()
 
                     for i in range(len(batch)):
                         yield batch[i]
+                        batch[i] = None
 
                     self.doc_count += len(batch)
-                    batch = []
+                    batch.clear()
                     batch_start_idx = self.doc_count
 
             if batch:
                 transformed_batch = self.transform_function(batch)
                 batch_filename = os.path.join(
                     self.path,
-                    f"batch_{batch_start_idx}.pt"
-                    if self.corpus_type == "TransformerCorpus"
-                    else f"batch_{batch_start_idx}.npy",
+                    (
+                        f"batch_{batch_start_idx}.pt"
+                        if self.corpus_type == "TransformerCorpus"
+                        else f"batch_{batch_start_idx}.npy"
+                    ),
                 )
                 if self.corpus_type == "TransformerCorpus":
                     torch.save(transformed_batch, batch_filename)
                 else:
                     np.save(batch_filename, transformed_batch)
                 self.batch_files.append((batch_start_idx, len(batch), batch_filename))
+                del transformed_batch
+                clear_device_cache()
 
                 for i in range(len(batch)):
                     yield batch[i]
+                    batch[i] = None
                 self.doc_count += len(batch)
+                batch.clear()
 
     def __load(self, doc_name) -> list[str] | torch.Tensor | np.ndarray:
         if self.transform_function is None:
@@ -261,6 +274,7 @@ class DocumentChunks:
 
         memmap_data.flush()
         self.consolidated = True
+        clear_device_cache()
 
 
 class Matches:
@@ -279,7 +293,8 @@ class Matches:
             self.cursor = self.conn.cursor()
             self.cursor.execute("DROP TABLE IF EXISTS matches")
             # Create table with sort columns for efficient sorting
-            self.cursor.execute("""
+            self.cursor.execute(
+                """
                 CREATE TABLE matches (
                     match_id INTEGER,
                     match blob,
@@ -290,12 +305,15 @@ class Matches:
                     target_start INTEGER,
                     target_length_neg INTEGER
                 )
-            """)
-            self.cursor.execute("""
+            """
+            )
+            self.cursor.execute(
+                """
                 CREATE INDEX sort_index ON matches (
                     source_filename, target_filename, source_start, source_length_neg, target_start, target_length_neg
                 )
-            """)
+            """
+            )
             self.matches = None
             self.is_cached = True
             self.has_sort_columns = True
@@ -387,7 +405,8 @@ class Matches:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         # Add columns for sorting: source_filename, target_filename, source_start, source_length_neg, target_start, target_length_neg
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE matches (
                 match_id INTEGER,
                 match blob,
@@ -398,13 +417,16 @@ class Matches:
                 target_start INTEGER,
                 target_length_neg INTEGER
             )
-        """)
+        """
+        )
         # Create index for efficient sorting
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE INDEX sort_index ON matches (
                 source_filename, target_filename, source_start, source_length_neg, target_start, target_length_neg
             )
-        """)
+        """
+        )
 
         count = 0
         for match in matches_iter:
@@ -432,10 +454,12 @@ class Matches:
     def iter_sorted(self):
         """Iterate through matches in sorted order for merging (uses SQLite ORDER BY)"""
         # Use SQLite's ORDER BY with our indexed sort columns for efficient sorting
-        self.cursor.execute("""
+        self.cursor.execute(
+            """
             SELECT match FROM matches
             ORDER BY source_filename, target_filename, source_start, source_length_neg, target_start, target_length_neg
-        """)
+        """
+        )
         for match_blob in self.cursor:
             yield DECODER.decode(match_blob[0])
 

@@ -21,6 +21,7 @@ from spacy.tokens import Doc
 from text_preprocessing import Tokens
 from tqdm import tqdm
 
+from textpair.utils import clear_device_cache
 from .structures import (
     PHILO_TEXT_OBJECT_LEVELS,
     DocumentChunks,
@@ -98,11 +99,9 @@ class Corpus(ABC):
         full_doc = Tokens([], {})
         current_doc_id = None
         chunks_done = 0
-        docs = {}
         current_chunk_group_length = 0
         print(f"Processing {self.direction} texts... ", end="", flush=True)
         for text in self.texts:
-            docs[text.metadata["philo_id"]] = " ".join([t.text for t in text])
             text.metadata["parsed_filename"] = os.path.join(
                 self.output_dir,
                 self.direction,
@@ -452,8 +451,7 @@ class TransformerCorpus(Corpus):
             if sim.dtype == torch.bfloat16:
                 sim = sim.to(torch.float32)
             sim = sim.numpy()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            clear_device_cache()
             return sim
 
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -474,7 +472,9 @@ class TransformerCorpus(Corpus):
         else:
             self.model = model
 
-        self.model.max_seq_length = min(self.model.get_max_seq_length() - 2, 4096)  # cap at 4K; LLM-based models can report 32K+ which causes memory issues
+        self.model.max_seq_length = min(
+            self.model.get_max_seq_length() - 2, 4096
+        )  # cap at 4K; LLM-based models can report 32K+ which causes memory issues
         self.max_tokens: int = int(self.model.max_seq_length / 2)
 
         self.docs = DocumentChunks(
@@ -484,8 +484,8 @@ class TransformerCorpus(Corpus):
         )
         self.length = len(self.docs)
 
+        clear_device_cache()
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()  # clear GPU cache after creating embeddings
             self.device = torch.device("cuda:0")
         elif torch.backends.mps.is_available():
             self.device = torch.device("mps")
@@ -501,16 +501,18 @@ class TransformerCorpus(Corpus):
     def create_embeddings(self, text_chunks) -> torch.Tensor:
         """Create document embeddings for a batch of text chunks"""
         chunks = list(text_chunks)
-        batch_size = 32
+        batch_size = 8
         while True:
             try:
-                return self.model.encode(
+                result = self.model.encode(
                     chunks,
                     convert_to_tensor=True,
                     batch_size=batch_size,
                     show_progress_bar=False,
                     normalize_embeddings=True,
                 )  # type: ignore
+                clear_device_cache()
+                return result
             except RuntimeError:
                 if batch_size == 1:
                     raise
