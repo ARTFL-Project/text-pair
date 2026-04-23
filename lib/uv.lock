@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "(python_full_version >= '3.12' and platform_machine != 'aarch64' and extra != 'extra-8-textpair-cpu' and extra == 'extra-8-textpair-cuda') or (python_full_version >= '3.12' and sys_platform != 'linux' and extra != 'extra-8-textpair-cpu' and extra == 'extra-8-textpair-cuda')",
@@ -618,11 +618,11 @@ wheels = [
 
 [[package]]
 name = "filelock"
-version = "3.20.0"
+version = "3.20.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/58/46/0028a82567109b5ef6e4d2a1f04a583fb513e6cf9527fcdd09afd817deeb/filelock-3.20.0.tar.gz", hash = "sha256:711e943b4ec6be42e1d4e6690b48dc175c822967466bb31c0c293f34334c13f4", size = 18922, upload-time = "2025-10-08T18:03:50.056Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1d/65/ce7f1b70157833bf3cb851b556a37d4547ceafc158aa9b34b36782f23696/filelock-3.20.3.tar.gz", hash = "sha256:18c57ee915c7ec61cff0ecf7f0f869936c7c30191bb0cf406f1341778d0834e1", size = 19485, upload-time = "2026-01-09T17:55:05.421Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/91/7216b27286936c16f5b4d0c530087e4a54eead683e6b0b73dd0c64844af6/filelock-3.20.0-py3-none-any.whl", hash = "sha256:339b4732ffda5cd79b13f4e2711a31b0365ce445d95d243bb996273d072546a2", size = 16054, upload-time = "2025-10-08T18:03:48.35Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/36/7fb70f04bf00bc646cd5bb45aa9eddb15e19437a28b8fb2b4a5249fac770/filelock-3.20.3-py3-none-any.whl", hash = "sha256:4b0dda527ee31078689fc205ec4f1c1bf7d56cf88b6dc9426c4f230e46c2dce1", size = 16701, upload-time = "2026-01-09T17:55:04.334Z" },
 ]
 
 [[package]]
@@ -758,28 +758,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
-]
-
-[[package]]
-name = "hdbscan"
-version = "0.8.40"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "joblib" },
-    { name = "numpy" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c1/84/6b010387b795f774e1ec695df3c8660c15abd041783647d5e7e4076bfc6b/hdbscan-0.8.40.tar.gz", hash = "sha256:c9e383ff17beee0591075ff65d524bda5b5a35dfb01d218245a7ba30c8d48a17", size = 6904096, upload-time = "2024-11-18T16:14:05.384Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/6b/88b8c8023c0c0b27589ad83c82084a1b751917a3e09bdf7fcacf7e6bd523/hdbscan-0.8.40-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:5e958f0d7a33cd2b5e8e927b47f7360bf8a3e7d72355dd65a701e8aabe407b27", size = 1491349, upload-time = "2024-11-18T16:16:10.666Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/72/84bc7b6ea9eb59ca6c5e4d3f32313cdfa8f4ab5cfece6fb6dfef4c9149fc/hdbscan-0.8.40-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:b95447c9c2cf6c95f98210c0edee3dc463d0a237e5531076855d9776495c96fc", size = 4459927, upload-time = "2025-10-11T11:55:49.958Z" },
-    { url = "https://files.pythonhosted.org/packages/a3/ef/32c8a0b3dc6e6c4e433b85b30c3723d8eb48d115c0185b82ab89e1a0ef89/hdbscan-0.8.40-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6e0d6197ee045b173e1f16e6884386f335a56091e373a839dd24f7331a8fa9ed", size = 4576215, upload-time = "2024-11-18T16:14:11.241Z" },
-    { url = "https://files.pythonhosted.org/packages/64/b1/96c347c7740efa1ac803be64155159284f92fafcff88c1077344e64eead5/hdbscan-0.8.40-cp311-cp311-win_amd64.whl", hash = "sha256:127cbe8c858dc77adfde33a3e1ce4f3bea810f78b01d2bd47b1147d4b5a50472", size = 732173, upload-time = "2024-11-18T16:18:40.361Z" },
-    { url = "https://files.pythonhosted.org/packages/33/ff/4739886abb990dc6feb7b02eafb38a7eaf090fffef6336e70a03d693f433/hdbscan-0.8.40-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:353eaa22e42bee69df095744dbb8b29360e516bd9dcb84580dceeeb755f004cc", size = 1497291, upload-time = "2024-11-18T16:16:54.731Z" },
-    { url = "https://files.pythonhosted.org/packages/f0/0f/97a315772abf99b3c230e3d57f3fa426d163ce4d6070241d68a3f0241ea9/hdbscan-0.8.40-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:991e745aa51abfb8abfb0e1525b9309df03a2f67fdd8df96e18f91fe7fe06806", size = 4362227, upload-time = "2025-10-11T11:53:16.452Z" },
-    { url = "https://files.pythonhosted.org/packages/c0/cb/6b4254f8a33e075118512e55acf3485c155ea52c6c35d69a985bdc59297c/hdbscan-0.8.40-cp312-cp312-win_amd64.whl", hash = "sha256:1b55a935ed7b329adac52072e1c4028979dfc54312ca08de2deece9c97d6ebb1", size = 726198, upload-time = "2024-11-18T16:18:09.99Z" },
-    { url = "https://files.pythonhosted.org/packages/80/2d/ca4d81a5aa5b8ccde1d41b892a2f480c2df238c58f113eee4df50473a3b0/hdbscan-0.8.40-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:32ea7bc4ce8854b5549d341edc841a29766feb62f8c399520e6e0940a41c5e39", size = 4336968, upload-time = "2025-10-11T11:53:10.417Z" },
 ]
 
 [[package]]
@@ -3522,12 +3500,10 @@ version = "2.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "ahocorasick-rs" },
-    { name = "aiohttp" },
     { name = "cython" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "gunicorn" },
-    { name = "hdbscan" },
     { name = "httptools" },
     { name = "lxml" },
     { name = "lz4" },
@@ -3542,10 +3518,10 @@ dependencies = [
     { name = "psycopg2" },
     { name = "pystemmer" },
     { name = "regex" },
-    { name = "scikit-learn" },
     { name = "sentence-transformers" },
     { name = "spacy-transformers" },
     { name = "text-preprocessing" },
+    { name = "textpair-llm" },
     { name = "torch-geometric" },
     { name = "tqdm" },
     { name = "umap-learn" },
@@ -3570,13 +3546,11 @@ cuda = [
 [package.metadata]
 requires-dist = [
     { name = "ahocorasick-rs" },
-    { name = "aiohttp", specifier = "~=3.12" },
     { name = "cupy-cuda12x", marker = "extra == 'cuda'", specifier = ">=13.0.0,<14.0.0" },
     { name = "cython" },
     { name = "faiss-cpu" },
     { name = "fastapi", specifier = "==0.110.3" },
     { name = "gunicorn" },
-    { name = "hdbscan", specifier = ">=0.8.40" },
     { name = "httptools" },
     { name = "lxml" },
     { name = "lz4" },
@@ -3591,10 +3565,10 @@ requires-dist = [
     { name = "psycopg2" },
     { name = "pystemmer" },
     { name = "regex" },
-    { name = "scikit-learn", specifier = ">=1.7.2" },
     { name = "sentence-transformers", specifier = "~=5.1" },
     { name = "spacy-transformers" },
     { name = "text-preprocessing", git = "https://github.com/ARTFL-Project/text-preprocessing?rev=v1.1.1.3" },
+    { name = "textpair-llm", editable = "textpair_llm" },
     { name = "torch", marker = "extra == 'cpu'", specifier = "==2.8", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "textpair", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cuda'", specifier = "==2.8", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "textpair", extra = "cuda" } },
     { name = "torch-geometric", specifier = "~=2.7.0" },
@@ -3607,6 +3581,23 @@ requires-dist = [
     { name = "uvloop" },
 ]
 provides-extras = ["cpu", "cuda"]
+
+[[package]]
+name = "textpair-llm"
+version = "0.1.0"
+source = { editable = "textpair_llm" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "requests" },
+    { name = "tqdm" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.12" },
+    { name = "requests" },
+    { name = "tqdm" },
+]
 
 [[package]]
 name = "thinc"
