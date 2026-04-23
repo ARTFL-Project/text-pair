@@ -277,7 +277,9 @@ class AsyncLLMEvaluator:
         results = []
         total_pairs = len(passage_pairs)
 
-        with tqdm(total=total_pairs, desc="LLM Evaluation", unit="pairs", leave=False, disable=not show_progress) as pbar:
+        with tqdm(
+            total=total_pairs, desc="LLM Evaluation", unit="pairs", leave=False, disable=not show_progress
+        ) as pbar:
             for i in range(0, len(passage_pairs), batch_size):
                 batch = passage_pairs[i : i + batch_size]
 
@@ -525,42 +527,23 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
         source_text = source_text[:half_max] + "..."
         target_text = target_text[:half_max] + "..."
 
-    prompt = f"""You are an intellectual history expert. Would a scholar cite both passages as evidence of the same specific idea shared between these two authors?
+    prompt = f"""You are evaluating whether two text excerpts engage a closely related question. You do not know the authors or their relationship.
 
-    CRITICAL: Texts from the same intellectual tradition naturally share broad themes (liberty, sovereignty, social contract, religion, etc.). Shared themes are NOT enough. Most thematically related passages should score 2.
+    For each passage, write TWO sentences:
+    - What general subject is it about?
+    - What question is it engaging with?
 
-    Follow these steps IN ORDER:
+    Then:
+    - Different subjects: score 1.
+    - Same subject, unrelated questions: score 2. MOST COMMON.
+    - Closely related questions, different or opposite answers: score 3.
+    - Closely related questions, similar answers from different perspectives: score 4.
+    - Closely related questions, essentially the same argument: score 5.
 
-    Step 1 — Summarize each passage's core argument in ONE sentence.
+    Respond with JSON: {{"reasoning": "...", "score": N}}
 
-    Step 2 — Can you combine both summaries into a SINGLE sentence that accurately captures what both authors argue, without distorting either one?
-    - If you cannot: the passages address different questions. Score 1 or 2. STOP here.
-    - If you can: write that combined sentence, then proceed to Step 3.
-
-    Step 3 — Test the combined sentence: what is LOST from each passage's argument when you reduce it to this shared claim? State what is lost for each passage.
-    - If what is lost is merely stylistic or contextual detail: the core argument is genuinely shared. Proceed to Step 4.
-    - If what is lost is the main point of either passage (its specific mechanism, its target, or its conclusion): the combined sentence is too abstract and the passages address different questions. Score 2. STOP here.
-    - If what is lost reveals that the authors actually disagree: score 3. STOP here.
-
-    Step 4 — How closely do the arguments align?
-    - Same claim but different angles or evidence: score 4.
-    - Same claim with overlapping evidence, structure, or framing: score 5.
-
-    Score Guide:
-    1 = Unrelated — different subjects entirely.
-    2 = Shared domain, different questions — same broad territory but different specific questions. This is the EXPECTED score for most thematically related passages.
-    3 = Same question, opposite answer — both engage the same question but reach different conclusions.
-    4 = Agree, indirect — same claim from different angles.
-    5 = Agree, direct — same claim with overlapping evidence and framing.
-
-    Respond with a JSON object. The "reasoning" field MUST come first:
-    - "reasoning": Follow the steps above. For score 4 or 5, you MUST include the combined sentence from Step 2.
-    - "score": An integer from 1 to 5
-
-    ---
     Passage 1: {source_text}
     ---
-    Passage 2: {target_text}
-    ---"""
+    Passage 2: {target_text}"""
 
     return prompt

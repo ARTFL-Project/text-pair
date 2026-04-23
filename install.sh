@@ -120,11 +120,13 @@ sudo chmod +x /usr/local/bin/compareNgrams
 # Install the web application components
 echo -e "\nMoving web application components into place..."
 sudo mkdir -p /var/lib/text-pair
-if [ ! -f /var/lib/text-pair/api_server/web_server.sh ]
-    then
-        sudo cp -Rf api_server /var/lib/text-pair/api_server/
+if [ ! -f /var/lib/text-pair/api_server/web_server.sh ]; then
+    sudo cp -Rf api_server /var/lib/text-pair/api_server/
 else
     echo "/var/lib/text-pair/api_server/web_server.sh already exists, not modifying..."
+    # Always update service files on reinstall
+    sudo cp api_server/textpair.service /var/lib/text-pair/api_server/textpair.service
+    sudo cp api_server/com.textpair.server.plist /var/lib/text-pair/api_server/com.textpair.server.plist
 fi
 
 if [ -d web/web_app/node_modules ]
@@ -174,6 +176,38 @@ else
     exit 1
 fi
 
+# Install and enable the web server service
+echo -e "\nInstalling TextPAIR web server service..."
+OS="$(uname -s)"
+if [ "$OS" = "Linux" ]; then
+    if command -v systemctl &> /dev/null; then
+        sudo cp /var/lib/text-pair/api_server/textpair.service /etc/systemd/system/textpair.service
+        sudo systemctl daemon-reload
+        sudo systemctl enable textpair
+        sudo systemctl restart textpair
+        echo "TextPAIR service installed and (re)started via systemd."
+        echo "  Manage with: systemctl {start|stop|restart|status} textpair"
+    else
+        echo "WARNING: systemctl not found. You can start the server manually:"
+        echo "  /var/lib/text-pair/api_server/web_server.sh"
+    fi
+elif [ "$OS" = "Darwin" ]; then
+    PLIST_SRC="/var/lib/text-pair/api_server/com.textpair.server.plist"
+    PLIST_DST="$HOME/Library/LaunchAgents/com.textpair.server.plist"
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cp "$PLIST_SRC" "$PLIST_DST"
+    launchctl bootout gui/$(id -u) "$PLIST_DST" 2>/dev/null || true
+    launchctl bootstrap gui/$(id -u) "$PLIST_DST"
+    launchctl kickstart -k gui/$(id -u)/com.textpair.server 2>/dev/null || true
+    echo "TextPAIR service installed and (re)started via launchd."
+    echo "  Stop:    launchctl bootout gui/\$(id -u) $PLIST_DST"
+    echo "  Start:   launchctl bootstrap gui/\$(id -u) $PLIST_DST"
+    echo "  Logs:    /var/lib/text-pair/api_server/launchd_stdout.log"
+else
+    echo "WARNING: Unsupported OS ($OS). Start the server manually:"
+    echo "  /var/lib/text-pair/api_server/web_server.sh"
+fi
+
 echo -e "\n## INSTALLATION COMPLETE ##"
 echo "TextPAIR has been installed successfully using uv!"
 if [ "$USE_CUDA" = true ]; then
@@ -182,9 +216,3 @@ else
     echo "- PyTorch was installed with CPU-only support"
     echo "- To install with CUDA support in the future, run: $0 -c"
 fi
-echo ""
-echo "## NEXT STEPS ##"
-echo "In order to start the TextPAIR web app, you need to configure and start up the web_server.sh script."
-echo "You can either:"
-echo "- Start it manually at /var/lib/text-pair/api_server/web_server.sh"
-echo "- Use the systemd init script located at /var/lib/text-pair/api_server/textpair.service: for this you will need to copy it to your OS systemd folder (usually /etc/systemd/system/) and run 'systemctl enable textpair && systemctl start textpair' as root"

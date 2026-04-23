@@ -99,7 +99,7 @@ class TextPairConfig:
             if not value:
                 continue
             match key:
-                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer":
+                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer" | "lowercase":
                     if value.lower() == "yes" or value.lower() == "true":
                         value = True
                     else:
@@ -137,9 +137,7 @@ class TextPairConfig:
                         # Default to Qwen3 embedding model
                         self.preprocessing_params["source"]["embedding_model"] = "Qwen/Qwen3-Embedding-0.6B"
                         self.preprocessing_params["target"]["embedding_model"] = "Qwen/Qwen3-Embedding-0.6B"
-                        print(
-                            "\nWARNING: Using default embedding model 'Qwen/Qwen3-Embedding-0.6B'"
-                        )
+                        print("\nWARNING: Using default embedding model 'Qwen/Qwen3-Embedding-0.6B'")
                         print("For better quality in specific languages, consider using a specialized model.")
                         print("Configure via 'embedding_model' in your config file.\n")
                 case _:
@@ -160,11 +158,7 @@ class TextPairConfig:
                             value = True
                         else:
                             value = False
-                    case (
-                        "min_similarity"
-                        | "most_common_ngram_proportion"
-                        | "common_ngram_threshold"
-                    ):
+                    case "min_similarity" | "most_common_ngram_proportion" | "common_ngram_threshold":
                         value = float(value)
                     case "llm_similarity_threshold":
                         value = int(value)
