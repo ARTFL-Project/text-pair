@@ -25,7 +25,7 @@ dependencies = [
     "lxml",
     "namedlist",
     "sentence-transformers~=5.3",
-    "transformers~=4.51.0",
+    "transformers~=5.0.0rc3",
     "lz4",
     "orjson",
     "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.1.2#egg=text_preprocessing",
