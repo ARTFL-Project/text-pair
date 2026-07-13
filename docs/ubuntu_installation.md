@@ -45,7 +45,7 @@ sudo vim /etc/postgresql/10/pg_hba.conf
 
 Note that the path the pg_hba.conf may vary based on your postgres version.
 
-Fill in the database info in text-pair config: `sudo vim /etc/text-pair/config/global_settings.ini`
+Fill in the database info in text-pair config: `sudo vim /etc/text-pair/global_settings.ini`
 
 ### Create webspace with proper permissions
 
