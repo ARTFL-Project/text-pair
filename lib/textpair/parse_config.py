@@ -7,6 +7,20 @@ import os
 from collections import defaultdict, namedtuple
 from typing import Any
 
+# Checked in order; later paths override earlier ones on a per-key basis.
+# The user-level path lets Mac bare-metal installs avoid writing to /etc as root.
+GLOBAL_CONFIG_SEARCH_PATHS = [
+    "/etc/text-pair/global_settings.ini",
+    os.path.expanduser("~/.text-pair/global_settings.ini"),
+]
+
+
+def read_global_config() -> configparser.ConfigParser:
+    """Read global_settings.ini from the first location(s) that exist. Missing files are silently skipped."""
+    config = configparser.ConfigParser()
+    config.read(GLOBAL_CONFIG_SEARCH_PATHS)
+    return config
+
 
 class TextPairConfig:
     """TextPAIR parameters returned from parsing CLI arguments"""
@@ -40,10 +54,11 @@ class TextPairConfig:
 
     def __parse_config(self):
         """Read config file and store into 4 dicts for each phase of the alignment"""
-        global_config = configparser.ConfigParser()
-        global_config.read("/etc/text-pair/global_settings.ini")
-        self.web_app_config["web_application_directory"] = global_config["WEB_APP"]["web_app_path"]
-        self.web_app_config["api_server"] = global_config["WEB_APP"]["api_server"]
+        global_config = read_global_config()
+        web_app_section = global_config["WEB_APP"] if global_config.has_section("WEB_APP") else {}
+        web_app_path = web_app_section.get("web_app_path", "")
+        self.web_app_config["web_application_directory"] = web_app_path
+        self.web_app_config["api_server"] = web_app_section.get("api_server", "")
         config = configparser.ConfigParser()
         config.read(self.__cli_args["config"])
         self.web_app_config["source_url"] = config["TEXT_SOURCES"]["source_url"]
@@ -55,12 +70,12 @@ class TextPairConfig:
             )
         else:
             self.web_app_config["source_philo_db_path"] = os.path.join(
-                global_config["WEB_APP"]["web_app_path"],
+                web_app_path,
                 self.__cli_args["dbname"],
                 "source_data",
             )
             self.web_app_config["target_philo_db_path"] = os.path.join(
-                global_config["WEB_APP"]["web_app_path"],
+                web_app_path,
                 self.__cli_args["dbname"],
                 "target_data",
             )
@@ -94,7 +109,7 @@ class TextPairConfig:
             if not value:
                 continue
             match key:
-                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer":
+                case "skipgram" | "numbers" | "word_order" | "modernize" | "ascii" | "stemmer" | "lowercase":
                     if value.lower() == "yes" or value.lower() == "true":
                         value = True
                     else:
