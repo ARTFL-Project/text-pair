@@ -9,6 +9,7 @@ import sys
 import psycopg2
 
 from . import create_web_app, get_config, parse_files, run_vsa
+from .parse_config import read_global_config
 from .passage_classifier import classify_passages
 from .sequence_alignment import (
     Ngrams,
@@ -90,8 +91,7 @@ def build_graph_and_labels(alignments_file: str, embedding_model: str, llm_param
 
 
 def delete_database(dbname: str) -> None:
-    global_config = configparser.ConfigParser()
-    global_config.read("/etc/text-pair/global_settings.ini")
+    global_config = read_global_config()
     conn = psycopg2.connect(
         user=global_config["DATABASE"]["database_user"],
         password=global_config["DATABASE"]["database_password"],

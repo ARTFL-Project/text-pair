@@ -225,6 +225,25 @@ install_textpair() {
 }
 
 # =============================================================================
+# SEED GLOBAL SETTINGS (user-level path, no sudo/root needed on macOS)
+# =============================================================================
+setup_global_settings() {
+    local target="$HOME/.text-pair/global_settings.ini"
+    echo "Setting up $target..."
+
+    if [ -f "$target" ] || [ -f /etc/text-pair/global_settings.ini ]; then
+        echo "  Already exists, leaving as-is"
+    else
+        mkdir -p "$HOME/.text-pair"
+        cp config/global_settings.ini "$target"
+        echo "  Seeded from config/global_settings.ini"
+        echo -e "${YELLOW}  Edit $target with your actual PostgreSQL credentials (only needed if you drop --skip_web_app)${NC}"
+    fi
+
+    echo ""
+}
+
+# =============================================================================
 # INSTALL BINARY
 # =============================================================================
 install_binary() {
@@ -288,6 +307,7 @@ main() {
     install_textpair
     patch_philologic_wc
     patch_banality_finder
+    setup_global_settings
     install_binary
     verify_install
 }
