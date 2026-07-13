@@ -174,6 +174,16 @@ check_dependencies() {
         echo -e "${YELLOW}  ripgrep: not found (optional, install with: brew install ripgrep)${NC}"
     fi
 
+    # Homebrew (required to auto-install Go below)
+    if command -v brew &> /dev/null; then
+        echo "  Homebrew: found"
+    else
+        echo -e "${RED}  ERROR: Homebrew not found. TextPAIR needs it to install the Go toolchain (used to build compareNgrams).${NC}"
+        echo -e "${YELLOW}  Install Homebrew first, then re-run this script:${NC}"
+        echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+        exit 1
+    fi
+
     # Go (required to build compareNgrams; the bundled binaries are Linux-only)
     if command -v go &> /dev/null; then
         echo "  Go: $(go version)"
