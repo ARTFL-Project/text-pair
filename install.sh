@@ -23,7 +23,7 @@ patch_philologic_wc() {
     echo "Patching PhiloLogic line_count.py for macOS..."
     
     # Find the philologic installation
-    local philologic_path=$(python3 -c "import philologic; print(philologic.__path__[0])" 2>/dev/null)
+    local philologic_path=$("$PYTHON_BIN" -c "import philologic; print(philologic.__path__[0])" 2>/dev/null)
     
     if [ -z "$philologic_path" ]; then
         echo -e "${YELLOW}  PhiloLogic not yet installed, will patch after pip install${NC}"
@@ -113,27 +113,76 @@ check_architecture() {
 # =============================================================================
 check_dependencies() {
     echo "Checking dependencies..."
-    
-    # Python 3.11+
-    if command -v python3 &> /dev/null; then
-        local py_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-        echo "  Python: $py_version"
-        if [[ $(echo "$py_version < 3.11" | bc -l) -eq 1 ]]; then
-            echo -e "${RED}  ERROR: Python 3.11+ required${NC}"
-            exit 1
-        fi
+
+    # Homebrew (required to auto-install pyenv/Go below)
+    if command -v brew &> /dev/null; then
+        echo "  Homebrew: found"
     else
-        echo -e "${RED}  ERROR: Python 3 not found${NC}"
+        echo -e "${RED}  ERROR: Homebrew not found. TextPAIR needs it to install pyenv and the Go toolchain.${NC}"
+        echo -e "${YELLOW}  Install Homebrew first, then re-run this script:${NC}"
+        echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
         exit 1
     fi
-    
+
+    # pyenv (guarantees a consistent, correct Python 3.11 regardless of whatever
+    # python3 happens to be on the ambient PATH - relying on system/Homebrew python3
+    # directly is what let a Python 3.9 slip past the old version check below)
+    if command -v pyenv &> /dev/null; then
+        echo "  pyenv: found"
+    else
+        echo "  pyenv: not found, installing with Homebrew..."
+        brew install pyenv
+        echo "  pyenv installed"
+    fi
+
+    # Resolve the latest available Python 3.11.x via pyenv, install it if missing, and
+    # pin this directory to it (writes .python-version) so python3/pip here always
+    # resolve to 3.11, regardless of the system's default python3.
+    TARGET_PY_VERSION=$(pyenv install --list | grep -E '^\s*3\.11\.[0-9]+$' | tail -1 | xargs)
+    if [ -z "$TARGET_PY_VERSION" ]; then
+        echo -e "${RED}  ERROR: could not find a Python 3.11.x version via pyenv${NC}"
+        exit 1
+    fi
+    if ! pyenv versions --bare | grep -qx "$TARGET_PY_VERSION"; then
+        echo "  Installing Python $TARGET_PY_VERSION via pyenv (this can take a few minutes)..."
+        pyenv install "$TARGET_PY_VERSION"
+    fi
+    pyenv local "$TARGET_PY_VERSION"
+    PYTHON_BIN="$(pyenv root)/versions/$TARGET_PY_VERSION/bin/python3"
+    echo "  Python: $("$PYTHON_BIN" --version) (pyenv, pinned to this directory via .python-version)"
+
+    # Confirm pyenv's shims are wired into the user's shell so `textpair`/`python3` keep
+    # resolving to this pinned version in future terminal sessions, not just this script run.
+    local shell_rc=""
+    case "$SHELL" in
+        */zsh) shell_rc="$HOME/.zshrc" ;;
+        */bash) shell_rc="$HOME/.bash_profile" ;;
+        *) shell_rc="$HOME/.profile" ;;
+    esac
+    if [ -f "$shell_rc" ] && grep -q 'pyenv init' "$shell_rc"; then
+        echo "  pyenv shell integration: found in $shell_rc"
+    else
+        echo -e "${YELLOW}  pyenv shell integration not found in $shell_rc${NC}"
+        echo -e "${YELLOW}  Add this line to $shell_rc, then restart your terminal:${NC}"
+        echo '    eval "$(pyenv init -)"'
+    fi
+
     # ripgrep (optional but recommended)
     if command -v rg &> /dev/null; then
         echo "  ripgrep: $(rg --version | head -1)"
     else
         echo -e "${YELLOW}  ripgrep: not found (optional, install with: brew install ripgrep)${NC}"
     fi
-    
+
+    # Go (required to build compareNgrams; the bundled binaries are Linux-only)
+    if command -v go &> /dev/null; then
+        echo "  Go: $(go version)"
+    else
+        echo "  Go: not found, installing with Homebrew..."
+        brew install go
+        echo "  Go installed"
+    fi
+
     echo ""
 }
 
@@ -210,17 +259,17 @@ EOF
 # =============================================================================
 install_textpair() {
     echo "Installing TextPAIR..."
-    
+
     # Install textpair_llm first (local dependency)
     if [ -d "lib/textpair_llm" ]; then
         echo "  Installing textpair_llm..."
-        pip install -e lib/textpair_llm/. --break-system-packages --quiet
+        "$PYTHON_BIN" -m pip install -e lib/textpair_llm/. --break-system-packages --quiet
     fi
-    
+
     # Install main package
     echo "  Installing textpair..."
-    pip install -e lib/. --break-system-packages
-    
+    "$PYTHON_BIN" -m pip install -e lib/. --break-system-packages
+
     echo ""
 }
 
@@ -244,22 +293,40 @@ setup_global_settings() {
 }
 
 # =============================================================================
+# SCAFFOLD STARTER CORPUS CONFIG
+# =============================================================================
+scaffold_config() {
+    local target="my_config.ini"
+    echo "Setting up $target..."
+
+    if [ -f "$target" ]; then
+        echo "  Already exists, leaving as-is ($target)"
+    else
+        cp config/config.ini "$target"
+        echo "  Seeded from config/config.ini"
+        echo -e "${YELLOW}  Edit $target and set source_file_path to your corpus directory before running textpair${NC}"
+    fi
+
+    echo ""
+}
+
+# =============================================================================
 # INSTALL BINARY
 # =============================================================================
 install_binary() {
     echo "Installing compareNgrams binary..."
-    
-    local binary_path="lib/core/binary/${BINARY_ARCH}/compareNgrams"
-    
-    if [ -f "$binary_path" ]; then
-        sudo cp "$binary_path" /usr/local/bin/
-        sudo chmod +x /usr/local/bin/compareNgrams
-        echo "  Installed to /usr/local/bin/compareNgrams"
-    else
-        echo -e "${RED}  ERROR: Binary not found at $binary_path${NC}"
-        exit 1
-    fi
-    
+
+    # The prebuilt binaries under lib/core/binary are Linux ELF executables (upstream only
+    # targets Linux) and cannot run on macOS at all, even when the CPU architecture matches.
+    # Build a native Mach-O binary from source instead. Go is guaranteed present at this point
+    # (installed by check_dependencies if it was missing).
+    echo "  Building compareNgrams from source with Go..."
+    (cd lib/core/src/compareNgrams && go build -o /tmp/compareNgrams_build .)
+    sudo cp /tmp/compareNgrams_build /usr/local/bin/compareNgrams
+    rm -f /tmp/compareNgrams_build
+    sudo chmod +x /usr/local/bin/compareNgrams
+    echo "  Built and installed to /usr/local/bin/compareNgrams"
+
     echo ""
 }
 
@@ -268,12 +335,19 @@ install_binary() {
 # =============================================================================
 verify_install() {
     echo "Verifying installation..."
-    
-    if command -v textpair &> /dev/null; then
-        echo -e "${GREEN}  textpair command found${NC}"
+
+    # Check the pyenv-pinned interpreter directly, since `command -v textpair` only
+    # works if pyenv's shims are already wired into this shell's PATH (see the
+    # shell-integration note printed by check_dependencies).
+    local textpair_bin="$(pyenv root)/versions/$TARGET_PY_VERSION/bin/textpair"
+    if [ -x "$textpair_bin" ]; then
+        echo -e "${GREEN}  textpair command found ($textpair_bin)${NC}"
     else
-        echo -e "${RED}  ERROR: textpair command not found${NC}"
+        echo -e "${RED}  ERROR: textpair command not found at $textpair_bin${NC}"
         exit 1
+    fi
+    if ! command -v textpair &> /dev/null; then
+        echo -e "${YELLOW}  Note: textpair isn't on PATH in this shell yet - see the pyenv shell integration note above${NC}"
     fi
     
     if command -v compareNgrams &> /dev/null; then
@@ -287,13 +361,16 @@ verify_install() {
     echo -e "${GREEN}Installation complete!${NC}"
     echo ""
     echo "Usage:"
-    echo "  textpair --config=config/config.ini --skip_web_app --output_path=/tmp/textpair-out --workers=4 alignment_name"
+    echo "  textpair --config=my_config.ini --skip_web_app --output_path=/tmp/textpair-out --workers=4 alignment_name"
     echo ""
     echo "Notes:"
+    echo "  - Edit my_config.ini first and set source_file_path to your corpus directory"
     echo "  - ulimit is automatically increased on macOS (no manual fix needed)"
-    echo "  - Use absolute paths in config.ini for source_file_path"
+    echo "  - Use absolute paths in my_config.ini for source_file_path"
     echo "  - Avoid paths with spaces (copy corpus to /tmp if on iCloud)"
     echo "  - Input files should be TEI XML format"
+    echo "  - Downloading a Spacy model (python -m spacy download <model>) is only needed if"
+    echo "    you enable POS/entity filtering or spacy-based lemmatization in my_config.ini"
 }
 
 # =============================================================================
@@ -308,6 +385,7 @@ main() {
     patch_philologic_wc
     patch_banality_finder
     setup_global_settings
+    scaffold_config
     install_binary
     verify_install
 }
