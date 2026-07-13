@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Web loading module"""
 
-import configparser
 import json
 import os
 import re
@@ -15,6 +14,8 @@ import psycopg2
 from pgvector.psycopg2 import register_vector
 from psycopg2.extras import execute_values
 from tqdm import tqdm
+
+from .parse_config import read_global_config
 
 DEFAULT_FIELDS = {
     "rowid",
@@ -302,8 +303,7 @@ def load_db(
     """Load SQL table"""
     import numpy as np
 
-    config = configparser.ConfigParser()
-    config.read("/etc/text-pair/global_settings.ini")
+    config = read_global_config()
     database = psycopg2.connect(
         user=config["DATABASE"]["database_user"],
         password=config["DATABASE"]["database_password"],
@@ -485,8 +485,7 @@ def load_db(
 
 def load_groups_file(groups_file: str, alignments_table: str, searchable_fields: list[str]):
     """Load the groups file into the database."""
-    config = configparser.ConfigParser()
-    config.read("/etc/text-pair/global_settings.ini")
+    config = read_global_config()
     table_name = f"{alignments_table}_groups"
 
     with open(groups_file, encoding="utf8") as input_file:
@@ -542,8 +541,7 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
 def generate_database_stats(table_name, algorithm):
     """Generate statistics for the database"""
     print("Generating database statistics (this could take a while)...")
-    config = configparser.ConfigParser()
-    config.read("/etc/text-pair/global_settings.ini")
+    config = read_global_config()
     database = psycopg2.connect(
         user=config["DATABASE"]["database_user"],
         password=config["DATABASE"]["database_password"],
