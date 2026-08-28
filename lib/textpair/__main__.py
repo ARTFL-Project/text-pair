@@ -272,11 +272,13 @@ async def run_alignment(params):
                 print("Running LLM post-evaluation on flagged banalities...")
                 rescued_count = await banality_llm_post_eval(
                     results_file,
-                    params.llm_params["llm_model"],
+                    params.llm_params.get("llm_model", ""),
                     params.llm_params["llm_context_window"],
                     params.llm_params["llm_concurrency_limit"],
-                    params.llm_params["llm_port"],
+                    params.llm_params.get("llm_port", 8080),
                     params.matching_params["store_banalities"],
+                    base_url=params.llm_params.get("llm_base_url", ""),
+                    api_key=params.llm_params.get("llm_api_key", ""),
                 )
                 if rescued_count > 0:
                     print(f"{rescued_count} passages were rescued (reclassified as substantive) after LLM evaluation.")
@@ -311,10 +313,10 @@ async def run_alignment(params):
     groups_file = merge_alignments(results_file, count)
 
     if params.web_app_config["skip_web_app"] is False:
-        # Build graph model and generate cluster labels
-        print(f"\n### Building Thematic Identity Graph model ###")
-        embedding_model = params.preprocessing_params["source"]["embedding_model"]
-        build_graph_and_labels(results_file, embedding_model, params.llm_params)
+        # Graph pipeline disabled for now
+        # print(f"\n### Building Thematic Identity Graph model ###")
+        # embedding_model = params.preprocessing_params["source"]["embedding_model"]
+        # build_graph_and_labels(results_file, embedding_model, params.llm_params)
 
         create_web_app(
             results_file,
@@ -392,9 +394,9 @@ async def run_vsa_similarity(params) -> None:
         output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
         count = get_count(os.path.join(params.output_path, "results/counts.txt"))
 
-        # Build graph model and generate cluster labels
-        embedding_model = params.preprocessing_params["source"]["embedding_model"]
-        build_graph_and_labels(output_file, embedding_model, params.llm_params)
+        # Graph pipeline disabled for now
+        # embedding_model = params.preprocessing_params["source"]["embedding_model"]
+        # build_graph_and_labels(output_file, embedding_model, params.llm_params)
 
         create_web_app(
             output_file,
@@ -416,6 +418,13 @@ async def run_vsa_similarity(params) -> None:
 async def main():
     """Main entry point for the textpair CLI."""
     params = get_config()
+
+    # Save a copy of the config file to the output directory for reproducibility
+    config_file = params.config
+    if config_file and os.path.exists(config_file):
+        os.makedirs(params.output_path, exist_ok=True)
+        shutil.copy2(config_file, os.path.join(params.output_path, f"{params.dbname}_config.ini"))
+
     if params.delete is True:
         delete_database(params.dbname)
     elif params.update_db is True:
@@ -470,56 +479,34 @@ async def main():
     elif params.matching_params["matching_algorithm"] == "vsa":
         await run_vsa_similarity(params)
 
-
-if __name__ == "__main__":
+def run():
+    """Sync entry point for console_scripts."""
     import asyncio
-
-    asyncio.run(main())
-
-def cli_entry():
-    import asyncio
-    import os
     import platform
-    import resource
-    # macOS defaults to 256 open file descriptors, which is too low
-    # for PhiloLogic's sort/merge operations on large corpora.
+
+    # macOS defaults to 256 open file descriptors, which is too low for
+    # PhiloLogic's sort/merge operations on large corpora; raise it for
+    # the duration of the run and restore it afterwards.
     original_soft = None
+    hard = None
     if platform.system() == "Darwin":
+        import resource
+
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         if soft < 4096:
             new_soft = min(hard, 10240)
             resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
             original_soft = soft
             print(f"[macOS] Raised open file limit: {soft} -> {new_soft}")
-    # Strip double .xml.xml extensions in source/target input directories
-    import configparser
-    import sys
-    config_file = None
-    for i, arg in enumerate(sys.argv):
-        if arg == "--config" and i + 1 < len(sys.argv):
-            config_file = sys.argv[i + 1]
-        elif arg.startswith("--config="):
-            config_file = arg.split("=", 1)[1]
-    if config_file:
-        cfg = configparser.ConfigParser()
-        cfg.read(config_file)
-        for section in ["TEXT_SOURCES", "SOURCE", "TARGET"]:
-            if cfg.has_option(section, "source_file_path"):
-                input_dir = cfg.get(section, "source_file_path")
-                if os.path.isdir(input_dir):
-                    fixed = 0
-                    for fname in os.listdir(input_dir):
-                        if fname.endswith(".xml.xml"):
-                            old_path = os.path.join(input_dir, fname)
-                            new_path = os.path.join(input_dir, fname[:-4])
-                            os.rename(old_path, new_path)
-                            fixed += 1
-                    if fixed:
-                        print(f"[pre-flight] Fixed {fixed} double .xml.xml extensions in {input_dir}")
-
     try:
         asyncio.run(main())
     finally:
         if original_soft is not None:
+            import resource
+
             resource.setrlimit(resource.RLIMIT_NOFILE, (original_soft, hard))
             print(f"[macOS] Restored open file limit: {original_soft}")
+
+
+if __name__ == "__main__":
+    run()

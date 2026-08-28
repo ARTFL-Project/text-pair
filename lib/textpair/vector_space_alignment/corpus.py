@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from abc import ABC
 from collections import deque
@@ -20,6 +21,7 @@ from spacy.tokens import Doc
 from text_preprocessing import Tokens
 from tqdm import tqdm
 
+from textpair.utils import clear_device_cache
 from .structures import (
     PHILO_TEXT_OBJECT_LEVELS,
     DocumentChunks,
@@ -55,7 +57,7 @@ class Corpus(ABC):
         output_path: str,
         similarity_function: Callable,
         min_text_obj_length: int = 15,
-        n_chunk: int = 3,
+        n_chunk: int = 5,
         text_object_type_split: str = "doc",
         direction="source",
         n_batches=1,
@@ -84,18 +86,22 @@ class Corpus(ABC):
         pass
 
     def get_text_chunks(self) -> Iterable[list[str]]:
-        """Process all texts into smaller text chunks"""
-        chunk_group: deque[Tokens] = deque(maxlen=self.n_chunk)
+        """Process all texts into smaller text chunks using a sliding window.
+
+        Window size is n_chunk, step is ceil(n_chunk / 2). This gives
+        paragraph-scale units with enough overlap that any relationship
+        spanning ceil(n_chunk/2) text objects appears fully in at least one window.
+        """
+        chunk_group: deque[Tokens] = deque()  # no maxlen — we control the slide manually
+        chunk_step: int = math.ceil(self.n_chunk / 2)
         min_chunk_length: int = self.n_chunk * self.min_text_obj_length
         current_text_level_id: str = "0"
         full_doc = Tokens([], {})
         current_doc_id = None
         chunks_done = 0
-        docs = {}
         current_chunk_group_length = 0
         print(f"Processing {self.direction} texts... ", end="", flush=True)
         for text in self.texts:
-            docs[text.metadata["philo_id"]] = " ".join([t.text for t in text])
             text.metadata["parsed_filename"] = os.path.join(
                 self.output_dir,
                 self.direction,
@@ -153,7 +159,17 @@ class Corpus(ABC):
                         flush=True,
                     )
                     yield self.__build_text_chunk(chunk_group)
+                # Slide window: remove step items from left, keep the overlap
+                for _ in range(chunk_step):
+                    if chunk_group:
+                        chunk_group.popleft()
             current_doc_id = doc_id
+        # Yield any remaining items in the window
+        if chunk_group:
+            current_chunk_group_length = sum([len(t) for t in chunk_group])
+            if current_chunk_group_length >= min_chunk_length:
+                chunks_done += 1
+                yield self.__build_text_chunk(chunk_group)
         save_tokens(full_doc, full_doc.metadata["parsed_filename"])
         print()
 
@@ -296,7 +312,7 @@ class TfIdfCorpus(Corpus):
         texts: Iterable[Tokens],
         output_path: str,
         min_text_obj_length: int = 15,
-        n_chunk: int = 3,
+        n_chunk: int = 5,
         text_object_type_split: str = "doc",
         vectorizer: Optional[TfidfVectorizer] = None,
         min_freq: int | float = 1,
@@ -372,7 +388,7 @@ class Word2VecEmbeddingCorpus(Corpus):
         model: str | spacy.Language,
         n_batches: int,
         min_text_obj_length: int = 15,
-        n_chunk: int = 3,
+        n_chunk: int = 5,
         text_object_type_split: str = "doc",
         direction: str = "source",
     ):
@@ -419,7 +435,7 @@ class TransformerCorpus(Corpus):
         model_name: str,
         n_batches: int,
         min_text_obj_length: int = 15,
-        n_chunk: int = 3,
+        n_chunk: int = 5,
         text_object_type_split: str = "sent",
         model=None,
         direction="source",
@@ -435,8 +451,7 @@ class TransformerCorpus(Corpus):
             if sim.dtype == torch.bfloat16:
                 sim = sim.to(torch.float32)
             sim = sim.numpy()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            clear_device_cache()
             return sim
 
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -453,11 +468,13 @@ class TransformerCorpus(Corpus):
         )
 
         if model is None:
-            self.model = SentenceTransformer(model_name, trust_remote_code=False)
+            self.model = SentenceTransformer(model_name)
         else:
             self.model = model
 
-        self.model.max_seq_length = self.model.get_max_seq_length() - 2  # needed to enable truncating long sequences
+        self.model.max_seq_length = min(
+            self.model.get_max_seq_length() - 2, 4096
+        )  # cap at 4K; LLM-based models can report 32K+ which causes memory issues
         self.max_tokens: int = int(self.model.max_seq_length / 2)
 
         self.docs = DocumentChunks(
@@ -467,9 +484,11 @@ class TransformerCorpus(Corpus):
         )
         self.length = len(self.docs)
 
+        clear_device_cache()
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()  # clear GPU cache after creating embeddings
             self.device = torch.device("cuda:0")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
 
@@ -481,14 +500,24 @@ class TransformerCorpus(Corpus):
 
     def create_embeddings(self, text_chunks) -> torch.Tensor:
         """Create document embeddings for a batch of text chunks"""
-        tensor = self.model.encode(
-            list(text_chunks),
-            convert_to_tensor=True,
-            batch_size=512,
-            show_progress_bar=False,
-            normalize_embeddings=True,
-        )
-        return tensor  # type: ignore
+        chunks = list(text_chunks)
+        batch_size = 8
+        while True:
+            try:
+                result = self.model.encode(
+                    chunks,
+                    convert_to_tensor=True,
+                    batch_size=batch_size,
+                    show_progress_bar=False,
+                    normalize_embeddings=True,
+                )  # type: ignore
+                clear_device_cache()
+                return result
+            except RuntimeError:
+                if batch_size == 1:
+                    raise
+                batch_size //= 2
+                print(f"Encoding failed, retrying with batch_size={batch_size}...", flush=True)
 
     def vectordb_compare(self, target_corpus, min_similarity: float) -> Matches:
         """Compare using FAISS vector database for efficient similarity search"""

@@ -8,7 +8,6 @@ using Large Language Models (LLMs) via HTTP API endpoints.
 import asyncio
 import atexit
 import json
-import re
 import subprocess
 import time
 
@@ -45,21 +44,23 @@ class LLMDebugLogger:
         target_filename: str,
         source_text: str,
         target_text: str,
+        kept: bool = True,
     ) -> None:
         """Log an LLM evaluation result with comparison to computed similarity."""
         if not self.enabled or not self.llm_file:
             return
 
+        status = "KEPT" if kept else "REJECTED"
         with open(self.llm_file, "a", encoding="utf-8") as debug_file:
-            debug_file.write(f"EVALUATION #{index + 1}\n")
+            debug_file.write(f"EVALUATION #{index + 1} [{status}]\n")
             debug_file.write(f"Files: {source_filename} <-> {target_filename}\n")
             debug_file.write(f"Computed Similarity: {computed_similarity:.3f}\n")
             debug_file.write(f"LLM Similarity: {llm_similarity:.3f}\n")
             debug_file.write(f"LLM Reasoning: {llm_reasoning}\n")
             debug_file.write("Source Text:\n")
-            debug_file.write(f"{source_text[:200]}{'...' if len(source_text) > 200 else ''}\n")
+            debug_file.write(f"{source_text}\n")
             debug_file.write("Target Text:\n")
-            debug_file.write(f"{target_text[:200]}{'...' if len(target_text) > 200 else ''}\n")
+            debug_file.write(f"{target_text}\n")
             debug_file.write("-" * 80 + "\n\n")
 
     def log_llm_error(self, error_message: str) -> None:
@@ -95,28 +96,53 @@ class LLMDebugLogger:
 class AsyncLLMEvaluator:
     """Async LLM-based similarity evaluator using llama-server via HTTP"""
 
+    # JSON schemas for structured output via llama.cpp grammar-constrained generation
+    SIMILARITY_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "reasoning": {"type": "string"},
+            "score": {"type": "integer", "enum": [1, 2, 3, 4, 5]},
+        },
+        "required": ["reasoning", "score"],
+    }
+
+    BANALITY_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "score": {"type": "integer"},
+            "explanation": {"type": "string"},
+        },
+        "required": ["score", "explanation"],
+    }
+
     def __init__(
         self,
-        model_path: str,
+        model_path: str = "",
         context_window: int = 8192,
         concurrency_limit: int = 8,
         port: int = 8080,
+        base_url: str = "",
+        api_key: str = "",
     ):
         self.model_path = model_path
         self.context_window = context_window
         self.port = port
         self.concurrency_limit = concurrency_limit
-        self.base_url = f"http://127.0.0.1:{port}"
         self.server_process = None
         self._session = None
+        self.api_key = api_key
 
-        self.banality_eval_params = {
-            "temperature": 0.1,
-            "max_tokens": 128,
-        }
+        # If base_url is provided, use external server; otherwise build from port
+        self._external = bool(base_url)
+        self.base_url = base_url.rstrip("/") if base_url else f"http://127.0.0.1:{port}"
 
     def start_server(self):
-        """Start the llama-server process"""
+        """Start the llama-server process. Skipped if using an external server."""
+        if self._external:
+            print(f"Using external LLM server at {self.base_url}")
+            self._wait_for_server()
+            return
+
         # Use the textpair_llama_server command
         cmd = [
             "textpair_llama_server",
@@ -133,17 +159,26 @@ class AsyncLLMEvaluator:
 
     def _wait_for_server(self):
         """Wait for server to be ready"""
-        max_retries = 30
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        # Try /health (llama.cpp, vLLM) then /v1/models (any OpenAI-compatible API)
+        health_endpoints = [f"{self.base_url}/health", f"{self.base_url}/v1/models"]
+        max_retries = 5 if self._external else 30
         for attempt in range(max_retries):
-            try:
-                response = requests.get(f"{self.base_url}/health", timeout=2)
-                if response.status_code == 200:
-                    return
-            except requests.exceptions.RequestException:
-                pass
+            for endpoint in health_endpoints:
+                try:
+                    response = requests.get(endpoint, headers=headers, timeout=5)
+                    if response.status_code == 200:
+                        return
+                    # Accept 401/403/404 as signs the server is reachable
+                    if self._external and response.status_code in (401, 403, 404):
+                        return
+                except requests.exceptions.RequestException:
+                    pass
             time.sleep(1)
 
-        raise RuntimeError("Failed to start llama-server")
+        raise RuntimeError(f"LLM server at {self.base_url} failed to become ready")
 
     def stop_server(self):
         """Stop the llama-server process"""
@@ -155,55 +190,96 @@ class AsyncLLMEvaluator:
                 self.server_process.kill()
             self.server_process = None
 
+    def _build_payload(self, prompt: str, json_schema: dict, max_tokens: int = 5000) -> dict:
+        """Build a chat completions payload with structured JSON output."""
+        payload = {
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "strict": True, "schema": json_schema},
+            },
+        }
+        # Only include model when set (required for multi-model routers like OpenRouter,
+        # unnecessary for single-model servers like llama-server or dedicated vLLM)
+        if self.model_path:
+            payload["model"] = self.model_path
+        return payload
+
+    def _get_headers(self) -> dict:
+        """Build request headers."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    @staticmethod
+    def _extract_text(result: dict) -> str:
+        """Extract generated text from a chat completions response."""
+        if "choices" in result and len(result["choices"]) > 0:
+            choice = result["choices"][0]
+            if "message" in choice:
+                return choice["message"].get("content", "").strip()
+            # Fallback for raw completions format
+            return choice.get("text", "").strip()
+        return ""
+
     async def evaluate_batch(
-        self, passage_pairs: list[tuple[str, str]], batch_size: int = 8
+        self, passage_pairs: list[tuple[str, str]], batch_size: int | None = None, show_progress: bool = True
     ) -> list[tuple[float, str, str]]:
         """
         Evaluate multiple passage pairs concurrently
         Returns: List of (similarity_score, reasoning, stance) tuples
         """
 
-        async def evaluate_single(session, source_text, target_text):
+        async def evaluate_single(session, source_text, target_text, retry: bool = True):
             try:
-                # Create evaluation prompt
                 prompt = create_similarity_evaluation_prompt(source_text, target_text, self.context_window)
+                payload = self._build_payload(prompt, self.SIMILARITY_SCHEMA)
 
-                # Prepare request payload
-                payload = {
-                    "prompt": prompt,
-                    "max_tokens": 500,
-                    "temperature": 0.1,
-                    "stop": [],
-                }
-
-                # Make async HTTP request
                 async with session.post(
-                    f"{self.base_url}/v1/completions",
+                    f"{self.base_url}/v1/chat/completions",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30),
+                    headers=self._get_headers(),
+                    timeout=aiohttp.ClientTimeout(total=120),
                 ) as response:
                     if response.status != 200:
-                        raise Exception(f"HTTP {response.status}")
-
+                        error_text = await response.text()
+                        raise Exception(f"HTTP {response.status}: {error_text[:300]}")
                     result = await response.json()
 
-                # Extract response text
-                response_text = ""
-                if "choices" in result and len(result["choices"]) > 0:
-                    choice = result["choices"][0]
-                    response_text = choice.get("text", "")
+                score, reasoning, stance = self._parse_llm_response(self._extract_text(result))
+                if score == 0.0 and retry:
+                    return await evaluate_single(session, source_text, target_text, retry=False)
+                return score, reasoning, stance
 
-                response_text = str(response_text).strip()
-                return self._parse_llm_response(response_text)
-
+            except asyncio.TimeoutError:
+                if retry:
+                    return await evaluate_single(session, source_text, target_text, retry=False)
+                print(
+                    f"WARNING: LLM request timed out after 120s. llm_concurrency_limit is set to {self.concurrency_limit},"
+                    f" meaning {self.concurrency_limit} requests are sent to the server simultaneously."
+                    f" Either lower llm_concurrency_limit to match the number of slots your server was started with,"
+                    f" or increase your server's parallel slot count to {self.concurrency_limit}.",
+                    flush=True,
+                )
+                return 0.0, "Error: timeout", "Unknown"
             except Exception as e:
+                if retry:
+                    return await evaluate_single(session, source_text, target_text, retry=False)
+                print(f"WARNING: LLM evaluation error: {e}", flush=True)
                 return 0.0, f"Error: {str(e)[:100]}...", "Unknown"
 
         # Process in batches to avoid overwhelming the server
+        if batch_size is None:
+            batch_size = self.concurrency_limit
         results = []
         total_pairs = len(passage_pairs)
 
-        with tqdm(total=total_pairs, desc="LLM Evaluation", unit="pairs", leave=False) as pbar:
+        with tqdm(
+            total=total_pairs, desc="LLM Evaluation", unit="pairs", leave=False, disable=not show_progress
+        ) as pbar:
             for i in range(0, len(passage_pairs), batch_size):
                 batch = passage_pairs[i : i + batch_size]
 
@@ -211,39 +287,36 @@ class AsyncLLMEvaluator:
                     tasks = [evaluate_single(session, source, target) for source, target in batch]
                     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                    # Handle any exceptions and update progress
-                    for j, result in enumerate(batch_results):
+                    # Handle any exceptions
+                    for result in batch_results:
                         if isinstance(result, Exception):
                             results.append((0.0, f"Error: {str(result)[:100]}...", "Unknown"))
                         else:
                             results.append(result)
 
-                        # Update progress bar
-                        pbar.update(1)
+                    pbar.update(len(batch_results))
 
         return results
 
-    async def _make_completion_request(self, prompt: str, llm_params: dict) -> dict:
+    async def _make_chat_request(self, prompt: str, json_schema: dict, max_tokens: int = 128) -> dict:
         """
-        Helper method to make a completion API request for banality classification.
+        Make a chat completions request with structured JSON output.
         """
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
 
-        payload = {
-            "prompt": prompt,
-            **llm_params,  # All LLM params passed through
-        }
+        payload = self._build_payload(prompt, json_schema, max_tokens=max_tokens)
 
         try:
-            # Check if server is still running
+            # Check if managed server is still running
             if self.server_process and self.server_process.poll() is not None:
                 print(f"ERROR: LLM server process has died! Exit code: {self.server_process.poll()}")
                 raise Exception("LLM server process is not running")
 
             async with self._session.post(
-                f"{self.base_url}/v1/completions",
+                f"{self.base_url}/v1/chat/completions",
                 json=payload,
+                headers=self._get_headers(),
                 timeout=aiohttp.ClientTimeout(total=60.0),
             ) as response:
                 if response.status != 200:
@@ -252,10 +325,9 @@ class AsyncLLMEvaluator:
                     print(f"DEBUG: Response: {error_text}")
                     raise Exception(f"HTTP {response.status}: {error_text}")
                 return await response.json()
-        except aiohttp.ServerDisconnectedError as e:
-            print(f"DEBUG: Server disconnected during request")
+        except aiohttp.ServerDisconnectedError:
+            print("DEBUG: Server disconnected during request")
             print(f"DEBUG: Prompt length: {len(prompt)} chars")
-            print(f"DEBUG: LLM params: {llm_params}")
             if self.server_process:
                 print(f"DEBUG: Server process alive: {self.server_process.poll() is None}")
             raise
@@ -277,22 +349,18 @@ class AsyncLLMEvaluator:
         prompt = create_scoring_prompt(temp_alignment)
 
         try:
-            result = await self._make_completion_request(prompt, self.banality_eval_params)
+            result = await self._make_chat_request(prompt, self.BANALITY_SCHEMA, max_tokens=128)
+            generated_text = self._extract_text(result)
+            if not generated_text:
+                return -1, True
 
-            if result.get("choices") and len(result["choices"]) > 0:
-                generated_text = result["choices"][0].get("text", "").strip()
-            else:
-                generated_text = "API_STRUCTURE_ERROR"
-
-            score = -1
             try:
-                match = re.search(r"\d+", generated_text)
-                if match:
-                    score = int(match.group(0))
-                    if not (1 <= score <= 100):
-                        score = -1
-            except Exception:
-                pass
+                data = json.loads(generated_text)
+                score = int(data["score"])
+                if not (1 <= score <= 100):
+                    score = -1
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                score = -1
 
             # Score < 40 means banal (not interesting), >= 40 means scholarly/interesting (not banal)
             is_banal = score < 40 if score != -1 else True
@@ -320,40 +388,33 @@ class AsyncLLMEvaluator:
 
         async def score_single(session, passage):
             try:
-                # Create a temporary alignment dict for the prompt
                 temp_alignment = {"target_passage": passage}
                 prompt = create_scoring_prompt(temp_alignment)
-
-                payload = {"prompt": prompt, **self.banality_eval_params}
+                payload = self._build_payload(prompt, self.BANALITY_SCHEMA, max_tokens=128)
 
                 async with session.post(
-                    f"{self.base_url}/v1/completions",
+                    f"{self.base_url}/v1/chat/completions",
                     json=payload,
+                    headers=self._get_headers(),
                     timeout=aiohttp.ClientTimeout(total=60.0),
                 ) as response:
                     if response.status != 200:
                         return -1, False
 
                     result = await response.json()
-
-                    if result.get("choices") and len(result["choices"]) > 0:
-                        generated_text = result["choices"][0].get("text", "").strip()
-                    else:
+                    generated_text = self._extract_text(result)
+                    if not generated_text:
                         return -1, False
 
-                    score = -1
                     try:
-                        match = re.search(r"\d+", generated_text)
-                        if match:
-                            score = int(match.group(0))
-                            if not (1 <= score <= 100):
-                                score = -1
-                    except Exception:
-                        pass
+                        data = json.loads(generated_text)
+                        score = int(data["score"])
+                        if not (1 <= score <= 100):
+                            score = -1
+                    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                        score = -1
 
-                    # Score < 40 means banal (not interesting), >= 40 means scholarly/interesting (not banal)
                     is_banal = score < 40 if score != -1 else True
-
                     return score, is_banal
 
             except Exception as e:
@@ -384,65 +445,21 @@ class AsyncLLMEvaluator:
 
         return results
 
+    _STANCE_MAP = {1: "Unrelated", 2: "Neutral", 3: "Disagree", 4: "Agree", 5: "Agree"}
+
     def _parse_llm_response(self, response: str) -> tuple[float, str, str]:
-        """Parse LLM response to extract score, reasoning, and stance (reasoning comes first in new format)"""
+        """Parse structured JSON response from LLM to extract score, reasoning, and stance.
+
+        Returns (score, reasoning, stance) where score is an integer 1-5:
+            1 = Unrelated, 2 = Neutral, 3 = Disagree, 4 = Agree (indirect), 5 = Agree (direct)
+        """
         try:
-            # Try to extract reasoning first (now comes before stance and score)
-            reasoning_patterns = [
-                r"Reasoning:\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "Reasoning: explanation" until Stance/Score or end
-                r"reasoning:\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # lowercase variant
-                r"because\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "because explanation"
-                r"since\s*(.+?)(?=Stance:|stance:|Score:|score:|$)",  # "since explanation"
-            ]
-
-            reasoning = "No reasoning provided"
-            for pattern in reasoning_patterns:
-                reasoning_match = re.search(pattern, response, re.IGNORECASE | re.DOTALL)
-                if reasoning_match:
-                    reasoning = reasoning_match.group(1).strip()
-                    # Remove any trailing "Stance:" or "Score:" that might have been captured
-                    reasoning = re.sub(r"\s*(Stance:|Score:)\s*$", "", reasoning, flags=re.IGNORECASE)
-                    break
-
-            # If no specific reasoning found, try to extract text before stance/score
-            if reasoning == "No reasoning provided":
-                stance_or_score_position = re.search(r"(Stance:|Score:)\s*", response, re.IGNORECASE)
-                if stance_or_score_position:
-                    reasoning = response[: stance_or_score_position.start()].strip()
-                elif response.strip():
-                    reasoning = response.strip()
-
-            # Try to extract stance (between reasoning and score)
-            stance_patterns = [
-                r"Stance:\s*(Agree|Disagree|Neutral|Unrelated)",  # "Stance: Agree"
-                r"stance:\s*(agree|disagree|neutral|unrelated)",  # lowercase variant
-            ]
-
-            stance = "Unknown"
-            for pattern in stance_patterns:
-                stance_match = re.search(pattern, response, re.IGNORECASE)
-                if stance_match:
-                    stance = stance_match.group(1).strip().capitalize()
-                    break
-
-            # Try multiple score patterns
-            score_patterns = [
-                r"Score:\s*([0-9]*\.?[0-9]+)",  # "Score: 0.8"
-                r"score:\s*([0-9]*\.?[0-9]+)",  # "score: 0.8" (lowercase)
-                r"([0-9]*\.?[0-9]+)",  # Just a number anywhere
-            ]
-
-            score = 0.0
-            for pattern in score_patterns:
-                score_match = re.search(pattern, response, re.IGNORECASE)
-                if score_match:
-                    score = float(score_match.group(1))
-                    score = max(0.0, min(1.0, score))  # Clamp to valid range
-                    break
-
-            return score, reasoning, stance
-
-        except Exception as e:
+            data = json.loads(response)
+            reasoning = data.get("reasoning", "No reasoning provided")
+            score = int(data["score"])
+            stance = self._STANCE_MAP.get(score, "Unknown")
+            return float(score), reasoning, stance
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             return 0.0, f"Failed to parse LLM response: {str(e)}", "Unknown"
 
 
@@ -491,15 +508,9 @@ def create_scoring_prompt(alignment: dict) -> str:
     1. Provide a score (integer 1-100). Carefully consider all criteria above when assigning the score.
     2. Provide a brief (one sentence) explanation justifying the score based ONLY on the criteria above (substantive vs. conventional/formulaic/structural).
 
-    Answer ONLY in the following specific format:
-    [SCORE]: [Brief explanation]
-
-    Example Output 1:
-    85: Substantive philosophical argument about free will using unique phrasing.
-    Example Output 2:
-    10: Standard correspondence closing formula with no unique content.
-    Example Output 3:
-    45: Common proverb reused without further analysis.
+    Respond with a JSON object containing these fields:
+    - "score": An integer between 1 and 100
+    - "explanation": A brief one-sentence justification
 
     PASSAGE: "{alignment["target_passage"]}"
     """
@@ -516,38 +527,23 @@ def create_similarity_evaluation_prompt(source_text: str, target_text: str, cont
         source_text = source_text[:half_max] + "..."
         target_text = target_text[:half_max] + "..."
 
-    prompt = f"""You are a text analysis expert. Your task is to rate the semantic similarity of two passages.
+    prompt = f"""You are evaluating whether two text excerpts engage a closely related question. You do not know the authors or their relationship.
 
-    First, determine if the passages address the same specific argument. Then, use the score guide below.
+    For each passage, write TWO sentences:
+    - What general subject is it about?
+    - What question is it engaging with?
 
-    IMPORTANT: Direct agreement and direct disagreement on the exact same point are both forms of HIGH similarity.
-    IMPORTANT: Avoid defaulting to the boundary scores of a category (like 0.40, 0.70, or 0.90). Use the full range to show nuance.
+    Then:
+    - Different subjects: score 1.
+    - Same subject, unrelated questions: score 2. MOST COMMON.
+    - Closely related questions, different or opposite answers: score 3.
+    - Closely related questions, similar answers from different perspectives: score 4.
+    - Closely related questions, essentially the same argument: score 5.
 
-    Score Guide:
-    • 0.0 - 0.4: Different Subjects. The passages are about completely different topics.
-    • > 0.4 to < 0.7: Shared Subject, Different Focus. The passages are about the same broad subject (e.g., the Roman Empire) but focus on different specific arguments or aspects (e.g., one is about military tactics, the other about trade policy).
-    • 0.7 - 0.9: Shared Subject, Shared Focus. The passages address the exact same specific argument, question, or thesis. They are in direct conversation, whether they agree, disagree, or analyze it in parallel.
-    • > 0.9 - 1.0: Paraphrase. The passages make the exact same point and have nearly identical meaning.
+    Respond with JSON: {{"reasoning": "...", "score": N}}
 
-    Your thought process:
-    1. What is the broad subject of each passage?
-    2. Do they narrow in on the exact same specific argument or point?
-    3. Determine the Stance:
-       - If they share the specific argument, do they Agree or Disagree?
-       - If they only share the broad subject, mark as Neutral.
-       - Otherwise, mark as Unrelated.
-    4. Based on that, which score category do they fall into?
-
-    Provide your answer in this exact format:
-    Reasoning: [Your step-by-step analysis - keep concise, 2-3 sentences]
-    Stance: [Agree, Disagree, Neutral, or Unrelated]
-    Score: X.XX
-
-    ---
     Passage 1: {source_text}
     ---
-    Passage 2: {target_text}
-    ---
-    Answer:"""
+    Passage 2: {target_text}"""
 
     return prompt
