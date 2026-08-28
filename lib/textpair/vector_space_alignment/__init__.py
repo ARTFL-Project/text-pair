@@ -12,6 +12,7 @@ import os
 from typing import Any, Iterable, Optional
 
 import lz4.frame
+import torch
 from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import linear_kernel
 from text_preprocessing import PreProcessor, Token, Tokens
@@ -240,7 +241,7 @@ def merge_passages(
         return count
 
     # Perform iterative merging with streaming
-    while last_count / current_count <= 1.0:
+    while last_count / current_count < 1.0:
         last_count = current_count
 
         # Alternate between temp databases
@@ -420,11 +421,20 @@ async def evaluate_passages_with_llm(
     llm_similarity_threshold: float | None = None,
     debug_llm: bool = False,
     output_path: str = "output",
+    llm_base_url: str = "",
+    llm_api_key: str = "",
+    llm_concurrency_limit: int = 8,
 ) -> tuple[list[MergedGroup], AsyncLLMEvaluator]:
     """Evaluate merged passages using LLM and filter by threshold. Returns (matches, evaluator)."""
 
     # Initialize LLM evaluator
-    llm_evaluator = AsyncLLMEvaluator(llm_model_path, context_window=llm_context_window)
+    llm_evaluator = AsyncLLMEvaluator(
+        llm_model_path,
+        context_window=llm_context_window,
+        concurrency_limit=llm_concurrency_limit,
+        base_url=llm_base_url,
+        api_key=llm_api_key,
+    )
     llm_evaluator.start_server()
 
     # Initialize debug logger (controlled by debug_llm parameter)
@@ -438,9 +448,12 @@ async def evaluate_passages_with_llm(
             debug_file.write("LLM EVALUATION DEBUG LOG\n")
             debug_file.write("=" * 50 + "\n\n")
 
-    # Override min_score if llm_similarity_threshold is provided
+    # Override min_score with llm_similarity_threshold (integer 1-5 scale)
+    # Default to 3 (keep passages engaging the same overall question) if not provided
     if llm_similarity_threshold is not None:
         min_score = llm_similarity_threshold
+    else:
+        min_score = 3
 
     try:
         # Prepare passage pairs for batch evaluation
@@ -462,14 +475,18 @@ async def evaluate_passages_with_llm(
             computed_similarities.append(merged_group.similarity)
 
         # Perform batch async evaluation
-        llm_results = await llm_evaluator.evaluate_batch(passage_pairs, batch_size=8)
+        llm_results = await llm_evaluator.evaluate_batch(passage_pairs)
 
         # Update similarities and filter by threshold
-        for i, (merged_group, (llm_similarity, llm_reasoning, _)) in enumerate(zip(merged_matches, llm_results)):
+        for i, (merged_group, (llm_similarity, llm_reasoning, llm_stance)) in enumerate(zip(merged_matches, llm_results)):
             computed_similarity = computed_similarities[i]
 
             # Update the similarity score with LLM evaluation
             merged_group.similarity = llm_similarity
+
+            # Store stance and reasoning for output
+            merged_group.source.metadata["llm_stance"] = llm_stance
+            merged_group.source.metadata["llm_reasoning"] = llm_reasoning
 
             # Debug: Log the LLM evaluation
             debug_logger.log_llm_evaluation(
@@ -481,6 +498,7 @@ async def evaluate_passages_with_llm(
                 merged_group.target.filename,
                 passage_pairs[i][0],
                 passage_pairs[i][1],
+                kept=llm_similarity >= min_score,
             )
 
         # Filter out passages below threshold
@@ -570,7 +588,7 @@ async def run_vsa(
         exit()
     print(f"{len(matches)} matches found.")
 
-    # First merge passages (now synchronous)
+    # Merge passages (now synchronous)
     matches = merge_passages(
         matches,
         config["min_similarity"],
@@ -579,27 +597,35 @@ async def run_vsa(
         use_llm_evaluation=config["llm_eval"],  # Use placeholders if LLM will evaluate
     )
 
-    # Then evaluate with LLM if model path is provided
+    # Then evaluate with LLM if enabled
     if config["llm_eval"]:
-        matches, llm_evaluator = await evaluate_passages_with_llm(
-            matches,
-            config["min_similarity"],
-            llm_params["llm_model"],
-            llm_params["llm_context_window"],
-            config["llm_similarity_threshold"],
-            config["llm_debug"],
-            output_path,
-        )
-        # Iteratively expand the boundaries of the validated matches
-        try:
-            if matches:  # Only run expansion if there are matches left
-                matches = await expand_validated_matches(
-                    matches,
-                    evaluator=llm_evaluator,
-                )
-        finally:
-            # Ensure we always stop the server
-            llm_evaluator.stop_server()
+        llm_model = llm_params.get("llm_model", "")
+        llm_base_url = llm_params.get("llm_base_url", "")
+        if not llm_model and not llm_base_url:
+            print("WARNING: llm_eval is enabled but neither llm_model nor llm_base_url is set. Skipping LLM evaluation.")
+        else:
+            matches, llm_evaluator = await evaluate_passages_with_llm(
+                matches,
+                config["min_similarity"],
+                llm_model,
+                llm_params.get("llm_context_window", 8192),
+                config["llm_similarity_threshold"],
+                config["llm_debug"],
+                output_path,
+                llm_base_url=llm_base_url,
+                llm_api_key=llm_params.get("llm_api_key", ""),
+                llm_concurrency_limit=llm_params.get("llm_concurrency_limit", 8),
+            )
+            # Iteratively expand the boundaries of the validated matches
+            try:
+                if matches:  # Only run expansion if there are matches left
+                    matches = await expand_validated_matches(
+                        matches,
+                        evaluator=llm_evaluator,
+                    )
+            finally:
+                # Ensure we always stop the server
+                llm_evaluator.stop_server()
 
     print("Formatting and writing out processed results...(this may take some time)")
     os.system("mkdir -p output/results")
@@ -654,6 +680,9 @@ async def run_vsa(
             else:
                 source_passage_with_matches = source_passage
                 target_passage_with_matches = target_passage
+            # Extract LLM fields before spreading metadata (they are corpus-level, not source/target)
+            llm_stance = match.source.metadata.pop("llm_stance", "")
+            llm_reasoning = match.source.metadata.pop("llm_reasoning", "")
             result_object: str = json.dumps(
                 {
                     "source_doc_id": match.source.metadata["philo_id"].split()[0],
@@ -667,6 +696,8 @@ async def run_vsa(
                     "target_context_after": target_context_after,
                     "target_passage_with_matches": target_passage_with_matches,
                     "similarity": str(match.similarity),
+                    "llm_stance": llm_stance,
+                    "llm_reasoning": llm_reasoning,
                     **{f"source_{field}": value for field, value in match.source.metadata.items()},
                     **{f"target_{field}": value for field, value in match.target.metadata.items()},
                 }

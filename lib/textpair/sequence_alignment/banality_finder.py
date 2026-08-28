@@ -180,6 +180,8 @@ async def banality_llm_post_eval(
     concurrency_limit: int,
     port: int,
     store_banalities: bool,
+    base_url: str = "",
+    api_key: str = "",
 ) -> int:
     """
     LLM-based post-evaluation of banalities detected by earlier stages using three-pass approach.
@@ -195,6 +197,8 @@ async def banality_llm_post_eval(
         port: Port for llama-server
         context_window: Context window size for the model
         concurrency_limit: Concurrency limit for LLM requests
+        base_url: Optional external API base URL
+        api_key: Optional API key for external server
 
     Returns:
         Number of banalities confirmed by LLM
@@ -205,6 +209,8 @@ async def banality_llm_post_eval(
         port=port,
         context_window=context_window,
         concurrency_limit=concurrency_limit,
+        base_url=base_url,
+        api_key=api_key,
     )
 
     try:

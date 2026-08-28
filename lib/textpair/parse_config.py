@@ -22,13 +22,17 @@ def read_global_config() -> configparser.ConfigParser:
     return config
 
 
+def _is_philo_db(path: str) -> bool:
+    """Auto-detect whether a path is a PhiloLogic database."""
+    return os.path.isdir(os.path.join(path, "data/words_and_philo_ids"))
+
+
 class TextPairConfig:
     """TextPAIR parameters returned from parsing CLI arguments"""
 
     def __init__(self, cli_args: dict[str, Any]):
         self.__cli_args: dict[str, Any] = cli_args
         if cli_args["delete"] is False:
-            self.is_philo_db: bool = self.__cli_args["is_philo_db"]
             self.__file_paths: dict[str, str] = {}
             self.text_parsing: dict[str, bool | str] = {}
             self.preprocessing_params: dict[str, Any] = {"source": {}, "target": {}}
@@ -63,11 +67,12 @@ class TextPairConfig:
         config.read(self.__cli_args["config"])
         self.web_app_config["source_url"] = config["TEXT_SOURCES"]["source_url"]
         self.web_app_config["target_url"] = config["TEXT_SOURCES"]["target_url"]
-        if self.__cli_args["is_philo_db"] is True:
-            self.web_app_config["source_philo_db_path"] = config["TEXT_SOURCES"]["source_file_path"]
-            self.web_app_config["target_philo_db_path"] = (
-                config["TEXT_SOURCES"]["target_file_path"] or config["TEXT_SOURCES"]["source_file_path"]
-            )
+        source_file_path = config["TEXT_SOURCES"]["source_file_path"] or ""
+        target_file_path = config["TEXT_SOURCES"]["target_file_path"] or ""
+        self.is_philo_db: bool = _is_philo_db(source_file_path)
+        if self.is_philo_db:
+            self.web_app_config["source_philo_db_path"] = source_file_path
+            self.web_app_config["target_philo_db_path"] = target_file_path or source_file_path
         else:
             self.web_app_config["source_philo_db_path"] = os.path.join(
                 web_app_path,
@@ -81,9 +86,9 @@ class TextPairConfig:
             )
         if self.only_align is False:
             self.__file_paths = {
-                "source_files": config["TEXT_SOURCES"]["source_file_path"] or "",
+                "source_files": source_file_path,
                 "input_source_metadata": config["TEXT_SOURCES"]["source_metadata"] or "",
-                "target_files": config["TEXT_SOURCES"]["target_file_path"] or "",
+                "target_files": target_file_path,
                 "input_target_metadata": config["TEXT_SOURCES"]["target_metadata"] or "",
             }
         else:
@@ -144,20 +149,12 @@ class TextPairConfig:
                         self.preprocessing_params["source"]["embedding_model"] = value
                         self.preprocessing_params["target"]["embedding_model"] = value
                     else:
-                        # Default to small, fast multilingual model if not specified
-                        self.preprocessing_params["source"]["embedding_model"] = (
-                            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                        )
-                        self.preprocessing_params["target"]["embedding_model"] = (
-                            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                        )
-                        print(
-                            "\nWARNING: Using default embedding model 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'"
-                        )
-                        print("This is a small, fast multilingual model suitable for many languages.")
-                        print("For better quality results in specific languages, consider using a specialized model.")
-                        print("See: https://huggingface.co/models?library=sentence-transformers&sort=downloads")
-                        print("Configure via 'embedding_model' in your config.ini file.\n")
+                        # Default to Qwen3 embedding model
+                        self.preprocessing_params["source"]["embedding_model"] = "Qwen/Qwen3-Embedding-0.6B"
+                        self.preprocessing_params["target"]["embedding_model"] = "Qwen/Qwen3-Embedding-0.6B"
+                        print("\nWARNING: Using default embedding model 'Qwen/Qwen3-Embedding-0.6B'")
+                        print("For better quality in specific languages, consider using a specialized model.")
+                        print("Configure via 'embedding_model' in your config file.\n")
                 case _:
                     self.preprocessing_params["source"][key] = value
                     self.preprocessing_params["target"][key] = value
@@ -176,32 +173,31 @@ class TextPairConfig:
                             value = True
                         else:
                             value = False
-                    case (
-                        "min_similarity"
-                        | "most_common_ngram_proportion"
-                        | "common_ngram_threshold"
-                        | "llm_similarity_threshold"
-                    ):
+                    case "min_similarity" | "most_common_ngram_proportion" | "common_ngram_threshold":
                         value = float(value)
+                    case "llm_similarity_threshold":
+                        value = int(value)
                     case "min_matching_words" | "source_batch" | "target_batch":
                         value = int(value)
                 self.matching_params[key] = value
-        for key, value in dict(config["LLM_PARAMS"]).items():
-            if value:
-                if key in ("llm_context_window", "llm_concurrency_limit"):
-                    value = int(value)
-                self.llm_params[key] = value
-        for key, value in dict(config["PASSAGE_CLASSIFICATION"]).items():
-            if value:
-                if key == "classify_passage":
-                    if value.lower() == "yes" or value.lower() == "true":
-                        self.passage_classification["classify_passage"] = True
+        if config.has_section("LLM_PARAMS"):
+            for key, value in dict(config["LLM_PARAMS"]).items():
+                if value:
+                    if key in ("llm_context_window", "llm_concurrency_limit", "llm_port"):
+                        value = int(value)
+                    self.llm_params[key] = value
+        if config.has_section("PASSAGE_CLASSIFICATION"):
+            for key, value in dict(config["PASSAGE_CLASSIFICATION"]).items():
+                if value:
+                    if key == "classify_passage":
+                        if value.lower() == "yes" or value.lower() == "true":
+                            self.passage_classification["classify_passage"] = True
+                        else:
+                            self.passage_classification["classify_passage"] = False
+                    elif key == "zero_shot_model":
+                        self.passage_classification["zero_shot_model"] = value.strip()
                     else:
-                        self.passage_classification["classify_passage"] = False
-                elif key == "zero_shot_model":
-                    self.passage_classification["zero_shot_model"] = value.strip()
-                else:
-                    self.passage_classification["classes"][key] = value.strip()
+                        self.passage_classification["classes"][key] = value.strip()
 
         # Validate passage classification configuration
         if self.passage_classification["classify_passage"] is True:
@@ -225,9 +221,8 @@ class TextPairConfig:
                 )
                 self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source/")
                 self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
-                self.paths["source"]["is_philo_db"] = False
             else:
-                if self.__cli_args["is_philo_db"] is True:
+                if self.is_philo_db:
                     self.paths["source"]["input_files_for_ngrams"] = os.path.join(
                         self.__file_paths["source_files"], "data/words_and_philo_ids"
                     )
@@ -235,7 +230,6 @@ class TextPairConfig:
                     self.paths["source"]["input_files_for_ngrams"] = self.__file_paths["source_files"]
                 self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source/")
                 self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
-                self.paths["source"]["is_philo_db"] = self.__cli_args["is_philo_db"]
             self.paths["source"]["common_ngrams"] = os.path.join(
                 self.output_path, "source/index/most_common_ngrams.txt"
             )
@@ -252,9 +246,8 @@ class TextPairConfig:
                     self.paths["target"]["metadata_path"] = os.path.join(
                         self.output_path, "target/metadata/metadata.json"
                     )
-                    self.paths["target"]["is_philo_db"] = False
                 else:
-                    if self.__cli_args["is_philo_db"] is True:
+                    if self.is_philo_db:
                         self.paths["target"]["input_files_for_ngrams"] = os.path.join(
                             self.__file_paths["target_files"],
                             "data/words_and_philo_ids",
@@ -265,7 +258,6 @@ class TextPairConfig:
                     self.paths["target"]["metadata_path"] = os.path.join(
                         self.output_path, "target/metadata/metadata.json"
                     )
-                    self.paths["target"]["is_philo_db"] = self.__cli_args["is_philo_db"]
                 self.paths["target"]["common_ngrams"] = os.path.join(
                     self.output_path, "target/index/most_common_ngrams.txt"
                 )
@@ -302,12 +294,6 @@ def get_config() -> TextPairConfig:
         help="configuration file used to override defaults",
         type=str,
         default="",
-    )
-    parser.add_argument(
-        "--is_philo_db",
-        help="define if files are from a PhiloLogic instance",
-        action="store_true",
-        default=False,
     )
     parser.add_argument(
         "--only_align",
