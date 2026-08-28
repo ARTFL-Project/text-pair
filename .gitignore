@@ -10742,3 +10742,5 @@ banality_finder.py.lprof
 *.bak
 in-and-out/
 lib/core/src/compareNgrams/compareNgrams
+my_config.ini
+text_setup.sh
