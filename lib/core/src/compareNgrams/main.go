@@ -603,6 +603,9 @@ func saveAlignmentConfig(config *matchingParams) {
 	os.MkdirAll(config.outputPath, 0755)
 	configOutput, err := os.Create(filepath.Join(config.outputPath, "alignment_config.ini"))
 	configOutput.WriteString("## Alignment Parameters ##\n\n")
+	// banalNgrams and oneWayMatching were removed from matchingParams; listing
+	// them here made FieldByName return the zero Value, so every run's
+	// alignment_config.ini recorded "<invalid reflect.Value>" for both.
 	matchingParameters := []string{
 		"matchingWindowSize",
 		"maxGap",
@@ -611,11 +614,9 @@ func saveAlignmentConfig(config *matchingParams) {
 		"minimumMatchingNgramsInWindow",
 		"minimumMatchingNgramsInDocs",
 		"contextSize",
-		"banalNgrams",
 		"mergeOnByteDistance",
 		"mergeOnNgramDistance",
 		"passageDistanceMultiplier",
-		"oneWayMatching",
 		"duplicateThreshold",
 		"sourceBatch",
 		"targetBatch",
