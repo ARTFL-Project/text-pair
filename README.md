@@ -1,6 +1,5 @@
 "Nous ne faisons que nous entregloser" Montaigne wrote famously in his <i>Essais</i>... Since all we do is gloss over what's already been written, we may as well build a tool to detect these intertextual relationships...
 
-> **Note:** This is a personal fork of [ARTFL-Project/text-pair](https://github.com/ARTFL-Project/text-pair) maintained by Tarah Wheeler. It includes patches for running TextPAIR on macOS without Docker (see [macOS bare-metal installation](#macos-bare-metal-installation) below). For production use, you probably want the upstream repository. The `v1.0-thesis` tag marks the version used in Wheeler (2026), DPhil thesis, University of Oxford.
 
 # TextPAIR (Pairwise Alignment for Intertextual Relations)
 
@@ -32,34 +31,34 @@ The recommended install is to build your own Docker image and run TextPAIR insid
 If you do run into the issue where the web server does not respond, restart the web server with the following command:
 `/var/lib/text-pair/api_server/web_server.sh &`
 
-### macOS bare-metal installation
+### macOS bare-metal installation (experimental)
 
-This fork includes a `mac-bare-metal` branch with patches for running TextPAIR on macOS without Docker. The upstream project officially supports only 64-bit Linux; these patches make it possible to develop and run TextPAIR locally on a Mac, at the cost of leaving the supported configuration.
-
-Specific changes from upstream:
-
--   `psycopg2-binary` (Mac wheel) instead of building `psycopg2` from source
--   Async wrapper for `cli_entry` to handle macOS event-loop differences
--   macOS `wc` whitespace patch for `banality_finder.py` (BSD `wc` formats output differently from GNU `wc`)
--   `install.sh` adjustments for macOS package managers and paths
--   `.gitignore` for corpus data, macOS artifacts, and backup files
-
-To use this branch:
+TextPAIR officially supports 64-bit Linux; the Docker method above is the recommended path for production use. For local development and research runs on a Mac (Apple Silicon or Intel), an opt-in installer sets up the full sequence-alignment pipeline natively, without Docker:
 
 ```console
-git clone https://github.com/tarahmarie/text-pair.git
-cd text-pair
-git checkout mac-bare-metal
-./install.sh
+./install_bare_metal_mac.sh
 ```
 
-The `v1.0-thesis` tag on this branch marks the exact version used in Wheeler (2026), DPhil thesis, University of Oxford. Use it if you need to reproduce that work specifically:
+**Prerequisite:** [Homebrew](https://brew.sh). The script stops with instructions if it is missing. Everything else is handled automatically:
+
+-   installs `pyenv`, Go, and `lz4` via Homebrew if absent, then installs Python 3.11 via pyenv and creates the environment TextPAIR runs in
+-   installs the TextPAIR Python package into that environment
+-   patches the installed PhiloLogic dependency's `line_count.py` (its non-lz4 code path is broken, and BSD `wc` output differs from GNU)
+-   builds a native `compareNgrams` binary from source with Go — the prebuilt binaries ship as Linux ELF executables and cannot run on macOS — and installs it to `/usr/local/bin` (this step asks for your password)
+-   seeds `~/.text-pair/global_settings.ini` and a starter `my_config.ini` (copied from `config/sa_config.ini`) if you do not already have them
+
+Then edit `my_config.ini` (at minimum, set `source_file_path` to your corpus directory) and run:
 
 ```console
-git checkout v1.0-thesis
+textpair --config=my_config.ini --skip_web_app --output_path=/tmp/textpair-out --workers=8 my_run_name
 ```
 
-For anything beyond personal or research use, the supported path remains Docker on Linux as documented above.
+Known limitations of the macOS path:
+
+-   Avoid corpus and output paths containing spaces (a PhiloLogic limitation; note that iCloud-synced folders live under a path with spaces — copy corpora to `/tmp` or similar first).
+-   The PostgreSQL credentials in `~/.text-pair/global_settings.ini` are only needed if you drop `--skip_web_app` to build the web application.
+
+This mode was developed for the corpus-scale alignment runs in Wheeler (2026), DPhil thesis, University of Oxford.
 
 ### Manual installation
 

@@ -65,29 +65,6 @@ PATCH
 }
 
 # =============================================================================
-# PATCH BANALITY FINDER WC WHITESPACE (macOS compatibility)
-# =============================================================================
-patch_banality_finder() {
-    echo "Patching banality_finder.py for macOS wc whitespace..."
-    
-    local banality_file="lib/textpair/sequence_alignment/banality_finder.py"
-    
-    if [ -f "$banality_file" ]; then
-        if grep -q '\.strip()\.split' "$banality_file"; then
-            echo "  Already patched"
-        else
-            # macOS wc outputs leading whitespace; .split() alone chokes on it
-            sed -i '' 's/\.stdout\.split/\.stdout\.strip()\.split/g' "$banality_file"
-            echo "  Patched: added .strip() before .split() on wc output"
-        fi
-    else
-        echo -e "${YELLOW}  banality_finder.py not found at expected path${NC}"
-    fi
-    
-    echo ""
-}
-
-# =============================================================================
 # ARCHITECTURE CHECK
 # =============================================================================
 check_architecture() {
@@ -193,74 +170,14 @@ check_dependencies() {
         echo "  Go installed"
     fi
 
-    echo ""
-}
-
-# =============================================================================
-# PATCH PYPROJECT.TOML
-# =============================================================================
-patch_pyproject() {
-    echo "Patching lib/pyproject.toml..."
-    
-    # Replace psycopg2 with psycopg2-binary (avoids pg_config requirement)
-    if grep -q '"psycopg2"' lib/pyproject.toml; then
-        sed -i '' 's/"psycopg2"/"psycopg2-binary"/g' lib/pyproject.toml
-        echo "  Replaced psycopg2 -> psycopg2-binary"
-    fi
-    
-    echo ""
-}
-
-# =============================================================================
-# PATCH ASYNC ENTRY POINT + ULIMIT FIX
-# =============================================================================
-patch_async_entry() {
-    echo "Patching lib/textpair/__main__.py for async entry point + ulimit fix..."
-    
-    # Check if already patched
-    if grep -q "def cli_entry" lib/textpair/__main__.py; then
-        echo "  Already patched"
+    # lz4 CLI (used to merge alignment result batches)
+    if command -v lz4 &> /dev/null; then
+        echo "  lz4: found"
     else
-        # Add async wrapper with ulimit fix at the end of the file
-        cat >> lib/textpair/__main__.py << 'EOF'
-
-def cli_entry():
-    """Synchronous entry point wrapper for async main()"""
-    import asyncio
-    import resource
-    import sys
-    import os
-    
-    # macOS ulimit fix - PhiloLogic needs many file descriptors for large corpora
-    # 10240 handles corpora up to ~4000+ files comfortably (macOS default is 256)
-    if sys.platform == 'darwin':
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        if soft < 10240:
-            try:
-                resource.setrlimit(resource.RLIMIT_NOFILE, (min(10240, hard), hard))
-            except ValueError:
-                pass  # silently fail if we can't increase
-    
-    # Warn about paths with spaces
-    for arg in sys.argv:
-        if arg.startswith('--config='):
-            config_path = arg.split('=', 1)[1]
-            if ' ' in os.path.abspath(config_path):
-                print("WARNING: Config path contains spaces. If you hit errors, copy corpus to /tmp/")
-        if arg.startswith('--output_path='):
-            out_path = arg.split('=', 1)[1]
-            if ' ' in os.path.abspath(out_path):
-                print("WARNING: Output path contains spaces. If you hit errors, use a simple path like /tmp/")
-    
-    asyncio.run(main())
-EOF
-        echo "  Added cli_entry() wrapper with ulimit fix and path warnings"
-        
-        # Update pyproject.toml entry point
-        sed -i '' 's/textpair.__main__:main/textpair.__main__:cli_entry/g' lib/pyproject.toml
-        echo "  Updated entry point in pyproject.toml"
+        echo "  lz4: not found, installing with Homebrew..."
+        brew install lz4
     fi
-    
+
     echo ""
 }
 
@@ -389,11 +306,8 @@ verify_install() {
 main() {
     check_architecture
     check_dependencies
-    patch_pyproject
-    patch_async_entry
     install_textpair
     patch_philologic_wc
-    patch_banality_finder
     setup_global_settings
     scaffold_config
     install_binary
