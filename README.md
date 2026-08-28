@@ -58,7 +58,7 @@ Known limitations of the macOS path:
 -   Avoid corpus and output paths containing spaces (a PhiloLogic limitation; note that iCloud-synced folders live under a path with spaces — copy corpora to `/tmp` or similar first).
 -   The PostgreSQL credentials in `~/.text-pair/global_settings.ini` are only needed if you drop `--skip_web_app` to build the web application.
 
-This mode was developed for the corpus-scale alignment runs in Wheeler (2026), DPhil thesis, University of Oxford.
+This mode was developed for the corpus-scale alignment runs in Tarah Wheeler's (2026) DPhil thesis at the University of Oxford.
 
 ### Manual installation
 
