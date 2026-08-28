@@ -10,7 +10,10 @@ find ../sextant/projects/eltec-100/splits/ -name "*" -exec cp {} in-and-out/elte
 # Sanity check: how many files landed?
 ls in-and-out/eltec-100_held/ | wc -l
 
-sed -i '' 's|^source_file_path =.*|source_file_path = /Users/sextant2/Repos/text-pair/in-and-out/eltec-100_held|' my_config.ini
+# Derive the repo root from this script's location instead of hardcoding
+# a machine-specific path.
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+sed -i '' "s|^source_file_path =.*|source_file_path = ${REPO_ROOT}/in-and-out/eltec-100_held|" my_config.ini
 
 export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"

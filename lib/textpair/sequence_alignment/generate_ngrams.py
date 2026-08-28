@@ -3,10 +3,12 @@
 
 import configparser
 import os
+import shutil
 import sqlite3
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
+from shlex import quote
 from typing import Any, Dict, List, Tuple
 
 import orjson
@@ -92,16 +94,18 @@ class Ngrams:
             files = [file_path]
         else:
             files = glob(os.path.join(file_path, "*"))
-        os.system(f"rm -rf {output_path}/ngrams")
-        os.system(f"rm -rf {output_path}/ngrams_in_order")
-        os.system(f"mkdir -p {output_path}/ngrams")
+        # Use shutil/os rather than shelling out: unquoted paths passed to the
+        # shell break (dangerously, for rm -rf) on paths containing spaces.
+        shutil.rmtree(os.path.join(output_path, "ngrams"), ignore_errors=True)
+        shutil.rmtree(os.path.join(output_path, "ngrams_in_order"), ignore_errors=True)
+        os.makedirs(os.path.join(output_path, "ngrams"), exist_ok=True)
         if self.debug:
-            os.system(f"mkdir {output_path}/debug")
-        os.system(f"mkdir -p {output_path}/metadata")
-        os.system(f"mkdir -p {output_path}/index")
-        os.system(f"mkdir -p {output_path}/config")
-        os.system(f"mkdir -p {output_path}/temp")
-        os.system(f"mkdir -p {output_path}/ngrams_in_order")
+            os.makedirs(os.path.join(output_path, "debug"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "metadata"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "index"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "config"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "temp"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "ngrams_in_order"), exist_ok=True)
         self.input_path = os.path.abspath(os.path.join(files[0], "../../../"))
         self.output_path = output_path
         combined_metadata: dict[str, Any] = {}
@@ -147,10 +151,14 @@ class Ngrams:
             "Saving ngram index and most common ngrams (this can take a while)...",
             flush=True,
         )
+        # The external-sort pipeline stays in the shell on purpose (sort -S does
+        # the heavy lifting), but every path is shell-quoted so output paths
+        # containing spaces work.
+        q_out = quote(output_path)
         os.system(
-            rf"""for i in {output_path}/temp/*; do cat $i; done | sort -T {output_path} -S 25% | uniq -c |
-            sort -rn -T {output_path} -S 25% | awk '{{print $2"\t"$3}}' | tee {output_path}/index/index.tab |
-            awk '{{print $2}}' > {output_path}/index/most_common_ngrams.txt"""
+            rf"""for i in {q_out}/temp/*; do cat "$i"; done | sort -T {q_out} -S 25% | uniq -c |
+            sort -rn -T {q_out} -S 25% | awk '{{print $2"\t"$3}}' | tee {q_out}/index/index.tab |
+            awk '{{print $2}}' > {q_out}/index/most_common_ngrams.txt"""
         )
 
         print("Saving metadata...")
@@ -159,7 +167,7 @@ class Ngrams:
         self.__dump_config(output_path)
 
         print("Cleaning up...")
-        os.system(f"rm -r {self.output_path}/temp")
+        shutil.rmtree(os.path.join(self.output_path, "temp"), ignore_errors=True)
 
     def text_to_ngram(self, text_object: Tokens) -> Dict[str, Any]:
         """Tranform doc to inverted index of ngrams"""
