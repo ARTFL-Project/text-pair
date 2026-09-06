@@ -3,6 +3,7 @@
 
 import configparser
 import os
+import platform
 import shutil
 import sqlite3
 from collections import defaultdict
@@ -111,7 +112,7 @@ class Ngrams:
         combined_metadata: dict[str, Any] = {}
 
         print("Generating ngrams...", flush=True)
-        preprocessor = PreProcessor(
+        preprocessor_kwargs = dict(
             language=self.config["language"],
             stemmer=self.config["stemmer"],
             lemmatizer=self.config["lemmatizer"],
@@ -127,25 +128,31 @@ class Ngrams:
             ascii=self.config["ascii"],
             post_processing_function=self.text_to_ngram,
             is_philo_db=True,
-            workers=1,
             progress=False,
         )
-        # NOTE: workers=1 above keeps text_preprocessing on its serial code path (no internal
-        # multiprocess.Pool). We fan out across files ourselves with a ThreadPoolExecutor instead:
-        # multiprocess.Pool defaults to fork() on macOS, and forking again right after the
-        # preceding PhiloLogic parse stage's own Pool tears down reliably deadlocks on modern
-        # macOS (bpo-33725). Threads sidestep this entirely since they never fork.
         philo_type_count = self.count_texts(files[0])
-        with tqdm(total=philo_type_count, leave=False) as pbar:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [
-                    executor.submit(lambda f=f: list(preprocessor.process_texts([f], progress=False)))
-                    for f in files
-                ]
-                for future in as_completed(futures):
-                    for local_metadata in future.result():
-                        combined_metadata.update(local_metadata)  # type: ignore
-                        pbar.update()
+        if platform.system() == "Darwin":
+            # multiprocess.Pool defaults to fork() on macOS, and forking again right after the
+            # preceding PhiloLogic parse stage's own Pool tears down reliably deadlocks on modern
+            # macOS (bpo-33725). Keep text_preprocessing on its serial path (workers=1) and fan
+            # out across files ourselves with threads, which never fork.
+            preprocessor = PreProcessor(**preprocessor_kwargs, workers=1)
+            with tqdm(total=philo_type_count, leave=False) as pbar:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = [
+                        executor.submit(lambda f=f: list(preprocessor.process_texts([f], progress=False)))
+                        for f in files
+                    ]
+                    for future in as_completed(futures):
+                        for local_metadata in future.result():
+                            combined_metadata.update(local_metadata)  # type: ignore
+                            pbar.update()
+        else:
+            preprocessor = PreProcessor(**preprocessor_kwargs, workers=workers)
+            with tqdm(total=philo_type_count, leave=False) as pbar:
+                for local_metadata in preprocessor.process_texts(files, progress=False):
+                    combined_metadata.update(local_metadata)  # type: ignore
+                    pbar.update()
 
         print(
             "Saving ngram index and most common ngrams (this can take a while)...",
