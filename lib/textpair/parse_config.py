@@ -16,7 +16,11 @@ GLOBAL_CONFIG_SEARCH_PATHS = [
 
 
 def read_global_config() -> configparser.ConfigParser:
-    """Read global_settings.ini from the first location(s) that exist. Missing files are silently skipped."""
+    """Read global_settings.ini from every location in GLOBAL_CONFIG_SEARCH_PATHS that exists.
+
+    Files are read in order, so a key set in a later file (the user-level ~/.text-pair one) overrides
+    the same key from an earlier file (/etc). Missing files are silently skipped.
+    """
     config = configparser.ConfigParser()
     config.read(GLOBAL_CONFIG_SEARCH_PATHS)
     return config
