@@ -3,7 +3,9 @@
 # For use without Docker, without web app
 # Forked from ARTFL-Project/text-pair
 # 
-# Usage: ./install-mac.sh
+# Usage: ./install_bare_metal_mac.sh [-p X.Y | -p X.Y.Z]
+#   -p  Python to install via pyenv: a series (3.12 -> newest 3.12.x) or an exact version.
+#       Default: newest 3.11.x. Must be >= 3.11 (requires-python in lib/pyproject.toml).
 
 set -e
 
@@ -11,6 +13,18 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+
+# Python version selection. The floor tracks requires-python in lib/pyproject.toml; the
+# default is the series we've tested on macOS. Override with -p (see usage above).
+MIN_PY_SERIES="3.11"
+PY_SERIES="$MIN_PY_SERIES"
+while getopts "p:" opt; do
+    case $opt in
+        p) PY_SERIES="$OPTARG" ;;
+        *) echo "Usage: $0 [-p X.Y | -p X.Y.Z]"; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
 
 echo -e "${GREEN}TextPAIR Mac Bare-Metal Installer${NC}"
 echo "=================================="
@@ -101,7 +115,7 @@ check_dependencies() {
         exit 1
     fi
 
-    # pyenv (guarantees a consistent, correct Python 3.11 regardless of whatever
+    # pyenv (guarantees a Python that satisfies requires-python regardless of whatever
     # python3 happens to be on the ambient PATH - relying on system/Homebrew python3
     # directly is what let a Python 3.9 slip past the old version check below)
     if command -v pyenv &> /dev/null; then
@@ -112,14 +126,31 @@ check_dependencies() {
         echo "  pyenv installed"
     fi
 
-    # Resolve the latest available Python 3.11.x via pyenv, install it if missing, and
-    # pin this directory to it (writes .python-version) so python3/pip here always
-    # resolve to 3.11, regardless of the system's default python3.
-    TARGET_PY_VERSION=$(pyenv install --list | grep -E '^\s*3\.11\.[0-9]+$' | tail -1 | xargs)
-    if [ -z "$TARGET_PY_VERSION" ]; then
-        echo -e "${RED}  ERROR: could not find a Python 3.11.x version via pyenv${NC}"
+    # Validate -p: an exact X.Y.Z is used as-is; an X.Y series resolves to the newest X.Y.Z
+    # pyenv knows about. Enforce the floor up front so a too-old -p fails fast instead of
+    # after a slow pyenv build (pip would reject it anyway via requires-python).
+    if [[ ! "$PY_SERIES" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+        echo -e "${RED}  ERROR: -p expects X.Y or X.Y.Z (got '$PY_SERIES')${NC}"
         exit 1
     fi
+    IFS=. read -r want_major want_minor _ <<< "$PY_SERIES"
+    IFS=. read -r min_major min_minor _ <<< "$MIN_PY_SERIES"
+    if [ "$want_major" -lt "$min_major" ] || { [ "$want_major" -eq "$min_major" ] && [ "$want_minor" -lt "$min_minor" ]; }; then
+        echo -e "${RED}  ERROR: Python $PY_SERIES is below the minimum $MIN_PY_SERIES required by lib/pyproject.toml${NC}"
+        exit 1
+    fi
+    if [[ "$PY_SERIES" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        TARGET_PY_VERSION="$PY_SERIES"
+    else
+        TARGET_PY_VERSION=$(pyenv install --list | grep -E "^\s*${PY_SERIES//./\\.}\.[0-9]+$" | tail -1 | xargs)
+    fi
+    if [ -z "$TARGET_PY_VERSION" ]; then
+        echo -e "${RED}  ERROR: could not find a Python ${PY_SERIES}.x version via pyenv${NC}"
+        exit 1
+    fi
+    # Install it if missing, then pin this directory to it. pyenv local writes .python-version,
+    # which is gitignored: it's machine-local state (and uv reads it too, so committing it would
+    # override whatever Python upstream's uv-based install asks for).
     if ! pyenv versions --bare | grep -qx "$TARGET_PY_VERSION"; then
         echo "  Installing Python $TARGET_PY_VERSION via pyenv (this can take a few minutes)..."
         pyenv install "$TARGET_PY_VERSION"

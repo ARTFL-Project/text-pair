@@ -10744,3 +10744,6 @@ in-and-out/
 lib/core/src/compareNgrams/compareNgrams
 my_config.ini
 text_setup.sh
+
+# pyenv local (run by install_bare_metal_mac.sh) writes this; machine-local, and uv reads it too
+.python-version

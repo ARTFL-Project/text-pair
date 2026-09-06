@@ -41,7 +41,7 @@ TextPAIR officially supports 64-bit Linux; the Docker method above is the recomm
 
 **Prerequisite:** [Homebrew](https://brew.sh). The script stops with instructions if it is missing. Everything else is handled automatically:
 
--   installs `pyenv`, Go, and `lz4` via Homebrew if absent, then installs Python 3.11 via pyenv and creates the environment TextPAIR runs in
+-   installs `pyenv`, Go, and `lz4` via Homebrew if absent, then installs Python via pyenv (the newest 3.11.x by default; pass `-p 3.12` or an exact `-p 3.12.4` to choose another, anything 3.11 or later) and creates the environment TextPAIR runs in
 -   installs the TextPAIR Python package into that environment
 -   patches the installed PhiloLogic dependency's `line_count.py` (its non-lz4 code path is broken, and BSD `wc` output differs from GNU)
 -   builds a native `compareNgrams` binary from source with Go — the prebuilt binaries ship as Linux ELF executables and cannot run on macOS — and installs it to `/usr/local/bin` (this step asks for your password)
