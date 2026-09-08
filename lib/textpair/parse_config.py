@@ -65,6 +65,16 @@ class TextPairConfig:
         global_config = read_global_config()
         web_app_section = global_config["WEB_APP"] if global_config.has_section("WEB_APP") else {}
         web_app_path = web_app_section.get("web_app_path", "")
+        # An empty path silently yields filesystem-root paths deep into the run: fail now.
+        if not web_app_path and (
+            self.__cli_args["skip_web_app"] is False
+            or self.__cli_args["update_db"] is True
+            or self.__cli_args["load_only_web_app"] is True
+        ):
+            print("No web_app_path set under [WEB_APP] in global_settings.ini.", flush=True)
+            print(f"""Searched: {", ".join(GLOBAL_CONFIG_SEARCH_PATHS)}""", flush=True)
+            print("Set web_app_path, or pass --skip_web_app to run without it.", flush=True)
+            os._exit(1)
         self.web_app_config["web_application_directory"] = web_app_path
         self.web_app_config["api_server"] = web_app_section.get("api_server", "")
         config = configparser.ConfigParser()
