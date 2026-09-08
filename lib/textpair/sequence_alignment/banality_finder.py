@@ -56,8 +56,9 @@ def banality_auto_detect(
 ):
     """Detect banalities automatically based on frequent ngram over-representation"""
     # Count number of ngrams to keep
-    output = subprocess.check_output(["wc", "-l", common_ngrams_file]).decode("utf-8")
-    total_ngrams = int(output.split(" ", maxsplit=1)[0])
+    # PATCHED_FOR_MACOS - pure Python line count (macOS wc has leading spaces)
+    with open(common_ngrams_file, "rb") as _f:
+        total_ngrams = sum(1 for _ in _f)
     top_ngrams = floor(total_ngrams * proportion / 100)
 
     common_ngrams = set()
@@ -96,7 +97,7 @@ def banality_auto_detect(
                 alignment["banality"] = False
             # Always write to main file with banality flag set
             output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
-    os.system(f"rm {filepath} && mv {filepath}.temp.lz4 {filepath}")
+    os.replace(f"{filepath}.temp.lz4", filepath)
     return banalities_found
 
 
@@ -135,7 +136,7 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
                 filtered_passages.write(line)  # type: ignore
             if banality is False:
                 output_file.write(line)  # type: ignore
-    os.system(f"rm {filepath} && mv {filepath}.keep.lz4 {filepath}")
+    os.replace(f"{filepath}.keep.lz4", filepath)
     print("done")
     return passages_filtered
 
@@ -168,7 +169,7 @@ def separate_banalities(filepath: str, count: Optional[int]) -> int:
             else:
                 output_file.write(line)  # type: ignore
 
-    os.system(f"rm {filepath} && mv {filepath}.keep.lz4 {filepath}")
+    os.replace(f"{filepath}.keep.lz4", filepath)
     return banalities_separated
 
 

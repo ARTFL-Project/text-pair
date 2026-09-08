@@ -6,10 +6,12 @@ import os
 import shutil
 import subprocess
 import sys
+from shlex import quote
 
 import psycopg2
 
 from . import create_web_app, get_config, parse_files, run_vsa
+from .parse_config import read_global_config
 from .passage_classifier import classify_passages
 from .sequence_alignment import (
     Ngrams,
@@ -91,8 +93,7 @@ def build_graph_and_labels(alignments_file: str, embedding_model: str, llm_param
 
 
 def delete_database(dbname: str) -> None:
-    global_config = configparser.ConfigParser()
-    global_config.read("/etc/text-pair/global_settings.ini")
+    global_config = read_global_config()
     conn = psycopg2.connect(
         user=global_config["DATABASE"]["database_user"],
         password=global_config["DATABASE"]["database_password"],
@@ -112,7 +113,7 @@ def delete_database(dbname: str) -> None:
         cursor.execute(f"DROP TABLE IF EXISTS {dbname}___groups")
         print("done")
         print(f"Deleting {dbname} web app directory...", end="")
-        os.system(f"rm -rf {global_config['WEB_APP']['web_app_path']}/{dbname}")
+        shutil.rmtree(os.path.join(global_config['WEB_APP']['web_app_path'], dbname), ignore_errors=True)
         print("done")
 
         print(f"\nDeletion of database {dbname} complete.")
@@ -190,14 +191,15 @@ async def run_alignment(params):
         params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
     result_batch_path = os.path.join(params.output_path, "results/result_batches")
     if os.path.exists(result_batch_path):
-        os.system(f"rm -rf {result_batch_path}")
+        shutil.rmtree(result_batch_path, ignore_errors=True)
+    # Path-valued arguments are shell-quoted so paths containing spaces work.
     command = f"""compareNgrams \
-                --output_path={params.output_path}/results \
+                --output_path={quote(f"{params.output_path}/results")} \
                 --threads={params.workers} \
-                --source_files={params.paths["source"]["ngram_output_path"]}/ngrams \
-                --target_files={params.paths["target"]["ngram_output_path"]}/ngrams \
-                --source_metadata={params.paths["source"]["metadata_path"]} \
-                --target_metadata={params.paths["target"]["metadata_path"]} \
+                --source_files={quote(f'{params.paths["source"]["ngram_output_path"]}/ngrams')} \
+                --target_files={quote(f'{params.paths["target"]["ngram_output_path"]}/ngrams')} \
+                --source_metadata={quote(params.paths["source"]["metadata_path"])} \
+                --target_metadata={quote(params.paths["target"]["metadata_path"])} \
                 --sort_by={params.matching_params["sort_by"]} \
                 --source_batch={params.matching_params["source_batch"]} \
                 --target_batch={params.matching_params["target_batch"]} \
@@ -213,24 +215,30 @@ async def run_alignment(params):
                 --merge_passages_on_ngram_distance={params.matching_params["merge_passages_on_ngram_distance"]} \
                 --passage_distance_multiplier={params.matching_params["passage_distance_multiplier"]} \
                 --debug={str(params.debug).lower()} \
-                --ngram_index={params.matching_params["ngram_index"]}"""
+                --ngram_index={quote(params.matching_params["ngram_index"])}"""
     results_file = f"{params.output_path}/results/alignments.jsonl.lz4"
     if os.path.exists(results_file):
-        os.system(f"rm -rf {results_file}")
+        os.remove(results_file)
     if params.debug:
         print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
     os.system(command)
     if len(os.listdir(result_batch_path)) == 1:
         filename = os.listdir(result_batch_path)[0]
-        os.system(f"mv {result_batch_path}/{filename} {results_file} && rm -rf {result_batch_path}")
+        shutil.move(os.path.join(result_batch_path, filename), results_file)
+        shutil.rmtree(result_batch_path, ignore_errors=True)
     else:
         print(
             "Merging alignments into one file (this may take a while)... ",
             end="",
             flush=True,
         )
-        merge_command = f"find {result_batch_path} -type f | sort -V | xargs lz4cat --rm | lz4 -q > {results_file}; rm -rf {result_batch_path}"
+        # NUL-delimited so batch paths containing spaces survive the pipeline.
+        merge_command = (
+            f"find {quote(result_batch_path)} -type f -print0 | sort -zV | "
+            f"xargs -0 lz4cat --rm | lz4 -q > {quote(results_file)}"
+        )
         os.system(merge_command)
+        shutil.rmtree(result_batch_path, ignore_errors=True)
         print("done.")
     count = get_count(os.path.join(params.output_path, "results/count.txt"))
 
@@ -471,12 +479,33 @@ async def main():
     elif params.matching_params["matching_algorithm"] == "vsa":
         await run_vsa_similarity(params)
 
-
 def run():
     """Sync entry point for console_scripts."""
     import asyncio
+    import platform
 
-    asyncio.run(main())
+    # macOS defaults to 256 open file descriptors, which is too low for
+    # PhiloLogic's sort/merge operations on large corpora; raise it for
+    # the duration of the run and restore it afterwards.
+    original_soft = None
+    hard = None
+    if platform.system() == "Darwin":
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft < 4096:
+            new_soft = min(hard, 10240)
+            resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+            original_soft = soft
+            print(f"[macOS] Raised open file limit: {soft} -> {new_soft}")
+    try:
+        asyncio.run(main())
+    finally:
+        if original_soft is not None:
+            import resource
+
+            resource.setrlimit(resource.RLIMIT_NOFILE, (original_soft, hard))
+            print(f"[macOS] Restored open file limit: {original_soft}")
 
 
 if __name__ == "__main__":

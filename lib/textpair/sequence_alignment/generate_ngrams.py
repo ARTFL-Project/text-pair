@@ -3,9 +3,13 @@
 
 import configparser
 import os
+import platform
+import shutil
 import sqlite3
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
+from shlex import quote
 from typing import Any, Dict, List, Tuple
 
 import orjson
@@ -91,22 +95,24 @@ class Ngrams:
             files = [file_path]
         else:
             files = glob(os.path.join(file_path, "*"))
-        os.system(f"rm -rf {output_path}/ngrams")
-        os.system(f"rm -rf {output_path}/ngrams_in_order")
-        os.system(f"mkdir -p {output_path}/ngrams")
+        # Use shutil/os rather than shelling out: unquoted paths passed to the
+        # shell break (dangerously, for rm -rf) on paths containing spaces.
+        shutil.rmtree(os.path.join(output_path, "ngrams"), ignore_errors=True)
+        shutil.rmtree(os.path.join(output_path, "ngrams_in_order"), ignore_errors=True)
+        os.makedirs(os.path.join(output_path, "ngrams"), exist_ok=True)
         if self.debug:
-            os.system(f"mkdir {output_path}/debug")
-        os.system(f"mkdir -p {output_path}/metadata")
-        os.system(f"mkdir -p {output_path}/index")
-        os.system(f"mkdir -p {output_path}/config")
-        os.system(f"mkdir -p {output_path}/temp")
-        os.system(f"mkdir -p {output_path}/ngrams_in_order")
+            os.makedirs(os.path.join(output_path, "debug"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "metadata"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "index"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "config"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "temp"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "ngrams_in_order"), exist_ok=True)
         self.input_path = os.path.abspath(os.path.join(files[0], "../../../"))
         self.output_path = output_path
         combined_metadata: dict[str, Any] = {}
 
         print("Generating ngrams...", flush=True)
-        preprocessor = PreProcessor(
+        preprocessor_kwargs = dict(
             language=self.config["language"],
             stemmer=self.config["stemmer"],
             lemmatizer=self.config["lemmatizer"],
@@ -122,23 +128,44 @@ class Ngrams:
             ascii=self.config["ascii"],
             post_processing_function=self.text_to_ngram,
             is_philo_db=True,
-            workers=workers,
             progress=False,
         )
         philo_type_count = self.count_texts(files[0])
-        with tqdm(total=philo_type_count, leave=False) as pbar:
-            for local_metadata in preprocessor.process_texts(files, progress=False):
-                combined_metadata.update(local_metadata)  # type: ignore
-                pbar.update()
+        if platform.system() == "Darwin":
+            # multiprocess.Pool defaults to fork() on macOS, and forking again right after the
+            # preceding PhiloLogic parse stage's own Pool tears down reliably deadlocks on modern
+            # macOS (bpo-33725). Keep text_preprocessing on its serial path (workers=1) and fan
+            # out across files ourselves with threads, which never fork.
+            preprocessor = PreProcessor(**preprocessor_kwargs, workers=1)
+            with tqdm(total=philo_type_count, leave=False) as pbar:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = [
+                        executor.submit(lambda f=f: list(preprocessor.process_texts([f], progress=False)))
+                        for f in files
+                    ]
+                    for future in as_completed(futures):
+                        for local_metadata in future.result():
+                            combined_metadata.update(local_metadata)  # type: ignore
+                            pbar.update()
+        else:
+            preprocessor = PreProcessor(**preprocessor_kwargs, workers=workers)
+            with tqdm(total=philo_type_count, leave=False) as pbar:
+                for local_metadata in preprocessor.process_texts(files, progress=False):
+                    combined_metadata.update(local_metadata)  # type: ignore
+                    pbar.update()
 
         print(
             "Saving ngram index and most common ngrams (this can take a while)...",
             flush=True,
         )
+        # The external-sort pipeline stays in the shell on purpose (sort -S does
+        # the heavy lifting), but every path is shell-quoted so output paths
+        # containing spaces work.
+        q_out = quote(output_path)
         os.system(
-            rf"""for i in {output_path}/temp/*; do cat $i; done | sort -T {output_path} -S 25% | uniq -c |
-            sort -rn -T {output_path} -S 25% | awk '{{print $2"\t"$3}}' | tee {output_path}/index/index.tab |
-            awk '{{print $2}}' > {output_path}/index/most_common_ngrams.txt"""
+            rf"""for i in {q_out}/temp/*; do cat "$i"; done | sort -T {q_out} -S 25% | uniq -c |
+            sort -rn -T {q_out} -S 25% | awk '{{print $2"\t"$3}}' | tee {q_out}/index/index.tab |
+            awk '{{print $2}}' > {q_out}/index/most_common_ngrams.txt"""
         )
 
         print("Saving metadata...")
@@ -147,7 +174,7 @@ class Ngrams:
         self.__dump_config(output_path)
 
         print("Cleaning up...")
-        os.system(f"rm -r {self.output_path}/temp")
+        shutil.rmtree(os.path.join(self.output_path, "temp"), ignore_errors=True)
 
     def text_to_ngram(self, text_object: Tokens) -> Dict[str, Any]:
         """Tranform doc to inverted index of ngrams"""
@@ -157,6 +184,9 @@ class Ngrams:
         for k, v in text_object.metadata.items():
             if not isinstance(v, str):
                 text_object.metadata[k] = str(v)
+        if "philo_id" not in text_object.metadata:
+            print(f"WARNING: skipping text object with no philo_id: {list(text_object.metadata.keys())}", flush=True)
+            return {}
         text_object_id = "_".join(
             text_object.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_type"]]]
         )

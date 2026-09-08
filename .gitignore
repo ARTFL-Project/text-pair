@@ -10734,3 +10734,16 @@ web-app/appConfig.json
 web-app/stats.json
 appConfig.json
 banality_finder.py.lprof
+
+# macOS
+.DS_Store
+
+# Backup files
+*.bak
+in-and-out/
+lib/core/src/compareNgrams/compareNgrams
+my_config.ini
+text_setup.sh
+
+# pyenv local (run by install_bare_metal_mac.sh) writes this; machine-local, and uv reads it too
+.python-version

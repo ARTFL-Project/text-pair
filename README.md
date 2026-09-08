@@ -1,4 +1,5 @@
-"Nous ne faisons que nous entregloser" Montaigne wrote famously in his <i>Essais</i>... Since all we do is glose over what's already been written, we may as well build a tool to detect these intertextual relationships...
+"Nous ne faisons que nous entregloser" Montaigne wrote famously in his <i>Essais</i>... Since all we do is gloss over what's already been written, we may as well build a tool to detect these intertextual relationships...
+
 
 # TextPAIR (Pairwise Alignment for Intertextual Relations)
 
@@ -29,6 +30,35 @@ The recommended install is to build your own Docker image and run TextPAIR insid
 
 If you do run into the issue where the web server does not respond, restart the web server with the following command:
 `/var/lib/text-pair/api_server/web_server.sh &`
+
+### macOS bare-metal installation (experimental)
+
+TextPAIR officially supports 64-bit Linux; the Docker method above is the recommended path for production use. For local development and research runs on a Mac (Apple Silicon or Intel), an opt-in installer sets up the full sequence-alignment pipeline natively, without Docker:
+
+```console
+./install_bare_metal_mac.sh
+```
+
+**Prerequisite:** [Homebrew](https://brew.sh). The script stops with instructions if it is missing. Everything else is handled automatically:
+
+-   installs `pyenv`, Go, and `lz4` via Homebrew if absent, then installs Python via pyenv (the newest 3.11.x by default; pass `-p 3.12` or an exact `-p 3.12.4` to choose another, anything 3.11 or later) and creates the environment TextPAIR runs in
+-   installs the TextPAIR Python package into that environment
+-   patches the installed PhiloLogic dependency's `line_count.py` (its non-lz4 code path is broken, and BSD `wc` output differs from GNU)
+-   builds a native `compareNgrams` binary from source with Go — the prebuilt binaries ship as Linux ELF executables and cannot run on macOS — and installs it to `/usr/local/bin` (this step asks for your password)
+-   seeds `~/.text-pair/global_settings.ini` and a starter `my_config.ini` (copied from `config/sa_config.ini`) if you do not already have them
+
+Then edit `my_config.ini` (at minimum, set `source_file_path` to your corpus directory) and run:
+
+```console
+textpair --config=my_config.ini --skip_web_app --output_path=/tmp/textpair-out --workers=8 my_run_name
+```
+
+Known limitations of the macOS path:
+
+-   Avoid corpus and output paths containing spaces (a PhiloLogic limitation; note that iCloud-synced folders live under a path with spaces — copy corpora to `/tmp` or similar first).
+-   The PostgreSQL credentials in `~/.text-pair/global_settings.ini` are only needed if you drop `--skip_web_app` to build the web application.
+
+This mode was developed for the corpus-scale alignment runs in Tarah Wheeler's (2026) DPhil thesis at the University of Oxford.
 
 ### Manual installation
 
