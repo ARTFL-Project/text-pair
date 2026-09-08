@@ -113,7 +113,7 @@ def delete_database(dbname: str) -> None:
         cursor.execute(f"DROP TABLE IF EXISTS {dbname}___groups")
         print("done")
         print(f"Deleting {dbname} web app directory...", end="")
-        shutil.rmtree(os.path.join(global_config['WEB_APP']['web_app_path'], dbname), ignore_errors=True)
+        shutil.rmtree(os.path.join(global_config["WEB_APP"]["web_app_path"], dbname), ignore_errors=True)
         print("done")
 
         print(f"\nDeletion of database {dbname} complete.")
@@ -478,6 +478,7 @@ async def main():
         await run_alignment(params)
     elif params.matching_params["matching_algorithm"] == "vsa":
         await run_vsa_similarity(params)
+
 
 def run():
     """Sync entry point for console_scripts."""

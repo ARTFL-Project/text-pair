@@ -141,14 +141,10 @@ echo -e "\nMoving global configuration into place..."
 sudo mkdir -p /etc/text-pair
 if [ ! -f /etc/text-pair/global_settings.ini ]
     then
-        sudo touch /etc/text-pair/global_settings.ini
-        echo "[WEB_APP]" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
-        echo "api_server = http://localhost/text-pair-api" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
-        echo "web_app_path =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
-        echo "[DATABASE]" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
-        echo "database_name =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
-        echo "database_user =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
-        echo "database_password =" | sudo tee -a /etc/text-pair/global_settings.ini > /dev/null
+        # Seeded from the template so config/global_settings.ini stays the single
+        # source of truth for the default settings. -m 644 is required: textpair
+        # runs unprivileged and parse_config.py reads this file as the invoking user.
+        sudo install -m 644 config/global_settings.ini /etc/text-pair/global_settings.ini
         echo "Make sure you create a PostgreSQL database with a user with read/write access to that database and configure /etc/text-pair/global_settings.ini accordingly."
 else
     echo "/etc/text-pair/global_settings.ini already exists, not modifying..."
