@@ -155,6 +155,9 @@ export default {
             availableAggregations: [],
             centralityMode: "degree",  // degree, eigenvector, or betweenness
             minThreshold: 10,
+            // The threshold the current data was fetched at. Edges below it were
+            // filtered out in SQL, so they cannot be revealed client-side.
+            fetchedThreshold: 10,
             layoutType: "communities",  // Default to community layout
             expandedNode: null,
             selectedNode: null,
@@ -270,6 +273,7 @@ export default {
             params.centrality = this.centralityMode;
             params.min_threshold = this.minThreshold;
             params.max_nodes = 10000;
+            this.fetchedThreshold = this.minThreshold;
 
             this.emitter.emit("searchArgsUpdate", {
                 counts: "",
@@ -692,6 +696,12 @@ export default {
         },
 
         applyThreshold() {
+            // Lowering the threshold needs a refetch: the API filters edges by
+            // weight in SQL, so what is below the fetched threshold was never sent.
+            if (this.minThreshold < this.fetchedThreshold) {
+                this.fetchNetworkData();
+                return;
+            }
             if (!this.graph) return;
 
             // Hide edges below threshold
@@ -732,6 +742,7 @@ export default {
             this.selectedNode = null;
             this.selectedEdge = null;
             this.minThreshold = 10;
+            this.fetchedThreshold = 10;
             this.fetchNetworkData();
         },
 

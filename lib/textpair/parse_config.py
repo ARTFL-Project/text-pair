@@ -39,7 +39,12 @@ class TextPairConfig:
         if cli_args["delete"] is False:
             self.__file_paths: dict[str, str] = {}
             self.text_parsing: dict[str, bool | str] = {}
-            self.preprocessing_params: dict[str, Any] = {"source": {}, "target": {}}
+            # embedding_model is read by web_loader and the graph even when the
+            # config's [PREPROCESSING] section omits it, as sa_config.ini does.
+            self.preprocessing_params: dict[str, Any] = {
+                "source": {"embedding_model": ""},
+                "target": {"embedding_model": ""},
+            }
             self.matching_params: defaultdict[str, Any] = defaultdict(str)
             self.matching_params["matching_algorithm"] = "sa"
             self.web_app_config: dict[str, Any] = {"skip_web_app": self.__cli_args["skip_web_app"]}
@@ -53,6 +58,24 @@ class TextPairConfig:
             self.passage_classification: dict[str, Any] = {
                 "classify_passage": False,
                 "classes": {},
+            }
+            self.graph_params: dict[str, Any] = {
+                "build_graph": False,
+                # "auto" means: sweep candidates and take the largest still-balanced
+                # partition. Resolved in textpair_graph, not here.
+                "min_cluster_size": "auto",
+                "cluster_selection_method": "eom",
+                # Empty means: inherit [PREPROCESSING] embedding_model. Resolved
+                # once the whole config has been read.
+                "embedding_model": "",
+                "merge_unthemed": True,
+                "label_model": "google/gemma-4-E2B-it",
+                "label_language": "French",
+                "spacy_model": "",
+                # Empty means: use the graph's own defaults, source_author and
+                # target_author.
+                "source_author_field": "",
+                "target_author_field": "",
             }
             self.__parse_config()
             self.__set_params()
@@ -70,6 +93,7 @@ class TextPairConfig:
             self.__cli_args["skip_web_app"] is False
             or self.__cli_args["update_db"] is True
             or self.__cli_args["load_only_web_app"] is True
+            or self.__cli_args["graph_only"] is True
         ):
             print("No web_app_path set under [WEB_APP] in global_settings.ini.", flush=True)
             print(f"""Searched: {", ".join(GLOBAL_CONFIG_SEARCH_PATHS)}""", flush=True)
@@ -200,6 +224,18 @@ class TextPairConfig:
                     if key in ("llm_context_window", "llm_concurrency_limit", "llm_port"):
                         value = int(value)
                     self.llm_params[key] = value
+        if config.has_section("GRAPH"):
+            for key, value in dict(config["GRAPH"]).items():
+                if not value:
+                    continue
+                match key:
+                    case "build_graph" | "merge_unthemed":
+                        self.graph_params[key] = value.lower() in ("yes", "true")
+                    case "min_cluster_size":
+                        # Kept as a string when "auto"; textpair_graph resolves it.
+                        self.graph_params[key] = value if value.lower() == "auto" else int(value)
+                    case _:
+                        self.graph_params[key] = value
         if config.has_section("PASSAGE_CLASSIFICATION"):
             for key, value in dict(config["PASSAGE_CLASSIFICATION"]).items():
                 if value:
@@ -218,6 +254,13 @@ class TextPairConfig:
             if not self.passage_classification.get("zero_shot_model"):
                 print("You need to set a value for zero_shot_model if classify_passage is enabled")
                 os._exit(1)
+
+        # [GRAPH] wins when set, otherwise inherit the vector-space alignment
+        # model so a VSA run need not name it twice.
+        if not self.graph_params.get("embedding_model"):
+            self.graph_params["embedding_model"] = self.preprocessing_params["source"].get(
+                "embedding_model", ""
+            )
 
         if not config["TEXT_SOURCES"]["target_file_path"]:
             self.source_against_source = True
@@ -324,6 +367,21 @@ def get_config() -> TextPairConfig:
     parser.add_argument(
         "--load_only_web_app",
         help="define whether to load results into a database and build a corresponding web app",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--graph_only",
+        help="rebuild the thematic graph from an existing alignment and publish it to the web "
+        "app, using the [GRAPH] settings in the config file. Skips parsing, alignment, the "
+        "database, and the web app build.",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--sweep",
+        help="with --graph_only, print the min_cluster_size candidate table and exit without "
+        "writing anything.",
         action="store_true",
         default=False,
     )

@@ -10,6 +10,7 @@ Requires-Dist: numpy
 Requires-Dist: scipy
 Requires-Dist: scikit-learn
 Requires-Dist: umap-learn
+Requires-Dist: pacmap
 Requires-Dist: hdbscan
 Requires-Dist: networkx
 Requires-Dist: sentence-transformers
@@ -20,6 +21,8 @@ Requires-Dist: orjson
 Requires-Dist: tqdm
 Requires-Dist: textpair_llm
 Requires-Dist: faiss-cpu
+Requires-Dist: transformers>=5.5
+Requires-Dist: accelerate
 Provides-Extra: cuda
 Requires-Dist: cuml-cu12==25.10.*; extra == "cuda"
 Requires-Dist: cugraph-cu12==25.10.*; extra == "cuda"

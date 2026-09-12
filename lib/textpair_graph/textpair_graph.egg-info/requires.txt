@@ -2,6 +2,7 @@ numpy
 scipy
 scikit-learn
 umap-learn
+pacmap
 hdbscan
 networkx
 sentence-transformers
@@ -12,6 +13,8 @@ orjson
 tqdm
 textpair_llm
 faiss-cpu
+transformers>=5.5
+accelerate
 
 [cuda]
 cuml-cu12==25.10.*

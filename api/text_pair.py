@@ -15,11 +15,12 @@ import numpy as np
 import orjson
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
 from pgvector.psycopg2 import register_vector
 from philologic.runtime.DB import DB
 from philologic.runtime.get_text import get_text_obj
+from psycopg2 import sql
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
@@ -1188,6 +1189,78 @@ def get_edge_details(request: Request):
     }
 
 
+# Registered with and without the trailing slash: a slashless request otherwise
+# hits the /{db_path} catch-all that serves web apps.
+@app.get("/alignment_by_rowid")
+@app.get("/alignment_by_rowid/")
+@app.get("/text-pair-api/alignment_by_rowid")
+@app.get("/text-pair-api/alignment_by_rowid/")
+def get_alignment_by_rowid(request: Request):
+    """One alignment by rowid, for the semantic map's click-through.
+
+    A dedicated route rather than reusing search_alignments with a rowid
+    filter: that endpoint is built for paged browsing, so it needs a direction
+    and an anchor it has no use for here, and it returns the embedding column.
+    The embedding is 13 KB of a 16.5 KB response and the client has no use for
+    it, since the map is already drawn from the precomputed projection.
+    """
+    _, _, other_args, _ = parse_args(request)
+    db_table = str(other_args.db_table)
+    try:
+        rowid = int(request.query_params["rowid"])
+    except (KeyError, TypeError, ValueError):
+        return {"error": "rowid is required and must be an integer"}
+
+    with psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    ) as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        columns = [
+            c
+            for c in get_pg_type(db_table)
+            if c != "embedding"
+        ]
+        if not columns:
+            return {"error": f"no such table: {db_table}"}
+        field_list = ", ".join(f'"{c}"' for c in columns)
+        cursor.execute(
+            sql.SQL("SELECT {fields} FROM {table} WHERE rowid = %s").format(
+                fields=sql.SQL(field_list), table=sql.Identifier(db_table)
+            ),
+            (rowid,),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        return {"error": f"no alignment with rowid {rowid}"}
+    return {"alignment": dict(row)}
+
+
+@app.get("/semantic_scatter_data/")
+@app.get("/text-pair-api/semantic_scatter_data/")
+def get_semantic_scatter_data(request: Request):
+    """Alignment-level scatter for the semantic map.
+
+    Serves the points HDBSCAN clustered, rather than aggregates of them: the
+    (author, cluster) view leaves a median of four nodes per cluster, which
+    cannot read as a cluster at any position, while at alignment level the
+    clustering is visually unambiguous.
+
+    Precomputed by textpair_graph, so this is a file read.
+    """
+    _, _, other_args, _ = parse_args(request)
+    db_name = str(other_args.db_table)
+    scatter_path = os.path.join(APP_PATH, db_name, "graph_data", "scatter_data.json")
+    if not os.path.exists(scatter_path):
+        return {
+            "error": f"Scatter data not found at {scatter_path}. "
+            "Re-run the graph build to generate it."
+        }
+    with open(scatter_path, "rb") as f:
+        return Response(content=f.read(), media_type="application/json")
+
+
 @app.get("/semantic_graph_data/")
 @app.get("/text-pair-api/semantic_graph_data/")
 def get_semantic_graph_data(request: Request):
@@ -1237,7 +1310,7 @@ def get_semantic_graph_data(request: Request):
         metadata = orjson.loads(f.read())
 
     n_clusters = metadata["n_clusters"]
-    total_clusters = metadata["total_clusters"]
+    total_clusters = metadata.get("total_clusters", metadata["n_clusters"])
     id_to_author = {v: k for k, v in author_to_id.items()}
 
     # Load cluster labels if available
@@ -1279,6 +1352,10 @@ def get_semantic_graph_data(request: Request):
             continue
 
         cluster_id = int(cluster_labels_modified[alignment_idx])
+        if cluster_id < 0:
+            # Unthemed: HDBSCAN called it noise and the graph was built without
+            # --merge-unthemed. Mirrors the same skip in build_precomputed_api_graph.
+            continue
         embedding_2d = embeddings_umap_2d[alignment_idx]
 
         for author_name in [source_author, target_author]:
@@ -1380,7 +1457,7 @@ def get_semantic_graph_data(request: Request):
                     }
                 )
 
-    # 2. Add centroid similarity edges (connect cluster anchors)
+    # Add centroid similarity edges (connect cluster anchors)
     # No filtering - send all edges to let ForceAtlas2 see full structure
     similarity_threshold = 0
 
@@ -1438,6 +1515,8 @@ def get_semantic_graph_data(request: Request):
 @app.get("/{db_path}/text-view")
 @app.get("/text-pair/{db_path}/network")
 @app.get("/{db_path}/network")
+@app.get("/text-pair/{db_path}/semantic")
+@app.get("/{db_path}/semantic")
 def index(db_path: str):
     """Return index.html which lists available POOLs"""
     with open(os.path.join(APP_PATH, db_path, "dist/index.html"), encoding="utf8") as html:

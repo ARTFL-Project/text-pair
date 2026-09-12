@@ -29,6 +29,12 @@ dependencies = [
     "lz4",
     "orjson",
     "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.1.2#egg=text_preprocessing",
+    # Lets spacy_model point at a transformer-based spaCy pipeline (e.g. the
+    # historic-French lemmatizer) for lemmatization and POS filtering during
+    # preprocessing. NOTE: this pins transformers below 4.53.3, which is the
+    # ceiling for this environment as a whole -- the same constraint that keeps
+    # the graph's own labeler and lemmatizer in separate venvs.
+    "spacy-transformers",
     "fastapi==0.110.3",
     "psycopg2; sys_platform != 'darwin'",
     "psycopg2-binary; sys_platform == 'darwin'",

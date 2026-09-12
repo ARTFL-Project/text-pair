@@ -23,34 +23,70 @@ from .sequence_alignment import (
 )
 
 
-def build_graph_and_labels(alignments_file: str, embedding_model: str, llm_params: dict) -> None:
+def build_graph_and_labels(
+    alignments_file: str,
+    embedding_model: str,
+    graph_params: dict | None = None,
+    preprocessing_params: dict | None = None,
+    sweep: bool = False,
+) -> None:
     """
-    Build graph model and optionally generate cluster labels.
-    Runs in separate graph environment via subprocess.
-    """
-    print("\n### Building graph model for alignment clustering ###")
+    Build the thematic identity graph and label its clusters.
 
-    # Path to graph environment python
+    Runs in the separate graph environment via subprocess, because UMAP/HDBSCAN
+    (and optionally the RAPIDS stack) conflict with the main pipeline's deps.
+
+    Labeling is c-TF-IDF term extraction followed by `topologic-labeler`; it
+    degrades to top-word descriptions when that tool is not installed, so no
+    LLM server configuration is required here.
+    """
+    graph_params = graph_params or {}
+    preprocessing_params = preprocessing_params or {}
+
+    if not embedding_model:
+        print(
+            "ERROR: [GRAPH] build_graph is enabled but no embedding model is set.\n"
+            "       Set embedding_model under [GRAPH], or under [PREPROCESSING] for a\n"
+            "       vector-space run to share it with alignment. Skipping the graph.",
+            file=sys.stderr,
+        )
+        return
+
+    print("\n### Building thematic identity graph ###", flush=True)
+
     graph_python = "/var/lib/text-pair/graph/bin/python"
     output_dir = os.path.dirname(alignments_file)
 
-    # Run graph building in separate environment
+    build_command = [
+        graph_python,
+        "-m",
+        "textpair_graph",
+        "build",
+        alignments_file,
+        output_dir,
+        "--model",
+        embedding_model,
+    ]
+    mcs = graph_params.get("min_cluster_size", "auto")
+    build_command += ["--min-cluster-size", str(mcs)]
+    build_command += ["--cluster-selection-method", graph_params.get("cluster_selection_method", "eom")]
+    if not graph_params.get("merge_unthemed", True):
+        build_command.append("--no-merge-unthemed")
+    for side in ("source", "target"):
+        field = graph_params.get(f"{side}_author_field")
+        if field:
+            build_command += [f"--{side}-author-field", field]
+    if sweep:
+        build_command.append("--sweep")
+
     try:
-        result = subprocess.run(
-            [
-                graph_python,
-                "-m",
-                "textpair_graph",
-                "build",
-                alignments_file,
-                output_dir,
-                "--model",
-                embedding_model,
-            ],
-            check=True,
-            capture_output=False,
-        )
-        print("✓ Graph model built successfully!")
+        # No success message here: the subprocess writes straight to this
+        # terminal and already reports it, with the output path.
+        subprocess.run(build_command, check=True, capture_output=False)
+        if sweep:
+            # --sweep prints the candidate table and writes nothing, so there is
+            # no clustering to label.
+            return
     except subprocess.CalledProcessError as e:
         print(
             f"ERROR: Graph model generation failed with exit code {e.returncode}",
@@ -62,34 +98,42 @@ def build_graph_and_labels(alignments_file: str, embedding_model: str, llm_param
         print("Install textpair_graph in a separate environment to enable graph functionality.")
         return
 
-    # Generate cluster labels using LLM (if configured)
-    if llm_params.get("llm_model"):
-        print("\n### Generating cluster labels with LLM ###")
-        graph_data_path = os.path.join(output_dir, "graph_data")
-        if os.path.exists(graph_data_path):
-            try:
-                result = subprocess.run(
-                    [
-                        graph_python,
-                        "-m",
-                        "textpair_graph",
-                        "label",
-                        graph_data_path,
-                        "--model",
-                        llm_params["llm_model"],
-                        "--context_window",
-                        str(llm_params["llm_context_window"]),
-                        "--port",
-                        str(llm_params["llm_port"]),
-                    ],
-                    check=True,
-                    capture_output=False,
-                )
-            except subprocess.CalledProcessError as e:
-                print(
-                    f"WARNING: Cluster labeling failed with exit code {e.returncode}",
-                    file=sys.stderr,
-                )
+    print("\n### Labeling clusters (c-TF-IDF + LLM) ###", flush=True)
+    graph_data_path = os.path.join(output_dir, "graph_data")
+    if not os.path.exists(graph_data_path):
+        print(f"WARNING: {graph_data_path} not found; skipping labeling.", file=sys.stderr)
+        return
+
+    label_command = [
+        graph_python,
+        "-m",
+        "textpair_graph",
+        "label",
+        graph_data_path,
+        "--alignments-file",
+        alignments_file,
+        "--model",
+        graph_params.get("label_model", "google/gemma-4-E2B-it"),
+        "--language",
+        graph_params.get("label_language", "French"),
+    ]
+    if preprocessing_params.get("language"):
+        label_command += ["--text-language", preprocessing_params["language"]]
+    # The graph's own spacy_model is the lemmatizer for term extraction, which is
+    # a different model from the alignment pipeline's language_model.
+    spacy_model = graph_params.get("spacy_model") or preprocessing_params.get("language_model")
+    if spacy_model:
+        label_command += ["--spacy-model", spacy_model]
+    if preprocessing_params.get("pos_to_keep"):
+        label_command += ["--pos-to-keep", ",".join(preprocessing_params["pos_to_keep"])]
+
+    try:
+        subprocess.run(label_command, check=True, capture_output=False)
+    except subprocess.CalledProcessError as e:
+        print(
+            f"WARNING: Cluster labeling failed with exit code {e.returncode}",
+            file=sys.stderr,
+        )
 
 
 def delete_database(dbname: str) -> None:
@@ -256,7 +300,9 @@ async def run_alignment(params):
             print(f"{filtered_passages} pairwise alignments have been filtered based on the phrase filter provided.")
             count = update_count(count, filtered_passages, params.output_path)
             print(f"{count} pairwise alignments remaining.")
-        elif params.matching_params["banality_auto_detection"] is True:
+        # Independent of the phrase filter above: the phrase list removes known
+        # boilerplate, auto-detection catches the rest.
+        if params.matching_params["banality_auto_detection"] is True:
             print("Running automatic banality detection...")
             banalities_found = banality_auto_detect(
                 results_file,
@@ -313,10 +359,13 @@ async def run_alignment(params):
     groups_file = merge_alignments(results_file, count)
 
     if params.web_app_config["skip_web_app"] is False:
-        # Graph pipeline disabled for now
-        # print(f"\n### Building Thematic Identity Graph model ###")
-        # embedding_model = params.preprocessing_params["source"]["embedding_model"]
-        # build_graph_and_labels(results_file, embedding_model, params.llm_params)
+        if params.graph_params.get("build_graph"):
+            build_graph_and_labels(
+                results_file,
+                params.graph_params.get("embedding_model", ""),
+                graph_params=params.graph_params,
+                preprocessing_params=params.preprocessing_params["source"],
+            )
 
         create_web_app(
             results_file,
@@ -394,9 +443,13 @@ async def run_vsa_similarity(params) -> None:
         output_file = os.path.join(params.output_path, "results/alignments.jsonl.lz4")
         count = get_count(os.path.join(params.output_path, "results/counts.txt"))
 
-        # Graph pipeline disabled for now
-        # embedding_model = params.preprocessing_params["source"]["embedding_model"]
-        # build_graph_and_labels(output_file, embedding_model, params.llm_params)
+        if params.graph_params.get("build_graph"):
+            build_graph_and_labels(
+                output_file,
+                params.graph_params.get("embedding_model", ""),
+                graph_params=params.graph_params,
+                preprocessing_params=params.preprocessing_params["source"],
+            )
 
         create_web_app(
             output_file,
@@ -451,6 +504,29 @@ async def main():
             groups_file=groups_file,
             store_banalities=params.matching_params["store_banalities"],
         )
+    elif params.graph_only is True:
+        # Rebuild the graph from an existing alignment and publish it, using the
+        # same [GRAPH] settings as a full run so the two cannot drift apart.
+        alignments_file = params.file or os.path.join(params.output_path, "results", "alignments.jsonl.lz4")
+        if not os.path.exists(alignments_file):
+            print(f"ERROR: no alignment file at {alignments_file}", file=sys.stderr)
+            print("Pass --file to point at one.", file=sys.stderr)
+            sys.exit(1)
+        build_graph_and_labels(
+            alignments_file,
+            params.graph_params.get("embedding_model", ""),
+            graph_params=params.graph_params,
+            preprocessing_params=params.preprocessing_params.get("source", {}),
+            sweep=params.sweep,
+        )
+        if params.sweep is False and params.skip_web_app is False:
+            from .web_loader import publish_graph_data
+
+            db_dir = os.path.join(params.web_app_config["web_application_directory"], params.dbname)
+            if os.path.isdir(db_dir):
+                publish_graph_data(os.path.join(os.path.dirname(alignments_file), "graph_data"), db_dir)
+            else:
+                print(f"Note: no web app at {db_dir}; graph built but not published.")
     elif params.only_web_app is True:
         count = get_count(os.path.join(params.output_path, "results/count.txt"))
         groups_file = None

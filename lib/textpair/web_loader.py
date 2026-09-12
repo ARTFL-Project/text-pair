@@ -2,9 +2,11 @@
 """Web loading module"""
 
 import json
+import glob
 import os
 import re
 import shutil
+import sys
 from collections import OrderedDict
 from typing import Any
 
@@ -196,10 +198,13 @@ def copy_data(params, direction):
     )
     with open(params.paths[direction]["metadata_path"], encoding="utf8") as metadata_file:
         metadata = json.load(metadata_file)
-    for file in metadata.values():
-        os.system(
-            f"cp {file['filename']} {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/TEXT/"
-        )
+    # Deduplicated: metadata has one entry per text object, not per file, so
+    # below the doc object type copying per entry recopies whole files repeatedly.
+    text_dir = os.path.join(
+        params.web_app_config["web_application_directory"], params.dbname, f"{direction}_data", "data", "TEXT"
+    )
+    for filename in dict.fromkeys(file["filename"] for file in metadata.values()):
+        shutil.copy(filename, text_dir)
     os.system(
         f"cp {params.output_path}/{direction}/toms.db {params.web_app_config['web_application_directory']}/{params.dbname}/{direction}_data/data/"
     )
@@ -323,28 +328,59 @@ def load_db(
     sbert_dim = None
     alignments_dir = os.path.dirname(file)
 
-    # Get embedding model name from params or use default
-    if textpair_params and hasattr(textpair_params, "preprocessing_params"):
-        embedding_model = textpair_params.preprocessing_params["source"]["embedding_model"]
-    else:
-        embedding_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # The cache directory is named after whichever model produced it, which may
+    # be [GRAPH] embedding_model rather than [PREPROCESSING]. Try the configured
+    # names, then any *_embeddings directory present.
+    candidates = []
+    if textpair_params is not None:
+        graph_params = getattr(textpair_params, "graph_params", None) or {}
+        if graph_params.get("embedding_model"):
+            candidates.append(graph_params["embedding_model"])
+        if hasattr(textpair_params, "preprocessing_params"):
+            configured = textpair_params.preprocessing_params.get("source", {}).get("embedding_model")
+            if configured:
+                candidates.append(configured)
+    candidates.append("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
-    # Convert model name to safe directory name (replace / with _)
-    safe_model_name = embedding_model.replace("/", "_")
-    embeddings_cache_path = os.path.join(alignments_dir, f"{safe_model_name}_embeddings", "passage_embeddings.dat")
-    embeddings_meta_path = os.path.join(alignments_dir, f"{safe_model_name}_embeddings", "metadata.json")
+    embeddings_cache_path = embeddings_meta_path = None
+    for model_name in candidates:
+        directory = os.path.join(alignments_dir, f"{model_name.replace('/', '_')}_embeddings")
+        if os.path.isdir(directory):
+            embeddings_cache_path = os.path.join(directory, "passage_embeddings.dat")
+            embeddings_meta_path = os.path.join(directory, "metadata.json")
+            break
+    if embeddings_cache_path is None:
+        found = sorted(glob.glob(os.path.join(alignments_dir, "*_embeddings")))
+        directory = found[0] if found else os.path.join(alignments_dir, "_embeddings")
+        embeddings_cache_path = os.path.join(directory, "passage_embeddings.dat")
+        embeddings_meta_path = os.path.join(directory, "metadata.json")
 
     if os.path.exists(embeddings_cache_path) and os.path.exists(embeddings_meta_path):
         with open(embeddings_meta_path, "rb") as f:
             metadata = orjson.loads(f.read())
         sbert_dim = metadata["sbert_dim"]
         alignment_counts = metadata["alignment_counts"]
-        embeddings_memmap = np.memmap(
-            embeddings_cache_path,
-            dtype="float32",
-            mode="r",
-            shape=(alignment_counts, sbert_dim),
-        )
+
+        # The cache is keyed only by model name, so an earlier run's cache sits
+        # where this one looks. Row n is alignment n, so a count mismatch means
+        # every embedding may be the wrong passage, not just the overflow.
+        with lz4.frame.open(file) as input_file:
+            file_counts = sum(1 for _ in input_file)
+        if file_counts != alignment_counts:
+            print(
+                f"WARNING: embeddings cache in {os.path.basename(os.path.dirname(embeddings_cache_path))} "
+                f"describes {alignment_counts:,} alignments but this file has {file_counts:,}. "
+                "It belongs to a different run; loading without embeddings. Re-run the graph "
+                "build to regenerate it.",
+                file=sys.stderr,
+            )
+        else:
+            embeddings_memmap = np.memmap(
+                embeddings_cache_path,
+                dtype="float32",
+                mode="r",
+                shape=(alignment_counts, sbert_dim),
+            )
 
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = DEFAULT_FIELDS
@@ -588,6 +624,27 @@ def set_up_app(web_config, db_path, table, algorithm):
     os.system(f"""cd {db_path}; npm install --silent; npm run build > "/dev/null" 2>&1;""")
 
 
+def publish_graph_data(source_graph_data: str, db_dir: str) -> bool:
+    """Put a graph_data directory where the API reads it.
+
+    A full replace rather than an overlay: theme count and author mapping
+    change between runs, so files from a previous build (an anchor_positions
+    array sized for a different number of themes, say) would otherwise linger
+    and be read alongside the new ones.
+    """
+    if not os.path.exists(source_graph_data):
+        print(
+            f"Note: No graph data found at {source_graph_data}. Clustering visualization will not be available."
+        )
+        return False
+    dest_graph_data = os.path.join(db_dir, "graph_data")
+    print(f"Copying graph data to web app directory: {dest_graph_data}")
+    if os.path.exists(dest_graph_data):
+        shutil.rmtree(dest_graph_data)
+    shutil.copytree(source_graph_data, dest_graph_data)
+    return True
+
+
 def create_web_app(
     file,
     source_metadata,
@@ -651,16 +708,7 @@ def create_web_app(
     if config_file and os.path.exists(config_file):
         shutil.copy2(config_file, os.path.join(db_dir, f"{table}_config.ini"))
 
-    # Copy graph_data directory to web app for API access
-    source_graph_data = os.path.join(os.path.dirname(file), "graph_data")
-    if os.path.exists(source_graph_data):
-        dest_graph_data = os.path.join(db_dir, "graph_data")
-        print(f"Copying graph data to web app directory: {dest_graph_data}")
-        if os.path.exists(dest_graph_data):
-            shutil.rmtree(dest_graph_data)
-        shutil.copytree(source_graph_data, dest_graph_data)
-    else:
-        print(f"Note: No graph data found at {source_graph_data}. Clustering visualization will not be available.")
+    publish_graph_data(os.path.join(os.path.dirname(file), "graph_data"), db_dir)
 
     if textpair_params.is_philo_db:
         # Stage db.locals.py and toms.db from the existing PhiloLogic DB into output_path

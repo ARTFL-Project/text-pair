@@ -3,7 +3,11 @@ pyproject.toml
 textpair_graph/__init__.py
 textpair_graph/__main__.py
 textpair_graph/build_graph_model.py
-textpair_graph/label_clusters.py
+textpair_graph/cluster_labeling.py
+textpair_graph/lemmatize_worker.py
+textpair_graph/passage_expansion.py
+textpair_graph/scatter_data.py
+textpair_graph/topic_labeler.py
 textpair_graph.egg-info/PKG-INFO
 textpair_graph.egg-info/SOURCES.txt
 textpair_graph.egg-info/dependency_links.txt

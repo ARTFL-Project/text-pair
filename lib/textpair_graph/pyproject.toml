@@ -18,6 +18,8 @@ dependencies = [
     "scipy",
     "scikit-learn",
     "umap-learn",
+    # LocalMAP, for the 2D display projection.
+    "pacmap",
     "hdbscan",
     "networkx",
     "sentence-transformers",
@@ -28,7 +30,18 @@ dependencies = [
     "tqdm",
     "textpair_llm",
     "faiss-cpu",
+    # For the vendored cluster labeler (textpair_graph.topic_labeler), which runs
+    # a small instruction-tuned model in this environment. The floor is set by the
+    # checkpoint rather than the code: google/gemma-4-E2B-it reports
+    # model_type "gemma4" and is refused outright by transformers < 5.5.
+    "transformers>=5.5",
+    "accelerate",
 ]
+
+# Term-extraction normalization deliberately lives in a separate environment
+# (/var/lib/text-pair/lemmatizer, built by install.sh). Transformer spaCy models
+# need spacy-transformers, which pins transformers<4.53.3, while this
+# environment needs >=5.5 for sentence-transformers and the label model.
 
 [project.optional-dependencies]
 cuda = [

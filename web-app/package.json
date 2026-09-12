@@ -21,6 +21,7 @@
         "graphology-layout": "^0.6.1",
         "graphology-layout-forceatlas2": "^0.10.1",
         "graphology-layout-noverlap": "^0.4.2",
+        "regl-scatterplot": "^1.16.0",
         "sigma": "^3.0.0",
         "tiny-emitter": "^2.1.0",
         "velocity-animate": "^1.5.2",

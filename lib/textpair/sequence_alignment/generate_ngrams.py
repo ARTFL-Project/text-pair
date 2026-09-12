@@ -49,6 +49,7 @@ class Ngrams:
         modernize=True,
         ascii=False,
         pos_to_keep=[],
+        language_model="",
         debug=False,
         **kwargs,
     ):
@@ -68,6 +69,10 @@ class Ngrams:
             "text_object_type": text_object_type,
             "pos_to_keep": pos_to_keep,
             "ascii": ascii,
+            # spaCy pipeline used for lemmatization and POS tagging. Without it
+            # `lemmatizer = spacy` and `pos_to_keep` have no effect, and the GPU
+            # is never touched, since there is no model to put on it.
+            "language_model": language_model,
         }
         self.debug = debug
         self.input_path = ""
@@ -121,6 +126,7 @@ class Ngrams:
             strip_numbers=self.config["numbers"],
             stopwords=self.config["stopwords"],
             pos_to_keep=self.config["pos_to_keep"],
+            language_model=self.config["language_model"] or None,
             ngrams=self.config["ngram"],
             ngram_gap=self.config["gap"],
             text_object_type=self.config["text_object_type"],
@@ -158,14 +164,16 @@ class Ngrams:
             "Saving ngram index and most common ngrams (this can take a while)...",
             flush=True,
         )
-        # The external-sort pipeline stays in the shell on purpose (sort -S does
-        # the heavy lifting), but every path is shell-quoted so output paths
-        # containing spaces work.
+        # Shell pipeline for sort -S, with every path quoted for spaces. awk
+        # splits on tab, not whitespace: an ngram can itself contain spaces, and
+        # splitting on those drops the hash from every line.
         q_out = quote(output_path)
         os.system(
             rf"""for i in {q_out}/temp/*; do cat "$i"; done | sort -T {q_out} -S 25% | uniq -c |
-            sort -rn -T {q_out} -S 25% | awk '{{print $2"\t"$3}}' | tee {q_out}/index/index.tab |
-            awk '{{print $2}}' > {q_out}/index/most_common_ngrams.txt"""
+            sort -rn -T {q_out} -S 25% |
+            awk -F'\t' '{{sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", $1); print $1"\t"$2}}' |
+            tee {q_out}/index/index.tab |
+            awk -F'\t' '{{print $2}}' > {q_out}/index/most_common_ngrams.txt"""
         )
 
         print("Saving metadata...")
