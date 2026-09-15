@@ -290,6 +290,7 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
         same_corpus = False
     else:
         target_batches = source_batches                               # main.go:384
+        target_meta = source_meta                                     # main.go:382
         same_corpus = True
 
     batch_path = os.path.join(output_path, "result_batches")
