@@ -216,17 +216,21 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                 pool.submit(np.ascontiguousarray(rows),
                             _jobs(rows, dups, docs, n_targets, target_base, threads,
                                   same_array))
-            if dups.shape[0]:
-                for i in np.lexsort((dups[:, 1], dups[:, 0])):
-                    duplicate_rows.append(output.duplicate_row(metas[int(dups[i, 0])],
-                                                               metas[int(dups[i, 1])],
-                                                               float(percents[i])))
+            for i in range(dups.shape[0]):
+                source_slot, target_slot = int(dups[i, 0]), int(dups[i, 1])
+                duplicate_rows.append((source_slot, target_slot,
+                                       output.duplicate_row(metas[source_slot],
+                                                            metas[target_slot],
+                                                            float(percents[i]))))
 
         pipeline.run_match(src_off, per_source, em_tgt, em_sslot, em_tslot, key_off, off_all,
                            idx_all, sb_all, eb_all, threads, params, on_result, progress)
     finally:
         pool.close()
-    return count, duplicate_rows
+    # Go appends duplicates in goroutine completion order, which is not reproducible;
+    # sort by document slot so the file is.
+    duplicate_rows.sort()
+    return count, [row for _, _, row in duplicate_rows]
 
 
 def _merge_batch(chunk_dir, batch_file):
