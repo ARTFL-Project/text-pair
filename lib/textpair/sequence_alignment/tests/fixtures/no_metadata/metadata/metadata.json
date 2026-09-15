@@ -1,0 +1,22 @@
+{
+  "2": {
+    "title": "Fixture 2",
+    "author": "Author 2",
+    "year": "1751",
+    "philo_id": "2 0 0 0 0 0 0",
+    "filename": "text/2.txt",
+    "start_byte": "0",
+    "end_byte": "260",
+    "word_count": "10"
+  },
+  "3": {
+    "title": "Fixture 3",
+    "author": "Author 3",
+    "year": "1752",
+    "philo_id": "3 0 0 0 0 0 0",
+    "filename": "text/3.txt",
+    "start_byte": "0",
+    "end_byte": "260",
+    "word_count": "10"
+  }
+}
