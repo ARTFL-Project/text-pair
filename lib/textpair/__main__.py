@@ -186,6 +186,50 @@ def update_count(count: int, to_remove: int, path: str) -> int:
     return count
 
 
+def run_python_aligner(params) -> None:
+    """Run the Python sequence aligner in-process with the same parameters as the binary."""
+    from .sequence_alignment.aligner import align
+
+    print("Using the Python aligner.", flush=True)
+    align(
+        f'{params.paths["source"]["ngram_output_path"]}/ngrams',
+        params.paths["source"]["metadata_path"],
+        f"{params.output_path}/results",
+        target_files=f'{params.paths["target"]["ngram_output_path"]}/ngrams',
+        target_metadata=params.paths["target"]["metadata_path"],
+        threads=params.workers,
+        sort_by=params.matching_params["sort_by"],
+        source_batch=params.matching_params["source_batch"],
+        target_batch=params.matching_params["target_batch"],
+        matching_window_size=params.matching_params["matching_window_size"],
+        max_gap=params.matching_params["max_gap"],
+        flex_gap=params.matching_params["flex_gap"],
+        minimum_matching_ngrams=params.matching_params["minimum_matching_ngrams"],
+        minimum_matching_ngrams_in_window=params.matching_params["minimum_matching_ngrams_in_window"],
+        minimum_matching_ngrams_in_docs=params.matching_params["minimum_matching_ngrams_in_docs"],
+        context_size=params.matching_params["context_size"],
+        duplicate_threshold=params.matching_params["duplicate_threshold"],
+        merge_passages_on_byte_distance=params.matching_params["merge_passages_on_byte_distance"],
+        merge_passages_on_ngram_distance=params.matching_params["merge_passages_on_ngram_distance"],
+        passage_distance_multiplier=params.matching_params["passage_distance_multiplier"],
+        debug=params.debug,
+        ngram_index=params.matching_params["ngram_index"],
+    )
+
+
+def get_aligner(params) -> str:
+    """Which sequence aligner to run: the compareNgrams binary or the Python port.
+
+    TEXTPAIR_ALIGNER wins over the config's [MATCHING] aligner key, which defaults to go.
+    """
+    aligner = (os.environ.get("TEXTPAIR_ALIGNER") or params.matching_params["aligner"] or "go")
+    aligner = aligner.strip().lower()
+    if aligner not in ("go", "python"):
+        print(f"Unknown aligner '{aligner}': set aligner to go or python.", file=sys.stderr)
+        os._exit(1)
+    return aligner
+
+
 async def run_alignment(params):
     """Main function to start sequence alignment"""
     if params.only_align is False:
@@ -236,8 +280,14 @@ async def run_alignment(params):
     result_batch_path = os.path.join(params.output_path, "results/result_batches")
     if os.path.exists(result_batch_path):
         shutil.rmtree(result_batch_path, ignore_errors=True)
-    # Path-valued arguments are shell-quoted so paths containing spaces work.
-    command = f"""compareNgrams \
+    results_file = f"{params.output_path}/results/alignments.jsonl.lz4"
+    if os.path.exists(results_file):
+        os.remove(results_file)
+    if get_aligner(params) == "python":
+        run_python_aligner(params)
+    else:
+        # Path-valued arguments are shell-quoted so paths containing spaces work.
+        command = f"""compareNgrams \
                 --output_path={quote(f"{params.output_path}/results")} \
                 --threads={params.workers} \
                 --source_files={quote(f'{params.paths["source"]["ngram_output_path"]}/ngrams')} \
@@ -260,12 +310,9 @@ async def run_alignment(params):
                 --passage_distance_multiplier={params.matching_params["passage_distance_multiplier"]} \
                 --debug={str(params.debug).lower()} \
                 --ngram_index={quote(params.matching_params["ngram_index"])}"""
-    results_file = f"{params.output_path}/results/alignments.jsonl.lz4"
-    if os.path.exists(results_file):
-        os.remove(results_file)
-    if params.debug:
-        print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
-    os.system(command)
+        if params.debug:
+            print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
+        os.system(command)
     if len(os.listdir(result_batch_path)) == 1:
         filename = os.listdir(result_batch_path)[0]
         shutil.move(os.path.join(result_batch_path, filename), results_file)
