@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 
@@ -201,7 +202,8 @@ def main(argv=None):
     parser.add_argument("--target-files", default="")
     parser.add_argument("--target-metadata", default="")
     parser.add_argument("--threads", type=int, default=4)
-    parser.add_argument("--workdir", default="./aligner_comparison")
+    parser.add_argument("--workdir", help="both aligners' output trees, never in the repo",
+                        default=os.path.join(tempfile.gettempdir(), "textpair_aligner_check"))
     parser.add_argument("--go-results", default="", help="reuse an existing Go output tree")
     parser.add_argument("--python-results", default="",
                         help="reuse an existing Python output tree")
