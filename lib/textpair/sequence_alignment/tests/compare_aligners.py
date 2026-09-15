@@ -171,9 +171,12 @@ def run_pair(args, params):
     workdir = os.path.abspath(args.workdir)
     os.makedirs(workdir, exist_ok=True)
     py_dir = os.path.join(workdir, "python")
-    shutil.rmtree(py_dir, ignore_errors=True)
+    if not args.python_results:
+        shutil.rmtree(py_dir, ignore_errors=True)
     env = dict(os.environ, OPENBLAS_NUM_THREADS="1")
     env.setdefault("NUMBA_CACHE_DIR", os.path.join(workdir, "numba_cache"))
+    if args.python_results:
+        py_dir = os.path.abspath(args.python_results)
     if args.go_results:
         go_dir = os.path.abspath(args.go_results)
     else:
@@ -182,10 +185,11 @@ def run_pair(args, params):
         print(f"--- {GO_BINARY} -> {go_dir}", flush=True)
         subprocess.run([GO_BINARY] + flags(args, params, go_dir), cwd=args.run_cwd,
                        check=True, stdout=subprocess.DEVNULL)
-    print(f"--- python aligner -> {py_dir}", flush=True)
-    subprocess.run([sys.executable, "-m", "textpair.sequence_alignment.aligner"]
-                   + flags(args, params, py_dir), cwd=args.run_cwd, check=True, env=env,
-                   stdout=subprocess.DEVNULL)
+    if not args.python_results:
+        print(f"--- python aligner -> {py_dir}", flush=True)
+        subprocess.run([sys.executable, "-m", "textpair.sequence_alignment.aligner"]
+                       + flags(args, params, py_dir), cwd=args.run_cwd, check=True, env=env,
+                       stdout=subprocess.DEVNULL)
     return go_dir, py_dir
 
 
@@ -199,6 +203,8 @@ def main(argv=None):
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--workdir", default="./aligner_comparison")
     parser.add_argument("--go-results", default="", help="reuse an existing Go output tree")
+    parser.add_argument("--python-results", default="",
+                        help="reuse an existing Python output tree")
     parser.add_argument("--run-cwd", default=None, help="cwd for both aligners")
     parser.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
                         help="matching parameter passed to both aligners")
@@ -219,7 +225,7 @@ def main(argv=None):
             fixture.target_files = fixture.target_metadata = ""
             fixture.run_cwd = os.path.join(here, "fixtures", name)
             fixture.workdir = os.path.join(os.path.abspath(args.workdir), name)
-            fixture.go_results = ""
+            fixture.go_results = fixture.python_results = ""
             result = compare(*run_pair(fixture, params), args.compare_workers)
             print(json.dumps(result, indent=1, ensure_ascii=False))
             if not result["PASS"]:
