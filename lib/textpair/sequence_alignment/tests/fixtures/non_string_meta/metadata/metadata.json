@@ -1,0 +1,39 @@
+{
+  "1": {
+    "title": "Fixture 1",
+    "author": null,
+    "year": "1750",
+    "philo_id": "1 0 0 0 0 0 0",
+    "filename": "text/1.txt",
+    "start_byte": "0",
+    "end_byte": "260",
+    "word_count": 1234,
+    "keywords": [
+      "a",
+      "b"
+    ]
+  },
+  "2": {
+    "title": 42,
+    "author": "Author 2",
+    "year": "1751",
+    "philo_id": "2 0 0 0 0 0 0",
+    "filename": "text/2.txt",
+    "start_byte": "0",
+    "end_byte": "260",
+    "word_count": "10",
+    "extent": {
+      "pages": 12
+    }
+  },
+  "3": {
+    "title": "Fixture 3",
+    "author": true,
+    "year": "1752",
+    "philo_id": "3 0 0 0 0 0 0",
+    "filename": "text/3.txt",
+    "start_byte": "0",
+    "end_byte": "260",
+    "word_count": "10"
+  }
+}
