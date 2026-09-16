@@ -16,6 +16,13 @@ for byte), count.txt, duplicate_files.csv as a sorted multiset, and alignment_co
 apart from outputPath and the stale prebuilt binary's "<invalid reflect.Value>" lines.
 Exits non-zero on any difference and prints the first record that differs. --go-results
 reuses an existing Go run instead of running the binary again.
+
+A mismatch is EXPECTED on any corpus where a document's sort value does not parse as an
+integer. The Python aligner orders documents by a total sort key; the Go binary's
+comparator (main.go:232-297) falls back to a string compare of document IDs there and is
+not transitive, so the two orders differ, source and target swap for the pairs involved,
+and the alignments differ with them. The run reports this as mismatch_expected, and
+check_direction_flips.py is what validates such a corpus instead.
 """
 import argparse
 import glob
@@ -31,6 +38,10 @@ from concurrent.futures import ProcessPoolExecutor
 
 import lz4.frame
 import orjson
+
+from textpair.sequence_alignment.aligner import docorder
+from textpair.sequence_alignment.aligner.gotext import load_metadata
+from textpair.sequence_alignment.tests.check_direction_flips import flip
 
 FIXTURES = ("no_byte_range", "non_string_meta", "missing_text", "no_metadata")
 GO_BINARY = os.environ.get("TEXTPAIR_GO_ALIGNER", "compareNgrams")
@@ -89,13 +100,59 @@ def read_text(path):
         return handle.read()
 
 
-def compare(go_dir, py_dir, workers):
+def unparseable_sort_values(ngrams_dir, metadata_path, sort_by, run_cwd):
+    """Documents the Go comparator cannot order transitively: those whose sort value does
+    not parse as an integer, and those with no metadata entry at all."""
+    if not ngrams_dir or not metadata_path or not sort_by:
+        return None
+    root = run_cwd or "."
+    metadata = load_metadata(os.path.join(root, metadata_path))
+    if docorder.sort_mode(metadata, sort_by) != docorder.NUMERIC:
+        return None
+    doc_ids = [docorder.doc_id_of(name)
+               for name in os.listdir(os.path.join(root, ngrams_dir))]
+    return sum(docorder.parse_int(metadata.get(doc, {}).get(sort_by, "")) is None
+               for doc in doc_ids)
+
+
+def sort_expectation(args, params):
+    sort_by = params.get("sort_by", "year")
+    counts = [unparseable_sort_values(files, metadata, sort_by, args.run_cwd)
+              for files, metadata in ((args.source_files, args.source_metadata),
+                                      (args.target_files, args.target_metadata))]
+    return {"sort_by": sort_by,
+            "n_unparseable_sort_values": [count for count in counts if count is not None],
+            "mismatch_expected": any(count for count in counts)}
+
+
+def mirrors(go_chunks, py_chunks, only_go, only_py):
+    """Whether the records unique to each run are the other's with source and target
+    exchanged. True means the two runs found the same alignments in opposite directions;
+    the matcher is asymmetric, so that is not guaranteed even when the only difference is
+    the document order."""
+    found = {"go": set(), "python": set()}
+    for label, source, wanted in (("go", go_chunks, only_go),
+                                  ("python", py_chunks, only_py)):
+        for name in sorted(source):
+            with lz4.frame.open(source[name], "rb") as handle:
+                for line in handle.read().splitlines():
+                    if line.strip() and digest(line) in wanted:
+                        record = orjson.loads(line)
+                        if label == "go":
+                            record = flip(record)
+                        found[label].add(
+                            hashlib.sha1(orjson.dumps(record, option=CANON)).digest())
+    return found["go"] == found["python"]
+
+
+def compare(go_dir, py_dir, workers, expectation=None):
     go_chunks, py_chunks = chunks(go_dir), chunks(py_dir)
-    result = {
+    result = dict(expectation or {})
+    result.update({
         "n_chunks_go": len(go_chunks),
         "n_chunks_python": len(py_chunks),
         "chunk_names_identical": sorted(go_chunks) == sorted(py_chunks),
-    }
+    })
     if not result["chunk_names_identical"]:
         result["chunks_only_go"] = sorted(set(go_chunks) - set(py_chunks))[:20]
         result["chunks_only_python"] = sorted(set(py_chunks) - set(go_chunks))[:20]
@@ -127,6 +184,9 @@ def compare(go_dir, py_dir, workers):
         result["records_only_go"] = len(only_go)
         result["records_only_python"] = len(only_py)
         result["first_difference"] = first_difference(go_chunks, py_chunks, only_go, only_py)
+        if result.get("mismatch_expected"):
+            result["records_identical_as_direction_flips"] = mirrors(
+                go_chunks, py_chunks, only_go, only_py)
 
     go_count = read_text(os.path.join(go_dir, "count.txt"))
     py_count = read_text(os.path.join(py_dir, "count.txt"))
@@ -160,6 +220,11 @@ def compare(go_dir, py_dir, workers):
                                                  "count_txt_identical",
                                                  "duplicates_identical_multiset",
                                                  "config_identical"))
+    if not result["PASS"] and result.get("mismatch_expected"):
+        result["note"] = ("EXPECTED: some of this corpus' sort values do not parse, so "
+                          "the two aligners order documents differently by design; chunk "
+                          "names, and the alignments involving those documents, differ "
+                          "with it. check_direction_flips.py characterises the change.")
     return result
 
 
@@ -231,7 +296,7 @@ def main(argv=None):
 
     if args.fixtures:
         here = os.path.dirname(os.path.abspath(__file__))
-        failures = []
+        failures, expected = [], []
         for name in FIXTURES:
             print(f"\n=== fixture {name} ===", flush=True)
             fixture = argparse.Namespace(**vars(args))
@@ -248,16 +313,27 @@ def main(argv=None):
                 shutil.rmtree(fixture.python_source_files, ignore_errors=True)
                 convert_directory(os.path.join(fixture.run_cwd, "ngrams"),
                                   fixture.python_source_files, args.threads)
-            result = compare(*run_pair(fixture, params), args.compare_workers)
+            result = compare(*run_pair(fixture, params), args.compare_workers,
+                             sort_expectation(fixture, params))
             print(json.dumps(result, indent=1, ensure_ascii=False))
-            if not result["PASS"]:
+            if result["PASS"]:
+                continue
+            if result.get("records_identical_as_direction_flips"):
+                expected.append(name)
+            else:
                 failures.append(name)
-        print("\nFAILED fixtures:" if failures else "\nAll fixtures PASS", *failures)
+        if expected:
+            print("\nEXPECTED mismatches, records are exact direction flips:", *expected)
+        if failures:
+            print("\nFAILED fixtures:", *failures)
+        else:
+            print("\nNo fixture failed")
         return 1 if failures else 0
 
     if not args.source_files or not args.source_metadata:
         parser.error("--source-files and --source-metadata are required")
-    result = compare(*run_pair(args, params), args.compare_workers)
+    result = compare(*run_pair(args, params), args.compare_workers,
+                     sort_expectation(args, params))
     print(json.dumps(result, indent=1, ensure_ascii=False))
     return 0 if result["PASS"] else 1
 
