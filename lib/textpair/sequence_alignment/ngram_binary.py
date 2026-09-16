@@ -22,8 +22,8 @@ Ordering is load-bearing, since the point of the format is to let the loader ski
 sort. `keys` is ascending as a *signed* int32, which is what `loader.build_csr_sorted`
 produces from JSON (np.argsort over the int32 hash) and also the order the aligner's
 biased `uint32(key) ^ 0x80000000` comparison gives, that bias being monotone in the
-signed key. Positions inside a key stay in increasing ngram-index order, which is the
-order the JSON writer's dict insertion leaves them in.
+signed key. Positions inside a key stay in increasing ngram-index order, which the
+stable sort in `_csr` preserves from the ngram order they are collected in.
 
 `convert_file` / `convert_directory` turn an existing JSON index into binary; they
 exist for the validation tools under tests/, not as a supported migration path.
@@ -42,43 +42,57 @@ _I4 = np.dtype("<i4")
 _HEADER = struct.Struct("<8sqq")
 
 
-def columns_from_index(text_index):
-    """(keys, offsets, idx, sb, eb) from {int hash: [(index, start_byte, end_byte), ...]}."""
-    keys = sorted(text_index)
-    offsets = np.empty(len(keys) + 1, _I4)
-    offsets[0] = 0
-    idx = []
-    sb = []
-    eb = []
-    for slot, key in enumerate(keys):
-        positions = text_index[key]
-        for position in positions:
-            idx.append(position[0])
-            sb.append(position[1])
-            eb.append(position[2])
-        offsets[slot + 1] = len(idx)
-    return (
-        np.fromiter(keys, _I4, len(keys)),
-        offsets,
-        np.array(idx, _I4),
-        np.array(sb, _I4),
-        np.array(eb, _I4),
-    )
-
-
-def dumps(text_index):
-    """Serialize an ngram index to the binary format."""
-    keys, offsets, idx, sb, eb = columns_from_index(text_index)
+def _pack(keys, offsets, idx, sb, eb):
     out = bytearray(_HEADER.pack(MAGIC, keys.shape[0], idx.shape[0]))
     for column in (keys, offsets, idx, sb, eb):
         out += column.tobytes()
     return bytes(out)
 
 
-def write(path, text_index):
-    """Write an ngram index to `path` in the binary format."""
+def _csr(hashes, idx, sb, eb):
+    """Group one entry per position by its hash into the five columns.
+
+    The sort is stable, so each key keeps its positions in the order they arrive.
+    """
+    keys = np.asarray(hashes, _I4)
+    n = keys.shape[0]
+    order = np.argsort(keys, kind="stable")
+    ordered = keys[order]
+    first = np.ones(n, bool)
+    first[1:] = ordered[1:] != ordered[:-1]
+    starts = np.flatnonzero(first)
+    offsets = np.empty(starts.shape[0] + 1, _I4)
+    offsets[:-1] = starts
+    offsets[-1] = n
+    return (ordered[starts], offsets, np.asarray(idx, _I4)[order],
+            np.asarray(sb, _I4)[order], np.asarray(eb, _I4)[order])
+
+
+def dumps_positions(hashes, start_bytes, end_bytes):
+    """Serialize a document whose positions are given in ngram-index order, so that
+    the ngram index of position i is i."""
+    return _pack(*_csr(hashes, np.arange(len(hashes), dtype=_I4), start_bytes, end_bytes))
+
+
+def write_positions(path, hashes, start_bytes, end_bytes):
+    """Write a document's positions, in ngram-index order, to `path`."""
     with open(path, "wb") as binary_file:
-        binary_file.write(dumps(text_index))
+        binary_file.write(dumps_positions(hashes, start_bytes, end_bytes))
+
+
+def dumps(text_index):
+    """Serialize {int hash: [(index, start_byte, end_byte), ...]}."""
+    hashes = []
+    idx = []
+    sb = []
+    eb = []
+    for key, positions in text_index.items():
+        for index, start_byte, end_byte in positions:
+            hashes.append(key)
+            idx.append(index)
+            sb.append(start_byte)
+            eb.append(end_byte)
+    return _pack(*_csr(hashes, idx, sb, eb))
 
 
 def parse_header(head, path=""):

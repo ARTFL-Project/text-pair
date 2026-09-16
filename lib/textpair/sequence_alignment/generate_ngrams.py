@@ -6,7 +6,6 @@ import os
 import platform
 import shutil
 import sqlite3
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
 from shlex import quote
@@ -201,14 +200,23 @@ class Ngrams:
             text_object.metadata["philo_id"].split()[: PHILO_TEXT_OBJECT_LEVELS[self.config["text_object_type"]]]
         )
         metadata[text_object_id] = text_object.metadata
-        text_index = defaultdict(list)
+        # Three parallel columns rather than a dict of position lists: the binary
+        # writer groups them by hash with one stable sort.
+        hashes: List[int] = []
+        start_bytes: List[int] = []
+        end_bytes: List[int] = []
         doc_ngrams_in_order: List[Tuple[int, int]] = []  # for banality filter
-        for index_pos, ngram in enumerate(text_object):
+        for ngram in text_object:
             hashed_ngram = hash32(ngram)
-            text_index[hashed_ngram].append((index_pos, ngram.ext["start_byte"], ngram.ext["end_byte"]))
-            doc_ngrams_in_order.append((ngram.ext["start_byte"], hashed_ngram))
+            start_byte = ngram.ext["start_byte"]
+            hashes.append(hashed_ngram)
+            start_bytes.append(start_byte)
+            end_bytes.append(ngram.ext["end_byte"])
+            doc_ngrams_in_order.append((start_byte, hashed_ngram))
             doc_ngrams.append("\t".join((ngram, str(hashed_ngram))))
-        ngram_binary.write(f"{self.output_path}/ngrams/{text_object_id}.bin", text_index)
+        ngram_binary.write_positions(
+            f"{self.output_path}/ngrams/{text_object_id}.bin", hashes, start_bytes, end_bytes
+        )
         with open(f"{self.output_path}/temp/{text_object_id}", "w", encoding="utf-8") as output:
             output.write("\n".join(sorted(doc_ngrams)))
         with open(f"{self.output_path}/ngrams_in_order/{text_object_id}.json", "wb") as json_file:
