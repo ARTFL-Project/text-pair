@@ -245,7 +245,7 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
           output_workers=0, lz4_level=3, **params):
     """Run the sequence aligner. Mirrors the compareNgrams binary's flags.
 
-    source_files / target_files   directories of per-document ngram JSON files
+    source_files / target_files   directories of per-document ngram files, JSON or binary
     source_metadata / target_metadata   paths to the corpora's metadata.json
     output_path                   directory for result_batches/, count.txt,
                                   duplicate_files.csv and alignment_config.ini

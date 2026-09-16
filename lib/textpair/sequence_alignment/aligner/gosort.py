@@ -254,6 +254,13 @@ def _pdqsort(less, swap, a, b, limit):
             b = mid
 
 
+def doc_id_of(name):
+    """An ngram file name's document ID, for either index format."""
+    if name.endswith(".bin"):
+        return name[: -len(".bin")]
+    return name.replace(".json", "", 1)
+
+
 def get_files(ngrams_dir, metadata, sort_field="year"):
     """main.go:232-297. Returns [(doc_id, ngram file path)] in SortID order, so that a
     document's position in the list is its SortID.
@@ -265,7 +272,7 @@ def get_files(ngrams_dir, metadata, sort_field="year"):
     if not ngrams_dir:
         return []
     names = [f for f in os.listdir(ngrams_dir) if not os.path.isdir(os.path.join(ngrams_dir, f))]
-    ids = [n.replace(".json", "", 1) for n in names]
+    ids = [doc_id_of(n) for n in names]
     paths = dict(zip(ids, (os.path.join(ngrams_dir, n) for n in names)))
     numeric = False
     for fields in metadata.values():

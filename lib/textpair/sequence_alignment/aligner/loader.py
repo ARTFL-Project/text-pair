@@ -1,16 +1,24 @@
-"""Ngram JSON loading for the sequence aligner.
+"""Ngram loading for the sequence aligner.
 
-One document file looks like {"<int32 hash>": [[index, start_byte, end_byte], ...], ...}.
-`load_corpus` parses a whole corpus into shared columnar arrays: per-document
-sorted keys plus CSR position blocks, with positions inside a key left in file
-order as Go's append leaves them (main.go:320-326). Insignificant whitespace is
-tolerated so ngram files from older, non-compact writers still parse.
+A document is either JSON, {"<int32 hash>": [[index, start_byte, end_byte], ...], ...},
+or the binary columnar format of ../ngram_binary.py; the format is picked per file by
+extension and confirmed by the magic bytes, so a half-converted corpus loads. JSON is
+parsed and sorted here, tolerating insignificant whitespace so files from older,
+non-compact writers still parse; binary is already in the loader's own order and is
+mmapped straight into place.
+
+`load_corpus` builds a whole corpus's shared columnar arrays: per-document sorted keys
+plus CSR position blocks, with positions inside a key left in file order as Go's append
+leaves them (main.go:320-326).
 """
+import mmap
 import os
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from numba import njit
+
+from .. import ngram_binary
 
 
 @njit(nogil=True, cache=True)
@@ -168,11 +176,16 @@ def build_csr_sorted(keys, counts, idx, sb, eb):
     return skeys, off, sidx, ssb, seb
 
 
+def is_binary(path):
+    return path.endswith(".bin")
+
+
 def load_corpus(paths, threads):
     """Parse `paths` (one ngram file per document, in SortID order) into global arrays.
 
-    Two passes so the arrays are allocated once and filled in place: a byte-count
-    pass, then the parse. Returns (key_off, keys_all, off_all, idx_all, sb_all, eb_all):
+    Two passes so the arrays are allocated once and filled in place: a sizing pass,
+    then the parse. Sizing scans a JSON file's bytes but only reads a binary file's
+    header. Returns (key_off, keys_all, off_all, idx_all, sb_all, eb_all):
 
       keys_all  int32[T]    per-document sorted keys, concatenated
       key_off   int64[N+1]  document -> its first slot in keys_all
@@ -185,7 +198,10 @@ def load_corpus(paths, threads):
     npos = np.zeros(n, np.int64)
 
     def count(i):
-        nk[i], npos[i] = count_keys_pos(np.fromfile(paths[i], dtype=np.uint8))
+        if is_binary(paths[i]):
+            nk[i], npos[i] = ngram_binary.read_header(paths[i])
+        else:
+            nk[i], npos[i] = count_keys_pos(np.fromfile(paths[i], dtype=np.uint8))
 
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(count, range(n)))
@@ -204,12 +220,7 @@ def load_corpus(paths, threads):
     sb_all = np.empty(n_pos, np.int32)
     eb_all = np.empty(n_pos, np.int32)
 
-    def parse(i):
-        buf = np.fromfile(paths[i], dtype=np.uint8)
-        ok, k, c, ix, sb, eb = parse_ngram_json(buf)
-        if not ok:
-            raise ValueError(f"malformed ngram json: {paths[i]}")
-        skeys, off, sidx, ssb, seb = build_csr_sorted(k, c, ix, sb, eb)
+    def store(i, skeys, off, sidx, ssb, seb):
         a, b = key_off[i], key_off[i + 1]
         keys_all[a:b] = skeys
         off_all[a + i: b + i + 1] = off.astype(np.int32) + np.int32(pos_base[i])
@@ -217,6 +228,18 @@ def load_corpus(paths, threads):
         idx_all[p:q] = sidx
         sb_all[p:q] = ssb
         eb_all[p:q] = seb
+
+    def parse(i):
+        if is_binary(paths[i]):
+            with open(paths[i], "rb") as ngram_file:
+                with mmap.mmap(ngram_file.fileno(), 0, access=mmap.ACCESS_READ) as view:
+                    store(i, *ngram_binary.columns(view, paths[i]))
+            return
+        buf = np.fromfile(paths[i], dtype=np.uint8)
+        ok, k, c, ix, sb, eb = parse_ngram_json(buf)
+        if not ok:
+            raise ValueError(f"malformed ngram json: {paths[i]}")
+        store(i, *build_csr_sorted(k, c, ix, sb, eb))
 
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(parse, range(n)))
