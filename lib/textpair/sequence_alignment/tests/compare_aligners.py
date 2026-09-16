@@ -5,6 +5,11 @@
         --target-metadata FILE] [--threads N] [--workdir DIR] [--go-results DIR]
         [--run-cwd DIR] [--param name=value]...
     compare_aligners.py --fixtures [--threads N]          # the synthetic corpora here
+    compare_aligners.py --fixtures --binary [--threads N] # ... with a binary ngram index
+
+--python-source-files / --python-target-files point the Python aligner at a different
+ngram directory from the binary's, which is how a converted (binary) index is checked
+against Go reading the JSON original.
 
 Compared: chunk file names, every JSON record as a sorted multiset (and per chunk, byte
 for byte), count.txt, duplicate_files.csv as a sorted multiset, and alignment_config.ini
@@ -158,11 +163,13 @@ def compare(go_dir, py_dir, workers):
     return result
 
 
-def flags(args, params, output_path):
+def flags(args, params, output_path, source_files="", target_files=""):
+    source_files = source_files or args.source_files
+    target_files = target_files or args.target_files
     out = [f"--output_path={output_path}", f"--threads={args.threads}",
-           f"--source_files={args.source_files}", f"--source_metadata={args.source_metadata}"]
-    if args.target_files:
-        out.append(f"--target_files={args.target_files}")
+           f"--source_files={source_files}", f"--source_metadata={args.source_metadata}"]
+    if target_files:
+        out.append(f"--target_files={target_files}")
     if args.target_metadata:
         out.append(f"--target_metadata={args.target_metadata}")
     return out + [f"--{key}={value}" for key, value in params.items()]
@@ -189,8 +196,9 @@ def run_pair(args, params):
     if not args.python_results:
         print(f"--- python aligner -> {py_dir}", flush=True)
         subprocess.run([sys.executable, "-m", "textpair.sequence_alignment.aligner"]
-                       + flags(args, params, py_dir), cwd=args.run_cwd, check=True, env=env,
-                       stdout=subprocess.DEVNULL)
+                       + flags(args, params, py_dir, args.python_source_files,
+                               args.python_target_files),
+                       cwd=args.run_cwd, check=True, env=env, stdout=subprocess.DEVNULL)
     return go_dir, py_dir
 
 
@@ -208,11 +216,16 @@ def main(argv=None):
     parser.add_argument("--python-results", default="",
                         help="reuse an existing Python output tree")
     parser.add_argument("--run-cwd", default=None, help="cwd for both aligners")
+    parser.add_argument("--python-source-files", default="",
+                        help="ngram directory for the Python run only, e.g. a binary index")
+    parser.add_argument("--python-target-files", default="")
     parser.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
                         help="matching parameter passed to both aligners")
     parser.add_argument("--compare-workers", type=int, default=8)
     parser.add_argument("--fixtures", action="store_true",
                         help="run every synthetic fixture corpus in fixtures/")
+    parser.add_argument("--binary", action="store_true",
+                        help="with --fixtures: convert each index to binary for the Python run")
     args = parser.parse_args(argv)
     params = dict(item.split("=", 1) for item in args.param)
 
@@ -228,6 +241,13 @@ def main(argv=None):
             fixture.run_cwd = os.path.join(here, "fixtures", name)
             fixture.workdir = os.path.join(os.path.abspath(args.workdir), name)
             fixture.go_results = fixture.python_results = ""
+            if args.binary:
+                from textpair.sequence_alignment.ngram_binary import convert_directory
+
+                fixture.python_source_files = os.path.join(fixture.workdir, "ngrams_binary")
+                shutil.rmtree(fixture.python_source_files, ignore_errors=True)
+                convert_directory(os.path.join(fixture.run_cwd, "ngrams"),
+                                  fixture.python_source_files, args.threads)
             result = compare(*run_pair(fixture, params), args.compare_workers)
             print(json.dumps(result, indent=1, ensure_ascii=False))
             if not result["PASS"]:
