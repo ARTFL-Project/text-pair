@@ -17,6 +17,8 @@ from mmh3 import hash as hash32
 from text_preprocessing import PreProcessor, Tokens
 from tqdm import tqdm
 
+from . import ngram_binary
+
 # https://github.com/tqdm/tqdm/issues/481
 tqdm.monitor_interval = 0
 PHILO_TEXT_OBJECT_LEVELS = {
@@ -203,11 +205,10 @@ class Ngrams:
         doc_ngrams_in_order: List[Tuple[int, int]] = []  # for banality filter
         for index_pos, ngram in enumerate(text_object):
             hashed_ngram = hash32(ngram)
-            text_index[str(hashed_ngram)].append((index_pos, ngram.ext["start_byte"], ngram.ext["end_byte"]))
+            text_index[hashed_ngram].append((index_pos, ngram.ext["start_byte"], ngram.ext["end_byte"]))
             doc_ngrams_in_order.append((ngram.ext["start_byte"], hashed_ngram))
             doc_ngrams.append("\t".join((ngram, str(hashed_ngram))))
-        with open(f"{self.output_path}/ngrams/{text_object_id}.json", "wb") as json_file:
-            json_file.write(orjson.dumps(dict(text_index)))
+        ngram_binary.write(f"{self.output_path}/ngrams/{text_object_id}.bin", text_index)
         with open(f"{self.output_path}/temp/{text_object_id}", "w", encoding="utf-8") as output:
             output.write("\n".join(sorted(doc_ngrams)))
         with open(f"{self.output_path}/ngrams_in_order/{text_object_id}.json", "wb") as json_file:
