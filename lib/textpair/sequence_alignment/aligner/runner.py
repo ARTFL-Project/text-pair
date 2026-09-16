@@ -15,7 +15,7 @@ from shlex import quote
 import numpy as np
 
 from . import loader, output, pipeline
-from .gosort import get_files
+from .docorder import get_files
 from .gotext import load_metadata
 
 # Go's flag defaults (main.go:132-154). sa_config.ini overrides some of them.

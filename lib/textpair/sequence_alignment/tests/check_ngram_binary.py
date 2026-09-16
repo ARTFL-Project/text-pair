@@ -9,10 +9,8 @@ the same document sequence, and compares all six corpus arrays element for eleme
 That covers the key ordering the writer has to reproduce, since the loader sorts the
 JSON side itself. Exits non-zero on any difference.
 
-The document sequence comes from the JSON directory alone. get_files sorts with Go's
-non-transitive comparator over the raw directory listing, so two directories holding
-the same documents under different names can order them differently; that is a property
-of getFiles, not of the index format, and `doc_order_identical` reports it separately.
+The document sequence comes from the JSON directory alone; `doc_order_identical`
+reports separately whether the binary directory orders the same documents the same way.
 """
 import argparse
 import os
@@ -24,7 +22,7 @@ import numpy as np
 
 from textpair.sequence_alignment import ngram_binary
 from textpair.sequence_alignment.aligner import loader
-from textpair.sequence_alignment.aligner.gosort import get_files
+from textpair.sequence_alignment.aligner.docorder import get_files
 from textpair.sequence_alignment.aligner.gotext import load_metadata
 
 ARRAYS = ("key_off", "keys_all", "off_all", "idx_all", "sb_all", "eb_all")
