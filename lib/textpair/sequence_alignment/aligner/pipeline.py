@@ -1,8 +1,9 @@
-"""Threaded phases of the inverted-index aligner: postings, emissions, matching.
+"""Threaded phases of the inverted-index aligner: postings, key-group index, matching.
 
 Each phase is a numpy/threads driver over the nogil kernels in `invidx`. The
 document arrays come from `loader.load_corpus`; see `invidx` for the layout.
 """
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -57,85 +58,99 @@ def build_postings(keys_all, threads):
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(sort_task,
                       _bucket_ranges(bstart, max(1, min(threads * 4, invidx.MSD_BUCKETS)))))
-    return post_u, post_slot, bstart, max_bucket
+    return post_u, post_slot, bstart
 
 
-def build_emissions(post_u, post_slot, bstart, max_bucket, key_off, n_src, same_doc, threads):
-    """One emission per (shared key, comparable document pair), source-major."""
+def index_postings(post_u, post_slot, bstart, key_off, n_src, same_doc, threads):
+    """Index the key groups for the per-source sweeps: each posting's document, where a
+    source's sweep of its group starts, and how many emissions each source will yield."""
     ranges = _bucket_ranges(bstart, max(1, min(threads, invidx.MSD_BUCKETS)))
     n_workers = len(ranges)
+    separate = same_doc.shape[0] != 0
+    post_doc = np.empty(post_u.shape[0], np.int32)
+    sweep_at = np.empty(int(key_off[n_src]), np.int32)   # source slots only
     counts = np.zeros((n_workers, n_src), np.int64)
     results = [None] * n_workers
 
-    def count_task(arg):
+    def task(arg):
         worker, bucket_range = arg
-        results[worker] = invidx.emit_count(bstart, bucket_range[0], bucket_range[1], post_u,
-                                            post_slot, key_off, n_src, same_doc, counts[worker],
-                                            np.empty(max_bucket, np.int32))
+        results[worker] = invidx.index_postings(bstart, bucket_range[0], bucket_range[1],
+                                                post_u, post_slot, key_off, n_src, separate,
+                                                post_doc, sweep_at, counts[worker])
 
     with ThreadPoolExecutor(threads) as pool:
-        list(pool.map(count_task, list(enumerate(ranges))))
-    repeats = sum(r[1] for r in results)
+        list(pool.map(task, list(enumerate(ranges))))
+    repeats = sum(results)
     if repeats:
         raise RuntimeError(f"{repeats} ngram key(s) repeat within a document")
-    per_source = counts.sum(axis=0)
-    total = int(per_source.sum())
-    src_off = np.zeros(n_src + 1, np.int64)
-    np.cumsum(per_source, out=src_off[1:])
-    write_off = src_off[:-1][None, :] + np.cumsum(counts, axis=0) - counts
-    del counts
-    em_tgt = np.empty(total, np.int32)
-    em_sslot = np.empty(total, np.int32)
-    em_tslot = np.empty(total, np.int32)
-
-    def scatter_task(arg):
-        worker, bucket_range = arg
-        invidx.emit_scatter(bstart, bucket_range[0], bucket_range[1], post_u, post_slot,
-                            key_off, n_src, same_doc, write_off[worker],
-                            em_tgt, em_sslot, em_tslot,
-                            np.empty(max_bucket, np.int32), np.empty(max_bucket, np.int32))
-
-    with ThreadPoolExecutor(threads) as pool:
-        list(pool.map(scatter_task, list(enumerate(ranges))))
-    return em_tgt, em_sslot, em_tslot, src_off, per_source
+    return post_doc, sweep_at, counts.sum(axis=0)
 
 
-def run_match(src_off, per_source, em_tgt, em_sslot, em_tslot, key_off, off_all, idx_all,
-              sb_all, eb_all, threads, params, on_result, progress=None, task_mult=4):
-    """Compare every document pair with emissions, longest source first.
+class _Scratch:
+    """One thread's emission buffers, grown to the largest source the thread has owned."""
 
-    `on_result(rows, duplicates, percents, stats)` is called once per task, from the
-    calling thread, so results can be written out while later tasks are still running.
-    `progress(done, total)` is called with the task counts after each result.
+    __slots__ = ("tcnt", "toff", "tcur", "size", "arrays")
+
+    def __init__(self, n_docs):
+        self.tcnt = np.zeros(n_docs, np.int32)
+        self.toff = np.empty(n_docs + 1, np.int64)
+        self.tcur = np.empty(n_docs, np.int64)
+        self.size = 0
+        self.arrays = ()
+
+    def sized(self, need):
+        if self.size < need:
+            self.arrays = (np.empty(need, np.int32), np.empty(need, np.int32))
+            self.size = need
+        return self.arrays
+
+
+def run_match(keys_all, key_off, sweep_at, post_u, post_slot, post_doc, per_source,
+              same_doc, off_all, idx_all, sb_all, eb_all, threads, params, on_result,
+              progress=None):
+    """Compare every source document with the documents it is paired with, longest first.
+
+    One source per task: its emissions are built, grouped and matched inside the task, so
+    only the sources in flight hold emissions.
+
+    `on_result(rows, duplicates, percents, stats)` is called once per source, from the
+    calling thread, so results can be written out while later sources are still running.
+    `progress(done, total)` is called with the source counts after each result.
     """
     n_docs = key_off.shape[0] - 1
-    npass = max(1, (max(1, int(n_docs - 1)).bit_length() + 7) // 8)
     live = np.nonzero(per_source > 0)[0]
     order = live[np.argsort(-per_source[live], kind="stable")]
-    n_tasks = max(1, min(threads * task_mult, order.shape[0]))
-    tasks = [np.ascontiguousarray(order[i::n_tasks].astype(np.int32)) for i in range(n_tasks)]
     args = (params["minimum_matching_ngrams_in_docs"], params["duplicate_threshold"],
             params["matching_window_size"], params["max_gap"], params["flex_gap"],
             params["minimum_matching_ngrams"], params["minimum_matching_ngrams_in_window"],
             params["merge_passages_on_byte_distance"],
             params["merge_passages_on_ngram_distance"],
             params["passage_distance_multiplier"])
+    local = threading.local()
 
-    def one(task):
-        return invidx.match_sources(task, src_off, em_tgt, em_sslot, em_tslot, key_off,
-                                    off_all, idx_all, sb_all, eb_all, npass, *args)
+    def one(source):
+        scratch = getattr(local, "scratch", None)
+        if scratch is None:
+            scratch = local.scratch = _Scratch(n_docs)
+        ssl, tsl = scratch.sized(int(per_source[source]))
+        excl = int(same_doc[source]) if same_doc.shape[0] else -1
+        return invidx.align_source(int(source), excl, keys_all, key_off, sweep_at, post_u,
+                                   post_slot, post_doc, scratch.tcnt, scratch.toff,
+                                   scratch.tcur, ssl, tsl, off_all, idx_all, sb_all, eb_all,
+                                   *args)
 
+    n_tasks = order.shape[0]
     done = 0
     if threads == 1:
-        for task in tasks:
-            rows, _, stats, dups, percents = one(task)
+        for source in order:
+            rows, _, stats, dups, percents = one(source)
             on_result(rows, dups, percents, stats)
             done += 1
             if progress:
                 progress(done, n_tasks)
     else:
         with ThreadPoolExecutor(threads) as pool:
-            futures = [pool.submit(one, task) for task in tasks]
+            futures = [pool.submit(one, source) for source in order]
             for future in as_completed(futures):
                 rows, _, stats, dups, percents = future.result()
                 on_result(rows, dups, percents, stats)
@@ -159,17 +174,16 @@ def warmup():
                         np.empty(4, np.uint32), np.empty(4, np.int32),
                         np.empty(invidx.LSD_RADIX, np.int64))
     key_off = np.array([0, 1, 2], np.int64)
-    for same_doc in (np.empty(0, np.int32), np.array([-1], np.int32)):
-        n_src = key_off.shape[0] - 1 if same_doc.shape[0] == 0 else 1
-        invidx.emit_count(bstart, 0, invidx.MSD_BUCKETS, post_u, post_slot, key_off, n_src,
-                          same_doc, np.zeros(n_src, np.int64), np.empty(4, np.int32))
-        invidx.emit_scatter(bstart, 0, invidx.MSD_BUCKETS, post_u, post_slot, key_off, n_src,
-                            same_doc, np.zeros(n_src, np.int64), np.empty(1, np.int32),
-                            np.empty(1, np.int32), np.empty(1, np.int32),
-                            np.empty(4, np.int32), np.empty(4, np.int32))
+    post_doc = np.empty(2, np.int32)
+    sweep_at = np.empty(2, np.int32)
+    for separate in (False, True):
+        n_src = 1 if separate else 2
+        invidx.index_postings(bstart, 0, invidx.MSD_BUCKETS, post_u, post_slot, key_off,
+                              n_src, separate, post_doc, sweep_at,
+                              np.zeros(n_src, np.int64))
     ones = np.array([0, 0], np.int32)
-    invidx.match_sources(np.array([0], np.int32), np.array([0, 1, 1], np.int64),
-                         np.array([1], np.int32), np.array([0], np.int32),
-                         np.array([1], np.int32), key_off,
-                         np.array([0, 1, 1, 2], np.int32), ones, ones, ones, 1,
-                         1, 200.0, 30, 15, False, 1, 1, True, True, 0.5)
+    one = np.ones(1, np.int32)
+    invidx.align_source(0, -1, keys, key_off, sweep_at, post_u, post_slot, post_doc,
+                        np.zeros(2, np.int32), np.zeros(3, np.int64), np.zeros(2, np.int64),
+                        one, one, np.array([0, 1, 1, 2], np.int32), ones, ones, ones,
+                        1, 200.0, 30, 15, False, 1, 1, True, True, 0.5)

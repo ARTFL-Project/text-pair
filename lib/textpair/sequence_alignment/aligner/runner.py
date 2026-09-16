@@ -203,10 +203,10 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
     try:
         key_off, keys_all, off_all, idx_all, sb_all, eb_all = \
             loader.load_corpus(paths, threads)
-        post_u, post_slot, bstart, max_bucket = pipeline.build_postings(keys_all, threads)
-        em_tgt, em_sslot, em_tslot, src_off, per_source = pipeline.build_emissions(
-            post_u, post_slot, bstart, max_bucket, key_off, n_sources, same_doc, threads)
-        del post_u, post_slot, keys_all
+        post_u, post_slot, bstart = pipeline.build_postings(keys_all, threads)
+        post_doc, sweep_at, per_source = pipeline.index_postings(
+            post_u, post_slot, bstart, key_off, n_sources, same_doc, threads)
+        del bstart
         gc.collect()
 
         def on_result(rows, dups, percents, _stats):
@@ -223,8 +223,9 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                                             metas[target_slot],
                                                             float(percents[i]))))
 
-        pipeline.run_match(src_off, per_source, em_tgt, em_sslot, em_tslot, key_off, off_all,
-                           idx_all, sb_all, eb_all, threads, params, on_result, progress)
+        pipeline.run_match(keys_all, key_off, sweep_at, post_u, post_slot, post_doc,
+                           per_source, same_doc, off_all, idx_all, sb_all, eb_all,
+                           threads, params, on_result, progress)
     finally:
         pool.close()
     # Go appends duplicates in goroutine completion order, which is not reproducible;

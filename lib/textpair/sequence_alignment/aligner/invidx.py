@@ -1,7 +1,8 @@
 """Inverted-index intersection kernels for the sequence aligner.
 
 Replaces compareNgrams' all-pairs merge join with:
-  postings -> emit one record per (key, document pair) -> bucket by source -> group by target.
+  postings -> index the key groups -> per source document, sweep its own keys, emit one
+  record per (key, comparable target), group by target and match.
 Everything from the cross-product expansion onward follows main.go:507-528.
 
 Key biasing: the int32 ngram hash is mapped to [0, 2^32) with `u = int64(key) + 2^31`, the
@@ -9,11 +10,17 @@ same monotone map as `uint32(key) ^ 0x80000000` but in int64 arithmetic.
 
 Document slots are the combination's SortID order: sources first, then targets when source
 and target corpora differ (`same_doc` non-empty). Array layout, with T = total (doc, key)
-entries, P = total ngram positions, M = total emissions:
+entries, P = total ngram positions:
   keys_all / key_off / off_all / idx_all / sb_all / eb_all  from loader.load_corpus
-  post_u    uint32[T]  biased key, sorted                   (freed after emit)
-  post_slot int32[T]   slot in keys_all                     (freed after emit)
-  em_tgt/em_sslot/em_tslot int32[M]  source-major emissions, slots index keys_all
+  post_u    uint32[T]  biased key, sorted
+  post_slot int32[T]   slot in keys_all
+  post_doc  int32[T]   document of that slot
+  sweep_at  int32[source slots]  where a source's sweep of its key's group starts
+
+The postings sort is stable and keys_all is document-major, so a key group holds its
+documents in SortID order: the documents a source is compared against are the suffix of
+the group that follows the source's own entry. Emissions are therefore built one source
+at a time, which bounds them by the biggest source instead of by sum(df^2 / 2).
 """
 import numpy as np
 from numba import njit
@@ -51,7 +58,8 @@ def scatter_msd(keys, lo, hi, woff, post_u, post_slot):
 @njit(nogil=True, cache=True)
 def sort_buckets(bstart, b_lo, b_hi, post_u, post_slot, buf_u, buf_s, cnt):
     """Sort each MSD bucket in [b_lo, b_hi) by the low LOW_BITS with two 10-bit LSD passes.
-    Buckets are visited in ascending order, so the whole array ends up sorted by biased key."""
+    Buckets are visited in ascending order, so the whole array ends up sorted by biased key.
+    Both passes are stable, so equal keys keep their ascending slot order."""
     for b in range(b_lo, b_hi):
         s = bstart[b]
         n = bstart[b + 1] - s
@@ -104,146 +112,66 @@ def _doc_of(key_off, slot):
     return lo
 
 
-# --------------------------------------------------------------------------- emit
+# --------------------------------------------------------------------------- key groups
 
 @njit(nogil=True, cache=True)
-def _pair(da, dc, n_src, same_doc):
-    """(source, target) document slots for a postings pair, or (-1, -1) when the pair is
-    not compared: within one corpus (main.go:487) or a target with the source's own
-    document ID (main.go:489). One corpus is signalled by an empty `same_doc`."""
-    if same_doc.shape[0] == 0:
-        if da < dc:
-            return da, dc
-        return dc, da
-    if da < n_src:
-        if dc < n_src:
-            return -1, -1
-        s = da
-        t = dc
-    else:
-        if dc >= n_src:
-            return -1, -1
-        s = dc
-        t = da
-    if same_doc[s] == t:
-        return -1, -1
-    return s, t
+def index_postings(bstart, b_lo, b_hi, post_u, post_slot, key_off, n_src, separate,
+                   post_doc, sweep_at, cnt):
+    """One pass over the key groups in [b_lo, b_hi): each posting's document, where every
+    source document's sweep of its group starts, and cnt[source] += the emissions that
+    sweep will yield. Returns the number of repeats -- the same key twice in one document,
+    which the caller rejects.
 
-
-@njit(nogil=True, cache=True)
-def emit_count(bstart, b_lo, b_hi, post_u, post_slot, key_off, n_src, same_doc, cnt, docbuf):
-    """Pass A: number of emissions this worker will contribute per source document.
-    Returns (n_emissions, n_same_doc_pairs) -- the latter must be 0 (a key twice in one doc)."""
-    total = 0
-    same = 0
+    Within one corpus the sweep starts just past the source's own entry (main.go:487).
+    With separate corpora it starts at the group's first target document (main.go:489
+    drops only the target that has the source's own document ID, during the sweep).
+    """
+    repeats = 0
     for b in range(b_lo, b_hi):
-        s = bstart[b]
+        gs = bstart[b]
         e = bstart[b + 1]
-        i = s
-        while i < e:
-            j = i + 1
-            u = post_u[i]
-            while j < e and post_u[j] == u:
-                j += 1
-            n = j - i
-            if n > 1:
-                for a in range(n):
-                    docbuf[a] = _doc_of(key_off, post_slot[i + a])
-                for a in range(n - 1):
-                    da = docbuf[a]
-                    for c in range(a + 1, n):
-                        dc = docbuf[c]
-                        if da == dc:
-                            same += 1
-                            continue
-                        s_doc, _ = _pair(da, dc, n_src, same_doc)
-                        if s_doc < 0:
-                            continue
-                        cnt[s_doc] += 1
-                        total += 1
-            i = j
-    return total, same
+        while gs < e:
+            ge = gs + 1
+            u = post_u[gs]
+            while ge < e and post_u[ge] == u:
+                ge += 1
+            prev = -1
+            for p in range(gs, ge):
+                d = _doc_of(key_off, post_slot[p])
+                post_doc[p] = d
+                if d == prev:
+                    repeats += 1
+                prev = d
+            if separate:
+                ts = gs
+                while ts < ge and post_doc[ts] < n_src:
+                    ts += 1
+                for p in range(gs, ts):
+                    sweep_at[post_slot[p]] = ts
+                    cnt[post_doc[p]] += ge - ts
+            else:
+                for p in range(gs, ge):
+                    sweep_at[post_slot[p]] = p + 1
+                    cnt[post_doc[p]] += ge - p - 1
+            gs = ge
+    return repeats
 
 
-@njit(nogil=True, cache=True)
-def emit_scatter(bstart, b_lo, b_hi, post_u, post_slot, key_off, n_src, same_doc, woff,
-                 em_tgt, em_sslot, em_tslot, docbuf, slotbuf):
-    """Pass B: write (target, sourceSlot, targetSlot) into this worker's slice of each
-    source document's region. woff[d] is this worker's private cursor for source d."""
-    for b in range(b_lo, b_hi):
-        s = bstart[b]
-        e = bstart[b + 1]
-        i = s
-        while i < e:
-            j = i + 1
-            u = post_u[i]
-            while j < e and post_u[j] == u:
-                j += 1
-            n = j - i
-            if n > 1:
-                for a in range(n):
-                    sl = post_slot[i + a]
-                    slotbuf[a] = sl
-                    docbuf[a] = _doc_of(key_off, sl)
-                for a in range(n - 1):
-                    da = docbuf[a]
-                    for c in range(a + 1, n):
-                        dc = docbuf[c]
-                        if da == dc:
-                            continue
-                        src, tgt = _pair(da, dc, n_src, same_doc)
-                        if src < 0:
-                            continue
-                        if src == da:
-                            ss = slotbuf[a]
-                            ts = slotbuf[c]
-                        else:
-                            ss = slotbuf[c]
-                            ts = slotbuf[a]
-                        p = woff[src]
-                        woff[src] = p + 1
-                        em_tgt[p] = tgt
-                        em_sslot[p] = ss
-                        em_tslot[p] = ts
-            i = j
-
-
-# --------------------------------------------------------------------------- group + match
+# --------------------------------------------------------------------------- emit + match
 
 @njit(nogil=True, cache=True)
-def _radix_by_tgt(t0, s0, x0, n, npass, t1, s1, x1, cnt):
-    """Stable LSD radix sort of (tgt, sslot, tslot) by tgt, npass passes of 8 bits."""
-    for p in range(npass):
-        shift = 8 * p
-        for i in range(256):
-            cnt[i] = 0
-        for i in range(n):
-            cnt[(t0[i] >> shift) & 255] += 1
-        acc = 0
-        for i in range(256):
-            c = cnt[i]
-            cnt[i] = acc
-            acc += c
-        for i in range(n):
-            d = (t0[i] >> shift) & 255
-            j = cnt[d]
-            cnt[d] = j + 1
-            t1[j] = t0[i]
-            s1[j] = s0[i]
-            x1[j] = x0[i]
-        t0, t1 = t1, t0
-        s0, s1 = s1, s0
-        x0, x1 = x1, x0
-    return t0, s0, x0
+def align_source(s, excl, keys_all, key_off, sweep_at, post_u, post_slot, post_doc,
+                 tcnt, toff, tcur, ssl, tsl,
+                 off_all, idx_all, sb_all, eb_all,
+                 min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
+                 min_matching, min_in_window, merge_byte, merge_ngram, multiplier):
+    """Own one source document end to end: sweep its keys for the documents that follow
+    it in each group, apply the two filters, then run the prototype's unchanged
+    cross-product / sort / matchPassage pipeline.
 
-
-@njit(nogil=True, cache=True)
-def match_sources(sources, src_off, em_tgt, em_sslot, em_tslot,
-                  key_off, off_all, idx_all, sb_all, eb_all, npass,
-                  min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
-                  min_matching, min_in_window, merge_byte, merge_ngram, multiplier):
-    """Own a set of source documents end to end: group each region by target, apply the two
-    filters, then run the prototype's unchanged cross-product / sort / matchPassage pipeline.
+    The sweep runs twice, first to size every target's block and then to fill it, so only
+    the grouped (sourceSlot, targetSlot) pair is ever stored. The caller sizes ssl/tsl for
+    this source's emissions and passes tcnt zeroed; tcnt is left zeroed again on return.
 
     Returns (rows, n_rows, stats, dup_st, dup_pct) with rows = int32[:, 2 + NCOL] of
     (source, target, alignment) and dup_st/dup_pct the duplicate pairs (main.go:499-505)
@@ -257,98 +185,117 @@ def match_sources(sources, src_off, em_tgt, em_sslot, em_tslot,
     dup_pct = np.empty(64, np.float64)
     ndup = 0
     stats = np.zeros(6, np.int64)
-    cnt256 = np.empty(256, np.int32)
-    for si in range(sources.shape[0]):
-        s = sources[si]
-        lo = src_off[s]
-        hi = src_off[s + 1]
-        n = hi - lo
-        if n == 0:
+    n_post = post_u.shape[0]
+    n_docs = key_off.shape[0] - 1
+
+    first_key = key_off[s]
+    last_key = key_off[s + 1]
+    for i in range(first_key, last_key):                               # size the blocks
+        u = np.uint32(np.int64(keys_all[i]) + BIAS)
+        q = sweep_at[i]
+        while q < n_post and post_u[q] == u:
+            t = post_doc[q]
+            if t != excl:
+                tcnt[t] += 1
+            q += 1
+    acc = 0
+    for t in range(n_docs):
+        toff[t] = acc
+        tcur[t] = acc
+        acc += tcnt[t]
+        tcnt[t] = 0
+    toff[n_docs] = acc
+    if acc == 0:
+        return out[:0], 0, stats, dup_st[:0], dup_pct[:0]
+    for i in range(first_key, last_key):                               # fill them
+        u = np.uint32(np.int64(keys_all[i]) + BIAS)
+        q = sweep_at[i]
+        while q < n_post and post_u[q] == u:
+            t = post_doc[q]
+            if t != excl:
+                p = tcur[t]
+                tcur[t] = p + 1
+                ssl[p] = i
+                tsl[p] = post_slot[q]
+            q += 1
+
+    ns = last_key - first_key                 # sourceFile.NgramLength (distinct keys)
+    for t in range(n_docs):
+        q = toff[t]
+        r = toff[t + 1]
+        count = r - q
+        if count == 0:
             continue
-        ns = key_off[s + 1] - key_off[s]          # sourceFile.NgramLength (distinct keys)
-        tg, ssl, tsl = _radix_by_tgt(em_tgt[lo:hi], em_sslot[lo:hi], em_tslot[lo:hi], n, npass,
-                                     np.empty(n, np.int32), np.empty(n, np.int32),
-                                     np.empty(n, np.int32), cnt256)
-        q = 0
-        while q < n:
-            r = q + 1
-            t = tg[q]
-            while r < n and tg[r] == t:
-                r += 1
-            count = r - q
-            stats[0] += 1
-            stats[4] += count
-            if count < min_in_docs:                                        # main.go:497
-                stats[1] += 1
-                q = r
-                continue
-            stats[5] += 1
-            pct = count / ns * 100
-            if pct > dup_threshold:                                        # main.go:499
-                stats[2] += 1
-                if ndup == dup_st.shape[0]:
-                    new_st = np.empty((ndup * 2, 2), np.int32)
-                    new_pct = np.empty(ndup * 2, np.float64)
-                    new_st[:ndup] = dup_st
-                    new_pct[:ndup] = dup_pct
-                    dup_st = new_st
-                    dup_pct = new_pct
-                dup_st[ndup, 0] = s
-                dup_st[ndup, 1] = t
-                dup_pct[ndup] = pct
-                ndup += 1
-                q = r
-                continue
-            stats[3] += 1
-            n_matches = 0
-            for k in range(q, r):
-                a = ssl[k] + s
-                b = tsl[k] + t
-                n_matches += (off_all[a + 1] - off_all[a]) * (off_all[b + 1] - off_all[b])
-            packed = np.empty(n_matches, np.int64)                         # main.go:507-516
-            srow = np.empty(n_matches, np.int32)
-            trow = np.empty(n_matches, np.int32)
-            k2 = 0
-            for k in range(q, r):
-                a = ssl[k] + s
-                b = tsl[k] + t
-                for p in range(off_all[a], off_all[a + 1]):
-                    for rr in range(off_all[b], off_all[b + 1]):
-                        packed[k2] = (np.int64(idx_all[p]) << 32) | np.int64(idx_all[rr])
-                        srow[k2] = p
-                        trow[k2] = rr
-                        k2 += 1
-            order = np.argsort(packed)                                     # main.go:517-524
-            m_sidx = np.empty(n_matches, np.int32)
-            m_ssb = np.empty(n_matches, np.int32)
-            m_seb = np.empty(n_matches, np.int32)
-            m_tidx = np.empty(n_matches, np.int32)
-            m_tsb = np.empty(n_matches, np.int32)
-            m_teb = np.empty(n_matches, np.int32)
-            for k in range(n_matches):
-                p = srow[order[k]]
-                rr = trow[order[k]]
-                m_sidx[k] = idx_all[p]
-                m_ssb[k] = sb_all[p]
-                m_seb[k] = eb_all[p]
-                m_tidx[k] = idx_all[rr]
-                m_tsb[k] = sb_all[rr]
-                m_teb[k] = eb_all[rr]
-            al, n_al = match_passage(m_sidx, m_ssb, m_seb, m_tidx, m_tsb, m_teb, n_matches,
-                                     window_size, max_gap, flex_gap, min_matching, min_in_window)
-            if merge_byte or merge_ngram:                                  # main.go:526
-                al, n_al = merge_with_previous(al, n_al, merge_byte, merge_ngram,
-                                               window_size, multiplier)
-            if n_al > 0:
-                while fill + n_al > out.shape[0]:
-                    new = np.empty((out.shape[0] * 2, NCOL + 2), np.int32)
-                    new[:fill] = out[:fill]
-                    out = new
-                for z in range(n_al):
-                    out[fill + z, 0] = s
-                    out[fill + z, 1] = t
-                    for cc in range(NCOL):
-                        out[fill + z, cc + 2] = al[z, cc]
-                fill += n_al
-            q = r
+        stats[0] += 1
+        stats[4] += count
+        if count < min_in_docs:                                        # main.go:497
+            stats[1] += 1
+            continue
+        stats[5] += 1
+        pct = count / ns * 100
+        if pct > dup_threshold:                                        # main.go:499
+            stats[2] += 1
+            if ndup == dup_st.shape[0]:
+                new_st = np.empty((ndup * 2, 2), np.int32)
+                new_pct = np.empty(ndup * 2, np.float64)
+                new_st[:ndup] = dup_st
+                new_pct[:ndup] = dup_pct
+                dup_st = new_st
+                dup_pct = new_pct
+            dup_st[ndup, 0] = s
+            dup_st[ndup, 1] = t
+            dup_pct[ndup] = pct
+            ndup += 1
+            continue
+        stats[3] += 1
+        n_matches = 0
+        for k in range(q, r):
+            a = ssl[k] + s
+            b = tsl[k] + t
+            n_matches += (off_all[a + 1] - off_all[a]) * (off_all[b + 1] - off_all[b])
+        packed = np.empty(n_matches, np.int64)                         # main.go:507-516
+        srow = np.empty(n_matches, np.int32)
+        trow = np.empty(n_matches, np.int32)
+        k2 = 0
+        for k in range(q, r):
+            a = ssl[k] + s
+            b = tsl[k] + t
+            for p in range(off_all[a], off_all[a + 1]):
+                for rr in range(off_all[b], off_all[b + 1]):
+                    packed[k2] = (np.int64(idx_all[p]) << 32) | np.int64(idx_all[rr])
+                    srow[k2] = p
+                    trow[k2] = rr
+                    k2 += 1
+        order = np.argsort(packed)                                     # main.go:517-524
+        m_sidx = np.empty(n_matches, np.int32)
+        m_ssb = np.empty(n_matches, np.int32)
+        m_seb = np.empty(n_matches, np.int32)
+        m_tidx = np.empty(n_matches, np.int32)
+        m_tsb = np.empty(n_matches, np.int32)
+        m_teb = np.empty(n_matches, np.int32)
+        for k in range(n_matches):
+            p = srow[order[k]]
+            rr = trow[order[k]]
+            m_sidx[k] = idx_all[p]
+            m_ssb[k] = sb_all[p]
+            m_seb[k] = eb_all[p]
+            m_tidx[k] = idx_all[rr]
+            m_tsb[k] = sb_all[rr]
+            m_teb[k] = eb_all[rr]
+        al, n_al = match_passage(m_sidx, m_ssb, m_seb, m_tidx, m_tsb, m_teb, n_matches,
+                                 window_size, max_gap, flex_gap, min_matching, min_in_window)
+        if merge_byte or merge_ngram:                                  # main.go:526
+            al, n_al = merge_with_previous(al, n_al, merge_byte, merge_ngram,
+                                           window_size, multiplier)
+        if n_al > 0:
+            while fill + n_al > out.shape[0]:
+                new = np.empty((out.shape[0] * 2, NCOL + 2), np.int32)
+                new[:fill] = out[:fill]
+                out = new
+            for z in range(n_al):
+                out[fill + z, 0] = s
+                out[fill + z, 1] = t
+                for cc in range(NCOL):
+                    out[fill + z, cc + 2] = al[z, cc]
+            fill += n_al
     return out[:fill], fill, stats, dup_st[:ndup], dup_pct[:ndup]
