@@ -1,9 +1,9 @@
 """Per-pair matching traces, produced after matching rather than during it.
 
 `write_traces` re-derives each compared pair's matches from the loaded corpus and walks
-them again, so nothing here is on the matching path: `kernels.match_passage` and
-`invidx.align_source` do not know this module exists. The cost is that the walk below
-must behave exactly like `kernels.match_passage`, which `tests/test_debug_trace.py`
+them again, so nothing here is on the matching path: `matching.match_passage` and
+`inverted_index.align_source` do not know this module exists. The cost is that the walk below
+must behave exactly like `matching.match_passage`, which `tests/test_tracing.py`
 checks by comparing the alignments the two produce.
 
 One file per traced pair lands in `<output_path>/debug_output`, named
@@ -24,7 +24,7 @@ import os
 
 import numpy as np
 
-from . import kernels
+from . import matching
 
 # Why a passage ends where it does, and why a rejected one was rejected, as a bitmask:
 # several can hold at once.
@@ -126,7 +126,7 @@ class Corpus:
 
 
 def _walk(match, n, params, floor):
-    """Mirror of kernels.match_passage, recording a block per kept or rejected passage.
+    """Mirror of matching.match_passage, recording a block per kept or rejected passage.
 
     Returns (rows, blocks, hidden): the alignments as that kernel would emit them, the
     trace of each passage, and a histogram of the rejected ones the floor hid.
@@ -138,7 +138,7 @@ def _walk(match, n, params, floor):
     flex_gap = params["flex_gap"]
     min_matching = params["minimum_matching_ngrams"]
     min_in_window = params["minimum_matching_ngrams_in_window"]
-    max_link = kernels.link_bound(window_size, max_gap, flex_gap, min_matching)
+    max_link = matching.link_bound(window_size, max_gap, flex_gap, min_matching)
 
     rows, blocks, hidden = [], [], {}
     best = [1] * n
@@ -363,7 +363,7 @@ def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_i
         parts = [_render(block, ngram_index) for block in blocks]
         if merging and rows:
             alignments = np.array(rows, np.int32)
-            _merged, after = kernels.merge_passages(
+            _merged, after = matching.merge_passages(
                 alignments, len(rows), params["merge_passages_on_byte_distance"],
                 params["merge_passages_on_ngram_distance"],
                 params["matching_window_size"], params["passage_distance_multiplier"])

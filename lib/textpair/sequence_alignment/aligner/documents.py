@@ -1,5 +1,7 @@
-"""Document ordering: a document's position in the list get_files returns is its SortID,
-which decides which document of a pair is the source and which is the target.
+"""Document ordering and corpus metadata.
+
+A document's position in the list get_files returns is its SortID, which decides which
+document of a pair is the source and which is the target.
 
 The order is a strict total order, produced by a sort key. The previous implementation
 used a comparator that is non-transitive whenever a sort value fails to parse as an
@@ -11,7 +13,10 @@ document of a pair is the source decides which passages are found at all.
 import os
 import re
 
+import orjson
+
 _INT_RE = re.compile(r"^[+-]?\d+$")
+_SPACE_CHARS = re.compile(r"[\t\n\f\r ]+")   # this class excludes \v, unlike \s
 
 NUMERIC, STRING, DOC_ID = "numeric", "string", "doc_id"
 
@@ -76,3 +81,23 @@ def get_files(ngrams_dir, metadata, sort_field="year"):
     paths = {doc_id_of(name): os.path.join(ngrams_dir, name) for name in names}
     key = sort_key(metadata, sort_field)
     return [(doc_id, paths[doc_id]) for doc_id in sorted(paths, key=key)]
+
+
+def load_metadata(path):
+    """Whitespace-collapse every string, blank out non-strings
+    (the metadata is typed as strings throughout, so a non-string blanks out),
+    then add the `ngrams` field."""
+    # `ngrams` is deliberately `.json`, not `.bin`: it names the document's
+    # ngrams_in_order/ file, which generate_ngrams still writes as JSON for the banality
+    # filter, not the binary index in ngrams/. banality_finder.NgramDoc opens it by this
+    # name and parses it with orjson.
+    if not path:
+        return {}
+    with open(path, "rb") as metadata_file:
+        meta = orjson.loads(metadata_file.read())
+    sub = _SPACE_CHARS.sub
+    for doc, fields in meta.items():
+        for key, value in list(fields.items()):
+            fields[key] = sub(" ", value) if isinstance(value, str) else ""
+        fields["ngrams"] = doc + ".json"
+    return meta

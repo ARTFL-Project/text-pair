@@ -25,7 +25,7 @@ import tempfile
 import numpy as np
 
 from textpair.sequence_alignment.aligner import align, runner
-from textpair.sequence_alignment.aligner.kernels import NCOL
+from textpair.sequence_alignment.aligner.matching import NCOL
 
 
 def sort_v(names):

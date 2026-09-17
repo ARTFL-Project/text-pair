@@ -57,8 +57,8 @@ from collections import Counter
 import lz4.frame
 import orjson
 
-from textpair.sequence_alignment.aligner import docorder
-from textpair.sequence_alignment.aligner.gotext import load_metadata
+from textpair.sequence_alignment.aligner import documents
+from textpair.sequence_alignment.aligner.documents import load_metadata
 from textpair.sequence_alignment.aligner.runner import align
 
 FIXTURES = ("no_byte_range", "non_string_meta", "missing_text", "no_metadata")
@@ -73,7 +73,7 @@ def reversed_metadata(source_files, source_metadata, into):
     through a tie in the sort field.
     """
     metadata = load_metadata(source_metadata)
-    docs = docorder.get_files(source_files, metadata, "year")
+    docs = documents.get_files(source_files, metadata, "year")
     total = len(docs)
     flipped = {}
     for rank, (doc_id, _path) in enumerate(docs):

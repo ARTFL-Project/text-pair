@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Drift guard for debug._walk against kernels.match_passage.
+"""Drift guard for tracing._walk against matching.match_passage.
 
-    test_debug_trace.py [--source-files DIR --source-metadata FILE] [--threads N]
+    test_tracing.py [--source-files DIR --source-metadata FILE] [--threads N]
 
 The trace is produced after matching by walking each pair's matches a second time, in
-`debug._walk`, so that nothing is on the matching path. That walk must behave exactly
-like `kernels.match_passage`. This feeds both the same matches, for every pair of a
+`tracing._walk`, so that nothing is on the matching path. That walk must behave exactly
+like `matching.match_passage`. This feeds both the same matches, for every pair of a
 corpus, and asserts they emit the same alignments. It also aligns the corpus with and
 without `debug` and checks the counts and the trace's accounting agree.
 
@@ -21,7 +21,8 @@ import tempfile
 
 import numpy as np
 
-from textpair.sequence_alignment.aligner import align, debug, docorder, kernels, loader
+from textpair.sequence_alignment.aligner import (align, documents, matching,
+                                                 ngram_loader, tracing)
 from textpair.sequence_alignment.aligner.runner import _normalize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,18 +31,18 @@ FIXTURES = ("no_byte_range", "non_string_meta", "missing_text", "no_metadata")
 
 def compare_kernels(source_files, source_metadata, params, threads):
     """Every pair's alignments from both implementations. Returns (pairs, mismatches)."""
-    from textpair.sequence_alignment.aligner.gotext import load_metadata
-    docs = docorder.get_files(source_files, load_metadata(source_metadata),
+    from textpair.sequence_alignment.aligner.documents import load_metadata
+    docs = documents.get_files(source_files, load_metadata(source_metadata),
                               params["sort_by"])
-    corpus = debug.Corpus(*loader.load_corpus([path for _, path in docs], threads))
+    corpus = tracing.Corpus(*ngram_loader.load_corpus([path for _, path in docs], threads))
     names = [doc for doc, _ in docs]
     pairs = mismatches = 0
-    for source, target in debug._pairs(names, len(names), np.empty(0, np.int32), None):
+    for source, target in tracing._pairs(names, len(names), np.empty(0, np.int32), None):
         match, n = corpus.matches(source, target)
         if not n:
             continue
         pairs += 1
-        rows, _blocks, _hidden = debug._walk(match, n, params,
+        rows, _blocks, _hidden = tracing._walk(match, n, params,
                                              params["debug_minimum_ngrams"])
         # The kernel takes the packed layout: indices together in one int64 and byte
         # offsets reached through positions. Lay the pair's offsets out so position k is
@@ -53,14 +54,14 @@ def compare_kernels(source_files, source_metadata, params, threads):
                | np.arange(n, 2 * n, dtype=np.int64))
         start_bytes = np.concatenate([np.asarray(s_sb, np.int32), np.asarray(t_sb, np.int32)])
         end_bytes = np.concatenate([np.asarray(s_eb, np.int32), np.asarray(t_eb, np.int32)])
-        out, cnt, _spans = kernels.match_passage(
+        out, cnt, _spans = matching.match_passage(
             pair, pos, n, start_bytes, end_bytes,
             params["matching_window_size"], params["max_gap"], params["flex_gap"],
             params["minimum_matching_ngrams"],
             params["minimum_matching_ngrams_in_window"],
             np.empty(n, np.int32), np.empty(n, np.int32), np.empty(n, np.uint8),
             np.empty(n, np.int32), np.empty(n + 1, np.int32), np.empty(n, np.int32),
-            np.empty((64, 4), np.int32), np.empty((64, kernels.NCOL), np.int32))
+            np.empty((64, 4), np.int32), np.empty((64, matching.NCOL), np.int32))
         if [tuple(int(v) for v in row) for row in out[:cnt]] != \
                 [tuple(int(v) for v in row) for row in rows]:
             mismatches += 1

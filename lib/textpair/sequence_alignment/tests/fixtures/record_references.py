@@ -3,9 +3,10 @@
 
     record_references.py [--threads N] [NAME ...]
 
-`compare_aligners.py --fixtures` checks the aligner against `<fixture>/reference`. Those
-trees are output, not a second implementation, so any deliberate change to what the
-matcher emits makes them stale and every fixture fails until they are recorded again.
+`check_reference_output.py --fixtures` checks the aligner against `<fixture>/reference`.
+Those trees are output, not a second implementation, so any deliberate change to what
+the matcher emits makes them stale and every fixture fails until they are recorded
+again.
 
 Run this only when the change is intended, and say in the commit message why the records
 moved. Recording references to hide an unexplained difference defeats the point of having

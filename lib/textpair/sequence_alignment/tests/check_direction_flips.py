@@ -33,8 +33,8 @@ from concurrent.futures import ProcessPoolExecutor
 import lz4.frame
 import orjson
 
-from textpair.sequence_alignment.aligner import docorder
-from textpair.sequence_alignment.aligner.gotext import load_metadata
+from textpair.sequence_alignment.aligner import documents
+from textpair.sequence_alignment.aligner.documents import load_metadata
 
 CANON = orjson.OPT_SORT_KEYS
 
@@ -125,16 +125,16 @@ def trim(records, counts):
 def movable_documents(metadata, sort_field):
     """The mode, and a predicate for the documents the two orders can place differently.
     A document with no metadata entry has no sort value, so it is always movable."""
-    mode = docorder.sort_mode(metadata, sort_field)
-    if mode == docorder.DOC_ID:
-        movable = {doc for doc in metadata if docorder.parse_int(doc) is None}
-    elif mode == docorder.STRING:
+    mode = documents.sort_mode(metadata, sort_field)
+    if mode == documents.DOC_ID:
+        movable = {doc for doc in metadata if documents.parse_int(doc) is None}
+    elif mode == documents.STRING:
         values = Counter(fields.get(sort_field, "") for fields in metadata.values())
         movable = {doc for doc, fields in metadata.items()
                    if values[fields.get(sort_field, "")] > 1}
     else:
         movable = {doc for doc, fields in metadata.items()
-                   if docorder.parse_int(fields.get(sort_field, "")) is None}
+                   if documents.parse_int(fields.get(sort_field, "")) is None}
     return mode, movable, lambda doc: doc in movable or doc not in metadata
 
 
