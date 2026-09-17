@@ -4,6 +4,11 @@ Kernels take int32/int64 arrays and scalars only, nogil and cached.
 An alignment row is int32[9]: source start byte, source end byte, source first index,
 source last index, target start byte, target end byte, target first index,
 target last index, total matching ngrams.
+
+Both kernels are symmetric: comparing a pair of documents the other way round gives the
+mirrored passages. `MATCHER_SYMMETRY.md` measures the asymmetric matcher they replaced,
+which agreed with itself on 52% of frantext passages when the document order was
+reversed, and records what it cost to fix.
 """
 import math
 import numpy as np
@@ -22,184 +27,359 @@ def _grow(out):
 
 
 @njit(nogil=True, cache=True)
-def match_passage(packed_indices, packed_positions, n, start_bytes, end_bytes,
-                  window_size, max_gap_cfg, flex_gap, min_matching, min_in_window):
-    """Matches must be sorted by (source index, target index).
+def _pair_key(packed):
+    """The two ngram indices as an unordered pair, so it is the same either way round.
 
-    A match is two packed int64s. `packed_indices` holds its source and target ngram
-    indices, which drive every comparison, so they are packed together and read as one
-    stream. `packed_positions` holds its source and target positions in start_bytes and
-    end_bytes: those offsets are wanted only at a run's first match and on the ones it
-    accepts, so they stay in the corpus arrays and are fetched when needed rather than
-    copied for every match.
+    31 bits a side: an ngram index is a non-negative int32, so no document is long
+    enough to make two different matches share a key by overflow.
     """
-    out = np.empty((64, NCOL), np.int32)
-    n_alignments = 0
-    last_source_position = 0
-    in_alignment = False
-    for match_index in range(n):
-        anchor_indices = packed_indices[match_index]
-        anchor_source_index = anchor_indices >> 32
-        if anchor_source_index < last_source_position:
-            continue
-        anchor_target_index = anchor_indices & TARGET_HALF
-        anchor_positions = packed_positions[match_index]
-        anchor_source_position = anchor_positions >> 32
-        anchor_target_position = anchor_positions & TARGET_HALF
-        source_anchor = anchor_source_index
-        source_window_boundary = source_anchor + window_size
-        last_source_position = source_anchor
-        max_source_gap = last_source_position + max_gap_cfg
-        target_anchor = anchor_target_index
-        target_window_boundary = target_anchor + window_size
-        last_target_position = target_anchor
-        max_target_gap = last_target_position + max_gap_cfg
-        in_alignment = True
-        previous_source_index = source_anchor
-        first_source_start_byte = start_bytes[anchor_source_position]   # the run's first
-        first_source_index = anchor_source_index
-        first_target_start_byte = start_bytes[anchor_target_position]
-        first_target_index = anchor_target_index
-        matches_in_current_alignment = 1
-        matches_in_current_window = 1
-        last_source_end_byte = end_bytes[anchor_source_position]        # and its last
-        last_source_index = anchor_source_index
-        last_target_end_byte = end_bytes[anchor_target_position]
-        last_target_index = anchor_target_index
-        max_gap = max_gap_cfg
-        matching_window_size = window_size
-        for j in range(match_index + 1, n):
-            match_indices = packed_indices[j]
-            source_index = match_indices >> 32
-            target_index = match_indices & TARGET_HALF
-            if source_index == previous_source_index:
-                continue
-            if target_index > max_target_gap or target_index <= last_target_position:
-                # The bound here is on the current match, so it always holds and the
-                # run continues whenever the source index is still within the gap.
-                if source_index <= max_source_gap:
-                    continue
-                else:
-                    in_alignment = False
-            if source_index > max_source_gap and matches_in_current_window < min_in_window:
-                in_alignment = False
-            if source_index > source_window_boundary or target_index > target_window_boundary:
-                if matches_in_current_window < min_in_window:
-                    in_alignment = False
-                else:
-                    if source_index > max_source_gap or target_index > max_target_gap:
-                        in_alignment = False
-                    else:
-                        source_anchor = source_index
-                        source_window_boundary = source_anchor + matching_window_size
-                        target_anchor = target_index
-                        target_window_boundary = target_anchor + matching_window_size
-                        matches_in_current_window = 0
-            if not in_alignment:
-                if matches_in_current_alignment >= min_matching:
-                    if n_alignments == out.shape[0]:
-                        out = _grow(out)
-                    out[n_alignments, 0] = first_source_start_byte
-                    out[n_alignments, 1] = last_source_end_byte
-                    out[n_alignments, 2] = first_source_index
-                    out[n_alignments, 3] = last_source_index
-                    out[n_alignments, 4] = first_target_start_byte
-                    out[n_alignments, 5] = last_target_end_byte
-                    out[n_alignments, 6] = first_target_index
-                    out[n_alignments, 7] = last_target_index
-                    out[n_alignments, 8] = matches_in_current_alignment
-                    n_alignments += 1
-                last_source_position = last_source_index + 1
-                break
-            last_source_position = source_index
-            max_source_gap = last_source_position + max_gap
-            last_target_position = target_index
-            max_target_gap = last_target_position + max_gap
-            previous_source_index = source_index
-            matches_in_current_window += 1
-            matches_in_current_alignment += 1
-            if flex_gap:
-                if matches_in_current_alignment == min_matching:
-                    max_gap += min_matching
-                    matching_window_size += min_matching
-                elif matches_in_current_alignment > min_matching:
-                    if max_gap < window_size:
-                        max_gap += 1
-                        matching_window_size += 1
-            match_positions = packed_positions[j]
-            last_source_end_byte = end_bytes[match_positions >> 32]
-            last_source_index = source_index
-            last_target_end_byte = end_bytes[match_positions & TARGET_HALF]
-            last_target_index = target_index
-        if in_alignment and matches_in_current_alignment >= min_matching:
-            if n_alignments == out.shape[0]:
-                out = _grow(out)
-            out[n_alignments, 0] = first_source_start_byte
-            out[n_alignments, 1] = last_source_end_byte
-            out[n_alignments, 2] = first_source_index
-            out[n_alignments, 3] = last_source_index
-            out[n_alignments, 4] = first_target_start_byte
-            out[n_alignments, 5] = last_target_end_byte
-            out[n_alignments, 6] = first_target_index
-            out[n_alignments, 7] = last_target_index
-            out[n_alignments, 8] = matches_in_current_alignment
-            n_alignments += 1
-    return out, n_alignments
+    source = packed >> 32
+    target = packed & TARGET_HALF
+    low = source if source < target else target
+    high = source if source > target else target
+    return (low << 31) | high
 
 
 @njit(nogil=True, cache=True)
-def merge_with_previous(al, n, merge_byte, merge_ngram, window_size, multiplier):
-    out = np.empty((n, NCOL), np.int32)
+def _sort_rows(out, n):
+    """By source index then target index: what merge_passages and the record order want.
+    Chains are emitted longest-first, which is not that order."""
+    for i in range(1, n):
+        row = out[i].copy()
+        j = i - 1
+        while j >= 0 and (out[j, 2] > row[2]
+                          or (out[j, 2] == row[2] and out[j, 6] > row[6])):
+            out[j + 1] = out[j]
+            j -= 1
+        out[j + 1] = row
+    return out, n
+
+
+@njit(nogil=True, cache=True)
+def _overlaps_kept(lo, hi, spans, n_spans, side):
+    for k in range(n_spans):
+        if lo <= spans[k, side * 2 + 1] and spans[k, side * 2] <= hi:
+            return True
+    return False
+
+
+@njit(nogil=True, cache=True)
+def _keep(out, n_alignments, spans, packed_indices, packed_positions, chain,
+          first, last, count, start_bytes, end_bytes):
+    """Emit chain[first:last] as a passage unless both of its stretches are already
+    covered by a kept passage. Grows out and spans together."""
+    source_lo = packed_indices[chain[first]] >> 32
+    source_hi = packed_indices[chain[last]] >> 32
+    target_lo = packed_indices[chain[first]] & TARGET_HALF
+    target_hi = packed_indices[chain[last]] & TARGET_HALF
+    if (_overlaps_kept(source_lo, source_hi, spans, n_alignments, 0)
+            and _overlaps_kept(target_lo, target_hi, spans, n_alignments, 1)):
+        return out, n_alignments, spans
+    if n_alignments == out.shape[0]:
+        out = _grow(out)
+        bigger = np.empty((out.shape[0], 4), np.int32)
+        bigger[:n_alignments] = spans[:n_alignments]
+        spans = bigger
+    spans[n_alignments, 0] = source_lo
+    spans[n_alignments, 1] = source_hi
+    spans[n_alignments, 2] = target_lo
+    spans[n_alignments, 3] = target_hi
+    head = packed_positions[chain[first]]
+    tail = packed_positions[chain[last]]
+    out[n_alignments, 0] = start_bytes[head >> 32]
+    out[n_alignments, 1] = end_bytes[tail >> 32]
+    out[n_alignments, 2] = source_lo
+    out[n_alignments, 3] = source_hi
+    out[n_alignments, 4] = start_bytes[head & TARGET_HALF]
+    out[n_alignments, 5] = end_bytes[tail & TARGET_HALF]
+    out[n_alignments, 6] = target_lo
+    out[n_alignments, 7] = target_hi
+    out[n_alignments, 8] = count
+    return out, n_alignments + 1, spans
+
+
+@njit(nogil=True, cache=True)
+def link_bound(window_size, max_gap, flex_gap, min_matching):
+    """The largest step `match_chains` must consider linking across.
+
+    Without flex_gap that is max_gap. With it, the run's allowance starts at max_gap,
+    jumps by min_matching once the run reaches min_matching matches, then climbs by one
+    per match while it is below window_size -- so it cannot exceed the larger of
+    max_gap + min_matching and window_size. Linking to that ceiling and enforcing the
+    real allowance while walking the chain keeps every run the old kernel could build
+    reachable.
+    """
+    if not flex_gap:
+        return max_gap
+    flexed = max_gap + min_matching
+    return flexed if flexed > window_size else window_size
+
+
+@njit(nogil=True, cache=True)
+def match_passage(packed_indices, packed_positions, n, start_bytes, end_bytes,
+                  window_size, max_gap, flex_gap, min_matching, min_in_window,
+                  best, parent, used, chain, key, order, spans, out):
+    """Matches must be sorted by (source index, target index).
+
+    A passage is a chain of matches strictly increasing in both ngram indices, with
+    consecutive steps inside the run's gap allowance in either document, dense enough
+    that every window_size stretch of either document holds min_in_window of them. Every
+    test is a symmetric function of the two indices, so comparing a pair the other way
+    round gives the mirrored passages. The matcher this replaced walked the source once
+    and reserved the source range of each passage it emitted, which reports a phrase
+    occurring once in the source and n times in the target as one passage, and as n when
+    the same pair is compared the other way.
+
+    Chains are found longest-first by dynamic programming, so a passage is never cut
+    short by a nearer but unextendable match, and a chain is kept only when it covers a
+    stretch of either document that no kept chain covers yet. Reserving neither side
+    instead reports n*m passages for a phrase occurring n and m times; reserving both is
+    what makes the count about n+m, every occurrence on both sides reported once.
+
+    Every buffer is the caller's: best, parent, used, chain, order sized for n matches,
+    key for n + 1, and spans and out grown here and handed back so the next pair reuses
+    them. Returns (out, n_alignments, spans).
+    """
     n_alignments = 0
     if n == 0:
-        return out, 0
+        return out, 0, spans
+    max_link = link_bound(window_size, max_gap, flex_gap, min_matching)
+
+    # Longest chain ending at each match. The (source, target) order makes the candidate
+    # predecessors of a match the ones still inside its source window.
+    window_start = 0
+    longest = 1
+    for b in range(n):
+        source_b = packed_indices[b] >> 32
+        target_b = packed_indices[b] & TARGET_HALF
+        while (packed_indices[window_start] >> 32) < source_b - max_link:
+            window_start += 1
+        best_b = np.int32(1)
+        parent_b = np.int32(-1)
+        best_step = np.int64(0)
+        best_near = np.int64(0)
+        for a in range(window_start, b):
+            source_a = packed_indices[a] >> 32
+            if source_a == source_b:
+                break                       # and so are all the matches after it
+            target_a = packed_indices[a] & TARGET_HALF
+            target_step = target_b - target_a
+            if target_step <= 0 or target_step > max_link:
+                continue
+            candidate = best[a] + np.int32(1)
+            source_step = source_b - source_a
+            step = source_step + target_step
+            # Among equally long chains, the nearest predecessor, measured by the two
+            # steps as an unordered pair: their total first, then the smaller of them,
+            # which together fix both. Both are symmetric in the two documents, so the
+            # choice does not depend on which one is the source. What that leaves tied
+            # is a predecessor at (di, dj) against one at (dj, di) -- exact mirror
+            # images, which nothing symmetric can separate.
+            near = source_step if source_step < target_step else target_step
+            if candidate > best_b or (candidate == best_b
+                                      and (step < best_step
+                                           or (step == best_step
+                                               and near < best_near))):
+                best_b = candidate
+                parent_b = a
+                best_step = step
+                best_near = near
+        best[b] = best_b
+        parent[b] = parent_b
+        used[b] = 0
+        if best_b > longest:
+            longest = best_b
+    if longest < min_matching:
+        return out, 0, spans                # no chain here can reach the threshold
+
+    # Chain ends, longest first, over only the matches that could end one: a counting
+    # sort on the length, then each length's block by its coordinate pair as an
+    # unordered pair, so the order does not depend on which document is the source.
+    n_ends = 0
+    n_buckets = longest - min_matching + 2
+    for bucket in range(n_buckets):
+        key[bucket] = 0
+    for b in range(n):
+        if best[b] >= min_matching:
+            key[longest - best[b]] += 1
+            n_ends += 1
+    running = 0
+    for bucket in range(n_buckets):
+        count = key[bucket]
+        key[bucket] = running
+        running += count
+    for b in range(n):
+        if best[b] >= min_matching:
+            bucket = longest - best[b]
+            order[key[bucket]] = b
+            key[bucket] += 1
+    block_start = 0
+    for rank in range(1, n_ends + 1):
+        if rank < n_ends and best[order[rank]] == best[order[block_start]]:
+            continue
+        for i in range(block_start + 1, rank):
+            entry = order[i]
+            entry_key = _pair_key(packed_indices[entry])
+            j = i - 1
+            while j >= block_start and _pair_key(packed_indices[order[j]]) > entry_key:
+                order[j + 1] = order[j]
+                j -= 1
+            order[j + 1] = entry
+        block_start = rank
+
+    for rank in range(n_ends):
+        end = order[rank]
+        if used[end]:
+            continue
+        length = 0
+        at = np.int32(end)
+        while at >= 0 and not used[at]:
+            chain[length] = at
+            length += 1
+            at = parent[at]
+        if length < min_matching:
+            used[end] = 1
+            continue
+        for c in range(length // 2):        # the walk collected the chain backwards
+            chain[c], chain[length - 1 - c] = chain[length - 1 - c], chain[c]
+        for c in range(length):
+            used[chain[c]] = 1
+        # Walk it applying the run's real gap allowance and the window test, cutting
+        # where either fails and keeping both sides rather than dropping everything past
+        # the first failure.
+        segment_start = 0
+        anchor = 0
+        in_window = 1
+        in_segment = 1
+        gap_allowance = max_gap
+        window = window_size
+        for t in range(1, length + 1):
+            cut = t == length
+            if not cut:
+                source_t = packed_indices[chain[t]] >> 32
+                target_t = packed_indices[chain[t]] & TARGET_HALF
+                previous = packed_indices[chain[t - 1]]
+                if (source_t - (previous >> 32) > gap_allowance
+                        or target_t - (previous & TARGET_HALF) > gap_allowance):
+                    cut = True
+                else:
+                    source_anchor = packed_indices[chain[anchor]] >> 32
+                    target_anchor = packed_indices[chain[anchor]] & TARGET_HALF
+                    if (source_t > source_anchor + window
+                            or target_t > target_anchor + window):
+                        if in_window < min_in_window:
+                            cut = True
+                        else:
+                            anchor = t
+                            in_window = 0
+            if cut:
+                count = t - segment_start
+                if count >= min_matching:
+                    out, n_alignments, spans = _keep(
+                        out, n_alignments, spans, packed_indices, packed_positions,
+                        chain, segment_start, t - 1, count, start_bytes, end_bytes)
+                if t == length:
+                    break
+                segment_start = t
+                anchor = t
+                in_window = 1
+                in_segment = 1
+                gap_allowance = max_gap
+                window = window_size
+                continue
+            in_window += 1
+            in_segment += 1
+            if flex_gap:
+                if in_segment == min_matching:
+                    gap_allowance += min_matching
+                    window += min_matching
+                elif in_segment > min_matching and gap_allowance < window_size:
+                    gap_allowance += 1
+                    window += 1
+    out, n_alignments = _sort_rows(out, n_alignments)
+    return out, n_alignments, spans
+
+
+@njit(nogil=True, cache=True)
+def _root(parent, x):
+    root = x
+    while parent[root] != root:
+        root = parent[root]
+    while parent[x] != root:
+        parent[x], x = root, parent[x]
+    return root
+
+
+@njit(nogil=True, cache=True)
+def merge_passages(al, n, merge_byte, merge_ngram, window_size, multiplier):
+    """Merge passages that continue one another, independently of which document is the
+    source. Rows must be in source order.
+
+    Three things differ from the merger this replaced. Each document's byte allowance
+    comes from that document's own passage length, where one allowance derived from the
+    source length was applied to both. The candidate must not overlap the passage it
+    merges into in either document, where only the target was checked -- enough while
+    passages could not overlap in the source, which they can now that the matcher does
+    not reserve source ranges. And merging is over the connected components of that
+    relation rather than a single left-to-right pass, so a chain of merges does not
+    depend on the order the passages arrive in.
+    """
+    if n == 0:
+        return al, 0
+    parent = np.empty(n, np.int64)
+    for i in range(n):
+        parent[i] = i
     max_ngram_distance = window_size if merge_ngram else 0
-    max_source_distance = 0
-    max_target_distance = 0
-    prev = np.empty(NCOL, np.int64)
-    for c in range(NCOL):
-        prev[c] = al[0, c]
-    last_index = n - 1
-    for index in range(1, n):
-        merged = False
-        if merge_byte:
-            distance_value = int(math.floor(float(prev[1] - prev[0]) * multiplier))
-            max_source_distance = prev[1] + distance_value
-            max_target_distance = prev[5] + distance_value
-        source_ngram_distance = prev[3] + max_ngram_distance
-        target_ngram_distance = prev[7] + max_ngram_distance
-        candidate_source_start_byte = al[index, 0]
-        candidate_target_start_byte = al[index, 4]
-        candidate_source_index = al[index, 2]
-        candidate_target_index = al[index, 6]
-        if (candidate_source_start_byte <= max_source_distance
-                and candidate_target_start_byte <= max_target_distance
-                and candidate_target_start_byte > prev[5]):
-            merged = True
-        elif (candidate_source_index <= source_ngram_distance
-                and candidate_target_index <= target_ngram_distance
-                and candidate_target_index > prev[7]):
-            merged = True
-        if merged:
-            prev[1] = al[index, 1]; prev[3] = al[index, 3]
-            prev[5] = al[index, 5]; prev[7] = al[index, 7]
-            prev[8] = prev[8] + al[index, 8]
-        else:
-            for c in range(NCOL):
-                out[n_alignments, c] = prev[c]
-            n_alignments += 1
-            for c in range(NCOL):
-                prev[c] = al[index, c]
-        if index == last_index:
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            # i strictly before j in both documents, or the relation says nothing here.
+            if al[i, 1] >= al[j, 1] or al[i, 5] >= al[j, 5]:
+                continue
+            if al[j, 0] <= al[i, 1] or al[j, 4] <= al[i, 5]:
+                continue
+            merged = False
+            if merge_byte:
+                source_room = int(math.floor(float(al[i, 1] - al[i, 0]) * multiplier))
+                target_room = int(math.floor(float(al[i, 5] - al[i, 4]) * multiplier))
+                if (al[j, 0] <= al[i, 1] + source_room
+                        and al[j, 4] <= al[i, 5] + target_room):
+                    merged = True
+            if not merged and merge_ngram:
+                if (al[j, 2] <= al[i, 3] + max_ngram_distance
+                        and al[j, 6] <= al[i, 7] + max_ngram_distance):
+                    merged = True
             if merged:
-                for c in range(NCOL):
-                    out[n_alignments, c] = prev[c]
-            else:
-                for c in range(NCOL):
-                    out[n_alignments, c] = al[index, c]
-            n_alignments += 1
-    if n == 1:                       # a lone alignment is emitted unchanged
+                root_i = _root(parent, i)
+                root_j = _root(parent, j)
+                if root_i != root_j:
+                    if root_i < root_j:     # the lowest row represents the component, so
+                        parent[root_j] = root_i     # the result does not depend on the
+                    else:                           # order the merges were found in
+                        parent[root_i] = root_j
+    out = np.empty((n, NCOL), np.int32)
+    n_out = 0
+    for i in range(n):
+        if _root(parent, i) != i:
+            continue
         for c in range(NCOL):
-            out[0, c] = prev[c]
-        n_alignments = 1
-    return out, n_alignments
+            out[n_out, c] = al[i, c]
+        for j in range(n):
+            if j == i or _root(parent, j) != i:
+                continue
+            if al[j, 0] < out[n_out, 0]:
+                out[n_out, 0] = al[j, 0]
+                out[n_out, 2] = al[j, 2]
+            if al[j, 1] > out[n_out, 1]:
+                out[n_out, 1] = al[j, 1]
+                out[n_out, 3] = al[j, 3]
+            if al[j, 4] < out[n_out, 4]:
+                out[n_out, 4] = al[j, 4]
+                out[n_out, 6] = al[j, 6]
+            if al[j, 5] > out[n_out, 5]:
+                out[n_out, 5] = al[j, 5]
+                out[n_out, 7] = al[j, 7]
+            out[n_out, 8] += al[j, 8]
+        n_out += 1
+    return _sort_rows(out, n_out)

@@ -26,7 +26,7 @@ at a time, which bounds them by the biggest source instead of by sum(df^2 / 2).
 import numpy as np
 from numba import njit
 
-from .kernels import NCOL, match_passage, merge_with_previous
+from .kernels import NCOL, match_passage, merge_passages
 
 MSD_BITS = 12                      # 4096 MSD buckets: 16 KB histogram per thread (L1)
 MSD_BUCKETS = 1 << MSD_BITS
@@ -220,8 +220,8 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
                  min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
                  min_matching, min_in_window, merge_byte, merge_ngram, multiplier):
     """Own one source document end to end: sweep its keys for the documents that follow
-    it in each group, apply the two filters, then run the prototype's unchanged
-    cross-product / sort / matchPassage pipeline.
+    it in each group, apply the two filters, then expand each surviving pair's matches
+    and hand them to kernels.match_passage.
 
     The sweep runs twice, first to size every target's block and then to fill it, so only
     the grouped (source slot, target slot) pair is ever stored. The caller sizes
@@ -253,6 +253,17 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
     match_capacity = 256
     packed_indices = np.empty(match_capacity, np.int64)
     packed_positions = np.empty(match_capacity, np.int64)
+    # match_passage's chaining buffers, kept across this source's targets for the same
+    # reason the match arrays are. `chain_spans` and `chain_out` grow inside the kernel
+    # and come back out, so a later pair inherits whatever size an earlier one needed.
+    chain_best = np.empty(match_capacity, np.int32)
+    chain_parent = np.empty(match_capacity, np.int32)
+    chain_used = np.empty(match_capacity, np.uint8)
+    chain_members = np.empty(match_capacity, np.int32)
+    chain_key = np.empty(match_capacity + 1, np.int32)
+    chain_order = np.empty(match_capacity, np.int32)
+    chain_spans = np.empty((64, 4), np.int32)
+    chain_out = np.empty((64, NCOL), np.int32)
     duplicate_slots = np.empty((64, 2), np.int32)
     duplicate_percents = np.empty(64, np.float64)
     n_duplicates = 0
@@ -304,7 +315,12 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
             stats[1] += 1
             continue
         stats[5] += 1
-        pct = count / ns * 100
+        # The share of the smaller document's ngrams the two have in common: the same
+        # reading of "one of these is a reprint of the other" whichever way round the
+        # pair is compared. Dividing by the source's own count made a short document
+        # inside a long one a duplicate one way only.
+        nt = key_offsets[t + 1] - key_offsets[t]
+        pct = count / (ns if ns < nt else nt) * 100
         if pct > dup_threshold:
             stats[2] += 1
             if n_duplicates == duplicate_slots.shape[0]:
@@ -369,6 +385,12 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
             match_capacity = n_matches * 2
             packed_indices = np.empty(match_capacity, np.int64)
             packed_positions = np.empty(match_capacity, np.int64)
+            chain_best = np.empty(match_capacity, np.int32)
+            chain_parent = np.empty(match_capacity, np.int32)
+            chain_used = np.empty(match_capacity, np.uint8)
+            chain_members = np.empty(match_capacity, np.int32)
+            chain_key = np.empty(match_capacity + 1, np.int32)
+            chain_order = np.empty(match_capacity, np.int32)
         written = 0
         for rank in range(n_positions):
             entry = order[rank]
@@ -383,11 +405,14 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
                                            | np.int64(ngram_indices[target_at]))
                 packed_positions[written] = source_position_half | np.int64(target_at)
                 written += 1
-        alignments, n_alignments = match_passage(packed_indices, packed_positions, n_matches,
-                                 start_bytes, end_bytes, window_size, max_gap, flex_gap,
-                                 min_matching, min_in_window)
+        chain_out, n_alignments, chain_spans = match_passage(
+            packed_indices, packed_positions, n_matches, start_bytes, end_bytes,
+            window_size, max_gap, flex_gap, min_matching, min_in_window,
+            chain_best, chain_parent, chain_used, chain_members, chain_key,
+            chain_order, chain_spans, chain_out)
+        alignments = chain_out
         if merge_byte or merge_ngram:
-            alignments, n_alignments = merge_with_previous(
+            alignments, n_alignments = merge_passages(
                 alignments, n_alignments, merge_byte, merge_ngram, window_size,
                 multiplier)
         if n_alignments > 0:

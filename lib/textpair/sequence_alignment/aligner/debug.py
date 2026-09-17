@@ -7,17 +7,18 @@ must behave exactly like `kernels.match_passage`, which `tests/test_debug_trace.
 checks by comparing the alignments the two produce.
 
 One file per traced pair lands in `<output_path>/debug_output`, named
-`<source_doc_id>_<target_doc_id>`, holding a block per emitted or rejected run and a
+`<source_doc_id>_<target_doc_id>`, holding a block per kept or rejected passage and a
 closing line when merging removed passages. `ngram_index` resolves an ngram's int32 key
 to its text; without it the keys cannot be named and the ngram lines come out empty.
 
-Failed runs shorter than `debug_minimum_ngrams` ngrams are replaced by one counted
+Rejected passages shorter than `debug_minimum_ngrams` ngrams are replaced by one counted
 summary line per pair, since they outnumber the near misses by about a hundred to one.
 The default keeps runs one ngram short of `minimum_matching_ngrams`; 1 keeps everything.
 `debug_pairs` narrows the trace to named pairs, which also skips re-deriving the rest.
 
-Each block reports which tests ended the run, in evaluation order, so the first named is
-the one that ended it and the rest also held.
+The matcher builds chains longest-first and splits each where it thins out, so a block is
+one segment of one chain. Its `Run ended:` line names where the segment stopped -- a gap,
+a sparse window, the end of the chain -- and, when the segment was rejected, why.
 """
 import os
 
@@ -25,16 +26,21 @@ import numpy as np
 
 from . import kernels
 
-# Which test ended a run, as a bitmask: several can hold at once.
-END_TARGET_GAP = 1        # target index beyond the target gap
-END_SOURCE_GAP = 2        # source index beyond the source gap, too few in window
-END_WINDOW_SPARSE = 4     # past a window boundary, too few matches in the window
-END_WINDOW_GAP = 8        # past a window boundary and beyond a gap
+# Why a passage ends where it does, and why a rejected one was rejected, as a bitmask:
+# several can hold at once.
+END_GAP = 1             # the step to the next match is beyond the gap allowance
+END_WINDOW_SPARSE = 2   # past a window boundary with too few matches in the window
+END_OF_CHAIN = 4        # no further match could extend the chain
+TRUNCATED = 8           # the chain stopped at a match an earlier passage had taken
+DROP_SHORT = 16         # fewer than minimum_matching_ngrams matches
+DROP_COVERED = 32       # both stretches already covered by a passage that was kept
 _END_NAMES = (
-    (END_TARGET_GAP, "target index beyond max_gap"),
-    (END_SOURCE_GAP, "source index beyond max_gap with too few matches in window"),
+    (END_GAP, "the next match is beyond max_gap in one of the documents"),
     (END_WINDOW_SPARSE, "past the window boundary with too few matches in window"),
-    (END_WINDOW_GAP, "past the window boundary and beyond max_gap"),
+    (END_OF_CHAIN, "the chain could not be extended"),
+    (TRUNCATED, "the chain ran into matches an earlier passage had taken"),
+    (DROP_SHORT, "fewer than minimum_matching_ngrams matches"),
+    (DROP_COVERED, "both stretches are already covered by a passage that was kept"),
 )
 
 
@@ -120,124 +126,176 @@ class Corpus:
 
 
 def _walk(match, n, params, floor):
-    """Mirror of kernels.match_passage, recording a block per emitted or rejected run.
+    """Mirror of kernels.match_passage, recording a block per kept or rejected passage.
 
     Returns (rows, blocks, hidden): the alignments as that kernel would emit them, the
-    trace of each run, and a histogram of the failed runs the floor hid.
+    trace of each passage, and a histogram of the rejected ones the floor hid.
     """
     (source_indices, source_start_bytes, source_end_bytes,
      target_indices, target_start_bytes, target_end_bytes, match_keys) = match
     window_size = params["matching_window_size"]
-    max_gap_cfg = params["max_gap"]
+    max_gap = params["max_gap"]
     flex_gap = params["flex_gap"]
     min_matching = params["minimum_matching_ngrams"]
     min_in_window = params["minimum_matching_ngrams_in_window"]
+    max_link = kernels.link_bound(window_size, max_gap, flex_gap, min_matching)
 
     rows, blocks, hidden = [], [], {}
-    last_source_position = 0
-    in_alignment = False
-    for match_index in range(n):
-        if source_indices[match_index] < last_source_position:
-            continue
-        source_anchor = source_indices[match_index]
-        source_window_boundary = source_anchor + window_size
-        last_source_position = source_anchor
-        max_source_gap = last_source_position + max_gap_cfg
-        target_anchor = target_indices[match_index]
-        target_window_boundary = target_anchor + window_size
-        last_target_position = target_anchor
-        max_target_gap = last_target_position + max_gap_cfg
-        in_alignment = True
-        previous_source_index = source_anchor
-        first_source_start_byte = source_start_bytes[match_index]
-        first_source_index = source_indices[match_index]
-        first_target_start_byte = target_start_bytes[match_index]
-        first_target_index = target_indices[match_index]
-        matches_in_current_alignment = 1
-        matches_in_current_window = 1
-        last_source_end_byte = source_end_bytes[match_index]
-        last_source_index = source_indices[match_index]
-        last_target_end_byte = target_end_bytes[match_index]
-        last_target_index = target_indices[match_index]
-        max_gap = max_gap_cfg
-        matching_window_size = window_size
-        keys = [match_keys[match_index]]
-        reason = 0
-        for j in range(match_index + 1, n):
-            source_index = source_indices[j]
-            target_index = target_indices[j]
-            if source_index == previous_source_index:
+    best = [1] * n
+    parent = [-1] * n
+    used = [False] * n
+    window_start = 0
+    longest = 1
+    for b in range(n):
+        source_b = int(source_indices[b])
+        target_b = int(target_indices[b])
+        while int(source_indices[window_start]) < source_b - max_link:
+            window_start += 1
+        best_b, parent_b, best_step, best_near = 1, -1, 0, 0
+        for a in range(window_start, b):
+            source_a = int(source_indices[a])
+            if source_a == source_b:
+                break
+            target_step = target_b - int(target_indices[a])
+            if target_step <= 0 or target_step > max_link:
                 continue
-            if target_index > max_target_gap or target_index <= last_target_position:
-                if source_index <= max_source_gap:
-                    continue
-                else:
-                    in_alignment = False
-                    reason |= END_TARGET_GAP
-            if source_index > max_source_gap and matches_in_current_window < min_in_window:
-                in_alignment = False
-                reason |= END_SOURCE_GAP
-            if source_index > source_window_boundary or target_index > target_window_boundary:
-                if matches_in_current_window < min_in_window:
-                    in_alignment = False
-                    reason |= END_WINDOW_SPARSE
-                else:
-                    if source_index > max_source_gap or target_index > max_target_gap:
-                        in_alignment = False
-                        reason |= END_WINDOW_GAP
+            candidate = best[a] + 1
+            source_step = source_b - source_a
+            step = source_step + target_step
+            near = min(source_step, target_step)
+            if candidate > best_b or (candidate == best_b
+                                      and (step, near) < (best_step, best_near)):
+                best_b, parent_b, best_step, best_near = candidate, a, step, near
+        best[b], parent[b] = best_b, parent_b
+        longest = max(longest, best_b)
+    if longest < min_matching:
+        return rows, blocks, hidden
+
+    def pair_key(i):
+        source, target = int(source_indices[i]), int(target_indices[i])
+        low, high = min(source, target), max(source, target)
+        return (low << 31) | high
+
+    # Ends longest first, then by coordinate pair: the kernel's counting sort followed by
+    # its per-length insertion sort, both stable, come to the same order.
+    ends = sorted((b for b in range(n) if best[b] >= min_matching),
+                  key=lambda b: (-best[b], pair_key(b)))
+    spans = []
+
+    def record(first, last, keys, reason):
+        """Offer chain[first:last] to the coverage test and trace the outcome."""
+        source_lo, source_hi = int(source_indices[first]), int(source_indices[last])
+        target_lo, target_hi = int(target_indices[first]), int(target_indices[last])
+        covered_source = any(source_lo <= hi and lo <= source_hi
+                             for lo, hi, _, _ in spans)
+        covered_target = any(target_lo <= hi and lo <= target_hi
+                             for _, _, lo, hi in spans)
+        emit = not (covered_source and covered_target)
+        if emit:
+            spans.append((source_lo, source_hi, target_lo, target_hi))
+            rows.append((int(source_start_bytes[first]), int(source_end_bytes[last]),
+                         source_lo, source_hi,
+                         int(target_start_bytes[first]), int(target_end_bytes[last]),
+                         target_lo, target_hi, len(keys)))
+        else:
+            reason |= DROP_COVERED
+        if emit or len(keys) >= floor:
+            blocks.append((emit, int(source_start_bytes[first]),
+                           int(source_end_bytes[last]), source_lo, source_hi,
+                           int(target_start_bytes[first]), int(target_end_bytes[last]),
+                           target_lo, target_hi, keys, reason))
+        else:
+            hidden[len(keys)] = hidden.get(len(keys), 0) + 1
+
+    for end in ends:
+        if used[end]:
+            continue
+        chain = []
+        at = end
+        while at >= 0 and not used[at]:
+            chain.append(at)
+            at = parent[at]
+        truncated = TRUNCATED if at >= 0 else 0
+        if len(chain) < min_matching:
+            used[end] = True
+            keys = [match_keys[i] for i in reversed(chain)]
+            if len(keys) >= floor:
+                first, last = chain[-1], chain[0]
+                blocks.append((False, int(source_start_bytes[first]),
+                               int(source_end_bytes[last]),
+                               int(source_indices[first]), int(source_indices[last]),
+                               int(target_start_bytes[first]),
+                               int(target_end_bytes[last]),
+                               int(target_indices[first]), int(target_indices[last]),
+                               keys, DROP_SHORT | truncated))
+            else:
+                hidden[len(keys)] = hidden.get(len(keys), 0) + 1
+            continue
+        chain.reverse()
+        for i in chain:
+            used[i] = True
+        segment_start = 0
+        anchor = 0
+        in_window = 1
+        in_segment = 1
+        gap_allowance = max_gap
+        window = window_size
+        for t in range(1, len(chain) + 1):
+            reason = 0
+            cut = t == len(chain)
+            if cut:
+                reason = END_OF_CHAIN | truncated
+            else:
+                source_t = int(source_indices[chain[t]])
+                target_t = int(target_indices[chain[t]])
+                if (source_t - int(source_indices[chain[t - 1]]) > gap_allowance
+                        or target_t - int(target_indices[chain[t - 1]]) > gap_allowance):
+                    cut, reason = True, END_GAP
+                elif (source_t > int(source_indices[chain[anchor]]) + window
+                      or target_t > int(target_indices[chain[anchor]]) + window):
+                    if in_window < min_in_window:
+                        cut, reason = True, END_WINDOW_SPARSE
                     else:
-                        source_anchor = source_index
-                        source_window_boundary = source_anchor + matching_window_size
-                        target_anchor = target_index
-                        target_window_boundary = target_anchor + matching_window_size
-                        matches_in_current_window = 0
-            if not in_alignment:
-                emit = matches_in_current_alignment >= min_matching
-                if emit:
-                    rows.append((first_source_start_byte, last_source_end_byte,
-                                     first_source_index, last_source_index,
-                                     first_target_start_byte, last_target_end_byte,
-                                     first_target_index, last_target_index,
-                                     matches_in_current_alignment))
-                if emit or len(keys) >= floor:
-                    blocks.append((emit, first_source_start_byte, last_source_end_byte,
-                                       first_source_index, last_source_index,
-                                       first_target_start_byte, last_target_end_byte,
-                                       first_target_index, last_target_index, keys, reason))
+                        anchor = t
+                        in_window = 0
+            if cut:
+                count = t - segment_start
+                keys = [match_keys[i] for i in chain[segment_start:t]]
+                if count >= min_matching:
+                    record(chain[segment_start], chain[t - 1], keys, reason)
+                elif len(keys) >= floor:
+                    first, last = chain[segment_start], chain[t - 1]
+                    blocks.append((False, int(source_start_bytes[first]),
+                                   int(source_end_bytes[last]),
+                                   int(source_indices[first]), int(source_indices[last]),
+                                   int(target_start_bytes[first]),
+                                   int(target_end_bytes[last]),
+                                   int(target_indices[first]), int(target_indices[last]),
+                                   keys, reason | DROP_SHORT))
                 else:
                     hidden[len(keys)] = hidden.get(len(keys), 0) + 1
-                last_source_position = last_source_index + 1
-                break
-            last_source_position = source_index
-            max_source_gap = last_source_position + max_gap
-            last_target_position = target_index
-            max_target_gap = last_target_position + max_gap
-            previous_source_index = source_index
-            matches_in_current_window += 1
-            matches_in_current_alignment += 1
+                if t == len(chain):
+                    break
+                segment_start = t
+                anchor = t
+                in_window = 1
+                in_segment = 1
+                gap_allowance = max_gap
+                window = window_size
+                continue
+            in_window += 1
+            in_segment += 1
             if flex_gap:
-                if matches_in_current_alignment == min_matching:
-                    max_gap += min_matching
-                    matching_window_size += min_matching
-                elif matches_in_current_alignment > min_matching:
-                    if max_gap < window_size:
-                        max_gap += 1
-                        matching_window_size += 1
-            last_source_end_byte = source_end_bytes[j]; last_source_index = source_index
-            last_target_end_byte = target_end_bytes[j]; last_target_index = target_index
-            keys.append(match_keys[j])
-        if in_alignment and matches_in_current_alignment >= min_matching:
-            rows.append((first_source_start_byte, last_source_end_byte,
-                             first_source_index, last_source_index,
-                             first_target_start_byte, last_target_end_byte,
-                             first_target_index, last_target_index,
-                             matches_in_current_alignment))
-            # This run reached the end of the matches; record a block so every
-            # alignment in the output appears in the trace.
-            blocks.append((True, first_source_start_byte, last_source_end_byte,
-                               first_source_index, last_source_index,
-                               first_target_start_byte, last_target_end_byte,
-                               first_target_index, last_target_index, keys, reason))
+                if in_segment == min_matching:
+                    gap_allowance += min_matching
+                    window += min_matching
+                elif in_segment > min_matching and gap_allowance < window_size:
+                    gap_allowance += 1
+                    window += 1
+    # The kernel hands its rows back in source order; passages are found longest-first,
+    # which is not that order. `blocks` stays in the order the matcher produced them,
+    # since that is what the trace is for.
+    rows.sort(key=lambda row: (row[2], row[6]))
     return rows, blocks, hidden
 
 
@@ -295,7 +353,8 @@ def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_i
         shared = np.intersect1d(source_keys, corpus.keys(target), assume_unique=True)
         if shared.shape[0] < min_in_docs:
             continue
-        if shared.shape[0] / source_keys.shape[0] * 100 > dup_threshold:
+        smaller = min(source_keys.shape[0], corpus.keys(target).shape[0])
+        if shared.shape[0] / smaller * 100 > dup_threshold:
             continue                                   # a duplicate, never matched
         match, n = corpus.matches(source, target)
         if not n:
@@ -304,7 +363,7 @@ def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_i
         parts = [_render(block, ngram_index) for block in blocks]
         if merging and rows:
             alignments = np.array(rows, np.int32)
-            _merged, after = kernels.merge_with_previous(
+            _merged, after = kernels.merge_passages(
                 alignments, len(rows), params["merge_passages_on_byte_distance"],
                 params["merge_passages_on_ngram_distance"],
                 params["matching_window_size"], params["passage_distance_multiplier"])

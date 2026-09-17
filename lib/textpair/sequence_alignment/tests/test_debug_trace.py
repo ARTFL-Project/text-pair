@@ -22,7 +22,7 @@ import tempfile
 import numpy as np
 
 from textpair.sequence_alignment.aligner import align, debug, docorder, kernels, loader
-from textpair.sequence_alignment.aligner.runner import DEFAULTS, _normalize
+from textpair.sequence_alignment.aligner.runner import _normalize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = ("no_byte_range", "non_string_meta", "missing_text", "no_metadata")
@@ -53,19 +53,22 @@ def compare_kernels(source_files, source_metadata, params, threads):
                | np.arange(n, 2 * n, dtype=np.int64))
         start_bytes = np.concatenate([np.asarray(s_sb, np.int32), np.asarray(t_sb, np.int32)])
         end_bytes = np.concatenate([np.asarray(s_eb, np.int32), np.asarray(t_eb, np.int32)])
-        out, cnt = kernels.match_passage(
+        out, cnt, _spans = kernels.match_passage(
             pair, pos, n, start_bytes, end_bytes,
             params["matching_window_size"], params["max_gap"], params["flex_gap"],
             params["minimum_matching_ngrams"],
-            params["minimum_matching_ngrams_in_window"])
+            params["minimum_matching_ngrams_in_window"],
+            np.empty(n, np.int32), np.empty(n, np.int32), np.empty(n, np.uint8),
+            np.empty(n, np.int32), np.empty(n + 1, np.int32), np.empty(n, np.int32),
+            np.empty((64, 4), np.int32), np.empty((64, kernels.NCOL), np.int32))
         if [tuple(int(v) for v in row) for row in out[:cnt]] != \
                 [tuple(int(v) for v in row) for row in rows]:
             mismatches += 1
     return pairs, mismatches
 
 
-def check_corpus(name, source_files, source_metadata, threads, failures):
-    params = _normalize({})
+def check_corpus(name, source_files, source_metadata, threads, failures, overrides=None):
+    params = _normalize(overrides or {})
     workdir = tempfile.mkdtemp(prefix="textpair_debug_check_")
 
     def check(label, got, want):
@@ -80,7 +83,7 @@ def check_corpus(name, source_files, source_metadata, threads, failures):
         check(f"_walk matches the kernel on all {pairs} pair(s)", mismatches, 0)
 
         common = dict(source_files=source_files, source_metadata=source_metadata,
-                      threads=threads)
+                      threads=threads, **(overrides or {}))
         plain, traced = os.path.join(workdir, "plain"), os.path.join(workdir, "traced")
         count = align(output_path=plain, **common)
         check("debug does not change the alignment count",
@@ -107,15 +110,23 @@ def main(argv=None):
     parser.add_argument("--threads", type=int, default=4)
     args = parser.parse_args(argv)
     failures = []
+    # Both settings of flex_gap: it changes how far the matcher links and the allowance
+    # the walk down each chain enforces, so the mirror has to hold for each. The shipped
+    # sa_config.ini sets it true, the aligner's own DEFAULTS leave it false.
+    settings = [{"flex_gap": False}, {"flex_gap": True}]
     if args.source_files:
-        check_corpus(os.path.basename(args.source_files.rstrip("/")) or "corpus",
-                     args.source_files, args.source_metadata, args.threads, failures)
+        base = os.path.basename(args.source_files.rstrip("/")) or "corpus"
+        for overrides in settings:
+            check_corpus(f"{base} flex_gap={overrides['flex_gap']}", args.source_files,
+                         args.source_metadata, args.threads, failures, overrides)
     else:
         for fixture in FIXTURES:
             root = os.path.join(HERE, "fixtures", fixture)
-            check_corpus(fixture, os.path.join(root, "ngrams"),
-                         os.path.join(root, "metadata", "metadata.json"), args.threads,
-                         failures)
+            for overrides in settings:
+                check_corpus(f"{fixture} flex_gap={overrides['flex_gap']}",
+                             os.path.join(root, "ngrams"),
+                             os.path.join(root, "metadata", "metadata.json"),
+                             args.threads, failures, overrides)
     print(f"\n{'FAILED: ' + ', '.join(failures) if failures else 'all checks PASS'}")
     return 1 if failures else 0
 

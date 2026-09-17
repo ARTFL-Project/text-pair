@@ -10,10 +10,12 @@ the target. Every record one run has and the other has not must therefore
   1. involve a document the two orders can place differently, and
   2. belong to a document pair the two runs compare in opposite directions.
 
-Both are required to pass. Reversing a pair does not merely relabel its alignments: the
-matcher is asymmetric, so it can find a different number of passages, or the same passage
-with different extents. How many of the differing records do have an exact mirror in the
-other run is reported, but not required. Exits non-zero, with an example, on any failure.
+Both are required to pass. The matcher is symmetric, so reversing a pair now does
+relabel its alignments and nothing more, apart from the tie `test_matcher_symmetry.py`
+documents, which can move a passage's start by a few ngrams. How many of the differing
+records have an exact mirror in the other run is therefore reported and expected to be
+nearly all of them, but is still not required. Exits non-zero, with an example, on any
+failure.
 
 Which documents count as movable follows the sort mode: in numeric mode those whose sort
 value does not parse as an integer, in string mode those sharing a value with another
