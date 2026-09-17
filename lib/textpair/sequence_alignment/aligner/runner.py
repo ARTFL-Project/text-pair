@@ -1,6 +1,6 @@
 """Driver for the Python sequence aligner: the `align()` entry point.
 
-`align()` takes the same parameters as the compareNgrams binary's command line flags and
+`align()` takes the alignment parameters as keyword arguments and
 writes the same artifacts to <output_path>: result_batches/ chunk files, count.txt,
 duplicate_files.csv and alignment_config.ini.
 """
@@ -14,11 +14,12 @@ from shlex import quote
 
 import numpy as np
 
+from . import debug as debug_output
 from . import loader, output, pipeline
 from .docorder import get_files
 from .gotext import load_metadata
 
-# Go's flag defaults (main.go:132-154). sa_config.ini overrides some of them.
+# sa_config.ini overrides some of these.
 DEFAULTS = dict(
     threads=4,
     sort_by="year",
@@ -37,6 +38,8 @@ DEFAULTS = dict(
     passage_distance_multiplier=0.5,
     debug=False,
     ngram_index="",
+    debug_minimum_ngrams=0,
+    debug_pairs="",
 )
 
 _INT_PARAMS = ("threads", "source_batch", "target_batch", "matching_window_size", "max_gap",
@@ -58,7 +61,7 @@ def _normalize(params):
     """Coerce config-file strings to the types the kernels expect.
 
     An empty typed parameter means "use the default", but an empty sort_by is kept: it is
-    how the caller asks for Go's unsorted, document-ID order (main.go:285).
+    how the caller asks for unsorted, document-ID order.
     """
     clean = dict(DEFAULTS)
     clean.update({k: v for k, v in params.items()
@@ -67,13 +70,17 @@ def _normalize(params):
         clean[key] = int(clean[key])
     for key in _FLOAT_PARAMS:
         clean[key] = float(clean[key])
+    if clean["debug_minimum_ngrams"] <= 0:
+        # Near misses only: a run one ngram short of the threshold. Shorter runs are
+        # counted in the per-pair summary instead.
+        clean["debug_minimum_ngrams"] = max(1, clean["minimum_matching_ngrams"] - 1)
     for key in _BOOL_PARAMS:
         clean[key] = _as_bool(clean[key])
     return clean
 
 
 def _config_values(params, output_path):
-    """The alignment_config.ini payload, with Go's key spellings (main.go:609-627)."""
+    """The alignment_config.ini payload, with the published key spellings."""
     return {
         "matchingWindowSize": params["matching_window_size"],
         "maxGap": params["max_gap"],
@@ -96,7 +103,11 @@ def _config_values(params, output_path):
 
 
 def _batches(files, count):
-    """main.go:985-997. Consecutive slices of ceil(len/count) documents."""
+    """Consecutive slices of ceil(len/count) documents.
+
+    The callers clamp `count` to the document count, so a batch count larger than the
+    corpus gives one document per batch rather than empty slices.
+    """
     if not files:
         return []
     size = int(math.ceil(len(files) / count))
@@ -104,10 +115,13 @@ def _batches(files, count):
 
 
 def chunk_ranges(position, n_targets, threads, same_array):
-    """Target ranges of the chunk files Go writes for one source document.
+    """Target ranges of the chunk files written for one source document.
 
-    One file per goroutine, and the goroutine count itself depends on how many targets
-    are left (main.go:437-481), so the file names only match Go's if this split does.
+    One file per worker, and the worker count itself depends on how many targets are
+    left, so the chunk file names depend on this split. The names carry the source
+    document first, which is what keeps a source's records together once the chunks
+    are concatenated in `sort -V` order: alignment_merger.first_step_merge reads that
+    stream once and flushes whenever source_doc_id changes.
     """
     start = position + 1 if same_array else 0
     if start >= n_targets:
@@ -124,7 +138,7 @@ def chunk_ranges(position, n_targets, threads, same_array):
             per_thread = local_length // needed
         increment = local_length // needed
     else:
-        increment = local_length - start        # Go's expression; the clamp below hides it
+        increment = local_length - start        # the clamp below hides this
     ranges = []
     end = start + increment
     for i in range(needed):
@@ -140,8 +154,8 @@ def chunk_ranges(position, n_targets, threads, same_array):
 def _jobs(rows, duplicates, docs, n_targets, target_base, threads, same_array):
     """Group one match task's rows into chunk files, as (slot, name, lo, hi).
 
-    A range with no alignment but a duplicate still gets a file: Go appends an empty
-    entry to localAlignments for a duplicate target (main.go:504).
+    A range with no alignment but a duplicate still gets a file, matching the empty
+    entry a duplicate target produces.
     """
     row_range = {}
     start = 0
@@ -173,7 +187,7 @@ def _jobs(rows, duplicates, docs, n_targets, target_base, threads, same_array):
 
 
 def _run_combination(params, source_docs, target_docs, source_metadata, target_metadata,
-                     same_array, chunk_dir, progress):
+                     same_array, chunk_dir, progress, trace=None):
     """Compare one (source batch, target batch) pair. Returns (count, duplicate rows)."""
     threads = params["threads"]
     if same_array:
@@ -201,12 +215,12 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
     count = 0
     duplicate_rows = []
     try:
-        key_off, keys_all, off_all, idx_all, sb_all, eb_all = \
+        key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes, end_bytes = \
             loader.load_corpus(paths, threads)
-        post_u, post_slot, bstart = pipeline.build_postings(keys_all, threads)
-        post_doc, sweep_at, per_source = pipeline.index_postings(
-            post_u, post_slot, bstart, key_off, n_sources, same_doc, threads)
-        del bstart
+        posting_keys, posting_slots, bucket_starts = pipeline.build_postings(ngram_keys, threads)
+        posting_docs, sweep_starts, per_source = pipeline.index_postings(
+            posting_keys, posting_slots, bucket_starts, key_offsets, n_sources, same_doc, threads)
+        del bucket_starts
         gc.collect()
 
         def on_result(rows, dups, percents, _stats):
@@ -223,19 +237,32 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                                             metas[target_slot],
                                                             float(percents[i]))))
 
-        pipeline.run_match(keys_all, key_off, sweep_at, post_u, post_slot, post_doc,
-                           per_source, same_doc, off_all, idx_all, sb_all, eb_all,
+        pipeline.run_match(ngram_keys, key_offsets, sweep_starts, posting_keys,
+                           posting_slots, posting_docs,
+                           per_source, same_doc, position_offsets, ngram_indices,
+                           start_bytes, end_bytes,
                            threads, params, on_result, progress)
+        # The caller's progress line is finished here so the trace's own message is
+        # not overwritten by it.
+        print("\r\033[KComparing files... done.", flush=True)
+        if trace is not None:
+            print("Tracing compared pairs... ", end="", flush=True)
+            written = debug_output.write_traces(
+                trace["output_path"], docs,
+                debug_output.Corpus(key_offsets, ngram_keys, position_offsets,
+                                    ngram_indices, start_bytes, end_bytes),
+                params, same_doc, n_sources, trace["ngram_index"], trace["pairs"])
+            print(f"{written} pair(s) written.", flush=True)
     finally:
         pool.close()
-    # Go appends duplicates in goroutine completion order, which is not reproducible;
+    # Workers complete in a non-reproducible order;
     # sort by document slot so the file is.
     duplicate_rows.sort()
     return count, [row for _, _, row in duplicate_rows]
 
 
 def _merge_batch(chunk_dir, batch_file):
-    """main.go:558. Concatenate a combination's chunks into one batch file."""
+    """Concatenate a combination's chunks into one batch file."""
     command = (f"find {quote(chunk_dir)} -type f -print0 | sort -zV | "
                f"xargs -0 --no-run-if-empty lz4cat --rm | lz4 -q > {quote(batch_file)}")
     subprocess.run(["bash", "-c", command], check=False)
@@ -243,14 +270,14 @@ def _merge_batch(chunk_dir, batch_file):
 
 def align(source_files, source_metadata, output_path, target_files="", target_metadata="",
           output_workers=0, lz4_level=3, **params):
-    """Run the sequence aligner. Mirrors the compareNgrams binary's flags.
+    """Run the sequence aligner.
 
     source_files / target_files   directories of per-document ngram files, JSON or binary
     source_metadata / target_metadata   paths to the corpora's metadata.json
     output_path                   directory for result_batches/, count.txt,
                                   duplicate_files.csv and alignment_config.ini
     output_workers                chunk writer processes, 0 means `threads`
-    lz4_level                     chunk compression level, 3 as in main.go:895
+    lz4_level                     chunk compression level, 3 by default
     **params                      any of DEFAULTS: threads, sort_by, source_batch,
                                   target_batch, matching_window_size, max_gap, flex_gap,
                                   minimum_matching_ngrams,
@@ -258,7 +285,8 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
                                   minimum_matching_ngrams_in_docs, context_size,
                                   duplicate_threshold, merge_passages_on_byte_distance,
                                   merge_passages_on_ngram_distance,
-                                  passage_distance_multiplier, debug, ngram_index
+                                  passage_distance_multiplier, debug, ngram_index,
+                                  debug_minimum_ngrams, debug_pairs
 
     Returns the number of alignments found.
     """
@@ -268,12 +296,17 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
     params = _normalize(params)
     params["output_workers"] = int(output_workers) or params["threads"]
     params["lz4_level"] = int(lz4_level)
+    ngram_index = {}
     if params["debug"]:
-        print("The Python aligner has no debug output; use aligner = go for that.",
-              file=sys.stderr, flush=True)
+        if params["ngram_index"]:
+            ngram_index = debug_output.load_ngram_index(params["ngram_index"])
+        else:
+            print("--debug without --ngram_index: traces cannot name their ngrams.",
+                  file=sys.stderr, flush=True)
+    pair_filter = debug_output.parse_pairs(params["debug_pairs"])
     if not source_metadata:
         raise ValueError("no source metadata provided")
-    if target_files == source_files:                                  # main.go:182
+    if target_files == source_files:
         target_files = ""
     print("Loading metadata...", end="", flush=True)
     source_meta = load_metadata(source_metadata)
@@ -294,18 +327,20 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
         target_batches = _batches(target_docs, min(params["target_batch"], len(target_docs)))
         same_corpus = False
     else:
-        target_batches = source_batches                               # main.go:384
-        target_meta = source_meta                                     # main.go:382
+        target_batches = source_batches
+        target_meta = source_meta
         same_corpus = True
 
     batch_path = os.path.join(output_path, "result_batches")
     batched = len(source_batches) > 1 or len(target_batches) > 1
     chunk_dir = os.path.join(batch_path, "result_chunks") if batched else batch_path
     if not batched:
-        # main.go:564 replaces result_batches wholesale for a single combination.
+        # result_batches is replaced wholesale for a single combination.
         shutil.rmtree(batch_path, ignore_errors=True)
     os.makedirs(chunk_dir, exist_ok=True)
     output.write_duplicates(output_path, ())
+    trace = ({"output_path": output_path, "ngram_index": ngram_index,
+              "pairs": pair_filter} if params["debug"] else None)
     pipeline.warmup()
     loader.warmup()
 
@@ -316,7 +351,7 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
                   flush=True)
         for target_number, target_batch in enumerate(target_batches):
             if same_corpus and source_number > target_number:
-                continue                                              # main.go:406
+                continue
             same_array = same_corpus and source_number == target_number
 
             def progress(done, total):
@@ -325,8 +360,7 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
             print("Comparing files... 0%", end="", flush=True)
             batch_count, duplicate_rows = _run_combination(
                 params, source_batch, target_batch, source_meta, target_meta, same_array,
-                chunk_dir, progress)
-            print("\r\033[KComparing files... done.", flush=True)
+                chunk_dir, progress, trace)
             count += batch_count
             output.write_duplicates(output_path, duplicate_rows, append=True)
             if batched:

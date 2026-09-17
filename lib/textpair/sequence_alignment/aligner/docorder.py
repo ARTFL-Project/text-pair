@@ -1,11 +1,12 @@
 """Document ordering: a document's position in the list get_files returns is its SortID,
 which decides which document of a pair is the source and which is the target.
 
-The order is a strict total order, produced by a sort key. compareNgrams (main.go:232-297)
-instead uses a comparator that is non-transitive whenever a sort value fails to parse as an
-integer, so its result depends on the sort algorithm, on Go's map iteration order and on
-the order the filesystem lists the ngram directory in. Ordering by key gives up matching
-the Go binary on any corpus that has an unparseable sort value.
+The order is a strict total order, produced by a sort key. The previous implementation
+used a comparator that is non-transitive whenever a sort value fails to parse as an
+integer, which left its result dependent on the sort algorithm, on hash iteration order
+and on the order the filesystem listed the ngram directory in. Ordering by key therefore
+changes results on any corpus that has an unparseable sort value, deliberately: which
+document of a pair is the source decides which passages are found at all.
 """
 import os
 import re
@@ -35,7 +36,7 @@ def doc_id_key(doc_id):
 
 def sort_mode(metadata, sort_field):
     """NUMERIC when most of the field's values parse as integers, STRING when they do not,
-    DOC_ID when no document carries the field (compareNgrams' behaviour for a missing
+    DOC_ID when no document carries the field (the established behaviour for a missing
     field). Decided once over the whole corpus, so it cannot vary between runs."""
     if not sort_field:
         return DOC_ID

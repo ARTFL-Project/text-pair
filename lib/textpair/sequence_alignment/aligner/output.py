@@ -1,9 +1,9 @@
 """Output phase of the sequence aligner.
 
-Ports writeAlignments (main.go:854-897), count.txt (570-573), duplicate_files.csv
+Writes the alignment chunks, count.txt, duplicate_files.csv
 (650-658) and alignment_config.ini (602-637). Chunk files are named
 {sourceDocID}-{firstTargetDocID}-{lastTargetDocID}.lz4 under <output_path>/result_batches,
-one per source document and per target range, as Go's goroutine split produces them.
+one per source document and per target range.
 
 Writers are processes, not threads: regex, unescape and dumps all hold the GIL.
 """
@@ -28,7 +28,7 @@ CONFIG_KEYS = ("matchingWindowSize", "maxGap", "flexGap", "minimumMatchingNgrams
                "sortingField", "debug")
 
 _MMAP_CACHE_LIMIT = 4096
-_DUMP_OPT = orjson.OPT_SORT_KEYS          # Go's encoding/json sorts map keys
+_DUMP_OPT = orjson.OPT_SORT_KEYS          # the format has object keys sorted
 
 
 # --------------------------------------------------------------- side artifacts
@@ -53,7 +53,7 @@ def _go_value(value):
 
 
 def write_config(output_path, config):
-    """main.go:602. Same keys, same order, `%v` formatting."""
+    """CONFIG_KEYS in order, with the published value spelling."""
     os.makedirs(output_path, exist_ok=True)
     with open(os.path.join(output_path, "alignment_config.ini"), "w", encoding="utf8") as output:
         output.write("## Alignment Parameters ##\n\n")
@@ -62,7 +62,7 @@ def write_config(output_path, config):
 
 
 def write_count(output_path, count):
-    """main.go:570. No trailing newline."""
+    """No trailing newline."""
     with open(os.path.join(output_path, "count.txt"), "w", encoding="utf8") as output:
         output.write(str(count))
 
@@ -86,7 +86,7 @@ def _csv_field(field):
 
 
 def write_duplicates(output_path, rows, append=False):
-    """main.go:650 header plus 500-502 row layout. csv.Writer, UseCRLF false."""
+    """DUP_HEADER then one row per duplicate pair, LF line endings."""
     path = os.path.join(output_path, "duplicate_files.csv")
     with open(path, "a" if append else "w", encoding="utf8") as output:
         if not append:
@@ -96,7 +96,7 @@ def write_duplicates(output_path, rows, append=False):
 
 
 def duplicate_row(source_meta, target_meta, percent):
-    """main.go:500-502."""
+    """The row duplicate_files.csv expects: source fields, target fields, overlap."""
     def field(meta, key):
         return meta.get(key, "")
     return (field(source_meta, "title"), field(source_meta, "author"),
@@ -150,19 +150,19 @@ class ChunkWriter:
                 buf = mmap.mmap(handle.fileno(), 0, prot=mmap.PROT_READ)
                 handle.close()
             except (OSError, ValueError, KeyError):
-                # main.go:922 only checkErr()s a failed open; the Seek/Read on the nil
-                # *os.File then return ErrInvalid and the zero-filled buffer is trimmed
-                # away, so every passage of that document is "".
+                # An unreadable document is not an error: every passage of it comes
+                # out as "", which is what the published output contains.
                 buf = b""
             self._buf[slot] = buf
         return buf
 
     def write(self, rows, jobs):
-        """rows: int32[K, 11] of (source slot, target slot, s_sb, s_eb, s_sidx, s_eidx,
-        t_sb, t_eb, t_sidx, t_eidx, ngrams), grouped by source slot and ascending target
-        slot within a source.
+        """rows: int32[K, 11] of (source slot, target slot, source start byte,
+        source end byte, source first index, source last index, target start byte,
+        target end byte, target first index, target last index, matching ngrams),
+        grouped by source slot and ascending target slot within a source.
         jobs: [(source_slot, chunk_name, lo, hi)] -- hi == lo for a range holding only
-        duplicates, which still gets a chunk file because Go's localAlignments is
+        duplicates, which still gets a chunk file because the duplicate list is
         non-empty for it too.
         """
         ctx = self.ctx
@@ -188,32 +188,40 @@ class ChunkWriter:
                 record["target_doc_id"] = docs[target_slot]
                 target_buf = self._text(target_slot)
                 for k in range(i, j):
-                    s_sb = int(rows[k, 2])
-                    s_eb = int(rows[k, 3])
-                    t_sb = int(rows[k, 6])
-                    t_eb = int(rows[k, 7])
-                    source_text = to_text(source_buf, s_sb, s_eb, ctx)
-                    target_text = to_text(target_buf, t_sb, t_eb, ctx)
-                    record["source_start_byte"] = s_sb
-                    record["source_end_byte"] = s_eb
+                    source_start_byte = int(rows[k, 2])
+                    source_end_byte = int(rows[k, 3])
+                    target_start_byte = int(rows[k, 6])
+                    target_end_byte = int(rows[k, 7])
+                    source_text = to_text(source_buf, source_start_byte, source_end_byte, ctx)
+                    target_text = to_text(target_buf, target_start_byte, target_end_byte, ctx)
+                    record["source_start_byte"] = source_start_byte
+                    record["source_end_byte"] = source_end_byte
                     record["source_context_before"] = source_text[0]
                     record["source_passage"] = source_text[1]
                     record["source_context_after"] = source_text[2]
                     record["source_start_position"], record["source_end_position"] = \
-                        rel_pos(s_sb, s_eb, source_meta)
-                    record["target_start_byte"] = t_sb
-                    record["target_end_byte"] = t_eb
+                        rel_pos(source_start_byte, source_end_byte, source_meta)
+                    record["target_start_byte"] = target_start_byte
+                    record["target_end_byte"] = target_end_byte
                     record["target_context_before"] = target_text[0]
                     record["target_passage"] = target_text[1]
                     record["target_context_after"] = target_text[2]
                     record["target_start_position"], record["target_end_position"] = \
-                        rel_pos(t_sb, t_eb, target_meta)
+                        rel_pos(target_start_byte, target_end_byte, target_meta)
                     line = dumps(record, option=_DUMP_OPT)
                     if self.go_escape:
-                        line = (line.replace(b"&", b"\\u0026").replace(b"<", b"\\u003c")
-                                .replace(b">", b"\\u003e")
-                                .replace(b"\xe2\x80\xa8", b"\\u2028")
-                                .replace(b"\xe2\x80\xa9", b"\\u2029"))
+                        # Each replace copies the whole line, so test first: the
+                        # membership check is a memchr and most lines contain none of
+                        # these. U+2028 and U+2029 share their first two bytes.
+                        if b"&" in line:
+                            line = line.replace(b"&", b"\\u0026")
+                        if b"<" in line:
+                            line = line.replace(b"<", b"\\u003c")
+                        if b">" in line:
+                            line = line.replace(b">", b"\\u003e")
+                        if b"\xe2\x80" in line:
+                            line = (line.replace(b"\xe2\x80\xa8", b"\\u2028")
+                                    .replace(b"\xe2\x80\xa9", b"\\u2029"))
                     lines.append(line)
                     lines.append(b"\n")
                 i = j

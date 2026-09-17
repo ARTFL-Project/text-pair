@@ -44,7 +44,11 @@ from textpair.sequence_alignment.aligner.gotext import load_metadata
 from textpair.sequence_alignment.tests.check_direction_flips import flip
 
 FIXTURES = ("no_byte_range", "non_string_meta", "missing_text", "no_metadata")
-GO_BINARY = os.environ.get("TEXTPAIR_GO_ALIGNER", "compareNgrams")
+# The Go aligner is no longer part of TextPAIR. Set TEXTPAIR_GO_ALIGNER to a binary to
+# compare against it again; otherwise pass --go-results a stored output tree. The
+# fixtures carry theirs in fixtures/<name>/go_reference, and the corpora references are
+# under /disk1/shared/text-pair-validation/go_references.
+GO_BINARY = os.environ.get("TEXTPAIR_GO_ALIGNER", "")
 CANON = orjson.OPT_SORT_KEYS
 
 
@@ -247,11 +251,16 @@ def run_pair(args, params):
     if not args.python_results:
         shutil.rmtree(py_dir, ignore_errors=True)
     env = dict(os.environ, OPENBLAS_NUM_THREADS="1")
-    env.setdefault("NUMBA_CACHE_DIR", os.path.join(workdir, "numba_cache"))
+    env.setdefault("TEXTPAIR_NUMBA_CACHE_DIR", os.path.join(workdir, "numba_cache"))
     if args.python_results:
         py_dir = os.path.abspath(args.python_results)
     if args.go_results:
         go_dir = os.path.abspath(args.go_results)
+    elif not GO_BINARY:
+        raise SystemExit(
+            "no reference to compare against: pass --go-results a stored output tree, or "
+            "set TEXTPAIR_GO_ALIGNER to a compareNgrams binary. TextPAIR no longer ships "
+            "one.")
     else:
         go_dir = os.path.join(workdir, "go")
         shutil.rmtree(go_dir, ignore_errors=True)
@@ -305,7 +314,9 @@ def main(argv=None):
             fixture.target_files = fixture.target_metadata = ""
             fixture.run_cwd = os.path.join(here, "fixtures", name)
             fixture.workdir = os.path.join(os.path.abspath(args.workdir), name)
-            fixture.go_results = fixture.python_results = ""
+            fixture.python_results = ""
+            stored = os.path.join(fixture.run_cwd, "go_reference")
+            fixture.go_results = "" if GO_BINARY else stored
             if args.binary:
                 from textpair.sequence_alignment.ngram_binary import convert_directory
 

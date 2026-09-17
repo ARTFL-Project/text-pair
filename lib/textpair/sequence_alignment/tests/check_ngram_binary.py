@@ -25,7 +25,8 @@ from textpair.sequence_alignment.aligner import loader
 from textpair.sequence_alignment.aligner.docorder import get_files
 from textpair.sequence_alignment.aligner.gotext import load_metadata
 
-ARRAYS = ("key_off", "keys_all", "off_all", "idx_all", "sb_all", "eb_all")
+ARRAYS = ("key_offsets", "ngram_keys", "position_offsets", "ngram_indices",
+          "start_bytes", "end_bytes")
 
 
 def compare(ngrams_dir, metadata_path, binary_dir, threads, sort_by):

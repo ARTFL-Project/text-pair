@@ -1,9 +1,13 @@
-"""Python sequence aligner, a port of lib/core/src/compareNgrams.
+"""Python sequence aligner.
 
-`align()` is the entry point and takes the same parameters as the Go binary's flags.
-Selected with `aligner = python` under [MATCHING], or TEXTPAIR_ALIGNER=python.
+`align()` is the entry point.
 """
 
-from .runner import DEFAULTS, align
+from .numba_cache import configure as _configure_numba_cache
+
+# Before .runner: numba binds cache locations when @njit is applied.
+_configure_numba_cache()
+
+from .runner import DEFAULTS, align  # noqa: E402
 
 __all__ = ["align", "DEFAULTS"]

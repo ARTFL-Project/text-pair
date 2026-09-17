@@ -1,23 +1,24 @@
 """Inverted-index intersection kernels for the sequence aligner.
 
-Replaces compareNgrams' all-pairs merge join with:
+Replaces an all-pairs merge join with:
   postings -> index the key groups -> per source document, sweep its own keys, emit one
   record per (key, comparable target), group by target and match.
-Everything from the cross-product expansion onward follows main.go:507-528.
 
-Key biasing: the int32 ngram hash is mapped to [0, 2^32) with `u = int64(key) + 2^31`, the
-same monotone map as `uint32(key) ^ 0x80000000` but in int64 arithmetic.
+Key biasing: an int32 ngram hash is mapped onto [0, 2^32) by adding 2^31 in int64
+arithmetic, the same monotone map as flipping the sign bit, so that sorting the biased
+keys as unsigned sorts the signed originals.
 
 Document slots are the combination's SortID order: sources first, then targets when source
 and target corpora differ (`same_doc` non-empty). Array layout, with T = total (doc, key)
 entries, P = total ngram positions:
-  keys_all / key_off / off_all / idx_all / sb_all / eb_all  from loader.load_corpus
-  post_u    uint32[T]  biased key, sorted
-  post_slot int32[T]   slot in keys_all
-  post_doc  int32[T]   document of that slot
-  sweep_at  int32[source slots]  where a source's sweep of its key's group starts
+  ngram_keys, key_offsets, position_offsets, ngram_indices, start_bytes, end_bytes
+            from loader.load_corpus
+  posting_keys   uint32[T]  biased key, sorted
+  posting_slots  int32[T]   slot in ngram_keys
+  posting_docs   int32[T]   document of that slot
+  sweep_starts   int32[source slots]  where a source's sweep of its group starts
 
-The postings sort is stable and keys_all is document-major, so a key group holds its
+The postings sort is stable and ngram_keys is document-major, so a key group holds its
 documents in SortID order: the documents a source is compared against are the suffix of
 the group that follows the source's own entry. Emissions are therefore built one source
 at a time, which bounds them by the biggest source instead of by sum(df^2 / 2).
@@ -37,75 +38,77 @@ BIAS = np.int64(1) << np.int64(31)
 # --------------------------------------------------------------------------- postings
 
 @njit(nogil=True, cache=True)
-def hist_msd(keys, lo, hi, cnt):
+def hist_msd(keys, lo, hi, bucket_counts):
     """Histogram of the top MSD_BITS of the biased key over keys[lo:hi]."""
     for i in range(lo, hi):
-        cnt[(np.int64(keys[i]) + BIAS) >> LOW_BITS] += 1
+        bucket_counts[(np.int64(keys[i]) + BIAS) >> LOW_BITS] += 1
 
 
 @njit(nogil=True, cache=True)
-def scatter_msd(keys, lo, hi, woff, post_u, post_slot):
-    """Stable scatter of keys[lo:hi] into MSD buckets. woff is this chunk's write cursor."""
+def scatter_msd(keys, lo, hi, write_cursors, posting_keys, posting_slots):
+    """Stable scatter of keys[lo:hi] into MSD buckets, at this chunk's write cursors."""
     for i in range(lo, hi):
-        u = np.int64(keys[i]) + BIAS
-        b = u >> LOW_BITS
-        p = woff[b]
-        woff[b] = p + 1
-        post_u[p] = np.uint32(u)
-        post_slot[p] = i
+        biased_key = np.int64(keys[i]) + BIAS
+        bucket = biased_key >> LOW_BITS
+        at = write_cursors[bucket]
+        write_cursors[bucket] = at + 1
+        posting_keys[at] = np.uint32(biased_key)
+        posting_slots[at] = i
 
 
 @njit(nogil=True, cache=True)
-def sort_buckets(bstart, b_lo, b_hi, post_u, post_slot, buf_u, buf_s, cnt):
-    """Sort each MSD bucket in [b_lo, b_hi) by the low LOW_BITS with two 10-bit LSD passes.
+def sort_buckets(bucket_starts, first_bucket, last_bucket, posting_keys, posting_slots,
+                 key_buffer, slot_buffer, digit_counts):
+    """Sort each MSD bucket in [first_bucket, last_bucket) by the low LOW_BITS, with
+    two 10-bit LSD passes.
     Buckets are visited in ascending order, so the whole array ends up sorted by biased key.
     Both passes are stable, so equal keys keep their ascending slot order."""
-    for b in range(b_lo, b_hi):
-        s = bstart[b]
-        n = bstart[b + 1] - s
-        if n < 2:
+    for bucket in range(first_bucket, last_bucket):
+        start = bucket_starts[bucket]
+        count = bucket_starts[bucket + 1] - start
+        if count < 2:
             continue
-        if n < 32:                                  # insertion sort on the biased key
-            for i in range(s + 1, s + n):
-                ku = post_u[i]
-                ks = post_slot[i]
+        if count < 32:                              # insertion sort on the biased key
+            for i in range(start + 1, start + count):
+                key = posting_keys[i]
+                slot = posting_slots[i]
                 j = i - 1
-                while j >= s and post_u[j] > ku:
-                    post_u[j + 1] = post_u[j]
-                    post_slot[j + 1] = post_slot[j]
+                while j >= start and posting_keys[j] > key:
+                    posting_keys[j + 1] = posting_keys[j]
+                    posting_slots[j + 1] = posting_slots[j]
                     j -= 1
-                post_u[j + 1] = ku
-                post_slot[j + 1] = ks
+                posting_keys[j + 1] = key
+                posting_slots[j + 1] = slot
             continue
         for shift in (0, 10):
-            for i in range(LSD_RADIX):
-                cnt[i] = 0
-            for i in range(n):
-                cnt[(post_u[s + i] >> shift) & (LSD_RADIX - 1)] += 1
-            acc = 0
-            for i in range(LSD_RADIX):
-                c = cnt[i]
-                cnt[i] = acc
-                acc += c
-            for i in range(n):
-                d = (post_u[s + i] >> shift) & (LSD_RADIX - 1)
-                j = cnt[d]
-                cnt[d] = j + 1
-                buf_u[j] = post_u[s + i]
-                buf_s[j] = post_slot[s + i]
-            for i in range(n):
-                post_u[s + i] = buf_u[i]
-                post_slot[s + i] = buf_s[i]
+            for digit in range(LSD_RADIX):
+                digit_counts[digit] = 0
+            for i in range(count):
+                digit_counts[(posting_keys[start + i] >> shift) & (LSD_RADIX - 1)] += 1
+            running = 0
+            for digit in range(LSD_RADIX):
+                in_digit = digit_counts[digit]
+                digit_counts[digit] = running
+                running += in_digit
+            for i in range(count):
+                digit = (posting_keys[start + i] >> shift) & (LSD_RADIX - 1)
+                at = digit_counts[digit]
+                digit_counts[digit] = at + 1
+                key_buffer[at] = posting_keys[start + i]
+                slot_buffer[at] = posting_slots[start + i]
+            for i in range(count):
+                posting_keys[start + i] = key_buffer[i]
+                posting_slots[start + i] = slot_buffer[i]
 
 
 @njit(nogil=True, cache=True)
-def _doc_of(key_off, slot):
-    """Largest d with key_off[d] <= slot."""
+def _doc_of(key_offsets, slot):
+    """The document owning `slot`: the largest d with key_offsets[d] <= slot."""
     lo = 0
-    hi = key_off.shape[0] - 1
+    hi = key_offsets.shape[0] - 1
     while hi - lo > 1:
         mid = (lo + hi) >> 1
-        if key_off[mid] <= slot:
+        if key_offsets[mid] <= slot:
             lo = mid
         else:
             hi = mid
@@ -115,54 +118,105 @@ def _doc_of(key_off, slot):
 # --------------------------------------------------------------------------- key groups
 
 @njit(nogil=True, cache=True)
-def index_postings(bstart, b_lo, b_hi, post_u, post_slot, key_off, n_src, separate,
-                   post_doc, sweep_at, cnt):
-    """One pass over the key groups in [b_lo, b_hi): each posting's document, where every
-    source document's sweep of its group starts, and cnt[source] += the emissions that
-    sweep will yield. Returns the number of repeats -- the same key twice in one document,
-    which the caller rejects.
+def index_postings(bucket_starts, first_bucket, last_bucket, posting_keys,
+                   posting_slots, key_offsets, n_sources, separate, posting_docs,
+                   sweep_starts, emission_counts):
+    """One pass over the key groups in [first_bucket, last_bucket): each posting's
+    document, where every source document's sweep of its group starts, and
+    emission_counts[source] += the emissions that sweep will yield. Returns the number of
+    repeats -- the same key twice in one document, which the caller rejects.
 
-    Within one corpus the sweep starts just past the source's own entry (main.go:487).
-    With separate corpora it starts at the group's first target document (main.go:489
-    drops only the target that has the source's own document ID, during the sweep).
+    Within one corpus the sweep starts just past the source's own entry. With separate
+    corpora it starts at the group's first target document, and the target that carries
+    the source's own document ID is dropped later, during the sweep itself.
     """
     repeats = 0
-    for b in range(b_lo, b_hi):
-        gs = bstart[b]
-        e = bstart[b + 1]
-        while gs < e:
-            ge = gs + 1
-            u = post_u[gs]
-            while ge < e and post_u[ge] == u:
-                ge += 1
-            prev = -1
-            for p in range(gs, ge):
-                d = _doc_of(key_off, post_slot[p])
-                post_doc[p] = d
-                if d == prev:
+    for bucket in range(first_bucket, last_bucket):
+        group_start = bucket_starts[bucket]
+        bucket_end = bucket_starts[bucket + 1]
+        while group_start < bucket_end:
+            group_end = group_start + 1
+            biased_key = posting_keys[group_start]
+            while group_end < bucket_end and posting_keys[group_end] == biased_key:
+                group_end += 1
+            previous_doc = -1
+            for at in range(group_start, group_end):
+                doc = _doc_of(key_offsets, posting_slots[at])
+                posting_docs[at] = doc
+                if doc == previous_doc:
                     repeats += 1
-                prev = d
+                previous_doc = doc
             if separate:
-                ts = gs
-                while ts < ge and post_doc[ts] < n_src:
-                    ts += 1
-                for p in range(gs, ts):
-                    sweep_at[post_slot[p]] = ts
-                    cnt[post_doc[p]] += ge - ts
+                first_target = group_start
+                while first_target < group_end and posting_docs[first_target] < n_sources:
+                    first_target += 1
+                for at in range(group_start, first_target):
+                    sweep_starts[posting_slots[at]] = first_target
+                    emission_counts[posting_docs[at]] += group_end - first_target
             else:
-                for p in range(gs, ge):
-                    sweep_at[post_slot[p]] = p + 1
-                    cnt[post_doc[p]] += ge - p - 1
-            gs = ge
+                for at in range(group_start, group_end):
+                    sweep_starts[posting_slots[at]] = at + 1
+                    emission_counts[posting_docs[at]] += group_end - at - 1
+            group_start = group_end
     return repeats
 
 
 # --------------------------------------------------------------------------- emit + match
 
 @njit(nogil=True, cache=True)
-def align_source(s, excl, keys_all, key_off, sweep_at, post_u, post_slot, post_doc,
-                 tcnt, toff, tcur, ssl, tsl,
-                 off_all, idx_all, sb_all, eb_all,
+def sort_insertion(keys, n, order):
+    """Order 0..n by `keys`. Cheapest for the many pairs with few source positions."""
+    for i in range(n):
+        order[i] = i
+    for i in range(1, n):
+        o = order[i]
+        k = keys[o]
+        j = i - 1
+        while j >= 0 and keys[order[j]] > k:
+            order[j + 1] = order[j]
+            j -= 1
+        order[j + 1] = o
+    return order
+
+
+@njit(nogil=True, cache=True)
+def sort_radix(keys, n, max_key, order, spare, digit_counts):
+    """Order 0..n by `keys`, LSD radix over only the bytes `max_key` needs.
+
+    Ping-pongs between `order` and `spare` and returns whichever holds the result, so
+    neither this nor the caller allocates. `keys` are ngram indices within a document:
+    non-negative and usually inside 16 bits, so this is two passes.
+    """
+    for i in range(n):
+        order[i] = i
+    source = order
+    target = spare
+    shift = 0
+    while (max_key >> shift) > 0:
+        for digit in range(256):
+            digit_counts[digit] = 0
+        for i in range(n):
+            digit_counts[(keys[source[i]] >> shift) & 255] += 1
+        running = 0
+        for digit in range(256):
+            in_digit = digit_counts[digit]
+            digit_counts[digit] = running
+            running += in_digit
+        for i in range(n):
+            entry = source[i]
+            digit = (keys[entry] >> shift) & 255
+            target[digit_counts[digit]] = entry
+            digit_counts[digit] += 1
+        source, target = target, source
+        shift += 8
+    return source
+
+
+@njit(nogil=True, cache=True)
+def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting_keys,
+                 posting_slots, posting_docs,
+                 target_counts, target_offsets, target_cursors, source_slots, target_slots,
+                 position_offsets, ngram_indices, start_bytes, end_bytes,
                  min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
                  min_matching, min_in_window, merge_byte, merge_ngram, multiplier):
     """Own one source document end to end: sweep its keys for the documents that follow
@@ -170,132 +224,182 @@ def align_source(s, excl, keys_all, key_off, sweep_at, post_u, post_slot, post_d
     cross-product / sort / matchPassage pipeline.
 
     The sweep runs twice, first to size every target's block and then to fill it, so only
-    the grouped (sourceSlot, targetSlot) pair is ever stored. The caller sizes ssl/tsl for
-    this source's emissions and passes tcnt zeroed; tcnt is left zeroed again on return.
+    the grouped (source slot, target slot) pair is ever stored. The caller sizes
+    source_slots and target_slots for
+    this source's emissions and passes target_counts zeroed; target_counts is left
+    zeroed again on return.
 
-    Returns (rows, n_rows, stats, dup_st, dup_pct) with rows = int32[:, 2 + NCOL] of
-    (source, target, alignment) and dup_st/dup_pct the duplicate pairs (main.go:499-505)
+    Returns (rows, n_rows, stats, duplicate_slots, duplicate_percents), with
+    rows = int32[:, 2 + NCOL] of
+    (source, target, alignment) and duplicate_slots/duplicate_percents the duplicate pairs
     that duplicate_files.csv needs and that still get a chunk file.
     stats = [pairs_with_common, pairs_below_min, pairs_duplicate, pairs_compared,
              sum_intersection_sizes, pairs_ge_min_in_docs]
     """
     out = np.empty((1024, NCOL + 2), np.int32)
-    fill = 0
-    dup_st = np.empty((64, 2), np.int32)
-    dup_pct = np.empty(64, np.float64)
-    ndup = 0
+    n_rows = 0
+    # Scratch for one target at a time, reused across every target of this source. Held
+    # here rather than allocated per pair because 3,253 matches is 76 KiB of match
+    # arrays: reused it stays in L2 between pairs, freshly allocated every write is a
+    # cold first touch, and eccotcp compares 4.3 million pairs.
+    position_capacity = 64
+    source_positions = np.empty(position_capacity, np.int32)
+    source_indices = np.empty(position_capacity, np.int32)
+    target_block_starts = np.empty(position_capacity, np.int32)
+    target_block_ends = np.empty(position_capacity, np.int32)
+    order_buffer = np.empty(position_capacity, np.int32)
+    order_spare = np.empty(position_capacity, np.int32)
+    digit_counts = np.empty(256, np.int64)
+    match_capacity = 256
+    packed_indices = np.empty(match_capacity, np.int64)
+    packed_positions = np.empty(match_capacity, np.int64)
+    duplicate_slots = np.empty((64, 2), np.int32)
+    duplicate_percents = np.empty(64, np.float64)
+    n_duplicates = 0
     stats = np.zeros(6, np.int64)
-    n_post = post_u.shape[0]
-    n_docs = key_off.shape[0] - 1
+    n_postings = posting_keys.shape[0]
+    n_docs = key_offsets.shape[0] - 1
 
-    first_key = key_off[s]
-    last_key = key_off[s + 1]
+    first_key = key_offsets[s]
+    last_key = key_offsets[s + 1]
     for i in range(first_key, last_key):                               # size the blocks
-        u = np.uint32(np.int64(keys_all[i]) + BIAS)
-        q = sweep_at[i]
-        while q < n_post and post_u[q] == u:
-            t = post_doc[q]
-            if t != excl:
-                tcnt[t] += 1
+        u = np.uint32(np.int64(ngram_keys[i]) + BIAS)
+        q = sweep_starts[i]
+        while q < n_postings and posting_keys[q] == u:
+            t = posting_docs[q]
+            if t != exclude_slot:
+                target_counts[t] += 1
             q += 1
-    acc = 0
+    running_total = 0
     for t in range(n_docs):
-        toff[t] = acc
-        tcur[t] = acc
-        acc += tcnt[t]
-        tcnt[t] = 0
-    toff[n_docs] = acc
-    if acc == 0:
-        return out[:0], 0, stats, dup_st[:0], dup_pct[:0]
-    for i in range(first_key, last_key):                               # fill them
-        u = np.uint32(np.int64(keys_all[i]) + BIAS)
-        q = sweep_at[i]
-        while q < n_post and post_u[q] == u:
-            t = post_doc[q]
-            if t != excl:
-                p = tcur[t]
-                tcur[t] = p + 1
-                ssl[p] = i
-                tsl[p] = post_slot[q]
+        target_offsets[t] = running_total
+        target_cursors[t] = running_total
+        running_total += target_counts[t]
+        target_counts[t] = 0
+    target_offsets[n_docs] = running_total
+    if running_total == 0:
+        return out[:0], 0, stats, duplicate_slots[:0], duplicate_percents[:0]
+    for i in range(first_key, last_key):                               # n_rows them
+        u = np.uint32(np.int64(ngram_keys[i]) + BIAS)
+        q = sweep_starts[i]
+        while q < n_postings and posting_keys[q] == u:
+            t = posting_docs[q]
+            if t != exclude_slot:
+                p = target_cursors[t]
+                target_cursors[t] = p + 1
+                source_slots[p] = i
+                target_slots[p] = posting_slots[q]
             q += 1
 
     ns = last_key - first_key                 # sourceFile.NgramLength (distinct keys)
     for t in range(n_docs):
-        q = toff[t]
-        r = toff[t + 1]
+        q = target_offsets[t]
+        r = target_offsets[t + 1]
         count = r - q
         if count == 0:
             continue
         stats[0] += 1
         stats[4] += count
-        if count < min_in_docs:                                        # main.go:497
+        if count < min_in_docs:
             stats[1] += 1
             continue
         stats[5] += 1
         pct = count / ns * 100
-        if pct > dup_threshold:                                        # main.go:499
+        if pct > dup_threshold:
             stats[2] += 1
-            if ndup == dup_st.shape[0]:
-                new_st = np.empty((ndup * 2, 2), np.int32)
-                new_pct = np.empty(ndup * 2, np.float64)
-                new_st[:ndup] = dup_st
-                new_pct[:ndup] = dup_pct
-                dup_st = new_st
-                dup_pct = new_pct
-            dup_st[ndup, 0] = s
-            dup_st[ndup, 1] = t
-            dup_pct[ndup] = pct
-            ndup += 1
+            if n_duplicates == duplicate_slots.shape[0]:
+                new_st = np.empty((n_duplicates * 2, 2), np.int32)
+                new_pct = np.empty(n_duplicates * 2, np.float64)
+                new_st[:n_duplicates] = duplicate_slots
+                new_pct[:n_duplicates] = duplicate_percents
+                duplicate_slots = new_st
+                duplicate_percents = new_pct
+            duplicate_slots[n_duplicates, 0] = s
+            duplicate_slots[n_duplicates, 1] = t
+            duplicate_percents[n_duplicates] = pct
+            n_duplicates += 1
             continue
         stats[3] += 1
+        # match_passage needs the matches ordered by (source index, target index).
+        # Sorting the cross-product to get there is wasteful: a source index is unique
+        # within its document and a key's positions are ascending by index -- the
+        # writers sort keys stably, keeping each key's positions in collection order --
+        # so ordering the pair's source positions alone and expanding each one's target
+        # block in place produces exactly that order, over three times fewer elements.
+        # tests/test_match_order.py checks both properties on a corpus.
+        n_positions = 0
         n_matches = 0
         for k in range(q, r):
-            a = ssl[k] + s
-            b = tsl[k] + t
-            n_matches += (off_all[a + 1] - off_all[a]) * (off_all[b + 1] - off_all[b])
-        packed = np.empty(n_matches, np.int64)                         # main.go:507-516
-        srow = np.empty(n_matches, np.int32)
-        trow = np.empty(n_matches, np.int32)
-        k2 = 0
+            a = source_slots[k] + s
+            b = target_slots[k] + t
+            in_source = position_offsets[a + 1] - position_offsets[a]
+            n_positions += in_source
+            n_matches += in_source * (position_offsets[b + 1] - position_offsets[b])
+        if n_positions > position_capacity:
+            position_capacity = n_positions * 2
+            source_positions = np.empty(position_capacity, np.int32)
+            source_indices = np.empty(position_capacity, np.int32)
+            target_block_starts = np.empty(position_capacity, np.int32)
+            target_block_ends = np.empty(position_capacity, np.int32)
+            order_buffer = np.empty(position_capacity, np.int32)
+            order_spare = np.empty(position_capacity, np.int32)
+        j = 0
+        max_source_index = 0
         for k in range(q, r):
-            a = ssl[k] + s
-            b = tsl[k] + t
-            for p in range(off_all[a], off_all[a + 1]):
-                for rr in range(off_all[b], off_all[b + 1]):
-                    packed[k2] = (np.int64(idx_all[p]) << 32) | np.int64(idx_all[rr])
-                    srow[k2] = p
-                    trow[k2] = rr
-                    k2 += 1
-        order = np.argsort(packed)                                     # main.go:517-524
-        m_sidx = np.empty(n_matches, np.int32)
-        m_ssb = np.empty(n_matches, np.int32)
-        m_seb = np.empty(n_matches, np.int32)
-        m_tidx = np.empty(n_matches, np.int32)
-        m_tsb = np.empty(n_matches, np.int32)
-        m_teb = np.empty(n_matches, np.int32)
-        for k in range(n_matches):
-            p = srow[order[k]]
-            rr = trow[order[k]]
-            m_sidx[k] = idx_all[p]
-            m_ssb[k] = sb_all[p]
-            m_seb[k] = eb_all[p]
-            m_tidx[k] = idx_all[rr]
-            m_tsb[k] = sb_all[rr]
-            m_teb[k] = eb_all[rr]
-        al, n_al = match_passage(m_sidx, m_ssb, m_seb, m_tidx, m_tsb, m_teb, n_matches,
-                                 window_size, max_gap, flex_gap, min_matching, min_in_window)
-        if merge_byte or merge_ngram:                                  # main.go:526
-            al, n_al = merge_with_previous(al, n_al, merge_byte, merge_ngram,
-                                           window_size, multiplier)
-        if n_al > 0:
-            while fill + n_al > out.shape[0]:
+            a = source_slots[k] + s
+            b = target_slots[k] + t
+            block_start = position_offsets[b]
+            block_end = position_offsets[b + 1]
+            for p in range(position_offsets[a], position_offsets[a + 1]):
+                index = ngram_indices[p]
+                # where it sits in ngram_indices, start_bytes and end_bytes
+                source_positions[j] = p
+                source_indices[j] = index               # its ngram index, the sort key
+                if index > max_source_index:
+                    max_source_index = index
+                target_block_starts[j] = block_start   # the shared key's target positions
+                target_block_ends[j] = block_end
+                j += 1
+        if n_positions < 64:
+            order = sort_insertion(source_indices, n_positions, order_buffer)
+        else:
+            order = sort_radix(source_indices, n_positions, max_source_index,
+                               order_buffer, order_spare, digit_counts)
+        if n_matches > match_capacity:
+            match_capacity = n_matches * 2
+            packed_indices = np.empty(match_capacity, np.int64)
+            packed_positions = np.empty(match_capacity, np.int64)
+        written = 0
+        for rank in range(n_positions):
+            entry = order[rank]
+            at = source_positions[entry]
+            # The source half is constant down a source position's run, so it is shifted
+            # once and only the target half varies. Byte offsets are not copied at all;
+            # match_passage reaches them through packed_positions.
+            source_index_half = np.int64(source_indices[entry]) << 32
+            source_position_half = np.int64(at) << 32
+            for target_at in range(target_block_starts[entry], target_block_ends[entry]):
+                packed_indices[written] = (source_index_half
+                                           | np.int64(ngram_indices[target_at]))
+                packed_positions[written] = source_position_half | np.int64(target_at)
+                written += 1
+        alignments, n_alignments = match_passage(packed_indices, packed_positions, n_matches,
+                                 start_bytes, end_bytes, window_size, max_gap, flex_gap,
+                                 min_matching, min_in_window)
+        if merge_byte or merge_ngram:
+            alignments, n_alignments = merge_with_previous(
+                alignments, n_alignments, merge_byte, merge_ngram, window_size,
+                multiplier)
+        if n_alignments > 0:
+            while n_rows + n_alignments > out.shape[0]:
                 new = np.empty((out.shape[0] * 2, NCOL + 2), np.int32)
-                new[:fill] = out[:fill]
+                new[:n_rows] = out[:n_rows]
                 out = new
-            for z in range(n_al):
-                out[fill + z, 0] = s
-                out[fill + z, 1] = t
+            for z in range(n_alignments):
+                out[n_rows + z, 0] = s
+                out[n_rows + z, 1] = t
                 for cc in range(NCOL):
-                    out[fill + z, cc + 2] = al[z, cc]
-            fill += n_al
-    return out[:fill], fill, stats, dup_st[:ndup], dup_pct[:ndup]
+                    out[n_rows + z, cc + 2] = alignments[z, cc]
+            n_rows += n_alignments
+    return (out[:n_rows], n_rows, stats, duplicate_slots[:n_duplicates],
+            duplicate_percents[:n_duplicates])
