@@ -1,4 +1,4 @@
-"""Command line wrapper around align(), with the compareNgrams binary's flag names.
+"""Command line wrapper around align().
 
 python -m textpair.sequence_alignment.aligner --source_files=DIR \
     --source_metadata=FILE --output_path=DIR [--threads=N] [...]

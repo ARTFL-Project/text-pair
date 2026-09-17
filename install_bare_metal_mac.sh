@@ -105,11 +105,11 @@ check_architecture() {
 check_dependencies() {
     echo "Checking dependencies..."
 
-    # Homebrew (required to auto-install pyenv/Go below)
+    # Homebrew (required to auto-install pyenv below)
     if command -v brew &> /dev/null; then
         echo "  Homebrew: found"
     else
-        echo -e "${RED}  ERROR: Homebrew not found. TextPAIR needs it to install pyenv and the Go toolchain.${NC}"
+        echo -e "${RED}  ERROR: Homebrew not found. TextPAIR needs it to install pyenv.${NC}"
         echo -e "${YELLOW}  Install Homebrew first, then re-run this script:${NC}"
         echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
         exit 1
@@ -182,25 +182,6 @@ check_dependencies() {
         echo -e "${YELLOW}  ripgrep: not found (optional, install with: brew install ripgrep)${NC}"
     fi
 
-    # Homebrew (required to auto-install Go below)
-    if command -v brew &> /dev/null; then
-        echo "  Homebrew: found"
-    else
-        echo -e "${RED}  ERROR: Homebrew not found. TextPAIR needs it to install the Go toolchain (used to build compareNgrams).${NC}"
-        echo -e "${YELLOW}  Install Homebrew first, then re-run this script:${NC}"
-        echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-        exit 1
-    fi
-
-    # Go (required to build compareNgrams; the bundled binaries are Linux-only)
-    if command -v go &> /dev/null; then
-        echo "  Go: $(go version)"
-    else
-        echo "  Go: not found, installing with Homebrew..."
-        brew install go
-        echo "  Go installed"
-    fi
-
     # lz4 CLI (used to merge alignment result batches)
     if command -v lz4 &> /dev/null; then
         echo "  lz4: found"
@@ -269,26 +250,6 @@ scaffold_config() {
 }
 
 # =============================================================================
-# INSTALL BINARY
-# =============================================================================
-install_binary() {
-    echo "Installing compareNgrams binary..."
-
-    # The prebuilt binaries under lib/core/binary are Linux ELF executables (upstream only
-    # targets Linux) and cannot run on macOS at all, even when the CPU architecture matches.
-    # Build a native Mach-O binary from source instead. Go is guaranteed present at this point
-    # (installed by check_dependencies if it was missing).
-    echo "  Building compareNgrams from source with Go..."
-    (cd lib/core/src/compareNgrams && go build -o /tmp/compareNgrams_build .)
-    sudo cp /tmp/compareNgrams_build /usr/local/bin/compareNgrams
-    rm -f /tmp/compareNgrams_build
-    sudo chmod +x /usr/local/bin/compareNgrams
-    echo "  Built and installed to /usr/local/bin/compareNgrams"
-
-    echo ""
-}
-
-# =============================================================================
 # VERIFY
 # =============================================================================
 verify_install() {
@@ -306,13 +267,6 @@ verify_install() {
     fi
     if ! command -v textpair &> /dev/null; then
         echo -e "${YELLOW}  Note: textpair isn't on PATH in this shell yet - see the pyenv shell integration note above${NC}"
-    fi
-    
-    if command -v compareNgrams &> /dev/null; then
-        echo -e "${GREEN}  compareNgrams binary found${NC}"
-    else
-        echo -e "${RED}  ERROR: compareNgrams binary not found${NC}"
-        exit 1
     fi
     
     echo ""
@@ -341,7 +295,6 @@ main() {
     patch_philologic_wc
     setup_global_settings
     scaffold_config
-    install_binary
     verify_install
 }
 

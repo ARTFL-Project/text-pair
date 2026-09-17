@@ -217,46 +217,6 @@ def run_python_aligner(params) -> None:
     )
 
 
-def get_aligner(params) -> str:
-    """Which sequence aligner to run: the Python port or the compareNgrams binary.
-
-    TEXTPAIR_ALIGNER wins over the config's [MATCHING] aligner key. The default is
-    python, since ngram generation writes the binary index that only it reads; go is
-    for corpora whose ngrams/ still holds JSON.
-    """
-    aligner = (os.environ.get("TEXTPAIR_ALIGNER") or params.matching_params["aligner"] or "python")
-    aligner = aligner.strip().lower()
-    if aligner not in ("go", "python"):
-        print(f"Unknown aligner '{aligner}': set aligner to go or python.", file=sys.stderr)
-        os._exit(1)
-    return aligner
-
-
-def check_ngram_format(aligner: str, ngram_dirs: list[str]) -> None:
-    """Refuse to run the Go binary over a binary ngram index.
-
-    compareNgrams only parses JSON and returns no error on a file it cannot read, so a
-    mismatch has to be caught here or it silently yields zero alignments.
-    """
-    if aligner != "go":
-        return
-    for directory in ngram_dirs:
-        if not directory or not os.path.isdir(directory):
-            continue
-        for entry in os.scandir(directory):
-            if entry.name.endswith(".bin"):
-                print(
-                    f"\nERROR: {directory} holds a binary ngram index ({entry.name}), which "
-                    "the compareNgrams binary cannot read: it would report no error and "
-                    "find no alignments.\nSet aligner = python under [MATCHING]. aligner = "
-                    "go only works on an ngrams/ directory of .json files, which ngram "
-                    "generation no longer produces.",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                sys.exit(1)
-
-
 async def run_alignment(params):
     """Main function to start sequence alignment"""
     if params.only_align is False:
@@ -304,51 +264,13 @@ async def run_alignment(params):
     print("\n### Starting sequence alignment ###")
     if params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
-    # Before the previous run's results are cleared, so a format mismatch loses nothing.
-    aligner = get_aligner(params)
-    check_ngram_format(
-        aligner,
-        [
-            f'{params.paths["source"]["ngram_output_path"]}/ngrams',
-            f'{params.paths["target"]["ngram_output_path"]}/ngrams',
-        ],
-    )
     result_batch_path = os.path.join(params.output_path, "results/result_batches")
     if os.path.exists(result_batch_path):
         shutil.rmtree(result_batch_path, ignore_errors=True)
     results_file = f"{params.output_path}/results/alignments.jsonl.lz4"
     if os.path.exists(results_file):
         os.remove(results_file)
-    if aligner == "python":
-        run_python_aligner(params)
-    else:
-        # Path-valued arguments are shell-quoted so paths containing spaces work.
-        command = f"""compareNgrams \
-                --output_path={quote(f"{params.output_path}/results")} \
-                --threads={params.workers} \
-                --source_files={quote(f'{params.paths["source"]["ngram_output_path"]}/ngrams')} \
-                --target_files={quote(f'{params.paths["target"]["ngram_output_path"]}/ngrams')} \
-                --source_metadata={quote(params.paths["source"]["metadata_path"])} \
-                --target_metadata={quote(params.paths["target"]["metadata_path"])} \
-                --sort_by={params.matching_params["sort_by"]} \
-                --source_batch={params.matching_params["source_batch"]} \
-                --target_batch={params.matching_params["target_batch"]} \
-                --matching_window_size={params.matching_params["matching_window_size"]} \
-                --max_gap={params.matching_params["max_gap"]} \
-                --flex_gap={params.matching_params["flex_gap"]} \
-                --minimum_matching_ngrams={params.matching_params["minimum_matching_ngrams"]} \
-                --minimum_matching_ngrams_in_window={params.matching_params["minimum_matching_ngrams_in_window"]} \
-                --minimum_matching_ngrams_in_docs={params.matching_params["minimum_matching_ngrams_in_docs"]} \
-                --context_size={params.matching_params["context_size"]} \
-                --duplicate_threshold={params.matching_params["duplicate_threshold"]} \
-                --merge_passages_on_byte_distance={params.matching_params["merge_passages_on_byte_distance"]} \
-                --merge_passages_on_ngram_distance={params.matching_params["merge_passages_on_ngram_distance"]} \
-                --passage_distance_multiplier={params.matching_params["passage_distance_multiplier"]} \
-                --debug={str(params.debug).lower()} \
-                --ngram_index={quote(params.matching_params["ngram_index"])}"""
-        if params.debug:
-            print(f"Running alignment with following arguments:\n{' '.join(command.split())}")
-        os.system(command)
+    run_python_aligner(params)
     if len(os.listdir(result_batch_path)) == 1:
         filename = os.listdir(result_batch_path)[0]
         shutil.move(os.path.join(result_batch_path, filename), results_file)

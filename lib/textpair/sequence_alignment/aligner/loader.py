@@ -8,8 +8,11 @@ non-compact writers still parse; binary is already in the loader's own order and
 mmapped straight into place.
 
 `load_corpus` builds a whole corpus's shared columnar arrays: per-document sorted keys
-plus CSR position blocks, with positions inside a key left in file order as Go's append
-leaves them (main.go:320-326).
+plus CSR position blocks, with positions inside a key left in the order the file gives
+them. Generation collects a document's ngrams in order and both writers sort keys
+stably, so that order is ascending by ngram index. `invidx.align_source` depends on it
+to order a pair's matches without sorting them, and `tests/test_match_order.py` asserts
+it.
 """
 import mmap
 import os
@@ -161,19 +164,19 @@ def build_csr_sorted(keys, counts, idx, sb, eb):
     order = np.argsort(keys)
     skeys = np.empty(n_keys, np.int32)
     off = np.empty(n_keys + 1, np.int32)
-    sidx = np.empty(n_pos, np.int32)
-    ssb = np.empty(n_pos, np.int32)
-    seb = np.empty(n_pos, np.int32)
+    source_indices = np.empty(n_pos, np.int32)
+    source_start_bytes = np.empty(n_pos, np.int32)
+    source_end_bytes = np.empty(n_pos, np.int32)
     off[0] = 0
     p = 0
     for k in range(n_keys):
         o = order[k]
         skeys[k] = keys[o]
         for q in range(off_in[o], off_in[o + 1]):
-            sidx[p] = idx[q]; ssb[p] = sb[q]; seb[p] = eb[q]
+            source_indices[p] = idx[q]; source_start_bytes[p] = sb[q]; source_end_bytes[p] = eb[q]
             p += 1
         off[k + 1] = p
-    return skeys, off, sidx, ssb, seb
+    return skeys, off, source_indices, source_start_bytes, source_end_bytes
 
 
 def is_binary(path):
@@ -185,13 +188,15 @@ def load_corpus(paths, threads):
 
     Two passes so the arrays are allocated once and filled in place: a sizing pass,
     then the parse. Sizing scans a JSON file's bytes but only reads a binary file's
-    header. Returns (key_off, keys_all, off_all, idx_all, sb_all, eb_all):
+    header. Returns (key_offsets, ngram_keys, position_offsets, ngram_indices,
+    start_bytes, end_bytes):
 
-      keys_all  int32[T]    per-document sorted keys, concatenated
-      key_off   int64[N+1]  document -> its first slot in keys_all
-      off_all   int32[T+N]  document d's CSR offsets at [key_off[d]+d .. key_off[d+1]+d],
-                            already shifted to global positions in idx_all
-      idx_all / sb_all / eb_all  int32[P]  ngram index, start byte, end byte
+      ngram_keys  int32[T]    per-document sorted keys, concatenated
+      key_offsets   int64[N+1]  document -> its first slot in ngram_keys
+      position_offsets   int32[T+N]  document d's CSR offsets, at
+                                    [key_offsets[d]+d .. key_offsets[d+1]+d],
+                            already shifted to global positions in ngram_indices
+      ngram_indices / start_bytes / end_bytes  int32[P]  ngram index, start byte, end byte
     """
     n = len(paths)
     nk = np.zeros(n, np.int64)
@@ -206,28 +211,28 @@ def load_corpus(paths, threads):
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(count, range(n)))
 
-    key_off = np.zeros(n + 1, np.int64)
-    np.cumsum(nk, out=key_off[1:])
+    key_offsets = np.zeros(n + 1, np.int64)
+    np.cumsum(nk, out=key_offsets[1:])
     pos_base = np.zeros(n + 1, np.int64)
     np.cumsum(npos, out=pos_base[1:])
-    n_keys = int(key_off[-1])
+    n_keys = int(key_offsets[-1])
     n_pos = int(pos_base[-1])
     if n_pos >= 2 ** 31:
         raise RuntimeError(f"{n_pos} ngram positions exceeds the int32 CSR offsets")
-    keys_all = np.empty(n_keys, np.int32)
-    off_all = np.empty(n_keys + n, np.int32)
-    idx_all = np.empty(n_pos, np.int32)
-    sb_all = np.empty(n_pos, np.int32)
-    eb_all = np.empty(n_pos, np.int32)
+    ngram_keys = np.empty(n_keys, np.int32)
+    position_offsets = np.empty(n_keys + n, np.int32)
+    ngram_indices = np.empty(n_pos, np.int32)
+    start_bytes = np.empty(n_pos, np.int32)
+    end_bytes = np.empty(n_pos, np.int32)
 
-    def store(i, skeys, off, sidx, ssb, seb):
-        a, b = key_off[i], key_off[i + 1]
-        keys_all[a:b] = skeys
-        off_all[a + i: b + i + 1] = off.astype(np.int32) + np.int32(pos_base[i])
+    def store(i, skeys, off, source_indices, source_start_bytes, source_end_bytes):
+        a, b = key_offsets[i], key_offsets[i + 1]
+        ngram_keys[a:b] = skeys
+        position_offsets[a + i: b + i + 1] = off.astype(np.int32) + np.int32(pos_base[i])
         p, q = pos_base[i], pos_base[i + 1]
-        idx_all[p:q] = sidx
-        sb_all[p:q] = ssb
-        eb_all[p:q] = seb
+        ngram_indices[p:q] = source_indices
+        start_bytes[p:q] = source_start_bytes
+        end_bytes[p:q] = source_end_bytes
 
     def parse(i):
         if is_binary(paths[i]):
@@ -243,7 +248,7 @@ def load_corpus(paths, threads):
 
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(parse, range(n)))
-    return key_off, keys_all, off_all, idx_all, sb_all, eb_all
+    return key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes, end_bytes
 
 
 def warmup():

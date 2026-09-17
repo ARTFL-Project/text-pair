@@ -28,6 +28,9 @@ dependencies = [
     "transformers~=4.51.0",
     "lz4",
     "orjson",
+    "numpy~=2.3",
+    # numba 0.x minors are breaking releases, each moving its own numpy ceiling.
+    "numba~=0.67.0",
     "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.1.2#egg=text_preprocessing",
     # Lets spacy_model point at a transformer-based spaCy pipeline (e.g. the
     # historic-French lemmatizer) for lemmatization and POS filtering during

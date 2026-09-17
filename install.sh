@@ -77,6 +77,31 @@ fi
 
 deactivate
 
+# Numba cache for the sequence aligner's kernels. Wiped on every install so it is
+# always repopulated from empty: mode 1777 forbids renaming over another user's
+# files, which is what reusing a stale entry would require.
+echo ""
+echo "Setting up the sequence aligner's numba cache..."
+sudo rm -rf /var/lib/text-pair/numba_cache
+sudo mkdir -p /var/lib/text-pair/numba_cache
+sudo chmod 1777 /var/lib/text-pair/numba_cache
+
+# Pre-compile the kernels so the first real alignment does not pay for it. The
+# three-document fixture warms the whole njit call graph, JSON and binary paths both.
+source /var/lib/text-pair/textpair_env/bin/activate
+warm_fixture="lib/textpair/sequence_alignment/tests/fixtures/no_byte_range"
+warm_out=$(mktemp -d)
+if python -m textpair.sequence_alignment.aligner \
+        --source_files="$warm_fixture/ngrams" \
+        --source_metadata="$warm_fixture/metadata/metadata.json" \
+        --output_path="$warm_out" > /dev/null 2>&1; then
+    echo "Aligner kernels pre-compiled into /var/lib/text-pair/numba_cache"
+else
+    echo "WARNING: could not pre-compile the aligner kernels; the first alignment will."
+fi
+rm -rf "$warm_out"
+deactivate
+
 # Create separate virtual environment for graph building
 echo ""
 echo "Creating separate virtual environment for graph building..."
@@ -136,20 +161,8 @@ fi
 # Install the textpair script
 sudo cp textpair /usr/local/bin/
 
-# Install compareNgrams binary
-arch=$(uname -m)
-if [ "$arch" = "x86_64" ]; then
-    binary_path="lib/core/binary/x86_64/compareNgrams"
-elif [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then
-    binary_path="lib/core/binary/aarch64/compareNgrams"
-else
-    echo "Only x86_64 and ARM are supported at this time."
-    exit 1
-fi
-sudo rm -f /usr/local/bin/compareNgrams
-sudo cp "$binary_path" /usr/local/bin/compareNgrams
-sudo chmod +x /usr/local/bin/compareNgrams
-
+# A compareNgrams binary from an earlier install is left where it is, but nothing
+# invokes it: the sequence aligner is textpair.sequence_alignment.aligner.
 
 # Install the web application components
 echo -e "\nMoving web application components into place..."
