@@ -4,7 +4,7 @@
     check_ngram_binary.py NGRAMS_DIR METADATA_JSON [--binary-dir DIR] [--threads N]
         [--sort-by FIELD] [--keep]
 
-Converts a JSON `ngrams/` directory to binary, loads both with loader.load_corpus over
+Converts a JSON `ngrams/` directory to binary, loads both with ngram_loader.load_corpus over
 the same document sequence, and compares all six corpus arrays element for element.
 That covers the key ordering the writer has to reproduce, since the loader sorts the
 JSON side itself. Exits non-zero on any difference.
@@ -21,9 +21,9 @@ import tempfile
 import numpy as np
 
 from textpair.sequence_alignment import ngram_binary
-from textpair.sequence_alignment.aligner import loader
-from textpair.sequence_alignment.aligner.docorder import get_files
-from textpair.sequence_alignment.aligner.gotext import load_metadata
+from textpair.sequence_alignment.aligner import ngram_loader
+from textpair.sequence_alignment.aligner.documents import get_files
+from textpair.sequence_alignment.aligner.documents import load_metadata
 
 ARRAYS = ("key_offsets", "ngram_keys", "position_offsets", "ngram_indices",
           "start_bytes", "end_bytes")
@@ -44,9 +44,9 @@ def compare(ngrams_dir, metadata_path, binary_dir, threads, sort_by):
         "doc_order_identical": [doc for doc, _ in json_docs]
                                == [doc for doc, _ in get_files(binary_dir, metadata, sort_by)],
     }
-    loader.warmup()
-    from_json = loader.load_corpus(json_paths, threads)
-    from_binary = loader.load_corpus(binary_paths, threads)
+    ngram_loader.warmup()
+    from_json = ngram_loader.load_corpus(json_paths, threads)
+    from_binary = ngram_loader.load_corpus(binary_paths, threads)
     differences = []
     for name, left, right in zip(ARRAYS, from_json, from_binary):
         if left.shape != right.shape:

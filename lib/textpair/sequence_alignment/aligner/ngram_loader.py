@@ -4,13 +4,13 @@ A document is either JSON, {"<int32 hash>": [[index, start_byte, end_byte], ...]
 or the binary columnar format of ../ngram_binary.py; the format is picked per file by
 extension and confirmed by the magic bytes, so a half-converted corpus loads. JSON is
 parsed and sorted here, tolerating insignificant whitespace so files from older,
-non-compact writers still parse; binary is already in the loader's own order and is
+non-compact writers still parse; binary is already in this module's own order and is
 mmapped straight into place.
 
 `load_corpus` builds a whole corpus's shared columnar arrays: per-document sorted keys
 plus CSR position blocks, with positions inside a key left in the order the file gives
 them. Generation collects a document's ngrams in order and both writers sort keys
-stably, so that order is ascending by ngram index. `invidx.align_source` depends on it
+stably, so that order is ascending by ngram index. `inverted_index.align_source` depends on it
 to order a pair's matches without sorting them, and `tests/test_match_order.py` asserts
 it.
 """
@@ -252,7 +252,7 @@ def load_corpus(paths, threads):
 
 
 def warmup():
-    """Compile the loader kernels on a one-key document."""
+    """Compile this module's kernels on a one-key document."""
     buf = np.frombuffer(b'{"1":[[0,1,2]]}', dtype=np.uint8)
     count_keys_pos(buf)
     ok, k, c, ix, sb, eb = parse_ngram_json(buf)

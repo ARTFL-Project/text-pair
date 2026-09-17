@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks for the aligner's document ordering (aligner/docorder.py).
+"""Checks for the aligner's document ordering (aligner/documents.py).
 
     test_document_order.py
 
@@ -21,7 +21,7 @@ import shutil
 import sys
 import tempfile
 
-from textpair.sequence_alignment.aligner import align, docorder
+from textpair.sequence_alignment.aligner import align, documents
 
 # Parseable and unparseable years, a document with no year at all, and non-numeric IDs.
 MIXED = {
@@ -124,10 +124,10 @@ def check_corpus(source_files, threads, check):
             root = os.path.join(work, f"corpus{index}")
             ngrams, meta_path, metadata = rebuilt_corpus(source_files, root, doc_ids, reverse)
             check(f"rebuilt corpus is in string mode (build {index})",
-                  docorder.sort_mode(metadata, "year"), docorder.STRING)
-            key = docorder.sort_key(metadata, "year")
+                  documents.sort_mode(metadata, "year"), documents.STRING)
+            key = documents.sort_key(metadata, "year")
             expected = sorted(metadata, key=key)
-            got = [doc for doc, _ in docorder.get_files(ngrams, metadata, "year")]
+            got = [doc for doc, _ in documents.get_files(ngrams, metadata, "year")]
             check(f"get_files follows the string key (build {index})", got, expected)
             orders.append(got)
             out = os.path.join(root, "out")
@@ -150,32 +150,32 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     check("mode of the mixed fixture",
-          docorder.sort_mode(MIXED, "year"), docorder.NUMERIC)
+          documents.sort_mode(MIXED, "year"), documents.NUMERIC)
     check("mode of the mostly-text fixture",
-          docorder.sort_mode(MOSTLY_TEXT, "year"), docorder.STRING)
-    check("mode with an empty sort field", docorder.sort_mode(MIXED, ""), docorder.DOC_ID)
+          documents.sort_mode(MOSTLY_TEXT, "year"), documents.STRING)
+    check("mode with an empty sort field", documents.sort_mode(MIXED, ""), documents.DOC_ID)
     check("mode with a sort field no document carries",
-          docorder.sort_mode(MIXED, "absent"), docorder.DOC_ID)
+          documents.sort_mode(MIXED, "absent"), documents.DOC_ID)
 
-    numeric = docorder.sort_key(MIXED, "year")
+    numeric = documents.sort_key(MIXED, "year")
     check("numeric order", sorted(MIXED, key=numeric), MIXED_ORDER)
     check_total_order("numeric order is total", sorted(MIXED), numeric)
 
-    text = docorder.sort_key(MOSTLY_TEXT, "year")
+    text = documents.sort_key(MOSTLY_TEXT, "year")
     check("string order", sorted(MOSTLY_TEXT, key=text), MOSTLY_TEXT_ORDER)
     check_total_order("string order is total", sorted(MOSTLY_TEXT), text)
 
-    by_doc_id = docorder.sort_key(MIXED, "")
+    by_doc_id = documents.sort_key(MIXED, "")
     check("document ID order", sorted(MIXED, key=by_doc_id), DOC_ID_ORDER)
     check("a sort field no document carries falls back to document ID order",
-          sorted(MIXED, key=docorder.sort_key(MIXED, "absent")), DOC_ID_ORDER)
+          sorted(MIXED, key=documents.sort_key(MIXED, "absent")), DOC_ID_ORDER)
     check_total_order("document ID order is total", sorted(MIXED), by_doc_id)
 
     # Every value parses, so the key must be (year, int(docID)), the published order.
     clean = {doc: fields for doc, fields in MIXED.items()
-             if docorder.parse_int(fields.get("year", "")) is not None and doc.isdigit()}
+             if documents.parse_int(fields.get("year", "")) is not None and doc.isdigit()}
     check("clean corpora keep (year, int(docID)) order",
-          sorted(clean, key=docorder.sort_key(clean, "year")),
+          sorted(clean, key=documents.sort_key(clean, "year")),
           sorted(clean, key=lambda doc: (int(clean[doc]["year"]), int(doc))))
 
     directory = tempfile.mkdtemp()
@@ -183,33 +183,33 @@ def main(argv=None):
         for doc in MIXED:
             open(os.path.join(directory, doc + ".json"), "w").close()
         os.mkdir(os.path.join(directory, "subdir"))
-        found = docorder.get_files(directory, MIXED, "year")
+        found = documents.get_files(directory, MIXED, "year")
         check("get_files order", [doc for doc, _ in found], MIXED_ORDER)
         check("get_files paths", [os.path.basename(path) for _, path in found],
               [doc + ".json" for doc in MIXED_ORDER])
 
         listdir = os.listdir
-        docorder.os.listdir = lambda path: list(reversed(sorted(listdir(path))))
+        documents.os.listdir = lambda path: list(reversed(sorted(listdir(path))))
         try:
-            reversed_listing = docorder.get_files(directory, MIXED, "year")
+            reversed_listing = documents.get_files(directory, MIXED, "year")
         finally:
-            docorder.os.listdir = listdir
+            documents.os.listdir = listdir
         check("get_files ignores the directory listing's order", reversed_listing, found)
     finally:
         shutil.rmtree(directory, ignore_errors=True)
 
     # The documented rule is a strict majority of parseable values.
     tie = {str(i): {"year": "1800" if i < 3 else "n.d."} for i in range(6)}
-    check("an exact tie is string mode", docorder.sort_mode(tie, "year"), docorder.STRING)
+    check("an exact tie is string mode", documents.sort_mode(tie, "year"), documents.STRING)
     tie["6"] = {"year": "1800"}
     check("one past the tie is numeric mode",
-          docorder.sort_mode(tie, "year"), docorder.NUMERIC)
+          documents.sort_mode(tie, "year"), documents.NUMERIC)
     missing = {"1": {"year": "1800"}, "2": {}, "3": {}}
     check("documents without the field do not count toward the majority",
-          docorder.sort_mode(missing, "year"), docorder.NUMERIC)
+          documents.sort_mode(missing, "year"), documents.NUMERIC)
 
-    check("get_files on an empty path", docorder.get_files("", MIXED, "year"), [])
-    check("doc_id_of", [docorder.doc_id_of(name) for name in ("1.json", "1.bin", "a.b")],
+    check("get_files on an empty path", documents.get_files("", MIXED, "year"), [])
+    check("doc_id_of", [documents.doc_id_of(name) for name in ("1.json", "1.bin", "a.b")],
           ["1", "1", "a.b"])
 
     if args.source_files:

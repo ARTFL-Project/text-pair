@@ -14,10 +14,9 @@ from shlex import quote
 
 import numpy as np
 
-from . import debug as debug_output
-from . import loader, output, pipeline
-from .docorder import get_files
-from .gotext import load_metadata
+from . import tracing
+from . import inverted_index, ngram_loader, output
+from .documents import get_files, load_metadata
 
 # sa_config.ini overrides some of these.
 DEFAULTS = dict(
@@ -216,9 +215,9 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
     duplicate_rows = []
     try:
         key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes, end_bytes = \
-            loader.load_corpus(paths, threads)
-        posting_keys, posting_slots, bucket_starts = pipeline.build_postings(ngram_keys, threads)
-        posting_docs, sweep_starts, per_source = pipeline.index_postings(
+            ngram_loader.load_corpus(paths, threads)
+        posting_keys, posting_slots, bucket_starts = inverted_index.build_postings(ngram_keys, threads)
+        posting_docs, sweep_starts, per_source = inverted_index.index_postings(
             posting_keys, posting_slots, bucket_starts, key_offsets, n_sources, same_doc, threads)
         del bucket_starts
         gc.collect()
@@ -237,7 +236,7 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                                             metas[target_slot],
                                                             float(percents[i]))))
 
-        pipeline.run_match(ngram_keys, key_offsets, sweep_starts, posting_keys,
+        inverted_index.run_match(ngram_keys, key_offsets, sweep_starts, posting_keys,
                            posting_slots, posting_docs,
                            per_source, same_doc, position_offsets, ngram_indices,
                            start_bytes, end_bytes,
@@ -247,9 +246,9 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
         print("\r\033[KComparing files... done.", flush=True)
         if trace is not None:
             print("Tracing compared pairs... ", end="", flush=True)
-            written = debug_output.write_traces(
+            written = tracing.write_traces(
                 trace["output_path"], docs,
-                debug_output.Corpus(key_offsets, ngram_keys, position_offsets,
+                tracing.Corpus(key_offsets, ngram_keys, position_offsets,
                                     ngram_indices, start_bytes, end_bytes),
                 params, same_doc, n_sources, trace["ngram_index"], trace["pairs"])
             print(f"{written} pair(s) written.", flush=True)
@@ -299,11 +298,11 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
     ngram_index = {}
     if params["debug"]:
         if params["ngram_index"]:
-            ngram_index = debug_output.load_ngram_index(params["ngram_index"])
+            ngram_index = tracing.load_ngram_index(params["ngram_index"])
         else:
             print("--debug without --ngram_index: traces cannot name their ngrams.",
                   file=sys.stderr, flush=True)
-    pair_filter = debug_output.parse_pairs(params["debug_pairs"])
+    pair_filter = tracing.parse_pairs(params["debug_pairs"])
     if not source_metadata:
         raise ValueError("no source metadata provided")
     if target_files == source_files:
@@ -341,8 +340,8 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
     output.write_duplicates(output_path, ())
     trace = ({"output_path": output_path, "ngram_index": ngram_index,
               "pairs": pair_filter} if params["debug"] else None)
-    pipeline.warmup()
-    loader.warmup()
+    inverted_index.warmup()
+    ngram_loader.warmup()
 
     count = 0
     for source_number, source_batch in enumerate(source_batches):

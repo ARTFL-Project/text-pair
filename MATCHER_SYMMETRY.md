@@ -1,6 +1,7 @@
 # Direction dependence in the sequence matcher
 
-**Scope:** `lib/textpair/sequence_alignment/aligner/kernels.py`, `invidx.py`, `debug.py`
+**Scope:** `lib/textpair/sequence_alignment/aligner/matching.py`, `inverted_index.py`,
+`tracing.py`
 **Corpus:** frantext `sub3596` (3,596 documents), eccotcp `ecco_clean` (3,014) and
 classical_chinese `cc_clean` (62), from `/disk1/shared/text-pair-validation/corpora`
 **Measured:** 2026-09-17, 64-core machine, 32 threads
@@ -54,7 +55,7 @@ other.
 
 ### 1. The matcher reserves the source range of each passage it emits
 
-`kernels.py:108`, `last_source_position = last_source_index + 1`. Target positions are
+`matching.py:108`, `last_source_position = last_source_index + 1`. Target positions are
 never reserved, so passages are disjoint in the source and may overlap freely in the
 target. A phrase occurring once in the source and *n* times in the target therefore yields
 one passage; the same pair compared the other way yields *n*.
@@ -71,14 +72,14 @@ with merging switched off, to separate it from cause 2).
 
 ### 2. The merger derives both byte thresholds from the source passage
 
-`kernels.py:166-168`. `merge_with_previous` computes one `distance_value` from the
+`matching.py:166-168`. `merge_with_previous` computes one `distance_value` from the
 *source* passage's byte length and applies it to both documents, and it checks that the
 candidate does not overlap the previous passage in the target only. Worth 6.7 points of
 agreement: with cause 1 fixed but this left alone, agreement is 93.1% rather than 99.9%.
 
 ### 3. The duplicate filter divides by the source's ngram count
 
-`invidx.py:295`, `pct = count / ns * 100` where `ns` is the source's distinct-key count. A
+`inverted_index.py:295`, `pct = count / ns * 100` where `ns` is the source's distinct-key count. A
 short document largely contained in a long one is a duplicate one way only. On frantext:
 29 duplicate pairs forward, 24 reversed, 18 in common. Small, but it removes pairs from
 the output entirely, so it is the last thing standing between 99.9% and 100%.
@@ -318,7 +319,7 @@ price of loose linking: the DP maximises chain length under the loose bound, and
 that is longest there can fragment where a tighter one would not have. 0.18% against
 0.13%.
 
-`test_debug_trace.py` and `test_matcher_symmetry.py` both run each setting, since
+`test_tracing.py` and `test_matcher_symmetry.py` both run each setting, since
 flex_gap changes how far the matcher links and what the walk down each chain enforces.
 The trace test previously only ever ran the default, which is why this path went
 unchecked until now.
@@ -327,16 +328,17 @@ unchecked until now.
 
 | file | |
 |---|---|
-| `kernels.py` | `match_passage` and `merge_passages` are the symmetric kernels. The asymmetric `match_passage` and `merge_with_previous` are deleted, not switchable: nobody would choose a matcher whose answer depends on which document is older, and keeping it would mean maintaining two `debug._walk` mirrors. Old results reproduce from a tag, the way `2042c06` retired the Go aligner |
-| `invidx.py` | chaining buffers hoisted into `align_source`; duplicate share taken against the smaller document |
-| `debug.py` | `_walk` rewritten to mirror the new matcher, with reasons for where a passage stops and why a rejected one was rejected |
+| `matching.py` | `match_passage` and `merge_passages` are the symmetric kernels. The asymmetric `match_passage` and `merge_with_previous` are deleted, not switchable: nobody would choose a matcher whose answer depends on which document is older, and keeping it would mean maintaining two `tracing._walk` mirrors. Old results reproduce from a tag, the way `2042c06` retired the Go aligner |
+| `inverted_index.py` | chaining buffers hoisted into `align_source`; duplicate share taken against the smaller document |
+| module layout | `kernels.py` became `matching.py`; `pipeline.py` merged into `inverted_index.py`, whose kernels it existed to drive, following `ngram_loader.py`'s pattern; `gotext.py` split, its passage-text half into `output.py` and `load_metadata` into `documents.py` (was `docorder.py`); `numba_cache.py` folded into `__init__.py`, whose import order is the reason it existed. 12 modules to 9, all renamed away from abbreviations. Output is byte-identical on frantext and classical_chinese, both `flex_gap` settings |
+| `tracing.py` | `_walk` rewritten to mirror the new matcher, with reasons for where a passage stops and why a rejected one was rejected |
 | `tests/test_matcher_symmetry.py` | new: runs a corpus forward and with the document order reversed and compares undirected passage pairs, including a corpus where a phrase occurs once in one document and seven times in another. Fails against the retired matcher with 1 occurrence against 7 |
-| `tests/compare_aligners.py` | was a Go-parity harness; now compares against a stored reference tree. `fixtures/record_references.py` re-records them |
-| `tests/test_debug_trace.py` | runs both `flex_gap` settings; it only ever ran the default before |
+| `tests/check_reference_output.py` | was a Go-parity harness; now compares against a stored reference tree. `fixtures/record_references.py` re-records them |
+| `tests/test_tracing.py` | runs both `flex_gap` settings; it only ever ran the default before |
 | `tests/check_direction_flips.py` | docstring: a direction flip now mirrors |
 
 All of `test_match_order`, `test_chunk_order`, `test_document_order`, `test_aligner_paths`,
-`test_debug_trace`, `test_matcher_symmetry` and `compare_aligners --fixtures` pass, and
+`test_debug_trace`, `test_matcher_symmetry` and `check_reference_output --fixtures` pass, and
 `_walk` matches the kernel on all 1,891 classical_chinese pairs, for both `flex_gap`
 settings, with the trace accounting for every alignment. The fixture references re-record
 byte for byte. The aligner is deterministic across runs and thread counts: five runs of
@@ -402,8 +404,8 @@ python $E/bench.py --reps 9 --threads 1 --matchers 0,8
 | file | |
 |---|---|
 | `variants.py` | the candidate kernels: `match_v1`, `match_v3`, `match_v4`, `match_v8`, `merge_symmetric`, `component_stats` |
-| `align.py` | `invidx.align_source` with a `matcher` argument; `matcher == 0` reproduces the shipped output byte for byte |
-| `run_variant.py` | whole-corpus run under one matcher, by monkeypatching `invidx.align_source` |
+| `align.py` | `inverted_index.align_source` with a `matcher` argument; `matcher == 0` reproduces the shipped output byte for byte |
+| `run_variant.py` | whole-corpus run under one matcher, by monkeypatching `inverted_index.align_source` |
 | `bench.py` | matching phase alone, corpus and postings preloaded, matchers interleaved across repetitions |
 | `census.py` | two trees as undirected passage sets: agreement, only-in-one, overlap |
 | `losses.py` | records of one tree with no counterpart, and per-document coverage |

@@ -14,7 +14,7 @@ if both of these hold of the loaded corpus:
      ascending target indices.
 
 Both come from the writers sorting keys stably and so keeping each key's positions in the
-order generation collected them (`ngram_binary.write_positions`, `loader.build_csr_sorted`).
+order generation collected them (`ngram_binary.write_positions`, `ngram_loader.build_csr_sorted`).
 Neither is enforced at load time, so this asserts them, and then asserts that the order
 align_source produces really is what a full sort of the cross-product would give.
 
@@ -26,9 +26,9 @@ import sys
 
 import numpy as np
 
-from textpair.sequence_alignment.aligner import loader
-from textpair.sequence_alignment.aligner.docorder import get_files
-from textpair.sequence_alignment.aligner.gotext import load_metadata
+from textpair.sequence_alignment.aligner import ngram_loader
+from textpair.sequence_alignment.aligner.documents import get_files
+from textpair.sequence_alignment.aligner.documents import load_metadata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -49,7 +49,7 @@ def main(argv=None):
 
     docs = get_files(args.ngrams_dir, load_metadata(args.metadata), "year")[:args.documents]
     (key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes,
-     end_bytes) = loader.load_corpus(
+     end_bytes) = ngram_loader.load_corpus(
         [path for _, path in docs], args.threads)
     failures = []
 

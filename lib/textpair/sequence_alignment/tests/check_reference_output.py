@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Run the sequence aligner over a corpus and compare every artifact with a stored tree.
 
-    compare_aligners.py --source-files DIR --source-metadata FILE [--target-files DIR
+    check_reference_output.py --source-files DIR --source-metadata FILE [--target-files DIR
         --target-metadata FILE] --reference DIR [--threads N] [--workdir DIR]
         [--run-cwd DIR] [--param name=value]...
-    compare_aligners.py --fixtures [--threads N]          # the synthetic corpora here
-    compare_aligners.py --fixtures --binary [--threads N] # ... with a binary ngram index
+    check_reference_output.py --fixtures [--threads N]          # the synthetic corpora here
+    check_reference_output.py --fixtures --binary [--threads N] # ... with a binary ngram index
 
 A reference is stored output, not a second implementation. The fixtures keep theirs in
 fixtures/<name>/reference; regenerate them with fixtures/record_references.py whenever the
@@ -42,8 +42,8 @@ from concurrent.futures import ProcessPoolExecutor
 import lz4.frame
 import orjson
 
-from textpair.sequence_alignment.aligner import docorder
-from textpair.sequence_alignment.aligner.gotext import load_metadata
+from textpair.sequence_alignment.aligner import documents
+from textpair.sequence_alignment.aligner.documents import load_metadata
 from textpair.sequence_alignment.tests.check_direction_flips import flip
 
 FIXTURES = ("no_byte_range", "non_string_meta", "missing_text", "no_metadata")
@@ -113,11 +113,11 @@ def unparseable_sort_values(ngrams_dir, metadata_path, sort_by, run_cwd):
         return None
     root = run_cwd or "."
     metadata = load_metadata(os.path.join(root, metadata_path))
-    if docorder.sort_mode(metadata, sort_by) != docorder.NUMERIC:
+    if documents.sort_mode(metadata, sort_by) != documents.NUMERIC:
         return None
-    doc_ids = [docorder.doc_id_of(name)
+    doc_ids = [documents.doc_id_of(name)
                for name in os.listdir(os.path.join(root, ngrams_dir))]
-    return sum(docorder.parse_int(metadata.get(doc, {}).get(sort_by, "")) is None
+    return sum(documents.parse_int(metadata.get(doc, {}).get(sort_by, "")) is None
                for doc in doc_ids)
 
 
