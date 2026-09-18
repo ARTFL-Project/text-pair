@@ -3,23 +3,17 @@
 # Default values
 PYTHON_VERSION="python3"
 USE_CUDA=false
-SKIP_LEMMATIZER="no"
 
 # Parse command line arguments
-while getopts "p:cL" opt; do
+while getopts "p:c" opt; do
   case $opt in
     p) PYTHON_VERSION="$OPTARG"
     ;;
     c) USE_CUDA=true
     ;;
-    L) SKIP_LEMMATIZER="yes"
-    ;;
-    *) echo "Usage: $0 [-p python_version] [-c] [-L]"
+    *) echo "Usage: $0 [-p python_version] [-c]"
        echo "  -p: Specify Python version (default: python3)"
        echo "  -c: Install with CUDA support (default: CPU only)"
-       echo "  -L: Skip the graph lemmatizer environment (a second torch copy)."
-       echo "      Without it, thematic-graph term extraction falls back to regex"
-       echo "      tokenization, which is worse on archaic spelling but still works."
        exit 1
     ;;
   esac
@@ -138,34 +132,6 @@ fi
 
 deactivate
 echo "Graph building environment created at /var/lib/text-pair/graph"
-
-# Separate environment because spacy-transformers pins transformers<4.53.3,
-# which the graph environment's label model (>=5.5) cannot share. Optional:
-# without it term extraction falls back to regex tokenization.
-if [ "$SKIP_LEMMATIZER" = "yes" ]; then
-    echo "Skipping the lemmatizer environment (-L)."
-else
-    echo "Installing lemmatizer environment..."
-    uv venv -p $PYTHON_VERSION /var/lib/text-pair/lemmatizer
-    source /var/lib/text-pair/lemmatizer/bin/activate
-    # torch LAST: installing it first does not hold, because the
-    # spacy-transformers install re-resolves it to a CUDA-13 build that a
-    # CUDA-12 driver refuses.
-    # TODO: simplify all this
-    uv pip install "spacy>=3.8.5,<3.9" spacy-transformers orjson lz4 scikit-learn tqdm
-    if [ "$USE_CUDA" = true ]; then
-        uv pip install --index-url https://download.pytorch.org/whl/cu126 "torch==2.8.0" || {
-            echo "WARNING: CUDA torch install failed; falling back to CPU torch."
-            uv pip install torch
-        }
-        uv pip install "cupy-cuda12x<14" || echo "WARNING: cupy install failed; lemmatizer will run on CPU."
-    else
-        uv pip install torch
-    fi
-    deactivate
-    echo "Lemmatizer environment created at /var/lib/text-pair/lemmatizer"
-    echo "Set spacy_model in the [GRAPH] config section to a spaCy model path to use it."
-fi
 
 # Install the textpair script
 sudo cp textpair /usr/local/bin/

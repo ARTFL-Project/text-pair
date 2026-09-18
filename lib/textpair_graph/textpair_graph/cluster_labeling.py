@@ -33,10 +33,17 @@ from tqdm import tqdm
 
 TOP_WORDS = 20  # what topic_labeler consumes per cluster
 DEFAULT_MAX_PASSAGES_PER_CLUSTER = 2000
-_SIMPLE_TOKEN = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+# Shortest term worth ranking. Applied by both normalization paths.
+MIN_TERM_LENGTH = 3
+_SIMPLE_TOKEN = re.compile(rf"[^\W\d_]{{{MIN_TERM_LENGTH},}}", re.UNICODE)
 
 
-LEMMATIZER_PYTHON = "/var/lib/text-pair/lemmatizer/bin/python"
+# The textpair environment, which owns the preprocessor the worker runs. It is
+# the spacy-transformers side of the split described in lemmatize_worker.py, so
+# it already satisfies every constraint term extraction has.
+TEXTPAIR_PYTHON = "/var/lib/text-pair/textpair_env/bin/python"
+
+DEFAULT_POS_TO_KEEP = ("NOUN", "ADJ", "PROPN")
 
 
 def _regex_normalize(text: str) -> str:
@@ -45,15 +52,29 @@ def _regex_normalize(text: str) -> str:
     return " ".join(m.group(0).lower() for m in _SIMPLE_TOKEN.finditer(text))
 
 
-def _lemmatize_via_subprocess(
-    passages: list[str], spacy_model: str, pos_to_keep: list[str]
-) -> list[str] | None:
-    """Normalize passages in the lemmatizer environment. None if unavailable.
+def _preprocess_params(params: dict, spacy_model: str) -> dict:
+    """The [PREPROCESSING] settings for term extraction.
+
+    Everything the caller configured is passed through, so modernization,
+    stopwords and the rest apply here exactly as they did during alignment.
+    Only the defaults differ: c-TF-IDF wants a bag of content-word lemmas, so
+    lemmatization and a POS filter are on unless overridden.
     """
-    if not os.path.exists(LEMMATIZER_PYTHON):
+    resolved = {key: value for key, value in params.items() if key != "spacy_model"}
+    resolved["language_model"] = spacy_model
+    resolved["lemmatizer"] = params.get("lemmatizer") or "spacy"
+    resolved["pos_to_keep"] = params.get("pos_to_keep") or list(DEFAULT_POS_TO_KEEP)
+    resolved.setdefault("minimum_word_length", MIN_TERM_LENGTH)
+    return resolved
+
+
+def _lemmatize_via_subprocess(passages: list[str], params: dict) -> list[str] | None:
+    """Normalize passages in the textpair environment. None if unavailable.
+    """
+    if not os.path.exists(TEXTPAIR_PYTHON):
         print(
-            f"  spacy_model is set but {LEMMATIZER_PYTHON} is missing; falling back to\n"
-            "  regex tokenization. Re-run install.sh without -L to build it."
+            f"  spacy_model is set but {TEXTPAIR_PYTHON} is missing; falling back to\n"
+            "  regex tokenization. Re-run install.sh to build it."
         )
         return None
 
@@ -62,18 +83,10 @@ def _lemmatize_via_subprocess(
         in_path = os.path.join(tmp, "passages.json")
         out_path = os.path.join(tmp, "normalized.json")
         with open(in_path, "w", encoding="utf-8") as f:
-            json.dump(passages, f)
-        command = [
-            LEMMATIZER_PYTHON,
-            worker,
-            in_path,
-            out_path,
-            "--model",
-            spacy_model,
-            "--pos-to-keep",
-            ",".join(pos_to_keep) if pos_to_keep else "",
-        ]
-        print(f"  lemmatizing {len(passages):,} passages with {spacy_model}...", flush=True)
+            json.dump({"params": params, "passages": passages}, f)
+        command = [TEXTPAIR_PYTHON, worker, in_path, out_path]
+        model = params["language_model"]
+        print(f"  lemmatizing {len(passages):,} passages with {model}...", flush=True)
         result = subprocess.run(command, check=False)
         if result.returncode != 0 or not os.path.exists(out_path):
             print(f"  lemmatizer exited {result.returncode}; falling back to regex tokenization.")
@@ -153,9 +166,7 @@ def compute_ctfidf(
 
     normalized = None
     if spacy_model:
-        normalized = _lemmatize_via_subprocess(
-            flat, spacy_model, params.get("pos_to_keep") or ["NOUN", "ADJ", "PROPN"]
-        )
+        normalized = _lemmatize_via_subprocess(flat, _preprocess_params(params, spacy_model))
     if normalized is None:
         normalized = [_regex_normalize(p) for p in flat]
 

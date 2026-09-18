@@ -38,10 +38,11 @@ dependencies = [
     "accelerate",
 ]
 
-# Term-extraction normalization deliberately lives in a separate environment
-# (/var/lib/text-pair/lemmatizer, built by install.sh). Transformer spaCy models
-# need spacy-transformers, which pins transformers<4.53.3, while this
-# environment needs >=5.5 for sentence-transformers and the label model.
+# Term-extraction normalization is absent here on purpose: transformer spaCy
+# models need spacy-transformers, which pins transformers<4.53.3, while this
+# environment needs >=5.5 for sentence-transformers and the label model. The
+# stage runs in the textpair environment instead, which already carries that
+# ceiling -- see textpair_graph/lemmatize_worker.py.
 
 [project.optional-dependencies]
 cuda = [

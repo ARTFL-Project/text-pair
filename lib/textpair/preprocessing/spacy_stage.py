@@ -221,8 +221,12 @@ class SpacyStage:
             text_object.forms = normalized
         else:
             text_object.forms = normalized
-            text_object.start_bytes = [text_object.start_bytes[i] for i in kept]
-            text_object.end_bytes = [text_object.end_bytes[i] for i in kept]
+            # Guarded like the columns below: a text object built from a bare
+            # string (process_strings) carries no byte offsets to resync.
+            if text_object.start_bytes:
+                text_object.start_bytes = [text_object.start_bytes[i] for i in kept]
+            if text_object.end_bytes:
+                text_object.end_bytes = [text_object.end_bytes[i] for i in kept]
             if text_object.surface_forms:
                 text_object.surface_forms = [text_object.surface_forms[i] for i in kept]
             if text_object.positions:

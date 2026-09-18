@@ -238,13 +238,8 @@ class PreProcessor:
     # Single string processing, for passage highlighting
     # ------------------------------------------------------------------
 
-    def process_string(self, text: str) -> list[tuple[str, str]]:
-        """Tokenize and normalize a raw passage.
-
-        Returns (normalized, surface_form) pairs, with a single-space pair
-        between words, so joining the surface forms reconstructs the passage.
-        Filtered tokens keep an empty normalized form so callers can mark them.
-        """
+    def _tokenize_string(self, text: str) -> list[str]:
+        """Split raw text into surface forms, words and sentence boundaries alike."""
         if self.config.strip_tags:
             text = remove_tags(text)
         if self._string_tokenizer is None:
@@ -252,7 +247,16 @@ class PreProcessor:
             self._string_tokenizer = re.compile(
                 rf"({self.config.word_regex})|([{re.escape(boundaries)}])"
             )
-        surface_forms = [match[0] for match in self._string_tokenizer.finditer(text)]
+        return [match[0] for match in self._string_tokenizer.finditer(text)]
+
+    def process_string(self, text: str) -> list[tuple[str, str]]:
+        """Tokenize and normalize a raw passage.
+
+        Returns (normalized, surface_form) pairs, with a single-space pair
+        between words, so joining the surface forms reconstructs the passage.
+        Filtered tokens keep an empty normalized form so callers can mark them.
+        """
+        surface_forms = self._tokenize_string(text)
         if not surface_forms:
             return []
         modernized = [self.normalizer.modernize(form) for form in surface_forms]
@@ -272,6 +276,30 @@ class PreProcessor:
             if index < last:
                 tokens.append((" ", " "))
         return tokens
+
+    def process_strings(self, texts: Iterable[str]) -> Iterator[list[str]]:
+        """Normalize many raw passages, yielding the surviving forms of each.
+
+        Batches the spaCy pipeline across passages instead of running one Doc
+        per call, which is what makes this worth having over a loop around
+        process_string: the pipeline is the cost, and it is only efficient when
+        fed a whole batch. Surface forms are dropped, since a caller with
+        thousands of passages wants a bag of words rather than an alignment
+        back to the source text.
+        """
+        modernize = self.normalizer.modernize
+        objects = (
+            TextObject(forms=[modernize(form) for form in self._tokenize_string(text)])
+            for text in texts
+        )
+        if self.spacy_stage is not None:
+            self.spacy_stage.keep_all = False
+            for text_object in self.spacy_stage(objects):
+                yield text_object.forms
+            return
+        normalize = self.normalizer.__call__ if self.config.memoizable else self.normalizer.normalize
+        for text_object in objects:
+            yield [form for form in map(normalize, text_object.forms) if form]
 
 
 def remove_tags(text: str) -> str:
