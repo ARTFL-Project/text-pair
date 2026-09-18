@@ -42,6 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 #   combinations. Its other claim -- that the binary and JSON indexes give the same
 #   alignments -- is checked against real corpora by ngram_binary.
 CHECKS = (
+    ("ngram_index", "test_ngram_index.py", (), False),
     ("document_order", "test_document_order.py", (), False),
     ("match_order", "test_match_order.py", (), True),
     ("chunk_order", "test_chunk_order.py", (), True),

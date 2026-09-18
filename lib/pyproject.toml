@@ -16,14 +16,13 @@ maintainers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "multiprocess",
+    "dill",
     "mmh3",
     "unidecode",
     "tqdm",
     "cython",
     "pystemmer",
     "lxml",
-    "namedlist",
     "sentence-transformers~=5.3",
     "transformers~=4.51.0",
     "lz4",
@@ -31,7 +30,6 @@ dependencies = [
     "numpy~=2.3",
     # numba 0.x minors are breaking releases, each moving its own numpy ceiling.
     "numba~=0.67.0",
-    "text_preprocessing @ git+https://github.com/ARTFL-Project/text-preprocessing@v1.1.2#egg=text_preprocessing",
     # Lets spacy_model point at a transformer-based spaCy pipeline (e.g. the
     # historic-French lemmatizer) for lemmatization and POS filtering during
     # preprocessing. NOTE: this pins transformers below 4.53.3, which is the
@@ -82,8 +80,12 @@ package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["textpair"]
+include = ["textpair*"]
 exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+# Modernization maps, shipped as editable TSV rather than generated Python.
+"textpair.preprocessing" = ["data/*.tsv"]
 
 [tool.isort]
 profile = "black"

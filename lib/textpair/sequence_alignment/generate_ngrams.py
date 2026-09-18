@@ -3,20 +3,18 @@
 
 import configparser
 import os
-import platform
 import shutil
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
-from shlex import quote
 from typing import Any, Dict, List, Tuple
 
 import orjson
 from mmh3 import hash as hash32
-from text_preprocessing import PreProcessor, Tokens
 from tqdm import tqdm
 
-from . import ngram_binary
+from textpair.preprocessing import PreProcessor, TextObject
+
+from . import ngram_binary, ngram_index
 
 # https://github.com/tqdm/tqdm/issues/481
 tqdm.monitor_interval = 0
@@ -118,7 +116,10 @@ class Ngrams:
         combined_metadata: dict[str, Any] = {}
 
         print("Generating ngrams...", flush=True)
-        preprocessor_kwargs = dict(
+        # word_order and the n-gram size/gap are read straight from self.config;
+        # PreprocessConfig accepts both the config-file names and its own.
+        preprocessor = PreProcessor(
+            workers=workers,
             language=self.config["language"],
             stemmer=self.config["stemmer"],
             lemmatizer=self.config["lemmatizer"],
@@ -127,55 +128,24 @@ class Ngrams:
             strip_numbers=self.config["numbers"],
             stopwords=self.config["stopwords"],
             pos_to_keep=self.config["pos_to_keep"],
-            language_model=self.config["language_model"] or None,
+            language_model=self.config["language_model"],
             ngrams=self.config["ngram"],
             ngram_gap=self.config["gap"],
+            ngram_word_order=self.config["word_order"],
             text_object_type=self.config["text_object_type"],
             min_word_length=self.config["minimum_word_length"],
             ascii=self.config["ascii"],
             post_processing_function=self.text_to_ngram,
-            is_philo_db=True,
-            progress=False,
         )
         philo_type_count = self.count_texts(files[0])
-        if platform.system() == "Darwin":
-            # multiprocess.Pool defaults to fork() on macOS, and forking again right after the
-            # preceding PhiloLogic parse stage's own Pool tears down reliably deadlocks on modern
-            # macOS (bpo-33725). Keep text_preprocessing on its serial path (workers=1) and fan
-            # out across files ourselves with threads, which never fork.
-            preprocessor = PreProcessor(**preprocessor_kwargs, workers=1)
-            with tqdm(total=philo_type_count, leave=False) as pbar:
-                with ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures = [
-                        executor.submit(lambda f=f: list(preprocessor.process_texts([f], progress=False)))
-                        for f in files
-                    ]
-                    for future in as_completed(futures):
-                        for local_metadata in future.result():
-                            combined_metadata.update(local_metadata)  # type: ignore
-                            pbar.update()
-        else:
-            preprocessor = PreProcessor(**preprocessor_kwargs, workers=workers)
-            with tqdm(total=philo_type_count, leave=False) as pbar:
-                for local_metadata in preprocessor.process_texts(files, progress=False):
-                    combined_metadata.update(local_metadata)  # type: ignore
-                    pbar.update()
+        with tqdm(total=philo_type_count, leave=False) as pbar:
+            for local_metadata in preprocessor.process_texts(files):
+                combined_metadata.update(local_metadata)
+                pbar.update()
 
-        print(
-            "Saving ngram index and most common ngrams (this can take a while)...",
-            flush=True,
-        )
-        # Shell pipeline for sort -S, with every path quoted for spaces. awk
-        # splits on tab, not whitespace: an ngram can itself contain spaces, and
-        # splitting on those drops the hash from every line.
-        q_out = quote(output_path)
-        os.system(
-            rf"""for i in {q_out}/temp/*; do cat "$i"; done | sort -T {q_out} -S 25% | uniq -c |
-            sort -rn -T {q_out} -S 25% |
-            awk -F'\t' '{{sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", $1); print $1"\t"$2}}' |
-            tee {q_out}/index/index.tab |
-            awk -F'\t' '{{print $2}}' > {q_out}/index/most_common_ngrams.txt"""
-        )
+        print("Saving ngram index and most common ngrams...", flush=True)
+        distinct = ngram_index.build(output_path)
+        print(f"{distinct:,} distinct ngrams indexed.", flush=True)
 
         print("Saving metadata...")
         with open(f"{self.output_path}/metadata/metadata.json", "wb") as metadata_output:
@@ -185,9 +155,8 @@ class Ngrams:
         print("Cleaning up...")
         shutil.rmtree(os.path.join(self.output_path, "temp"), ignore_errors=True)
 
-    def text_to_ngram(self, text_object: Tokens) -> Dict[str, Any]:
-        """Tranform doc to inverted index of ngrams"""
-        doc_ngrams: List[str] = []
+    def text_to_ngram(self, text_object: TextObject) -> Dict[str, Any]:
+        """Transform one text object into its n-gram files. Runs in a worker."""
         metadata: Dict[str, Any] = {}
         # Make sure we only have strings in our metadata:
         for k, v in text_object.metadata.items():
@@ -202,23 +171,23 @@ class Ngrams:
         metadata[text_object_id] = text_object.metadata
         # Three parallel columns rather than a dict of position lists: the binary
         # writer groups them by hash with one stable sort.
-        hashes: List[int] = []
-        start_bytes: List[int] = []
-        end_bytes: List[int] = []
-        doc_ngrams_in_order: List[Tuple[int, int]] = []  # for banality filter
-        for ngram in text_object:
-            hashed_ngram = hash32(ngram)
-            start_byte = ngram.ext["start_byte"]
-            hashes.append(hashed_ngram)
-            start_bytes.append(start_byte)
-            end_bytes.append(ngram.ext["end_byte"])
-            doc_ngrams_in_order.append((start_byte, hashed_ngram))
-            doc_ngrams.append("\t".join((ngram, str(hashed_ngram))))
+        forms = text_object.forms
+        start_bytes = text_object.start_bytes
+        hashes: List[int] = [hash32(form) for form in forms]
+        doc_ngrams_in_order: List[Tuple[int, int]] = list(zip(start_bytes, hashes))  # banality filter
+        doc_ngrams: List[str] = [f"{form}\t{hashed}" for form, hashed in zip(forms, hashes)]
         ngram_binary.write_positions(
-            f"{self.output_path}/ngrams/{text_object_id}.bin", hashes, start_bytes, end_bytes
+            f"{self.output_path}/ngrams/{text_object_id}.bin",
+            hashes,
+            start_bytes,
+            text_object.end_bytes,
         )
+        # Trailing newline matters: these files used to be concatenated with cat,
+        # and without it the last ngram of one document was welded to the first of
+        # the next, producing one corrupt index entry per file boundary.
         with open(f"{self.output_path}/temp/{text_object_id}", "w", encoding="utf-8") as output:
             output.write("\n".join(sorted(doc_ngrams)))
+            output.write("\n")
         with open(f"{self.output_path}/ngrams_in_order/{text_object_id}.json", "wb") as json_file:
             json_file.write(orjson.dumps(doc_ngrams_in_order))
         return metadata

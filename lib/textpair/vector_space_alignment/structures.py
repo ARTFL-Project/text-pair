@@ -14,7 +14,7 @@ import msgspec
 import numpy as np
 import torch
 from msgspec import field
-from text_preprocessing import Tokens
+from textpair.preprocessing import TextObject
 
 from textpair.utils import clear_device_cache
 
@@ -491,20 +491,15 @@ class TokenSearchData(msgspec.Struct):
     sentence_ids: list[str]
 
 
-def save_tokens(tokens: Tokens, parsed_filename: str):
+def save_tokens(tokens: TextObject, parsed_filename: str):
     """
     Saves token search data to a cache file using msgpack serialization.
     """
-    start_bytes = [token.ext["start_byte"] for token in tokens.tokens]
-    end_bytes = [token.ext["end_byte"] for token in tokens.tokens]
-    surface_forms = [token.surface_form for token in tokens.tokens]
-    sentence_ids = [get_sentence_id(token) for token in tokens.tokens]
-
     search_data = TokenSearchData(
-        start_bytes=start_bytes,
-        end_bytes=end_bytes,
-        surface_forms=surface_forms,
-        sentence_ids=sentence_ids,
+        start_bytes=tokens.start_bytes,
+        end_bytes=tokens.end_bytes,
+        surface_forms=tokens.surface_forms,
+        sentence_ids=[sentence_id(position) for position in tokens.positions],
     )
 
     # Save the data to the cache file
@@ -515,8 +510,7 @@ def save_tokens(tokens: Tokens, parsed_filename: str):
 
 def load_token_search_data(parsed_filename: str) -> TokenSearchData:
     """
-    Loads token search data from a cache if available, otherwise creates it
-    from the full Tokens object and caches it.
+    Loads the token search data written by save_tokens.
     """
     decoder = msgspec.msgpack.Decoder(TokenSearchData)
 
@@ -547,10 +541,6 @@ def find_token_index_by_byte(bytes: list[int], byte_offset: int) -> int:
     return index - 1
 
 
-def get_sentence_id(token) -> str:
-    """Extracts the sentence ID from a token's position string."""
-    try:
-        # The sentence ID is composed of the first 6 integers of the position string.
-        return " ".join(token.ext["position"].split()[:6])
-    except (AttributeError, KeyError, IndexError):
-        return ""
+def sentence_id(position: str) -> str:
+    """The sentence a token belongs to: the first 6 fields of its philo position."""
+    return " ".join(position.split()[:6])

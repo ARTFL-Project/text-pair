@@ -5,7 +5,6 @@ from html import unescape as unescape_html
 from xml.sax.saxutils import unescape as unescape_xml
 
 import regex as re
-import torch
 
 TAGS = re.compile(r"<[^>]+>")
 PHILO_TEXT_OBJECT_LEVELS = {
@@ -59,6 +58,9 @@ def text_object_upper_bound(config) -> str:
 
 def clear_device_cache():
     """Release cached memory across all backends (CPU, CUDA, MPS, XPU)"""
+    # Imported here: torch is heavy and the alignment path never calls this.
+    import torch
+
     gc.collect()
     if hasattr(torch, "cpu") and hasattr(torch.cpu, "memory") and hasattr(torch.cpu.memory, "empty_cache"):
         torch.cpu.memory.empty_cache()

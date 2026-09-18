@@ -87,7 +87,7 @@ def get_previous_sentences_from_tokens(filepath: str, start_byte: int, count: in
         # Stop if the candidate sentence belongs to a different parent object.
         if boundary_parent_id and _get_parent_id(token_data.sentence_ids[first_token_index]) != boundary_parent_id:
             break
-        sentences.append(("".join(reversed(prev_sentence)), start_byte_of_sentence))
+        sentences.append((" ".join(reversed(prev_sentence)), start_byte_of_sentence))
         match_start_index = first_token_index
 
     return sentences
@@ -139,7 +139,7 @@ def get_next_sentences_from_tokens(filepath: str, end_byte: int, count: int) -> 
         # Stop if the candidate sentence belongs to a different parent object.
         if boundary_parent_id and _get_parent_id(token_data.sentence_ids[last_token_index]) != boundary_parent_id:
             break
-        sentences.append(("".join(next_sentence), end_byte_of_sentence))
+        sentences.append((" ".join(next_sentence), end_byte_of_sentence))
         match_end_index = last_token_index
 
     return sentences
