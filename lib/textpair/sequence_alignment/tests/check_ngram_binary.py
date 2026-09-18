@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Round-trip check for the binary ngram index.
 
-    check_ngram_binary.py NGRAMS_DIR METADATA_JSON [--binary-dir DIR] [--threads N]
+    check_ngram_binary.py --source-files DIR --source-metadata FILE
+        [--binary-dir DIR] [--threads N]
         [--sort-by FIELD] [--keep]
 
 Converts a JSON `ngrams/` directory to binary, loads both with ngram_loader.load_corpus over
@@ -65,8 +66,8 @@ def compare(ngrams_dir, metadata_path, binary_dir, threads, sort_by):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("ngrams_dir")
-    parser.add_argument("metadata")
+    parser.add_argument("--source-files", required=True)
+    parser.add_argument("--source-metadata", required=True)
     parser.add_argument("--binary-dir", default="", help="default: a temporary directory")
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--sort-by", default="year")
@@ -75,7 +76,8 @@ def main(argv=None):
 
     binary_dir = args.binary_dir or tempfile.mkdtemp(prefix="ngram_binary_roundtrip_")
     try:
-        result = compare(args.ngrams_dir, args.metadata, binary_dir, args.threads,
+        result = compare(args.source_files, args.source_metadata, binary_dir,
+                         args.threads,
                          args.sort_by)
     finally:
         if not args.keep and not args.binary_dir:
