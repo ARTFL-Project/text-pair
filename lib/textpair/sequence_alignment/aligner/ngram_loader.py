@@ -1,6 +1,6 @@
 """Ngram loading for the sequence aligner.
 
-A document is either JSON, {"<int32 hash>": [[index, start_byte, end_byte], ...], ...},
+A document is either JSON, {"<int64 hash>": [[index, start_byte, end_byte], ...], ...},
 or the binary columnar format of ../ngram_binary.py; the format is picked per file by
 extension and confirmed by the magic bytes, so a half-converted corpus loads. JSON is
 parsed and sorted here, tolerating insignificant whitespace so files from older,
@@ -81,7 +81,7 @@ def parse_ngram_json(buf):
         elif b == 91:    # '['
             n_br += 1
     n_pos = n_br - n_keys
-    keys = np.empty(n_keys, np.int32)
+    keys = np.empty(n_keys, np.int64)
     counts = np.empty(n_keys, np.int32)
     idx = np.empty(n_pos, np.int32)
     sb = np.empty(n_pos, np.int32)
@@ -162,7 +162,7 @@ def build_csr_sorted(keys, counts, idx, sb, eb):
     for k in range(n_keys):
         off_in[k + 1] = off_in[k] + counts[k]
     order = np.argsort(keys)
-    skeys = np.empty(n_keys, np.int32)
+    skeys = np.empty(n_keys, np.int64)
     off = np.empty(n_keys + 1, np.int32)
     source_indices = np.empty(n_pos, np.int32)
     source_start_bytes = np.empty(n_pos, np.int32)
@@ -191,7 +191,7 @@ def load_corpus(paths, threads):
     header. Returns (key_offsets, ngram_keys, position_offsets, ngram_indices,
     start_bytes, end_bytes):
 
-      ngram_keys  int32[T]    per-document sorted keys, concatenated
+      ngram_keys  int64[T]    per-document sorted keys, concatenated
       key_offsets   int64[N+1]  document -> its first slot in ngram_keys
       position_offsets   int32[T+N]  document d's CSR offsets, at
                                     [key_offsets[d]+d .. key_offsets[d+1]+d],
@@ -219,7 +219,7 @@ def load_corpus(paths, threads):
     n_pos = int(pos_base[-1])
     if n_pos >= 2 ** 31:
         raise RuntimeError(f"{n_pos} ngram positions exceeds the int32 CSR offsets")
-    ngram_keys = np.empty(n_keys, np.int32)
+    ngram_keys = np.empty(n_keys, np.int64)
     position_offsets = np.empty(n_keys + n, np.int32)
     ngram_indices = np.empty(n_pos, np.int32)
     start_bytes = np.empty(n_pos, np.int32)

@@ -144,6 +144,20 @@ Otherwise the cache location comes from `TEXTPAIR_NUMBA_CACHE_DIR`, then
 `aligner/__init__.py`, which also explains why it is set through `numba.config.CACHE_DIR`
 rather than `NUMBA_CACHE_DIR`.
 
+## test_ngram_order.py
+
+The `ngrams_in_order/{doc}.bin` format and the range lookup the banality filter does over
+it. That file was a JSON array of `[start_byte, key]` pairs that `NgramDoc` parsed with
+orjson and bisected; it is now two binary columns and two `np.frombuffer` views, 12 bytes
+an n-gram against 30, and the parse went from 4.7ms a document to nothing measurable. The
+check reimplements the old bisect path and requires identical answers over random ranges,
+every exact boundary, repeated start bytes, an empty document and keys at both int64
+extremes.
+
+```bash
+python $T/test_ngram_order.py
+```
+
 ## check_hash_collisions.py
 
 Measures how often a 32-bit hash collision fabricates a passage, by indexing a corpus

@@ -4,16 +4,16 @@ Replaces an all-pairs merge join with:
   postings -> index the key groups -> per source document, sweep its own keys, emit one
   record per (key, comparable target), group by target and match.
 
-Key biasing: an int32 ngram hash is mapped onto [0, 2^32) by adding 2^31 in int64
-arithmetic, the same monotone map as flipping the sign bit, so that sorting the biased
-keys as unsigned sorts the signed originals.
+Key biasing: an int64 ngram hash is mapped onto [0, 2^64) by flipping its sign bit, a
+monotone map, so that sorting the biased keys as unsigned sorts the signed originals. It
+is an XOR rather than the addition of 2^63, which int64 cannot hold.
 
 Document slots are the combination's SortID order: sources first, then targets when source
 and target corpora differ (`same_doc` non-empty). Array layout, with T = total (doc, key)
 entries, P = total ngram positions:
   ngram_keys, key_offsets, position_offsets, ngram_indices, start_bytes, end_bytes
             from ngram_loader.load_corpus
-  posting_keys   uint32[T]  biased key, sorted
+  posting_keys   uint64[T]  biased key, sorted
   posting_slots  int32[T]   slot in ngram_keys
   posting_docs   int32[T]   document of that slot
   sweep_starts   int32[source slots]  where a source's sweep of its group starts
@@ -31,11 +31,15 @@ from numba import njit
 
 from .matching import NCOL, match_passage, merge_passages
 
-MSD_BITS = 12                      # 4096 MSD buckets: 16 KB histogram per thread (L1)
+MSD_BITS = 12                      # 4096 MSD buckets: 32 KB histogram per thread
 MSD_BUCKETS = 1 << MSD_BITS
-LOW_BITS = 32 - MSD_BITS           # 20 bits handled by two 10-bit LSD passes per bucket
-LSD_RADIX = 1 << 10
-BIAS = np.int64(1) << np.int64(31)
+LOW_BITS = 64 - MSD_BITS           # 52 bits, handled by four 13-bit LSD passes per bucket
+LSD_BITS = 13
+LSD_RADIX = 1 << LSD_BITS
+LSD_SHIFTS = (0, 13, 26, 39)       # 4 x 13 covers LOW_BITS exactly
+SIGN_BIT = np.uint64(0x8000000000000000)
+LOW_SHIFT = np.uint64(LOW_BITS)
+DIGIT_MASK = np.uint64(LSD_RADIX - 1)
 
 
 # --------------------------------------------------------------------------- postings
@@ -44,18 +48,18 @@ BIAS = np.int64(1) << np.int64(31)
 def hist_msd(keys, lo, hi, bucket_counts):
     """Histogram of the top MSD_BITS of the biased key over keys[lo:hi]."""
     for i in range(lo, hi):
-        bucket_counts[(np.int64(keys[i]) + BIAS) >> LOW_BITS] += 1
+        bucket_counts[np.int64((np.uint64(keys[i]) ^ SIGN_BIT) >> LOW_SHIFT)] += 1
 
 
 @njit(nogil=True, cache=True)
 def scatter_msd(keys, lo, hi, write_cursors, posting_keys, posting_slots):
     """Stable scatter of keys[lo:hi] into MSD buckets, at this chunk's write cursors."""
     for i in range(lo, hi):
-        biased_key = np.int64(keys[i]) + BIAS
-        bucket = biased_key >> LOW_BITS
+        biased_key = np.uint64(keys[i]) ^ SIGN_BIT
+        bucket = np.int64(biased_key >> LOW_SHIFT)
         at = write_cursors[bucket]
         write_cursors[bucket] = at + 1
-        posting_keys[at] = np.uint32(biased_key)
+        posting_keys[at] = biased_key
         posting_slots[at] = i
 
 
@@ -63,7 +67,7 @@ def scatter_msd(keys, lo, hi, write_cursors, posting_keys, posting_slots):
 def sort_buckets(bucket_starts, first_bucket, last_bucket, posting_keys, posting_slots,
                  key_buffer, slot_buffer, digit_counts):
     """Sort each MSD bucket in [first_bucket, last_bucket) by the low LOW_BITS, with
-    two 10-bit LSD passes.
+    four 13-bit LSD passes.
     Buckets are visited in ascending order, so the whole array ends up sorted by biased key.
     Both passes are stable, so equal keys keep their ascending slot order."""
     for bucket in range(first_bucket, last_bucket):
@@ -83,18 +87,19 @@ def sort_buckets(bucket_starts, first_bucket, last_bucket, posting_keys, posting
                 posting_keys[j + 1] = key
                 posting_slots[j + 1] = slot
             continue
-        for shift in (0, 10):
+        for shift_bits in LSD_SHIFTS:
+            shift = np.uint64(shift_bits)
             for digit in range(LSD_RADIX):
                 digit_counts[digit] = 0
             for i in range(count):
-                digit_counts[(posting_keys[start + i] >> shift) & (LSD_RADIX - 1)] += 1
+                digit_counts[np.int64((posting_keys[start + i] >> shift) & DIGIT_MASK)] += 1
             running = 0
             for digit in range(LSD_RADIX):
                 in_digit = digit_counts[digit]
                 digit_counts[digit] = running
                 running += in_digit
             for i in range(count):
-                digit = (posting_keys[start + i] >> shift) & (LSD_RADIX - 1)
+                digit = np.int64((posting_keys[start + i] >> shift) & DIGIT_MASK)
                 at = digit_counts[digit]
                 digit_counts[digit] = at + 1
                 key_buffer[at] = posting_keys[start + i]
@@ -277,7 +282,7 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
     first_key = key_offsets[s]
     last_key = key_offsets[s + 1]
     for i in range(first_key, last_key):                               # size the blocks
-        u = np.uint32(np.int64(ngram_keys[i]) + BIAS)
+        u = np.uint64(ngram_keys[i]) ^ SIGN_BIT
         q = sweep_starts[i]
         while q < n_postings and posting_keys[q] == u:
             t = posting_docs[q]
@@ -294,7 +299,7 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
     if running_total == 0:
         return out[:0], 0, stats, duplicate_slots[:0], duplicate_percents[:0]
     for i in range(first_key, last_key):                               # n_rows them
-        u = np.uint32(np.int64(ngram_keys[i]) + BIAS)
+        u = np.uint64(ngram_keys[i]) ^ SIGN_BIT
         q = sweep_starts[i]
         while q < n_postings and posting_keys[q] == u:
             t = posting_docs[q]
@@ -468,7 +473,7 @@ def build_postings(ngram_keys, threads):
     bucket_starts = np.zeros(MSD_BUCKETS + 1, np.int64)
     np.cumsum(totals, out=bucket_starts[1:])
     write_off = bucket_starts[:-1][None, :] + np.cumsum(hist, axis=0) - hist    # per-chunk cursors
-    posting_keys = np.empty(n_slots, np.uint32)
+    posting_keys = np.empty(n_slots, np.uint64)
     posting_slots = np.empty(n_slots, np.int32)
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(lambda a: scatter_msd(ngram_keys, a[1][0], a[1][1], write_off[a[0]],
@@ -480,7 +485,7 @@ def build_postings(ngram_keys, threads):
     def sort_task(bucket_range):
         sort_buckets(bucket_starts, bucket_range[0], bucket_range[1],
                             posting_keys, posting_slots,
-                            np.empty(max_bucket, np.uint32), np.empty(max_bucket, np.int32),
+                            np.empty(max_bucket, np.uint64), np.empty(max_bucket, np.int32),
                             np.empty(LSD_RADIX, np.int64))
 
     with ThreadPoolExecutor(threads) as pool:
@@ -596,16 +601,16 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
 
 def warmup():
     """Compile every kernel on tiny inputs, off the critical path."""
-    keys = np.array([1, 2], np.int32)
+    keys = np.array([1, 2], np.int64)
     hist = np.zeros(MSD_BUCKETS, np.int64)
     hist_msd(keys, 0, 2, hist)
     bucket_starts = np.zeros(MSD_BUCKETS + 1, np.int64)
     np.cumsum(hist, out=bucket_starts[1:])
-    posting_keys = np.empty(2, np.uint32)
+    posting_keys = np.empty(2, np.uint64)
     posting_slots = np.empty(2, np.int32)
     scatter_msd(keys, 0, 2, bucket_starts[:-1].copy(), posting_keys, posting_slots)
     sort_buckets(bucket_starts, 0, MSD_BUCKETS, posting_keys, posting_slots,
-                        np.empty(4, np.uint32), np.empty(4, np.int32),
+                        np.empty(4, np.uint64), np.empty(4, np.int32),
                         np.empty(LSD_RADIX, np.int64))
     key_offsets = np.array([0, 1, 2], np.int64)
     posting_docs = np.empty(2, np.int32)

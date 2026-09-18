@@ -4,8 +4,8 @@
     check_hash_collisions.py --philo-db DIR --work DIR [--docs N] [--workers N]
                              [--seeds A B] [--keep]
 
-The aligner matches on a 32-bit hash of each n-gram, so distinct n-grams that
-hash alike are indistinguishable to it. This indexes the same corpus twice under
+The aligner matches on a hash of each n-gram, so distinct n-grams that hash
+alike are indistinguishable to it. This indexes the same corpus twice under
 different mmh3 seeds and diffs the two alignments: collisions under one seed are
 almost surely not collisions under the other, so any disagreement is caused by
 them. The aligner is checked for determinism first, since a nondeterministic
@@ -33,7 +33,8 @@ INDEX_CHILD = r'''
 import sys, mmh3
 seed = int(sys.argv[3])
 import textpair.sequence_alignment.generate_ngrams as gn
-gn.hash32 = lambda s, _s=seed: mmh3.hash(s, _s)
+# generate_ngrams calls hash64(form)[0]; reseed it in place, keeping the tuple shape.
+gn.hash64 = lambda s, _s=seed: mmh3.hash64(s, _s)
 from textpair.sequence_alignment.generate_ngrams import Ngrams
 Ngrams(text_object_type="doc", ngram=3, gap=0, stemmer=True, lemmatizer="",
        stopwords=False, numbers=True, language="french", lowercase=True,

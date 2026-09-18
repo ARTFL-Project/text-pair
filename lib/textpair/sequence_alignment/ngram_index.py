@@ -11,13 +11,14 @@
 
 Frequencies come from `ngrams/*.bin`, not from n-gram text: each document's CSR
 already holds its distinct keys and the offsets that give their counts, so the
-whole corpus is a numpy aggregation over int32 columns. Counting the text
+whole corpus is a numpy aggregation over integer columns. Counting the text
 instead meant a per-distinct-n-gram Python loop, which at 70M n-grams was most
 of the generation stage.
 
-It is also the frequency the aligner acts on. Its inverted index is over keys, so
-a key's corpus frequency is the sum over the n-grams that hash to it; counting
-distinct (ngram, key) rows splits that frequency between colliding n-grams.
+It is also the frequency the aligner acts on. Its inverted index is over keys,
+so a key's corpus frequency is the sum over the n-grams that hash to it -- with
+a 64-bit key that is one n-gram short of certainty, 1.3e-04 collisions expected
+over 70M distinct n-grams, where a 32-bit key had 566,635 of them.
 
 Nothing proportional to the corpus stays resident: the aggregation spills by key
 range, and frequency ordering is a counting sort into per-count buckets rather
@@ -45,10 +46,12 @@ EXACT_MAX = 255
 # (key, count) pairs, so this is what bounds memory during aggregation.
 KEY_BITS = 8
 KEY_BUCKETS = 1 << KEY_BITS
-_KEY_EDGES = [((bucket << (32 - KEY_BITS)) - (1 << 31)) for bucket in range(KEY_BUCKETS + 1)]
+_KEY_EDGES = [((bucket << (64 - KEY_BITS)) - (1 << 63)) for bucket in range(KEY_BUCKETS + 1)]
 
-# Keys are mmh3 32-bit hashes, signed.
-KEY_DTYPE = np.int32
+# Keys are the low 64 bits of mmh3's 128-bit hash, signed. Counts stay int32: they are
+# per-document occurrence counts, and widening them would inflate the spill for nothing.
+KEY_DTYPE = np.int64
+COUNT_DTYPE = np.int32
 # Ceiling on files handed to one sort -m. BSD sort's behaviour with thousands of
 # inputs is not something to rely on, so batches stay moderate and rounds do the
 # rest.
@@ -115,7 +118,9 @@ def _aggregate(binaries: list[str], scratch: str) -> Iterator[tuple[np.ndarray, 
             keys, offsets = ngram_binary.columns(buffer, path)[:2]
             if keys.size == 0:
                 continue
-            counts = (offsets[1:] - offsets[:-1]).astype(KEY_DTYPE)
+            # A TPNG0001 index hands back int32 keys; the spill is int64 throughout.
+            keys = keys.astype(KEY_DTYPE, copy=False)
+            counts = (offsets[1:] - offsets[:-1]).astype(COUNT_DTYPE)
             splits = np.searchsorted(keys, interior)
             previous = 0
             for bucket, stop in enumerate(np.append(splits, keys.size)):
@@ -135,7 +140,7 @@ def _aggregate(binaries: list[str], scratch: str) -> Iterator[tuple[np.ndarray, 
         if keys.size == 0:
             os.remove(count_path)
             continue
-        counts = np.fromfile(count_path, dtype=KEY_DTYPE)
+        counts = np.fromfile(count_path, dtype=COUNT_DTYPE)
         os.remove(count_path)
         order = np.argsort(keys, kind="stable")
         keys = keys[order]

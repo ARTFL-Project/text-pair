@@ -43,6 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 #   alignments -- is checked against real corpora by ngram_binary.
 CHECKS = (
     ("ngram_index", "test_ngram_index.py", (), False),
+    ("ngram_order", "test_ngram_order.py", (), False),
     ("document_order", "test_document_order.py", (), False),
     ("match_order", "test_match_order.py", (), True),
     ("chunk_order", "test_chunk_order.py", (), True),

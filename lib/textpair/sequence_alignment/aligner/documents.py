@@ -87,10 +87,9 @@ def load_metadata(path):
     """Whitespace-collapse every string, blank out non-strings
     (the metadata is typed as strings throughout, so a non-string blanks out),
     then add the `ngrams` field."""
-    # `ngrams` is deliberately `.json`, not `.bin`: it names the document's
-    # ngrams_in_order/ file, which generate_ngrams still writes as JSON for the banality
-    # filter, not the binary index in ngrams/. banality_finder.NgramDoc opens it by this
-    # name and parses it with orjson.
+    # `ngrams` names the document's ngrams_in_order/ file, which banality_finder.NgramDoc
+    # opens by this name -- not the CSR index in ngrams/, which happens to share the
+    # extension now that both are binary.
     if not path:
         return {}
     with open(path, "rb") as metadata_file:
@@ -99,5 +98,5 @@ def load_metadata(path):
     for doc, fields in meta.items():
         for key, value in list(fields.items()):
             fields[key] = sub(" ", value) if isinstance(value, str) else ""
-        fields["ngrams"] = doc + ".json"
+        fields["ngrams"] = doc + ".bin"
     return meta

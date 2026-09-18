@@ -1,6 +1,5 @@
 """Banality detection"""
 
-import bisect
 import os
 import subprocess
 from math import floor
@@ -8,9 +7,12 @@ from typing import Any, Optional
 
 import ahocorasick_rs
 import lz4.frame
+import numpy as np
 import orjson
 import regex as re
 from tqdm import tqdm
+
+from . import ngram_binary
 
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
 SPACES = re.compile(r"\p{Z}+")
@@ -25,22 +27,27 @@ def clean_text(text: str) -> str:
 
 
 class NgramDoc:
-    """Doc with various properties"""
+    """One document's n-grams in order, as the two columns of its ngrams_in_order file.
 
-    __slots__ = ["name", "ngrams", "ngram_pos"]
+    The file is binary and mmap-shaped, so this is a read and two `np.frombuffer` views
+    rather than a parse: 4.7ms of orjson per document became nothing measurable, and the
+    filter opens one document per source in the results.
+    """
+
+    __slots__ = ["name", "keys", "start_bytes"]
 
     def __init__(self, filepath):
         self.name = os.path.basename(filepath)
         with open(filepath, "rb") as input_file:
-            self.ngrams: list[list[int]] = orjson.loads(input_file.read())
-        self.ngram_pos: list[int] = [ngram[0] for ngram in self.ngrams]
+            self.keys, self.start_bytes = ngram_binary.order_columns(
+                input_file.read(), filepath
+            )
 
     def get_ngrams(self, start_byte, end_byte) -> list[int]:
-        """Get ngrams in a given range"""
-        start_index = bisect.bisect_left(self.ngram_pos, start_byte)
-        end_index = bisect.bisect_left(self.ngram_pos, end_byte)
-        ngrams = [ngram for _, ngram in self.ngrams[start_index:end_index]]
-        return ngrams
+        """The keys of every n-gram starting in [start_byte, end_byte)."""
+        start_index = int(np.searchsorted(self.start_bytes, start_byte, "left"))
+        end_index = int(np.searchsorted(self.start_bytes, end_byte, "left"))
+        return self.keys[start_index:end_index].tolist()
 
 
 def banality_auto_detect(
