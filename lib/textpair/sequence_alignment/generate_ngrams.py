@@ -109,8 +109,13 @@ class Ngrams:
         os.makedirs(os.path.join(output_path, "metadata"), exist_ok=True)
         os.makedirs(os.path.join(output_path, "index"), exist_ok=True)
         os.makedirs(os.path.join(output_path, "config"), exist_ok=True)
-        os.makedirs(os.path.join(output_path, "temp"), exist_ok=True)
         os.makedirs(os.path.join(output_path, "ngrams_in_order"), exist_ok=True)
+        # temp/ holds the n-gram text, which only index.tab needs, which in turn
+        # only the aligner's --debug tracer reads. Writing it means a sort of
+        # every document's n-grams; skip it when nothing will read it.
+        shutil.rmtree(os.path.join(output_path, "temp"), ignore_errors=True)
+        if self.debug:
+            os.makedirs(os.path.join(output_path, "temp"), exist_ok=True)
         self.input_path = os.path.abspath(os.path.join(files[0], "../../../"))
         self.output_path = output_path
         combined_metadata: dict[str, Any] = {}
@@ -144,8 +149,8 @@ class Ngrams:
                 pbar.update()
 
         print("Saving ngram index and most common ngrams...", flush=True)
-        distinct = ngram_index.build(output_path)
-        print(f"{distinct:,} distinct ngrams indexed.", flush=True)
+        distinct = ngram_index.build(output_path, write_index_tab=self.debug)
+        print(f"{distinct:,} distinct ngram keys indexed.", flush=True)
 
         print("Saving metadata...")
         with open(f"{self.output_path}/metadata/metadata.json", "wb") as metadata_output:
@@ -175,19 +180,21 @@ class Ngrams:
         start_bytes = text_object.start_bytes
         hashes: List[int] = [hash32(form) for form in forms]
         doc_ngrams_in_order: List[Tuple[int, int]] = list(zip(start_bytes, hashes))  # banality filter
-        doc_ngrams: List[str] = [f"{form}\t{hashed}" for form, hashed in zip(forms, hashes)]
         ngram_binary.write_positions(
             f"{self.output_path}/ngrams/{text_object_id}.bin",
             hashes,
             start_bytes,
             text_object.end_bytes,
         )
-        # Trailing newline matters: these files used to be concatenated with cat,
-        # and without it the last ngram of one document was welded to the first of
-        # the next, producing one corrupt index entry per file boundary.
-        with open(f"{self.output_path}/temp/{text_object_id}", "w", encoding="utf-8") as output:
-            output.write("\n".join(sorted(doc_ngrams)))
-            output.write("\n")
+        if self.debug:
+            # Sorted here so the corpus index is a merge rather than a sort. The
+            # trailing newline is load-bearing: sort -m treats a final incomplete
+            # line as a line, but anything concatenating these files would weld it
+            # to the next document's first n-gram.
+            doc_ngrams = sorted(f"{form}\t{hashed}" for form, hashed in zip(forms, hashes))
+            with open(f"{self.output_path}/temp/{text_object_id}", "w", encoding="utf-8") as output:
+                output.write("\n".join(doc_ngrams))
+                output.write("\n")
         with open(f"{self.output_path}/ngrams_in_order/{text_object_id}.json", "wb") as json_file:
             json_file.write(orjson.dumps(doc_ngrams_in_order))
         return metadata
