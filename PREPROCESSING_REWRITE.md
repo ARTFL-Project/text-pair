@@ -249,7 +249,20 @@ cat temp/* | sort | uniq -c | sort -rn | awk | tee index.tab | awk > most_common
 which re-sorted input that workers had already sorted, and carried §3.5 and §3.6. It was
 also **61% of the generation stage's wall time** on `rousseau_complete_works`.
 
-`ngram_index.build` replaces it. Two ideas:
+`ngram_index.build` replaces it. Three ideas:
+
+- **Frequencies come from `ngrams/*.bin`, not from n-gram text.** Each document's CSR
+  already holds its distinct keys and the offsets that give their counts, so the corpus
+  total is a numpy aggregation over int32 columns rather than a Python loop over 70M
+  distinct n-grams. It is also the frequency the aligner acts on: its inverted index is
+  over keys, so a key's corpus frequency is the sum over the n-grams that hash to it,
+  where counting `(ngram, key)` rows split that frequency between colliding n-grams.
+  `most_common_ngrams.txt` therefore has one line per key -- 69,550,968 rather than
+  70,120,689 on frantext, the difference being the 566,635 keys that carry more than one
+  n-gram. Checked against an independently counted ground truth: same keys, same order.
+- **`index.tab` is written only when asked.** Its only reader is the aligner's `--debug`
+  tracer, which is gated on the same flag, so it follows `debug`. That also removes the
+  per-document n-gram sort and text write that fed it -- 23% of per-document work.
 
 - **Counting is a merge, not a sort.** `LC_ALL=C sort -m` merges the already-sorted files
   externally and `uniq -c` counts adjacent runs. `LC_ALL=C` matters twice: it is the
@@ -273,16 +286,18 @@ also **61% of the generation stage's wall time** on `rousseau_complete_works`.
   order -- and rarer higher counts share power-of-two bands small enough to order in
   memory. Nothing proportional to the corpus is resident.
 
-At 100k text objects (30M n-gram occurrences, 2.68M distinct, 784MB of input):
+The whole stage on the full frantext (3,630 documents, 6.87GB, 200.7M n-gram
+occurrences, 69.6M distinct keys), 32 workers:
 
-| | wall | peak RSS |
-|---|---|---|
-| shell pipeline | 60.6s | 4.50 GB |
-| `sort -m --files0-from` (GNU) | 12.9s | 0.18 GB |
-| `sort -m` in batches (BSD) | 13.6s | 0.26 GB |
+| | total | index | workers |
+|---|---|---|---|
+| shell pipeline | — | — | — |
+| `sort -m` over the text | 149.1s | 83.8s | 65.3s |
+| counts from the binary indexes | **69.0s** | **16.6s** | **52.4s** |
 
-Checked against an independently counted ground truth at that size: 2,675,240 distinct
-n-grams, the same set, the same frequency order, no corrupt keys.
+The index phase had been 56% of the stage; it is now 24%. The merge path is still there
+for `index.tab`, and at 100k text objects it cost 12.9s and 0.18GB against the shell
+pipeline's 60.6s and 4.50GB (13.6s and 0.26GB on BSD sort's batched route).
 
 `index.tab` is now written in merge (lexicographic) rather than frequency order. Its only
 consumer is the aligner's `--debug` tracer, which builds a key -> n-gram dict, so order is
