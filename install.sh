@@ -77,6 +77,15 @@ fi
 
 deactivate
 
+# Pack the modernization maps. They are stored as editable TSV; the loader builds
+# this cache on first use anyway, but doing it here means the first alignment does
+# not pay for it, and it surfaces a write-permission problem now rather than later.
+echo ""
+echo "Packing modernization maps..."
+source /var/lib/text-pair/textpair_env/bin/activate
+python -c "import textpair.preprocessing.modernize as m; m.pack_all()"
+deactivate
+
 # Numba cache for the sequence aligner's kernels. Wiped on every install so it is
 # always repopulated from empty: mode 1777 forbids renaming over another user's
 # files, which is what reusing a stale entry would require.

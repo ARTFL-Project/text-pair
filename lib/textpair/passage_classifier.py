@@ -6,7 +6,6 @@ import re
 import lz4.frame
 import orjson
 from tqdm import tqdm
-from transformers import pipeline
 
 
 def get_expanded_passage(alignment: dict, context_bytes: int = 1000) -> str:
@@ -93,6 +92,10 @@ async def classify_passages(
         return 0
 
     print(f"Loading passage classifier: {zero_shot_model}")
+    # Imported here: transformers pulls in torch, which nothing else in the
+    # alignment pipeline needs.
+    from transformers import pipeline
+
     classifier = pipeline(
         "zero-shot-classification",
         model=zero_shot_model,

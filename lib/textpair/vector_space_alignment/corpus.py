@@ -18,7 +18,7 @@ from sentence_transformers import SentenceTransformer, util
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from spacy.tokens import Doc
-from text_preprocessing import Tokens
+from textpair.preprocessing import TextObject
 from tqdm import tqdm
 
 from textpair.utils import clear_device_cache
@@ -53,7 +53,7 @@ class Corpus(ABC):
 
     def __init__(
         self,
-        texts: Iterable[Tokens],
+        texts: Iterable[TextObject],
         output_path: str,
         similarity_function: Callable,
         min_text_obj_length: int = 15,
@@ -63,7 +63,7 @@ class Corpus(ABC):
         n_batches=1,
     ):
         """Initialize Corpus Object"""
-        self.texts: Iterable[Tokens] = texts
+        self.texts: Iterable[TextObject] = texts
         self.min_text_obj_length: int = min_text_obj_length
         self.n_chunk: int = n_chunk
         self.metadata: list[dict[str, Any]] = []
@@ -92,11 +92,11 @@ class Corpus(ABC):
         paragraph-scale units with enough overlap that any relationship
         spanning ceil(n_chunk/2) text objects appears fully in at least one window.
         """
-        chunk_group: deque[Tokens] = deque()  # no maxlen — we control the slide manually
+        chunk_group: deque[TextObject] = deque()  # no maxlen — we control the slide manually
         chunk_step: int = math.ceil(self.n_chunk / 2)
         min_chunk_length: int = self.n_chunk * self.min_text_obj_length
         current_text_level_id: str = "0"
-        full_doc = Tokens([], {})
+        full_doc = TextObject()
         current_doc_id = None
         chunks_done = 0
         current_chunk_group_length = 0
@@ -113,7 +113,7 @@ class Corpus(ABC):
                 doc_id != current_doc_id and current_doc_id is not None
             ):  # we save the current doc when doc_ids don't match
                 save_tokens(full_doc, full_doc.metadata["parsed_filename"])
-                full_doc = Tokens([], text.metadata)
+                full_doc = TextObject(metadata=text.metadata)
             full_doc.extend(text)
             text.purge()
             text_level_id: str = " ".join(
@@ -132,7 +132,7 @@ class Corpus(ABC):
                         yield text_chunk
                 chunk_group.clear()
             current_text_level_id = text_level_id
-            current_chunk_group_length = sum([len(t.tokens) for t in chunk_group])
+            current_chunk_group_length = sum(len(t) for t in chunk_group)
             text_length = len(text)
             if current_chunk_group_length + text_length > self.max_tokens and current_chunk_group_length:
                 chunks_done += 1
@@ -173,17 +173,21 @@ class Corpus(ABC):
         save_tokens(full_doc, full_doc.metadata["parsed_filename"])
         print()
 
-    def __build_text_chunk(self, chunk_group: deque[Tokens]) -> list[str]:
+    def __build_text_chunk(self, chunk_group: deque[TextObject]) -> list[str]:
         """Build chunks from a group of text objects"""
-        chunk = [t for c in chunk_group for t in c]
+        forms = [form for text_object in chunk_group for form in text_object.forms]
+        if not forms:
+            return []
+        first = next(t for t in chunk_group if t.start_bytes)
+        last = next(t for t in reversed(chunk_group) if t.end_bytes)
         self.metadata.append(
             {
                 **chunk_group[0].metadata,
-                "start_byte": chunk[0].ext["start_byte"],
-                "end_byte": chunk[-1].ext["end_byte"],
+                "start_byte": first.start_bytes[0],
+                "end_byte": last.end_bytes[-1],
             }
         )
-        return [t.text for t in chunk]
+        return forms
 
     def __compare(self, target_corpus=None) -> np.ndarray:
         """Compare the corpus to another corpus"""
@@ -309,7 +313,7 @@ class TfIdfCorpus(Corpus):
 
     def __init__(
         self,
-        texts: Iterable[Tokens],
+        texts: Iterable[TextObject],
         output_path: str,
         min_text_obj_length: int = 15,
         n_chunk: int = 5,
@@ -383,7 +387,7 @@ class Word2VecEmbeddingCorpus(Corpus):
 
     def __init__(
         self,
-        texts: Iterable[Tokens],
+        texts: Iterable[TextObject],
         output_path: str,
         model: str | spacy.Language,
         n_batches: int,
@@ -430,7 +434,7 @@ class TransformerCorpus(Corpus):
 
     def __init__(
         self,
-        texts: Iterable[Tokens],
+        texts: Iterable[TextObject],
         output_path: str,
         model_name: str,
         n_batches: int,

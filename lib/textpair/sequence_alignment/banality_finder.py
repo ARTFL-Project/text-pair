@@ -12,8 +12,6 @@ import orjson
 import regex as re
 from tqdm import tqdm
 
-from textpair_llm.llm_evaluation import AsyncLLMEvaluator
-
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
 SPACES = re.compile(r"\p{Z}+")
 
@@ -64,7 +62,11 @@ def banality_auto_detect(
     common_ngrams = set()
     with open(common_ngrams_file, encoding="utf8") as input_file:
         for _ in range(top_ngrams):
-            try:  # TODO: investigate why we don't always get numbers
+            # Non-numeric lines came from the old shell index pipeline, which
+            # concatenated newline-less temp files and so welded a key to the
+            # next document's first ngram. ngram_index.build no longer produces
+            # them; the guard stays for index directories built before that.
+            try:
                 common_ngrams.add(int(next(input_file)))
             except ValueError:
                 pass
@@ -204,6 +206,8 @@ async def banality_llm_post_eval(
         Number of banalities confirmed by LLM
     """
     # Initialize LLM evaluator
+    from textpair_llm.llm_evaluation import AsyncLLMEvaluator
+
     evaluator = AsyncLLMEvaluator(
         model_path=model_path,
         port=port,

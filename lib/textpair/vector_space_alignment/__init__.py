@@ -15,7 +15,7 @@ import lz4.frame
 import torch
 from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import linear_kernel
-from text_preprocessing import PreProcessor, Token, Tokens
+from textpair.preprocessing import PreProcessor, TextObject
 from tqdm import tqdm
 
 from textpair.utils import clean_text, get_text, text_object_upper_bound
@@ -30,41 +30,12 @@ from .structures import TEMP_DIR, Matches, MergedGroup, PassageGroup
 # ============================================================================
 
 
-def get_passage(doc: Tokens, start_byte: int, end_byte: int) -> list[Token]:
-    """Get passage within Tokens object"""
-    tokens = []
-    try:
-        for token in doc:  # type: ignore
-            if token.ext["start_byte"] >= start_byte and token.ext["end_byte"] <= end_byte:
-                tokens.append(token)
-            elif token.ext["end_byte"] > end_byte:
-                break
-    except (TypeError, AttributeError):
-        # Handle cases where iteration might not work as expected
-        pass
-    return tokens
-
-
 def get_tokens(passage: PassageGroup, preproc: PreProcessor) -> list[tuple[str, str]]:
-    """Get tokens"""
-    text: str = " "
-    start_byte: int = passage.start_byte
-    end_byte: int = passage.end_byte
+    """Read a passage off disk and return its (normalized, surface) token pairs."""
     with open(passage.filename, "rb") as text_file:
-        text_file.seek(start_byte)
-        text = text_file.read(end_byte - start_byte).decode("utf8", "ignore")
-    tokens: list[tuple[str, str]] = []
-    pos = 0
-    try:
-        for token in preproc.process_string(text):  # type: ignore
-            pos += 1
-            surface_form = token.surface_form.replace("\n", " ")
-            token.surface_form = surface_form
-            tokens.append((token.text, token.surface_form))
-    except (TypeError, AttributeError):
-        # Handle cases where process_string might not work as expected
-        pass
-    return tokens
+        text_file.seek(passage.start_byte)
+        text = text_file.read(passage.end_byte - passage.start_byte).decode("utf8", "ignore")
+    return [(form, surface.replace("\n", " ")) for form, surface in preproc.process_string(text)]
 
 
 def post_process_passages(
@@ -293,12 +264,12 @@ def merge_passages(
 
 
 def simple_similarity(
-    source_texts: Iterable[Tokens],
+    source_texts: Iterable[TextObject],
     source_config: dict[str, Any],
     target_config: dict[str, Any],
     min_similarity: float,
     output_path: str,
-    target_texts: Optional[Iterable[Tokens]] = None,
+    target_texts: Optional[Iterable[TextObject]] = None,
     use_llm_evaluation: bool = False,
 ) -> tuple[TfIdfCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of TF-IDF vectors"""
@@ -332,13 +303,13 @@ def simple_similarity(
 
 
 def transformer_similarity(
-    source_texts: Iterable[Tokens],
+    source_texts: Iterable[TextObject],
     source_config: dict[str, Any],
     target_config: dict[str, Any],
     min_similarity: float,
     source_batch: int,
     output_path: str,
-    target_texts: Optional[Iterable[Tokens]] = None,
+    target_texts: Optional[Iterable[TextObject]] = None,
     target_batch: int = 1,
 ) -> tuple[Matches, list[dict[str, Any]], list[dict[str, Any]], Optional[SentenceTransformer]]:
     """Cosine similarity of sentence embeddings from transformer models"""
@@ -376,13 +347,13 @@ def transformer_similarity(
 
 
 def word2vec_embed_similarity(
-    source_texts: Iterable[Tokens],
+    source_texts: Iterable[TextObject],
     source_config: dict[str, Any],
     target_config: dict[str, Any],
     min_similarity: float,
     source_batch: int,
     output_path: str,
-    target_texts: Optional[Iterable[Tokens]] = None,
+    target_texts: Optional[Iterable[TextObject]] = None,
     target_batch: int = 1,
 ) -> tuple[Word2VecEmbeddingCorpus, Matches, list[dict[str, Any]], list[dict[str, Any]]]:
     """Cosine similarity of sentence embeddings using mean w2v vectors"""
@@ -542,11 +513,11 @@ async def run_vsa(
         config["target"]["strip_punctuation"] = False
     source_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["source"])
     target_preproc = PreProcessor(is_philo_db=True, workers=workers, **config["target"])
-    source_texts: Iterable[Tokens] = source_preproc.process_texts(
-        (file.path for file in os.scandir(source_path)), keep_all=True, progress=False
+    source_texts: Iterable[TextObject] = source_preproc.process_texts(
+        (file.path for file in os.scandir(source_path)), keep_all=True, keep_surface=True
     )
-    target_texts: Iterable[Tokens] = target_preproc.process_texts(
-        (file.path for file in os.scandir(target_path)), keep_all=True, progress=False
+    target_texts: Iterable[TextObject] = target_preproc.process_texts(
+        (file.path for file in os.scandir(target_path)), keep_all=True, keep_surface=True
     )
 
     if config["source"]["vectorization"] == "tfidf":
@@ -667,10 +638,12 @@ async def run_vsa(
                 match.target.metadata["filename"],
             )
             if config["source"]["vectorization"] == "tfidf":
-                source_preproc.strip_tags = False  # type: ignore
-                source_preproc.pos_to_keep = []  # type: ignore
-                target_preproc.strip_tags = False  # type: ignore
-                target_preproc.pos_to_keep = []  # type: ignore
+                # The four assignments that used to sit here set attributes on the
+                # PreProcessor that nothing read -- strip_tags and pos_to_keep lived
+                # on TextFetcher as class variables -- so they never took effect.
+                # Removed rather than made to work, to keep the rendered passages
+                # identical; strip_tags stays on, as the comment at the top of
+                # run_vsa intends.
                 source_passage_with_matches, target_passage_with_matches = post_process_passages(
                     match.source,
                     match.target,

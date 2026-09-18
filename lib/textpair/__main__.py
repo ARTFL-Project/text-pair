@@ -10,9 +10,8 @@ from shlex import quote
 
 import psycopg2
 
-from . import create_web_app, get_config, parse_files, run_vsa
+from . import get_config
 from .parse_config import read_global_config
-from .passage_classifier import classify_passages
 from .sequence_alignment import (
     Ngrams,
     banality_auto_detect,
@@ -219,6 +218,8 @@ def run_python_aligner(params) -> None:
 
 async def run_alignment(params):
     """Main function to start sequence alignment"""
+    from . import classify_passages, create_web_app, parse_files
+
     if params.only_align is False:
         if params.text_parsing["parse_source_files"] is True:
             print("\n### Parsing source files ###")
@@ -393,6 +394,8 @@ async def run_alignment(params):
 
 async def run_vsa_similarity(params) -> None:
     """Run vsa similarity"""
+    from . import classify_passages, create_web_app, parse_files, run_vsa
+
     if params.paths["target"]["ngram_output_path"] == "":  # if path not defined make target like source
         params.paths["target"]["ngram_output_path"] = params.paths["source"]["ngram_output_path"]
     if params.text_parsing["parse_source_files"] is True:
@@ -475,6 +478,8 @@ async def run_vsa_similarity(params) -> None:
 
 async def main():
     """Main entry point for the textpair CLI."""
+    from . import create_web_app
+
     params = get_config()
 
     # Save a copy of the config file to the output directory for reproducibility
