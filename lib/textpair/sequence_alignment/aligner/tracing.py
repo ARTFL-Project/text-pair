@@ -3,7 +3,7 @@
 `write_traces` re-derives each compared pair's matches from the loaded corpus and walks
 them again, so nothing here is on the matching path: `matching.match_passage` and
 `inverted_index.align_source` do not know this module exists. The cost is that the walk below
-must behave exactly like `matching.match_passage`, which `tests/test_tracing.py`
+must behave exactly like `matching.match_passage`, which `tests/check_tracing.py`
 checks by comparing the alignments the two produce.
 
 One file per traced pair lands in `<output_path>/debug_output`, named
@@ -103,26 +103,39 @@ class Corpus:
         lo, hi = int(self.position_offsets[slot + doc]), int(self.position_offsets[slot + doc + 1])
         return self.ngram_indices[lo:hi], self.start_bytes[lo:hi], self.end_bytes[lo:hi]
 
-    def matches(self, source, target):
+    def matches(self, source, target, limit=0):
         """The pair's matches, ordered as the matcher requires, and each one's key.
 
         The cross product of every shared key's positions, sorted by (source index,
         target index). That pair is unique per match, so the order is too.
+
+        Returns (columns, count, stopped_early). `limit` stops once another shared key
+        would take the count past it, keeping whole keys -- so the count usually lands
+        below the limit rather than on it, which is why whether it stopped is reported
+        rather than inferred. The result is then a subset rather than all of the pair's
+        matches, which is still valid input to either implementation -- neither requires
+        the match list to be complete -- so a caller comparing the two can bound the work
+        without weakening the comparison. `tests/check_tracing.py` is why it exists;
+        write_traces leaves it at 0, since a trace has to describe the whole pair.
         """
         shared = np.intersect1d(self.keys(source), self.keys(target),
                                 assume_unique=True)
         cols = []
+        stopped_early = False
         for key in shared:
             source_idx, source_start, source_end = self.positions(source, key)
             target_idx, target_start, target_end = self.positions(target, key)
+            if limit and cols and len(cols) + source_idx.shape[0] * target_idx.shape[0] > limit:
+                stopped_early = True
+                break
             for a in range(source_idx.shape[0]):
                 for b in range(target_idx.shape[0]):
                     cols.append((source_idx[a], source_start[a], source_end[a],
                                  target_idx[b], target_start[b], target_end[b], key))
         if not cols:
-            return None, 0
+            return None, 0, False
         cols.sort(key=lambda row: (int(row[0]), int(row[3])))
-        return list(zip(*cols)), len(cols)
+        return list(zip(*cols)), len(cols), stopped_early
 
 
 def _walk(match, n, params, floor):
@@ -356,7 +369,7 @@ def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_i
         smaller = min(source_keys.shape[0], corpus.keys(target).shape[0])
         if shared.shape[0] / smaller * 100 > dup_threshold:
             continue                                   # a duplicate, never matched
-        match, n = corpus.matches(source, target)
+        match, n, _stopped = corpus.matches(source, target)
         if not n:
             continue
         rows, blocks, hidden = _walk(match, n, params, floor)

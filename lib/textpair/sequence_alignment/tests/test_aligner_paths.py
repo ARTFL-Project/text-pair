@@ -14,6 +14,12 @@ Three things the aligner can vary without being allowed to change what it finds:
   - a batch count larger than the corpus, which must slice to one batch per document
     rather than fail.
 
+Keep this on small corpora. Batch counts clamp to the document count, so the last case
+above gives one batch per document and O(documents^2) combinations, each of which
+rebuilds the inverted index over the whole corpus. That is seconds on the fixtures and
+twenty minutes on sixty documents. `run_tests.py` never passes it a corpus for that
+reason; what it checks does not depend on corpus size.
+
 Needs a JSON `ngrams/` directory to convert; with no arguments it uses the fixtures.
 """
 import argparse

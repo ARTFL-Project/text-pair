@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks the two index properties align_source relies on to order matches cheaply.
 
-    test_match_order.py [NGRAMS_DIR METADATA_JSON] [--threads N]
+    test_match_order.py [--source-files DIR --source-metadata FILE] [--threads N]
 
 `align_source` must hand `match_passage` the matches ordered by (source index, target
 index). It does not sort the cross-product to get there. Instead it sorts the pair's
@@ -36,18 +36,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("ngrams_dir", nargs="?", default="")
-    parser.add_argument("metadata", nargs="?", default="")
+    parser.add_argument("--source-files", default="")
+    parser.add_argument("--source-metadata", default="")
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--documents", type=int, default=250,
                         help="how many documents to load")
     args = parser.parse_args(argv)
-    if not args.ngrams_dir:
+    if not args.source_files:
         root = os.path.join(HERE, "fixtures", "no_byte_range")
-        args.ngrams_dir = os.path.join(root, "ngrams")
-        args.metadata = os.path.join(root, "metadata", "metadata.json")
+        args.source_files = os.path.join(root, "ngrams")
+        args.source_metadata = os.path.join(root, "metadata", "metadata.json")
 
-    docs = get_files(args.ngrams_dir, load_metadata(args.metadata), "year")[:args.documents]
+    docs = get_files(args.source_files, load_metadata(args.source_metadata),
+                     "year")[:args.documents]
     (key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes,
      end_bytes) = ngram_loader.load_corpus(
         [path for _, path in docs], args.threads)

@@ -319,7 +319,7 @@ price of loose linking: the DP maximises chain length under the loose bound, and
 that is longest there can fragment where a tighter one would not have. 0.18% against
 0.13%.
 
-`test_tracing.py` and `test_matcher_symmetry.py` both run each setting, since
+`check_tracing.py` and `test_matcher_symmetry.py` both run each setting, since
 flex_gap changes how far the matcher links and what the walk down each chain enforces.
 The trace test previously only ever ran the default, which is why this path went
 unchecked until now.
@@ -334,7 +334,7 @@ unchecked until now.
 | `tracing.py` | `_walk` rewritten to mirror the new matcher, with reasons for where a passage stops and why a rejected one was rejected |
 | `tests/test_matcher_symmetry.py` | new: runs a corpus forward and with the document order reversed and compares undirected passage pairs, including a corpus where a phrase occurs once in one document and seven times in another. Fails against the retired matcher with 1 occurrence against 7 |
 | `tests/check_reference_output.py` | was a Go-parity harness; now compares against a stored reference tree. `fixtures/record_references.py` re-records them |
-| `tests/test_tracing.py` | runs both `flex_gap` settings; it only ever ran the default before |
+| `tests/check_tracing.py` | was `test_debug_trace.py`: rewritten to mirror the new matcher, and now runs both `flex_gap` settings, having only ever run the default. Renamed out of the automated suite because it checks the `--debug` trace rather than the alignments |
 | `tests/check_direction_flips.py` | docstring: a direction flip now mirrors |
 
 All of `test_match_order`, `test_chunk_order`, `test_document_order`, `test_aligner_paths`,

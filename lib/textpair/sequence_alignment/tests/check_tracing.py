@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Drift guard for tracing._walk against matching.match_passage.
 
-    test_tracing.py [--source-files DIR --source-metadata FILE] [--threads N]
+    check_tracing.py [--source-files DIR --source-metadata FILE] [--threads N]
+        [--max-matches N]
+
+Run this when you change the matcher: `tracing._walk` is a second implementation of it,
+and this is what tells you the two have not drifted. It is not in `run_tests.py`, because
+it checks the --debug trace rather than the alignments, and a --debug run over a whole
+corpus is slow -- write_traces re-derives every pair, which --max-matches cannot bound,
+since a trace has to describe the whole pair. Point it at a corpus deliberately.
 
 The trace is produced after matching by walking each pair's matches a second time, in
 `tracing._walk`, so that nothing is on the matching path. That walk must behave exactly
@@ -29,19 +36,27 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = ("no_byte_range", "non_string_meta", "missing_text", "no_metadata")
 
 
-def compare_kernels(source_files, source_metadata, params, threads):
-    """Every pair's alignments from both implementations. Returns (pairs, mismatches)."""
+def compare_kernels(source_files, source_metadata, params, threads, max_matches):
+    """Every pair's alignments from both implementations.
+
+    Returns (pairs, mismatches, truncated). `max_matches` bounds the matches taken from
+    any one pair; both implementations get the same list, so the comparison is unaffected
+    by it, and every pair is still walked. Without a bound this is the slowest check by
+    far -- the walk is pure Python by design, and classical_chinese holds 20.5 million
+    matches across its 1,891 pairs, 25 minutes for the two flex_gap settings.
+    """
     from textpair.sequence_alignment.aligner.documents import load_metadata
     docs = documents.get_files(source_files, load_metadata(source_metadata),
                               params["sort_by"])
     corpus = tracing.Corpus(*ngram_loader.load_corpus([path for _, path in docs], threads))
     names = [doc for doc, _ in docs]
-    pairs = mismatches = 0
+    pairs = mismatches = truncated = 0
     for source, target in tracing._pairs(names, len(names), np.empty(0, np.int32), None):
-        match, n = corpus.matches(source, target)
+        match, n, stopped_early = corpus.matches(source, target, max_matches)
         if not n:
             continue
         pairs += 1
+        truncated += stopped_early
         rows, _blocks, _hidden = tracing._walk(match, n, params,
                                              params["debug_minimum_ngrams"])
         # The kernel takes the packed layout: indices together in one int64 and byte
@@ -65,10 +80,11 @@ def compare_kernels(source_files, source_metadata, params, threads):
         if [tuple(int(v) for v in row) for row in out[:cnt]] != \
                 [tuple(int(v) for v in row) for row in rows]:
             mismatches += 1
-    return pairs, mismatches
+    return pairs, mismatches, truncated
 
 
-def check_corpus(name, source_files, source_metadata, threads, failures, overrides=None):
+def check_corpus(name, source_files, source_metadata, threads, failures, overrides=None,
+                 max_matches=0):
     params = _normalize(overrides or {})
     workdir = tempfile.mkdtemp(prefix="textpair_debug_check_")
 
@@ -80,8 +96,11 @@ def check_corpus(name, source_files, source_metadata, threads, failures, overrid
             print(f"     got  {got}\n     want {want}")
 
     try:
-        pairs, mismatches = compare_kernels(source_files, source_metadata, params, threads)
-        check(f"_walk matches the kernel on all {pairs} pair(s)", mismatches, 0)
+        pairs, mismatches, truncated = compare_kernels(source_files, source_metadata,
+                                                      params, threads, max_matches)
+        capped = (f", {truncated} of them capped at {max_matches:,} matches"
+                  if truncated else "")
+        check(f"_walk matches the kernel on all {pairs} pair(s){capped}", mismatches, 0)
 
         common = dict(source_files=source_files, source_metadata=source_metadata,
                       threads=threads, **(overrides or {}))
@@ -109,6 +128,9 @@ def main(argv=None):
     parser.add_argument("--source-files", default="")
     parser.add_argument("--source-metadata", default="")
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--max-matches", type=int, default=1000, metavar="N",
+                        help="matches taken from any one pair; 0 for all of them. "
+                             "Both implementations get the same list either way")
     args = parser.parse_args(argv)
     failures = []
     # Both settings of flex_gap: it changes how far the matcher links and the allowance
@@ -119,7 +141,8 @@ def main(argv=None):
         base = os.path.basename(args.source_files.rstrip("/")) or "corpus"
         for overrides in settings:
             check_corpus(f"{base} flex_gap={overrides['flex_gap']}", args.source_files,
-                         args.source_metadata, args.threads, failures, overrides)
+                         args.source_metadata, args.threads, failures, overrides,
+                         args.max_matches)
     else:
         for fixture in FIXTURES:
             root = os.path.join(HERE, "fixtures", fixture)
