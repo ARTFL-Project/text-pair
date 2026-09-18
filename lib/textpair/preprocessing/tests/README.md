@@ -6,7 +6,7 @@ Same split as the aligner's checks: the prefix says which kind a script is.
 corpora and PhiloLogic databases in temporary directories, so there are no fixtures to
 keep in step. `run_tests.py` runs all of them in a few seconds.
 
-**`check_*.py` are tools you point at something.** Neither runs by default.
+**`check_*.py` are tools you point at something.** It does not run by default.
 
 ## Running them
 
@@ -14,7 +14,7 @@ keep in step. `run_tests.py` runs all of them in a few seconds.
 cd /disk1/shared/text-pair/lib
 T=textpair/preprocessing/tests
 
-python $T/run_tests.py                     # the four property checks
+python $T/run_tests.py                     # all five
 python $T/run_tests.py --only ngrams       # one of them
 ```
 
@@ -24,32 +24,7 @@ python $T/run_tests.py --only ngrams       # one of them
 | `ngrams` | byte ranges, and the `gap > 0` path: every combination emitted once, each with a range covering its own tokens. |
 | `config` | that two preprocessors stay independent, and that the `[PREPROCESSING]` names are honoured. |
 | `reader` | text-object grouping per level, punctuation reattachment, sentence metadata, `keep_all` placeholders. |
-
-## check_parity.py
-
-Compares this package against the `text_preprocessing` library it replaced, token for
-token, over 23 configurations at five text-object levels.
-
-```bash
-# needs the old library still importable
-PARITY_FIXTURES=/tmp/parity python $T/check_parity.py /path/to/philo_db 4
-```
-
-It needs a stopword list at `$PARITY_FIXTURES/stopwords.txt` and a lemmatizer map at
-`$PARITY_FIXTURES/lemmas.tsv`; any content will do, they only have to exist. It reports
-each configuration, then metadata field by field, then the `gap > 0` properties.
-
-Two metadata differences are expected and recognised by shape rather than by field name,
-so a genuinely new one still fails. Both fix order-dependent behaviour in the old
-library: a field empty at an object's own level could be dropped entirely depending on
-which sibling was processed first, and a sentence's `word_count` was inherited from its
-paragraph for the last sentence in each file. `gap > 0` is deliberately not byte-exact —
-the old implementation double-counted and gave every combination sharing a leading token
-one byte range, wrong on half the rows — so it is checked against its own properties
-instead.
-
-This is a migration tool, not a permanent check. Once `text_preprocessing` is gone from
-the environment it stops being runnable, and the `test_*.py` files are what remain.
+| `worker_imports` | that the alignment path pulls in none of the heavy optional stacks — torch, transformers, spaCy, faiss and the rest — which `spawn` would re-import in every worker. |
 
 ## check_start_method.py
 
