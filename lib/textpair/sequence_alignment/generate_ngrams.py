@@ -6,10 +6,10 @@ import os
 import shutil
 import sqlite3
 from glob import glob
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import orjson
-from mmh3 import hash as hash32
+from mmh3 import hash64
 from tqdm import tqdm
 
 from textpair.preprocessing import PreProcessor, TextObject
@@ -178,8 +178,10 @@ class Ngrams:
         # writer groups them by hash with one stable sort.
         forms = text_object.forms
         start_bytes = text_object.start_bytes
-        hashes: List[int] = [hash32(form) for form in forms]
-        doc_ngrams_in_order: List[Tuple[int, int]] = list(zip(start_bytes, hashes))  # banality filter
+        # The key is the low 64 bits of MurmurHash3-128, signed. 32 bits used to be
+        # enough; at a few hundred million distinct n-grams it is not, and the collision
+        # rate is first-order in the population -- see NGRAM_KEY_COLLISIONS.md.
+        hashes: List[int] = [hash64(form)[0] for form in forms]
         ngram_binary.write_positions(
             f"{self.output_path}/ngrams/{text_object_id}.bin",
             hashes,
@@ -195,8 +197,13 @@ class Ngrams:
             with open(f"{self.output_path}/temp/{text_object_id}", "w", encoding="utf-8") as output:
                 output.write("\n".join(doc_ngrams))
                 output.write("\n")
-        with open(f"{self.output_path}/ngrams_in_order/{text_object_id}.json", "wb") as json_file:
-            json_file.write(orjson.dumps(doc_ngrams_in_order))
+        # Binary rather than JSON: 12 bytes an n-gram against 30, and the banality
+        # filter mmaps it instead of parsing 1.6MB of text per document.
+        ngram_binary.write_order(
+            f"{self.output_path}/ngrams_in_order/{text_object_id}.bin",
+            hashes,
+            start_bytes,
+        )
         return metadata
 
     def count_texts(self, text: str) -> int:
