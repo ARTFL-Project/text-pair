@@ -213,6 +213,19 @@ install_textpair() {
 }
 
 # =============================================================================
+# PACK MODERNIZATION MAPS
+# =============================================================================
+pack_modernizers() {
+    # The maps are stored as editable TSV under lib/textpair/preprocessing/data/.
+    # The loader builds this cache on first use anyway; doing it here keeps the
+    # first alignment from paying for it, and surfaces a write-permission problem
+    # now rather than mid-run.
+    echo "Packing modernization maps..."
+    "$PYTHON_BIN" -c "import textpair.preprocessing.modernize as m; m.pack_all()"
+    echo ""
+}
+
+# =============================================================================
 # SEED GLOBAL SETTINGS (user-level path, no sudo/root needed on macOS)
 # =============================================================================
 setup_global_settings() {
@@ -283,6 +296,10 @@ verify_install() {
     echo "  - Input files should be TEI XML format"
     echo "  - Downloading a Spacy model (python -m spacy download <model>) is only needed if"
     echo "    you enable POS/entity filtering or spacy-based lemmatization in my_config.ini"
+    echo "  - Historical spelling maps are plain TSV under lib/textpair/preprocessing/data/;"
+    echo "    edit them and the packed cache beside them is rebuilt on the next run"
+    echo "  - The ngram index uses \`sort -m\`, which BSD sort supports, so GNU coreutils"
+    echo "    is not required"
 }
 
 # =============================================================================
@@ -293,6 +310,7 @@ main() {
     check_dependencies
     install_textpair
     patch_philologic_wc
+    pack_modernizers
     setup_global_settings
     scaffold_config
     verify_install
