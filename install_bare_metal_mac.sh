@@ -205,10 +205,61 @@ install_textpair() {
         "$PYTHON_BIN" -m pip install -e lib/textpair_llm/. --break-system-packages --quiet
     fi
 
-    # Install main package
-    echo "  Installing textpair..."
-    "$PYTHON_BIN" -m pip install -e lib/. --break-system-packages
+    # Install main package. install.sh uses the [cpu] extra, which pins
+    # torch==2.8; upstream stopped shipping macOS x86_64 wheels after 2.2.2, so
+    # on Intel the pin is unsatisfiable and torch is left to resolve transitively
+    # as before.
+    if [ "$BINARY_ARCH" == "aarch64" ]; then
+        echo "  Installing textpair (with the [cpu] extra, pinning torch)..."
+        "$PYTHON_BIN" -m pip install -e "lib/.[cpu]" --break-system-packages
+    else
+        echo "  Installing textpair (torch unpinned: no macOS x86_64 wheels past 2.2.2)..."
+        "$PYTHON_BIN" -m pip install -e lib/. --break-system-packages
+    fi
 
+    echo ""
+}
+
+# =============================================================================
+# NUMBA CACHE AND ALIGNER KERNEL PRE-COMPILE
+# =============================================================================
+precompile_aligner() {
+    echo "Setting up the sequence aligner's numba cache..."
+
+    # Ask the runtime where the cache goes rather than hardcoding it: the shared
+    # /var/lib/text-pair path install.sh uses is not writable by an unprivileged
+    # user on macOS, so the aligner falls back to ~/.cache/textpair/numba.
+    local cache_dir
+    cache_dir="$("$PYTHON_BIN" -c \
+        "from textpair.sequence_alignment.aligner import configure_numba_cache as c; print(c() or '')" \
+        2>/dev/null)" || cache_dir=""
+
+    if [ -n "$cache_dir" ]; then
+        # Wiped on every install, as install.sh does, so it is always repopulated
+        # from empty rather than reusing entries built against older kernels.
+        rm -rf "$cache_dir"
+        mkdir -p "$cache_dir"
+        echo "  Cache: $cache_dir"
+    else
+        echo -e "${YELLOW}  Could not resolve a cache directory; numba will use its own fallback${NC}"
+    fi
+
+    # Pre-compile so the first real alignment does not pay for it. The
+    # three-document fixture warms the whole njit call graph, JSON and binary
+    # paths both.
+    local warm_fixture="lib/textpair/sequence_alignment/tests/fixtures/no_byte_range"
+    local warm_out
+    # Explicit template: BSD mktemp wants one, unlike GNU's bare -d.
+    warm_out="$(mktemp -d "${TMPDIR:-/tmp}/textpair-warm.XXXXXX")"
+    if "$PYTHON_BIN" -m textpair.sequence_alignment.aligner \
+            --source_files="$warm_fixture/ngrams" \
+            --source_metadata="$warm_fixture/metadata/metadata.json" \
+            --output_path="$warm_out" > /dev/null 2>&1; then
+        echo "  Aligner kernels pre-compiled"
+    else
+        echo -e "${YELLOW}  WARNING: could not pre-compile the aligner kernels; the first alignment will${NC}"
+    fi
+    rm -rf "$warm_out"
     echo ""
 }
 
@@ -310,6 +361,7 @@ main() {
     check_dependencies
     install_textpair
     patch_philologic_wc
+    precompile_aligner
     pack_modernizers
     setup_global_settings
     scaffold_config
