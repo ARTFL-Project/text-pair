@@ -143,3 +143,18 @@ Otherwise the cache location comes from `TEXTPAIR_NUMBA_CACHE_DIR`, then
 `/var/lib/text-pair/numba_cache`, then `$XDG_CACHE_HOME/textpair/numba` — see
 `aligner/__init__.py`, which also explains why it is set through `numba.config.CACHE_DIR`
 rather than `NUMBA_CACHE_DIR`.
+
+## check_hash_collisions.py
+
+Measures how often a 32-bit hash collision fabricates a passage, by indexing a corpus
+twice under different mmh3 seeds and diffing the alignments: collisions under one seed are
+almost surely not collisions under the other. It checks the aligner is deterministic
+first, since otherwise the diff means nothing.
+
+```bash
+python $T/check_hash_collisions.py --philo-db DIR --work DIR [--docs N] [--workers N]
+```
+
+Needs room for two n-gram indexes and two alignments of the corpus. On frantext the answer
+is about two spurious passages per million, flat across a 19x range of corpus size; see
+NGRAM_KEY_COLLISIONS.md for what that means and what it does not cover.
