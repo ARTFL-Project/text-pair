@@ -13,6 +13,10 @@ Three things the aligner can vary without being allowed to change what it finds:
     so the records must be the same multiset however the corpus is sliced.
   - a batch count larger than the corpus, which must slice to one batch per document
     rather than fail.
+  - max_positions, which raises the batch count on its own when a combination would hold
+    more n-gram positions than int32 CSR offsets can address. Its real value is 2^31, so
+    the mechanism is checked by setting it below what the fixture holds; the constant
+    needs no test.
 
 Keep this on small corpora. Batch counts clamp to the document count, so the last case
 above gives one batch per document and O(documents^2) combinations, each of which
@@ -48,6 +52,16 @@ def tree(path):
             with open(full, "rb") as handle:
                 digests[os.path.relpath(full, path)] = hashlib.md5(handle.read()).hexdigest()
     return digests
+
+
+def config_value(path, key):
+    """One `key: value` line from a run's alignment_config.ini."""
+    with open(os.path.join(path, "alignment_config.ini"), encoding="utf8") as handle:
+        for line in handle:
+            name, _, value = line.partition(":")
+            if name.strip() == key:
+                return value.strip()
+    return None
 
 
 def records(path):
@@ -127,6 +141,33 @@ def main(argv=None):
 
         base_out, base_count = json_self, n_self
         base = records(base_out)
+
+        # Sized in advance only for a binary index -- counting a JSON one would mean
+        # scanning it -- so this case runs on the converted corpus. One position under
+        # the corpus total is enough to rule out a single combination.
+        positions = sum(ngram_binary.read_header(path)[1]
+                        for path in glob.glob(os.path.join(binary["source"], "*.bin")))
+        out, count = run("auto_batched", source_files=binary["source"], target_files="",
+                         target_metadata="", max_positions=positions - 1)
+        check("max_positions: same records", records(out), base)
+        check("max_positions: same count", count, base_count)
+        check("max_positions: raised the batch count past one",
+              config_value(out, "sourceBatch") not in ("1", None), True)
+        check("max_positions: a budget the corpus already fits leaves the count alone",
+              config_value(run("not_batched", source_files=binary["source"],
+                               target_files="", target_metadata="",
+                               max_positions=positions)[0], "sourceBatch"), "1")
+        # A budget under one document's own positions is the case batching cannot fix,
+        # and the only way to reach it in practice would be a document larger than the
+        # 2GB a file may be, so it is checked here rather than trusted.
+        try:
+            run("under_one_document", source_files=binary["source"], target_files="",
+                target_metadata="", max_positions=1)
+            refused = "no error"
+        except ValueError as error:
+            refused = "alone holds" in str(error) and "ngram positions" in str(error)
+        check("max_positions under a single document: refused, with the document named",
+              refused, True)
         for label, over in (("source_batch=3", {"source_batch": 3}),
                             ("target_batch=3", {"target_batch": 3}),
                             ("both batched", {"source_batch": 2, "target_batch": 2}),

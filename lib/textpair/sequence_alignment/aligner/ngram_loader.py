@@ -14,6 +14,7 @@ stably, so that order is ascending by ngram index. `inverted_index.align_source`
 to order a pair's matches without sorting them, and `tests/test_match_order.py` asserts
 it.
 """
+import math
 import mmap
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -218,7 +219,14 @@ def load_corpus(paths, threads):
     n_keys = int(key_offsets[-1])
     n_pos = int(pos_base[-1])
     if n_pos >= 2 ** 31:
-        raise RuntimeError(f"{n_pos} ngram positions exceeds the int32 CSR offsets")
+        # runner._size_batches raises source_batch to keep combinations under this, but
+        # it can only size a binary index in advance -- counting a JSON one means
+        # scanning it -- so a JSON corpus can still arrive here.
+        raise RuntimeError(
+            f"{n_pos:,} ngram positions in one combination, over the "
+            f"{2 ** 31:,} the int32 CSR offsets can address. Set source_batch to at "
+            f"least {int(math.ceil(2 * n_pos / 2 ** 31))}, or regenerate the index in "
+            f"the binary format, which is sized automatically.")
     ngram_keys = np.empty(n_keys, np.int64)
     position_offsets = np.empty(n_keys + n, np.int32)
     ngram_indices = np.empty(n_pos, np.int32)

@@ -14,6 +14,9 @@ from shlex import quote
 
 import numpy as np
 
+from concurrent.futures import ThreadPoolExecutor
+
+from .. import ngram_binary
 from . import tracing
 from . import inverted_index, ngram_loader, output
 from .documents import get_files, load_metadata
@@ -24,6 +27,10 @@ DEFAULTS = dict(
     sort_by="year",
     source_batch=1,
     target_batch=1,
+    # A combination may not load more n-gram positions than this: ngram_loader's CSR
+    # offsets are int32, so 2^31 is the hard ceiling. A parameter rather than a constant
+    # so a test can force batching on a corpus small enough to check the result.
+    max_positions=2 ** 31,
     matching_window_size=30,
     max_gap=15,
     flex_gap=False,
@@ -41,7 +48,8 @@ DEFAULTS = dict(
     debug_pairs="",
 )
 
-_INT_PARAMS = ("threads", "source_batch", "target_batch", "matching_window_size", "max_gap",
+_INT_PARAMS = ("threads", "source_batch", "target_batch", "max_positions",
+               "matching_window_size", "max_gap",
                "minimum_matching_ngrams", "minimum_matching_ngrams_in_window",
                "minimum_matching_ngrams_in_docs", "context_size")
 _FLOAT_PARAMS = ("duplicate_threshold", "passage_distance_multiplier")
@@ -99,6 +107,105 @@ def _config_values(params, output_path):
         "sortingField": params["sort_by"],
         "debug": params["debug"],
     }
+
+
+def _positions(docs, threads):
+    """N-gram positions per document, or None if any of them is JSON.
+
+    A binary index carries the count in its 24-byte header, which is what
+    `load_corpus`'s sizing pass reads anyway, so this costs one small read per
+    document. Counting a JSON index means scanning it, and generation has not written
+    JSON since the binary format landed, so that path keeps the loader's guard instead
+    of being sized in advance.
+    """
+    if any(not ngram_loader.is_binary(path) for _, path in docs):
+        return None
+    counts = np.zeros(len(docs), np.int64)
+
+    def count(i):
+        counts[i] = ngram_binary.read_header(docs[i][1])[1]
+
+    with ThreadPoolExecutor(threads) as pool:
+        list(pool.map(count, range(len(docs))))
+    return counts
+
+
+def _slice_totals(counts, batch_count):
+    """Positions per batch, for the slices `_batches` would cut at this count."""
+    size = int(math.ceil(counts.shape[0] / batch_count))
+    return [int(counts[i:i + size].sum()) for i in range(0, counts.shape[0], size)]
+
+
+def _worst_combination(counts, batch_count):
+    """The most positions one combination would load, comparing a corpus with itself.
+
+    One batch means one combination holding everything. Two or more means the heaviest
+    combination is the off-diagonal one that loads the two largest batches -- which is
+    why `source_batch = 2` buys nothing on a self-comparison: the two batches together
+    are still the whole corpus.
+    """
+    totals = _slice_totals(counts, batch_count)
+    if len(totals) < 2:
+        return totals[0] if totals else 0
+    return sum(sorted(totals)[-2:])
+
+
+def _raise_batches(counts, requested, budget, worst):
+    """The smallest batch count at or above `requested` that keeps `worst` within budget.
+
+    `_batches` slices by document count, so raising the count shrinks every slice. It
+    starts from the count the total positions alone require, which is a lower bound, so
+    this walks up over a couple of values rather than from one.
+    """
+    total = int(counts.sum())
+    start = max(requested, 1, int(math.ceil(total / budget)) if budget > 0 else 1)
+    for batch_count in range(start, counts.shape[0] + 1):
+        if worst(counts, batch_count) <= budget:
+            return batch_count
+    return counts.shape[0]
+
+
+def _size_batches(params, source_docs, target_docs, budget, threads):
+    """Raise source_batch / target_batch until no combination exceeds `budget` positions.
+
+    Only ever raises. An explicit batch count is a memory choice the caller made, and
+    this is a correctness floor under it, not a second opinion. It prints whenever it
+    moves: a run that silently sliced itself differently than asked would be worse than
+    either outcome.
+    """
+    source_counts = _positions(source_docs, threads)
+    if source_counts is None or source_counts.size == 0:
+        return
+    if target_docs:
+        target_counts = _positions(target_docs, threads)
+        if target_counts is None:
+            return
+        # The sides are sliced independently and one of each is loaded together, so each
+        # gets half the budget.
+        def worst(counts, count):
+            return max(_slice_totals(counts, count))
+        share = budget // 2
+        plan = (("source_batch", source_docs, source_counts, share),
+                ("target_batch", target_docs, target_counts, share))
+    else:
+        worst = _worst_combination
+        plan = (("source_batch", source_docs, source_counts, budget),)
+    for name, docs, counts, allowance in plan:
+        biggest = int(counts.max())
+        if biggest > allowance:
+            doc = docs[int(counts.argmax())][0]
+            raise ValueError(
+                f"document {doc} alone holds {biggest:,} ngram positions, more than the "
+                f"{allowance:,} one combination may load. No batch count can help; the "
+                f"index would have to be split or max_positions raised, and the CSR "
+                f"offsets are int32.")
+        asked = int(params[name])
+        needed = _raise_batches(counts, asked, allowance, worst)
+        if needed > asked:
+            print(f"{name} raised {asked} -> {needed}: at {asked} a combination would "
+                  f"load {worst(counts, asked):,} ngram positions, over the "
+                  f"{allowance:,} allowed by max_positions={budget:,}.", flush=True)
+            params[name] = needed
 
 
 def _batches(files, count):
@@ -320,6 +427,10 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
     if not source_docs:
         raise ValueError(f"no ngram files in {source_files}")
 
+    # Before write_config, so the file records the batch counts the run will use.
+    if int(params["max_positions"]) > 0:
+        _size_batches(params, source_docs, target_docs, int(params["max_positions"]),
+                      params["threads"])
     output.write_config(output_path, _config_values(params, output_path))
     source_batches = _batches(source_docs, min(params["source_batch"], len(source_docs)))
     if target_docs:

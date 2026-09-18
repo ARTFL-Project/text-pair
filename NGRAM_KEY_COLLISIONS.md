@@ -658,34 +658,53 @@ key count and the n-gram count are now the same number.
 - **The full eebo corpus is unmeasured**, at ~7 to 14 hours per seed. With 64-bit keys the
   two-seed test there is a check on the implementation rather than a rate measurement,
   which makes it less urgent than it was.
-- **Positions are still int32**, and it is worth being precise about which ones, because
-  the obvious reading is that this bounds document size. It does not. `start_bytes`,
-  `end_bytes` and `ngram_indices` hold values relative to one document, so int32 bounds a
-  single *file* at 2GB and nothing else. What binds is `position_offsets`, which is
-  corpus-global — `ngram_loader.store` shifts each document's CSR offsets by `pos_base[i]`,
-  the running total over every preceding document — so the ceiling is 2^31 n-gram
-  positions **summed over the whole index**: ~153,000 eebo-sized documents, ~39,000
-  frantext-sized ones, however small each one is. That one guard suffices for the rest,
-  since every key slot holds at least one position, so P >= T and `posting_slots`' int32 is
-  safe whenever the guard passes.
+- **Positions are still int32, and this is not a corpus-size limit — nor a manual
+  concern any more.** `ngram_loader` refuses past 2^31 n-gram positions, but that applies
+  to what one `runner._run_combination` loads, and a combination loads **at most two
+  batches**: the diagonal of the batch triangle sweeps one batch against itself, the
+  off-diagonal loads a source batch plus a target batch. So the ceiling is on
+  `source_batch + target_batch`, roughly 153,000 eebo-sized documents or 39,000
+  frantext-sized ones, and a corpus larger than that is aligned by raising `source_batch`
+  — `k` batches give `k(k+1)/2` combinations covering every unordered document pair
+  exactly once.
 
-  Raising it means int64 `position_offsets`, `posting_slots` and `sweep_starts` — all
-  three hold global indices — and reworking `align_source`'s `packed_positions`, which
-  packs a global position index into the high half of an int64 and so has its own 2^32
-  wall; the fix there is to pack document-relative positions and add the base inside
-  `match_passage`. The trade, from the measured eebo figures:
+  `runner._size_batches` now does that raising itself, from the `max_positions`
+  parameter: positions per document come from the binary headers, which the loader's
+  sizing pass reads anyway, so a combination's load is known before anything is
+  allocated. It only ever raises an explicit `source_batch`, and says so when it does.
+  Measured on 600 frantext documents — 33,228,373 positions, every header read in under
+  10ms — budgets of half and a fifth of the corpus raised the count to 5 and 14, wrote the
+  15 and 105 batch files the triangle predicts, and found the same 928,546 passages as a
+  single batch. The cost is per-combination overhead: 7s, 38s and 209s for 1, 5 and 14
+  batches at that size, which is why the sizing raises the count only when the alternative
+  is failing. At a scale where batching is actually required, matching dominates and the
+  overhead disappears.
 
-  | | per document | ceiling |
+  Verified rather than assumed: the same 600 documents at `source_batch=1` and
+  `source_batch=3` give **identical** passages, 928,546 either way, the batched run writing
+  the 6 batch files the triangle predicts. It costs k-fold index loading — each batch is
+  loaded once per combination it appears in — which at 600 documents turned 6s into 22s
+  because loading is the whole run at that size, and which at a million documents is about
+  an hour against weeks of matching.
+
+  Widening the offsets would therefore buy larger *batches*, not a larger corpus: fewer,
+  bigger combinations and less re-loading. It means int64 `position_offsets`,
+  `posting_slots` and `sweep_starts` — all three hold global indices — and reworking
+  `align_source`'s `packed_positions`, which packs a global position index into the high
+  half of an int64 and so has its own 2^32 wall; the fix there is to pack
+  document-relative positions and add the base inside `match_passage`. The trade, from the
+  measured eebo figures:
+
+  | | per document | ceiling per combination |
   |---|---|---|
   | int32 offsets | 599.6 KB | 153,414 documents, the guard |
   | int64 offsets | 761.4 KB | 262,673 documents, RAM at 200GB usable |
 
-  1.7x more documents per index, for +27% resident arrays — which itself drops the
-  RAM-bound ceiling from 333,578 documents to 262,673, so some of the gain pays for
-  itself. For all-pairs work over a million documents it turns 14 shards and 105 pair-runs
-  into 8 shards and 36, with **identical** total document-pair comparisons: it saves index
-  loading, not matching. Not worth doing until a single index has to exceed 153,000
-  documents, and the guard says so loudly with the exact count when that day comes.
+  1.7x per combination for +27% resident arrays, which itself drops the RAM-bound ceiling
+  from 333,578 documents to 262,673. For a million documents it turns 14 batches and 105
+  combinations into 8 and 36, with identical total comparisons: it saves index loading, not
+  matching. Not worth doing until re-loading shows up in a profile.
+
 - **`most_common_ngrams.txt` is now 1.4GB of decimal text**, and `ngrams_in_order` showed
   what binary is worth. The same argument applies to it.
 
