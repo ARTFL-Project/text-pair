@@ -77,22 +77,34 @@ def split_text_objects(
         normalize = normalizer.normalize
 
     want_sent_starts = normalizer.config.needs_spacy
+    # Sentence ids cost a split and a join per token, and are only needed when
+    # something reads them. The punctuation workaround below rewrites a token's
+    # position, which can only change the object it lands in when objects are
+    # finer-grained than the document -- a punct token cannot be attributed to a
+    # different document -- and the rewritten position itself is only kept when
+    # keep_surface is on.
+    track_sentences = level > 1 or keep_surface or want_sent_starts
     current_object_id: str | None = None
     current = TextObject()
     previous_sent_id: str | None = None
     current_sent_id = ""
 
     for word in read_words(path):
-        # Works around a PhiloLogic parser bug that assigns punctuation to the
-        # following sentence: reattach it to the sentence just closed.
-        if word.philo_type == "punct" and current_sent_id:
-            philo_id = current_sent_id.split()
-            position = f"{current_sent_id} 0"
-        else:
-            philo_id = word.position.split()
+        if not track_sentences:
             position = word.position
-        object_id = " ".join(philo_id[:level])
-        current_sent_id = " ".join(philo_id[:SENT_LEVEL])
+            object_id = position[: position.find(" ")]
+        else:
+            # Works around a PhiloLogic parser bug that assigns punctuation to
+            # the following sentence: reattach it to the sentence just closed.
+            if word.philo_type == "punct" and current_sent_id:
+                position = f"{current_sent_id} 0"
+            else:
+                position = word.position
+            # Capped split: only the first SENT_LEVEL fields are ever read, and a
+            # philo position has seven.
+            philo_id = position.split(" ", SENT_LEVEL)
+            object_id = philo_id[0] if level == 1 else " ".join(philo_id[:level])
+            current_sent_id = " ".join(philo_id[:SENT_LEVEL])
 
         if current_object_id is None:
             current_object_id = object_id
