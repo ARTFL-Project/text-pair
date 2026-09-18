@@ -34,7 +34,8 @@ dependencies = [
     # historic-French lemmatizer) for lemmatization and POS filtering during
     # preprocessing. NOTE: this pins transformers below 4.53.3, which is the
     # ceiling for this environment as a whole -- the same constraint that keeps
-    # the graph's own labeler and lemmatizer in separate venvs.
+    # the graph's labeler in a venv of its own, and the reason the graph shells
+    # back out to this one to lemmatize its term-extraction passages.
     "spacy-transformers",
     "fastapi==0.110.3",
     "psycopg2; sys_platform != 'darwin'",

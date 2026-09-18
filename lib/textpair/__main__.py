@@ -125,6 +125,10 @@ def build_graph_and_labels(
         label_command += ["--spacy-model", spacy_model]
     if preprocessing_params.get("pos_to_keep"):
         label_command += ["--pos-to-keep", ",".join(preprocessing_params["pos_to_keep"])]
+    # Term extraction modernizes by default. Forward the alignment's setting so a
+    # run that deliberately keeps period spelling is not modernized behind its back.
+    if not preprocessing_params.get("modernize", True):
+        label_command.append("--no-modernize")
 
     try:
         subprocess.run(label_command, check=True, capture_output=False)
