@@ -279,17 +279,31 @@ class Columns:
         return raw.decode("utf8")
 
 
-def _line_ends(buffer: np.ndarray) -> np.ndarray:
-    """Start of every line, plus a final sentinel at the end of the buffer."""
-    breaks = np.flatnonzero(buffer == NEWLINE)
-    ends = np.empty(breaks.size + 2, dtype=np.int64)
+@njit(nogil=True, cache=True)
+def _line_ends(buffer):
+    """Start of every line, plus a final sentinel at the end of the buffer.
+
+    Counting first and filling second walks the buffer twice, which is still
+    less work than `flatnonzero(buffer == NEWLINE)`: that materialises a bool
+    the size of the file -- 12MB a document, 45.7GB over a corpus -- and then
+    scans it.
+    """
+    breaks = 0
+    for i in range(buffer.size):
+        if buffer[i] == NEWLINE:
+            breaks += 1
+    ends = np.empty(breaks + 2, dtype=np.int64)
     ends[0] = 0
-    ends[1:-1] = breaks + 1
-    ends[-1] = buffer.size
+    at = 1
+    for i in range(buffer.size):
+        if buffer[i] == NEWLINE:
+            ends[at] = i + 1
+            at += 1
+    ends[at] = buffer.size
     # A trailing newline leaves an empty last line; drop it.
-    if ends.size >= 2 and ends[-2] >= buffer.size:
-        ends = ends[:-1]
-    return ends
+    if at >= 1 and ends[at - 1] >= buffer.size:
+        return ends[:at]
+    return ends[:at + 1]
 
 
 def _intern(buffer, lo, hi, limit):
