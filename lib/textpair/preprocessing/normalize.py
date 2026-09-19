@@ -88,7 +88,7 @@ class Normalizer:
         "config", "modernizer", "stopwords", "lemmas", "stem", "punct_map",
         "lowercase", "strip_punctuation", "strip_numbers", "min_word_length",
         "ascii", "convert_entities", "spacy_lemmatizer", "pos_to_keep",
-        "ents_to_keep", "_memo", "_raw_memo",
+        "ents_to_keep", "_memo", "_raw_memo", "vocabulary",
     )
 
     def __init__(self, config: PreprocessConfig):
@@ -114,6 +114,10 @@ class Normalizer:
         self.ents_to_keep = frozenset(config.ents_to_keep)
         self._memo: dict[str, str] = {}
         self._raw_memo: dict[str, str] = {}
+        # Set by the scanning reader on first use: every token this worker has
+        # seen, so a form is computed once per worker rather than once per
+        # document it appears in. Opaque here; see philo_scan.Vocabulary.
+        self.vocabulary = None
 
     def modernize(self, token: str) -> str:
         """Modernize a raw surface form. Applied before everything else."""

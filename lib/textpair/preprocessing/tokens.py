@@ -26,6 +26,18 @@ class FormTable:
     longest: int
 
     @classmethod
+    def from_vocabulary(cls, vocabulary) -> "FormTable":
+        """A view of a worker vocabulary's packed forms.
+
+        No copy: the arrays are the vocabulary's own, sliced to what it has
+        filled. They only ever grow, so a view taken now stays valid for the ids
+        it was taken for.
+        """
+        return cls(vocabulary.form_data[: vocabulary.form_used],
+                   vocabulary.form_offsets[: vocabulary.count + 1],
+                   vocabulary.longest)
+
+    @classmethod
     def build(cls, forms: list[str]) -> "FormTable":
         encoded = [form.encode("utf8") for form in forms]
         offsets = np.zeros(len(encoded) + 1, dtype=np.int64)
@@ -69,6 +81,9 @@ class TextObject:
     form_table: Any = None
     # n-gram keys, when they were computed without building the n-gram strings.
     keys: Any = None
+    # Whether the reader already applied purge's rule, so purge has nothing to
+    # find and need not walk every form looking.
+    prefiltered: bool = False
 
     def __len__(self) -> int:
         return len(self.forms)
@@ -100,6 +115,9 @@ class TextObject:
 
     def purge(self) -> None:
         """Drop filtered tokens, then resync the metadata byte range."""
+        if self.prefiltered:
+            self.sync_byte_range()
+            return
         keep = [index for index, form in enumerate(self.forms) if form and form != " "]
         if len(keep) != len(self.forms):
             self.forms = [self.forms[i] for i in keep]

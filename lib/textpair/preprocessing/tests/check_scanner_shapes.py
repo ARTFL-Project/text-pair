@@ -38,12 +38,13 @@ def scan(blob, level=1):
     columns = {name: np.empty(rows, dtype=np.int64)
                for name in ("token_lo", "token_hi", "start_byte", "end_byte",
                             "position_lo", "position_hi", "object_hi")}
-    flags = {name: np.empty(rows, dtype=np.uint8) for name in ("token_escaped", "is_punct")}
+    flags = {name: np.empty(rows, dtype=np.uint8)
+             for name in ("token_escaped", "is_punct", "new_object")}
     philo_scan.scan_lines(
         buffer, ends, level, True, columns["token_lo"], columns["token_hi"],
         flags["token_escaped"], columns["start_byte"], columns["end_byte"],
         columns["position_lo"], columns["position_hi"], columns["object_hi"],
-        flags["is_punct"])
+        flags["is_punct"], flags["new_object"])
     return buffer, columns, flags
 
 

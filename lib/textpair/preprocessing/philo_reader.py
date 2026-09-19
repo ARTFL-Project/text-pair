@@ -169,36 +169,33 @@ def _scanned_objects(path: str, level: int, normalizer: Normalizer, keep_all: bo
     handled here: nothing needs a token's position beyond which object it is in,
     so the whole file reduces to columns and one pass over the distinct tokens.
     """
-    columns = philo_scan.read_columns(read_blob(path), level)
+    if normalizer.vocabulary is None:
+        normalizer.vocabulary = philo_scan.Vocabulary()
+    vocabulary = normalizer.vocabulary
+
+    columns = philo_scan.read_columns(read_blob(path), level, vocabulary=vocabulary)
     if columns is None:
         return None
 
-    # Once per distinct surface form rather than once per token: a 2.5M-word
-    # document holds about 25k of them, and the memo spans the worker's whole
-    # run, so a form seen in an earlier document costs one dict lookup.
-    from_raw = normalizer.from_raw if normalizer.config.memoizable else (
-        lambda token: normalizer.normalize(normalizer.modernize(token)))
-    forms = [from_raw(columns.token(i)) for i in range(columns.n_distinct)]
-    # The same rule TextObject.purge applies: a form of one space survives
-    # normalization (punctuation separated by spaces reduces to a space run) but
-    # is not a token. Dropping it here keeps forms and form_ids the same length,
-    # which is what lets the n-gram kernel index one by the other.
-    kept = np.fromiter((bool(form) and form != " " for form in forms),
-                       dtype=bool, count=len(forms))
+    # The vocabulary spans the worker's whole run, so a token is turned into a
+    # string, modernized and normalized once -- the first time this worker meets
+    # it -- rather than once per document it appears in.
+    normalize = normalizer.normalize if not normalizer.config.memoizable else None
+    if normalize is None:
+        vocabulary.resolve(normalizer.from_raw)
+    else:
+        vocabulary.resolve(lambda token: normalize(normalizer.modernize(token)))
 
-    # Only when nothing was kept as a placeholder: the n-gram kernel reads the
-    # ids straight through, and an empty form has no bytes to contribute.
-    table = None if keep_all else FormTable.build(forms)
-    return _emit_objects(columns, forms, kept, keep_all, table)
+    table = None if keep_all else FormTable.from_vocabulary(vocabulary)
+    return _emit_objects(columns, vocabulary.forms, vocabulary.kept, keep_all, table)
 
 
 def _emit_objects(columns, forms, kept, keep_all: bool, table=None):
-    object_ids = columns.object_ids
-    if object_ids.size == 0:
+    new_object = columns.new_object
+    if new_object.size == 0:
         return
-    boundaries = np.flatnonzero(object_ids[1:] != object_ids[:-1]) + 1
-    starts = np.concatenate(([0], boundaries))
-    stops = np.concatenate((boundaries, [object_ids.size]))
+    starts = np.flatnonzero(new_object)
+    stops = np.concatenate((starts[1:], [new_object.size]))
     buffer = columns.buffer
     token_ids = columns.token_ids
     start_byte = columns.start_byte
@@ -223,6 +220,7 @@ def _emit_objects(columns, forms, kept, keep_all: bool, table=None):
             form_table=table,
             first_position=buffer[columns.position_lo[start]:columns.position_hi[start]]
                 .tobytes().decode("utf8"),
+            prefiltered=not keep_all,
             raw_length=int(stop - start),
             raw_start_byte=int(start_byte[start]),
             raw_end_byte=int(end_byte[stop - 1]),
