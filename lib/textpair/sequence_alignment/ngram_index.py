@@ -97,9 +97,9 @@ def build(output_path: str, write_index_tab: bool = False) -> int:
         binaries = sorted(glob(os.path.join(output_path, "ngrams", "*.bin")))
         buckets = _Buckets(scratch)
         distinct = 0
-        for keys, totals in _aggregate(binaries, scratch):
-            buckets.add_many(keys, totals)
-            distinct += keys.size
+        for block in _aggregate(binaries, scratch):
+            buckets.add_banded(block)
+            distinct += block[0].size
         buckets.write_descending(common_path)
 
         if write_index_tab:
@@ -243,7 +243,26 @@ def _aggregate_bucket(directory: str, bucket: int, lanes: int):
         return None
     keys = key_blocks[0] if len(key_blocks) == 1 else np.concatenate(key_blocks)
     counts = count_blocks[0] if len(count_blocks) == 1 else np.concatenate(count_blocks)
-    return _sum_by_key(keys, counts)
+    return _band_sort(*_sum_by_key(keys, counts))
+
+
+def _band_sort(keys: np.ndarray, counts: np.ndarray):
+    """Order one key range's keys by the bucket their count falls in.
+
+    Done here rather than in the consumer because it is nearly all of what
+    bucketing costs, and there are threads sitting behind this one waiting to
+    hand over. What is left for the consumer is the writes, which have to stay
+    in key-range order and so cannot be threaded.
+    """
+    bands = np.where(
+        counts <= EXACT_MAX,
+        counts,
+        EXACT_MAX + np.maximum(_bit_length(counts) - 8, 1),
+    )
+    order = np.argsort(bands, kind="stable")
+    bands = bands[order]
+    starts = np.flatnonzero(np.r_[True, bands[1:] != bands[:-1]])
+    return keys[order], counts[order], bands, starts
 
 
 # ----------------------------------------------------------------------
@@ -479,18 +498,13 @@ class _Buckets:
         os.makedirs(self.directory, exist_ok=True)
         self.handles: dict[int, object] = {}
 
-    def add_many(self, keys: np.ndarray, counts: np.ndarray) -> None:
-        """Append a block of keys, each to the bucket for its count."""
-        bands = np.where(
-            counts <= EXACT_MAX,
-            counts,
-            EXACT_MAX + np.maximum(_bit_length(counts) - 8, 1),
-        )
-        order = np.argsort(bands, kind="stable")
-        bands = bands[order]
-        keys = keys[order]
-        counts = counts[order]
-        starts = np.flatnonzero(np.r_[True, bands[1:] != bands[:-1]])
+    def add_banded(self, block) -> None:
+        """Append one key range's keys, each to the bucket for its count.
+
+        Takes what _band_sort produced: keys and counts already in bucket
+        order, and where each bucket's run begins.
+        """
+        keys, counts, bands, starts = block
         stops = np.r_[starts[1:], bands.size]
         for start, stop in zip(starts, stops):
             band = int(bands[start])
@@ -499,10 +513,10 @@ class _Buckets:
                 # The count is implied by the bucket, so only keys are stored.
                 handle.write(keys[start:stop].astype(KEY_DTYPE).tobytes())
             else:
-                block = np.empty((stop - start, 2), dtype=np.int64)
-                block[:, 0] = counts[start:stop]
-                block[:, 1] = keys[start:stop]
-                handle.write(block.tobytes())
+                pairs = np.empty((stop - start, 2), dtype=np.int64)
+                pairs[:, 0] = counts[start:stop]
+                pairs[:, 1] = keys[start:stop]
+                handle.write(pairs.tobytes())
 
     def _handle(self, band: int):
         handle = self.handles.get(band)
