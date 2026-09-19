@@ -98,10 +98,15 @@ class Ngrams:
         if os.path.isfile(file_path):
             files = [file_path]
         else:
-            # Sorted, not in directory order: documents are spilled into the
-            # n-gram index as they come back, so the order they are submitted in
-            # is the order their counts are totalled in.
-            files = sorted(glob(os.path.join(file_path, "*")))
+            # Biggest first. Workers take the next file as they free up, so
+            # what is left at the end is whatever was submitted last: start with
+            # the longest jobs and the tail is short files rather than a 63MB
+            # one finishing alone. Worth a fifth of the stage on frantext.
+            # Sorting at all also matters because documents are spilled into the
+            # n-gram index as they come back, so submission order decides the
+            # order their counts are totalled in, and it has to be reproducible.
+            files = sorted(glob(os.path.join(file_path, "*")),
+                           key=lambda path: (-os.path.getsize(path), path))
         # Use shutil/os rather than shelling out: unquoted paths passed to the
         # shell break (dangerously, for rm -rf) on paths containing spaces.
         shutil.rmtree(os.path.join(output_path, "ngrams"), ignore_errors=True)
