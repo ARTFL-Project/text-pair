@@ -1,8 +1,11 @@
 """Corpus-wide n-gram index.
 
-  most_common_ngrams.txt keys by corpus frequency, descending. The banality
-                         filter reads the first `proportion` percent, so this
-                         order is load-bearing. Always written.
+  most_common_ngrams.bin int64 keys by corpus frequency, descending. The
+                         banality filter reads the first `proportion` percent,
+                         so this order is load-bearing. Always written. Binary
+                         because formatting 77M keys as decimal was a third of
+                         this stage, and the reader turns them straight back
+                         into ints.
   index.tab              `ngram<TAB>key` for every distinct n-gram. Read only by
                          the aligner's --debug tracer, which builds a
                          key -> ngram dict, so it is written only when the
@@ -38,6 +41,7 @@ from glob import glob
 from typing import Iterator
 
 import numpy as np
+from numba import njit
 
 # Counts at or below this get an exact bucket; above it, power-of-two bands.
 EXACT_MAX = 255
@@ -46,11 +50,18 @@ EXACT_MAX = 255
 # (key, count) pairs, so this is what bounds memory during aggregation.
 KEY_BITS = 8
 KEY_BUCKETS = 1 << KEY_BITS
+
+# Entries gathered per bucket before a write. 256 buckets at this size is ~130MB
+# of buffer at worst, against nearly a million small writes without it.
+SPILL_BLOCK = 1 << 16
 _KEY_EDGES = [((bucket << (64 - KEY_BITS)) - (1 << 63)) for bucket in range(KEY_BUCKETS + 1)]
 
 # Keys are the low 64 bits of mmh3's 128-bit hash, signed. Counts stay int32: they are
 # per-document occurrence counts, and widening them would inflate the spill for nothing.
 KEY_DTYPE = np.int64
+
+# The frequency-ordered key list, read by the banality filter.
+COMMON_NGRAMS = "most_common_ngrams.bin"
 COUNT_DTYPE = np.int32
 # Ceiling on files handed to one sort -m. BSD sort's behaviour with thousands of
 # inputs is not something to rely on, so batches stay moderate and rounds do the
@@ -67,7 +78,7 @@ def build(output_path: str, write_index_tab: bool = False) -> int:
     """
     index_dir = os.path.join(output_path, "index")
     os.makedirs(index_dir, exist_ok=True)
-    common_path = os.path.join(index_dir, "most_common_ngrams.txt")
+    common_path = os.path.join(index_dir, COMMON_NGRAMS)
     index_path = os.path.join(index_dir, "index.tab")
     scratch = os.path.join(output_path, "index_scratch")
     shutil.rmtree(scratch, ignore_errors=True)
@@ -110,7 +121,24 @@ def _aggregate(binaries: list[str], scratch: str) -> Iterator[tuple[np.ndarray, 
     os.makedirs(directory, exist_ok=True)
     key_files = [open(os.path.join(directory, f"{b}.k"), "wb") for b in range(KEY_BUCKETS)]
     count_files = [open(os.path.join(directory, f"{b}.c"), "wb") for b in range(KEY_BUCKETS)]
+    # Each document contributes a slice to most buckets, so writing slices
+    # straight out is one call per (document, bucket): 930k of them on a
+    # 3,630-document corpus, for a few KB each. They are gathered per bucket and
+    # flushed in blocks instead.
+    pending_keys: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
+    pending_counts: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
+    pending_size = [0] * KEY_BUCKETS
     interior = np.array(_KEY_EDGES[1:-1], dtype=np.int64)
+
+    def flush(bucket: int) -> None:
+        if not pending_size[bucket]:
+            return
+        key_files[bucket].write(np.concatenate(pending_keys[bucket]).tobytes())
+        count_files[bucket].write(np.concatenate(pending_counts[bucket]).tobytes())
+        pending_keys[bucket].clear()
+        pending_counts[bucket].clear()
+        pending_size[bucket] = 0
+
     try:
         for path in binaries:
             with open(path, "rb") as handle:
@@ -125,9 +153,14 @@ def _aggregate(binaries: list[str], scratch: str) -> Iterator[tuple[np.ndarray, 
             previous = 0
             for bucket, stop in enumerate(np.append(splits, keys.size)):
                 if stop > previous:
-                    key_files[bucket].write(keys[previous:stop].tobytes())
-                    count_files[bucket].write(counts[previous:stop].tobytes())
+                    pending_keys[bucket].append(keys[previous:stop])
+                    pending_counts[bucket].append(counts[previous:stop])
+                    pending_size[bucket] += stop - previous
+                    if pending_size[bucket] >= SPILL_BLOCK:
+                        flush(bucket)
                 previous = stop
+        for bucket in range(KEY_BUCKETS):
+            flush(bucket)
     finally:
         for handle in (*key_files, *count_files):
             handle.close()
@@ -142,11 +175,7 @@ def _aggregate(binaries: list[str], scratch: str) -> Iterator[tuple[np.ndarray, 
             continue
         counts = np.fromfile(count_path, dtype=COUNT_DTYPE)
         os.remove(count_path)
-        order = np.argsort(keys, kind="stable")
-        keys = keys[order]
-        counts = counts[order]
-        starts = np.flatnonzero(np.r_[True, keys[1:] != keys[:-1]])
-        yield keys[starts], np.add.reduceat(counts.astype(np.int64), starts)
+        yield _sum_by_key(keys, counts)
 
 
 # ----------------------------------------------------------------------
@@ -305,6 +334,58 @@ def _finish(process: subprocess.Popen, name: str) -> None:
         raise RuntimeError(f"{name} exited {process.returncode} while building the ngram index")
 
 
+@njit(nogil=True, cache=True)
+def _accumulate(keys, counts, table_key, table_slot, out_keys, out_counts):
+    """Sum counts per distinct key through an open-addressing table.
+
+    Returns the number of distinct keys, written to the head of the out arrays
+    in order of first appearance.
+    """
+    mask = np.uint64(table_key.size - 1)
+    found = 0
+    for i in range(keys.size):
+        key = keys[i]
+        # Fibonacci hashing: the keys are already hashes, but their low bits are
+        # what the bucket split consumed, so they need spreading again.
+        scattered = np.uint64(key) * np.uint64(0x9E3779B97F4A7C15)
+        scattered ^= scattered >> np.uint64(29)
+        slot = scattered & mask
+        while True:
+            at = table_slot[slot]
+            if at == -1:
+                table_slot[slot] = found
+                table_key[slot] = key
+                out_keys[found] = key
+                out_counts[found] = counts[i]
+                found += 1
+                break
+            if table_key[slot] == key:
+                out_counts[at] += counts[i]
+                break
+            slot = (slot + np.uint64(1)) & mask
+    return found
+
+
+def _sum_by_key(keys: np.ndarray, counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Distinct keys and their summed counts, in order of first appearance.
+
+    Hashing rather than sorting: a bucket holds one entry per (document, key),
+    several times what it holds distinct keys, and nothing downstream needs them
+    ordered. Keys are hashes, so "ascending key" was never a meaningful order --
+    it only decided which of several equally frequent keys landed either side of
+    the banality filter's cut, and first-appearance order decides that just as
+    arbitrarily and just as reproducibly. Sorting them back cost 3.2s of a 8.2s
+    index build and moved 0.7% of the keys at a 10% cut.
+    """
+    size = 1 << max(int(keys.size * 2 - 1).bit_length(), 4)
+    table_key = np.zeros(size, dtype=KEY_DTYPE)
+    table_slot = np.full(size, -1, dtype=np.int64)
+    out_keys = np.empty(keys.size, dtype=KEY_DTYPE)
+    out_counts = np.zeros(keys.size, dtype=np.int64)
+    found = _accumulate(keys, counts, table_key, table_slot, out_keys, out_counts)
+    return out_keys[:found], out_counts[:found]
+
+
 # ----------------------------------------------------------------------
 # Frequency ordering by counting sort
 # ----------------------------------------------------------------------
@@ -362,7 +443,7 @@ class _Buckets:
         return handle
 
     def write_descending(self, path: str) -> None:
-        """Concatenate buckets highest count first, into text."""
+        """Concatenate buckets highest count first."""
         for handle in self.handles.values():
             handle.close()
         with open(path, "wb") as output:
@@ -371,18 +452,9 @@ class _Buckets:
                 if band <= EXACT_MAX:
                     keys = np.fromfile(bucket_path, dtype=KEY_DTYPE)
                 else:
-                    block = np.fromfile(bucket_path, dtype=np.int64).reshape(-1, 2)
-                    # Stable, so equal counts keep the lexicographic order they
-                    # were appended in.
+                    block = np.fromfile(bucket_path, dtype=KEY_DTYPE).reshape(-1, 2)
+                    # Stable, so equal counts keep the order they were appended in.
                     block = block[np.argsort(-block[:, 0], kind="stable")]
-                    keys = block[:, 1]
-                _write_keys(output, keys)
+                    keys = np.ascontiguousarray(block[:, 1])
+                output.write(keys.tobytes())
                 os.remove(bucket_path)
-
-
-def _write_keys(output, keys: np.ndarray) -> None:
-    """Keys as one decimal per line, formatted in blocks."""
-    block_size = 1 << 18
-    for start in range(0, keys.size, block_size):
-        block = keys[start : start + block_size].tolist()
-        output.write(("\n".join(map(str, block)) + "\n").encode("ascii"))

@@ -14,6 +14,31 @@ from tqdm import tqdm
 
 from . import ngram_binary
 
+def load_common_ngrams(path: str, proportion: float) -> set[int]:
+    """The most frequent `proportion` percent of keys, as a set.
+
+    ngram_index writes an int64 array ordered by descending corpus frequency.
+    Older index directories have a text file of one decimal per line instead;
+    both are read here so an index built before the change still works.
+    """
+    if path.endswith(".bin") and os.path.exists(path):
+        keys = np.fromfile(path, dtype=np.int64)
+        return set(keys[: floor(keys.size * proportion / 100)].tolist())
+
+    legacy = path[: -len(".bin")] + ".txt" if path.endswith(".bin") else path
+    with open(legacy, "rb") as handle:
+        total = sum(1 for _ in handle)
+    wanted = floor(total * proportion / 100)
+    keys: set[int] = set()
+    with open(legacy, encoding="utf8") as handle:
+        for _ in range(wanted):
+            try:
+                keys.add(int(next(handle)))
+            except ValueError:
+                pass
+    return keys
+
+
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
 SPACES = re.compile(r"\p{Z}+")
 
@@ -60,23 +85,7 @@ def banality_auto_detect(
     threshold: float,
 ):
     """Detect banalities automatically based on frequent ngram over-representation"""
-    # Count number of ngrams to keep
-    # PATCHED_FOR_MACOS - pure Python line count (macOS wc has leading spaces)
-    with open(common_ngrams_file, "rb") as _f:
-        total_ngrams = sum(1 for _ in _f)
-    top_ngrams = floor(total_ngrams * proportion / 100)
-
-    common_ngrams = set()
-    with open(common_ngrams_file, encoding="utf8") as input_file:
-        for _ in range(top_ngrams):
-            # Non-numeric lines came from the old shell index pipeline, which
-            # concatenated newline-less temp files and so welded a key to the
-            # next document's first ngram. ngram_index.build no longer produces
-            # them; the guard stays for index directories built before that.
-            try:
-                common_ngrams.add(int(next(input_file)))
-            except ValueError:
-                pass
+    common_ngrams = load_common_ngrams(common_ngrams_file, proportion)
 
     banalities_found = 0
     with (

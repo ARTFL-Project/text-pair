@@ -288,7 +288,7 @@ class TextPairConfig:
                 self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source/")
                 self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
             self.paths["source"]["common_ngrams"] = os.path.join(
-                self.output_path, "source/index/most_common_ngrams.txt"
+                self.output_path, "source/index/most_common_ngrams.bin"
             )
             self.matching_params["ngram_index"] = os.path.join(self.output_path, "source/index/index.tab")
             if self.__file_paths["target_files"]:
@@ -316,7 +316,7 @@ class TextPairConfig:
                         self.output_path, "target/metadata/metadata.json"
                     )
                 self.paths["target"]["common_ngrams"] = os.path.join(
-                    self.output_path, "target/index/most_common_ngrams.txt"
+                    self.output_path, "target/index/most_common_ngrams.bin"
                 )
         elif self.__cli_args["update_db"] is True:
             self.paths["source"]["metadata_path"] = self.__cli_args["source_metadata"]
@@ -325,14 +325,14 @@ class TextPairConfig:
             self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source")
             self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
             self.paths["source"]["common_ngrams"] = os.path.join(
-                self.output_path, "source/index/most_common_ngrams.txt"
+                self.output_path, "source/index/most_common_ngrams.bin"
             )
             self.matching_params["ngram_index"] = os.path.join(self.output_path, "source/index/index.tab")
             if self.__file_paths["target_files"]:
                 self.paths["target"]["ngram_output_path"] = os.path.join(self.output_path, "target")
                 self.paths["target"]["metadata_path"] = os.path.join(self.output_path, "target/metadata/metadata.json")
                 self.paths["target"]["common_ngrams"] = os.path.join(
-                    self.output_path, "target/index/most_common_ngrams.txt"
+                    self.output_path, "target/index/most_common_ngrams.bin"
                 )
             else:
                 self.paths["target"] = self.paths["source"]

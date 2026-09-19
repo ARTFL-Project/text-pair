@@ -13,6 +13,9 @@ from typing import Iterator
 import lz4.frame
 import msgspec
 
+import numpy as np
+
+from . import philo_scan
 from .metadata import PHILO_LEVELS
 from .normalize import Normalizer
 from .tokens import TextObject
@@ -20,8 +23,12 @@ from .tokens import TextObject
 SENT_LEVEL = PHILO_LEVELS["sent"]
 
 
-class Word(msgspec.Struct):
-    """A word as written by the PhiloLogic parser."""
+class Word(msgspec.Struct, gc=False):
+    """A word as written by the PhiloLogic parser.
+
+    gc=False because these are short-lived and hold no references the collector
+    needs to trace; it keeps them out of its bookkeeping.
+    """
 
     token: str
     position: str
@@ -31,19 +38,24 @@ class Word(msgspec.Struct):
 
 
 _DECODE = msgspec.json.Decoder(Word).decode
+_DECODE_LINES = msgspec.json.Decoder(Word).decode_lines
 
 
-def read_words(path: str) -> Iterator[Word]:
-    """Decode every word object in a words_and_philo_ids file."""
-    if path.endswith(".lz4"):
-        with open(path, "rb") as compressed:
-            blob = lz4.frame.decompress(compressed.read())
-    else:
-        with open(path, "rb") as plain:
-            blob = plain.read()
-    for line in blob.splitlines():
-        if line:
-            yield _DECODE(line)
+def read_blob(path: str) -> bytes:
+    """The decompressed contents of a words_and_philo_ids file."""
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    return lz4.frame.decompress(raw) if path.endswith(".lz4") else raw
+
+
+def read_words(path: str) -> list[Word]:
+    """Every word object in a words_and_philo_ids file.
+
+    One decode_lines call rather than one decode per line: msgspec has no way to
+    reuse an output object, so the objects get allocated either way, but the
+    per-call overhead does not have to be.
+    """
+    return _DECODE_LINES(read_blob(path))
 
 
 def split_text_objects(
@@ -84,6 +96,13 @@ def split_text_objects(
     # different document -- and the rewritten position itself is only kept when
     # keep_surface is on.
     track_sentences = level > 1 or keep_surface or want_sent_starts
+
+    if not track_sentences and not defer_normalization:
+        scanned = _scanned_objects(path, level, normalizer, keep_all)
+        if scanned is not None:
+            yield from scanned
+            return
+
     current_object_id: str | None = None
     current = TextObject()
     previous_sent_id: str | None = None
@@ -100,8 +119,8 @@ def split_text_objects(
                 position = f"{current_sent_id} 0"
             else:
                 position = word.position
-            # Capped split: only the first SENT_LEVEL fields are ever read, and a
-            # philo position has seven.
+            # Capped split: only the first SENT_LEVEL fields are ever read, and
+            # a philo position has at least seven -- some corpora write nine.
             philo_id = position.split(" ", SENT_LEVEL)
             object_id = philo_id[0] if level == 1 else " ".join(philo_id[:level])
             current_sent_id = " ".join(philo_id[:SENT_LEVEL])
@@ -140,6 +159,66 @@ def split_text_objects(
 
     if current.raw_length and current_object_id is not None:
         yield current, current_object_id
+
+
+def _scanned_objects(path: str, level: int, normalizer: Normalizer, keep_all: bool):
+    """Text objects read by scanning the buffer rather than parsing each line.
+
+    Returns None when the scanner does not recognise the file's JSON, leaving the
+    caller to parse it properly. Only the case with no sentence tracking is
+    handled here: nothing needs a token's position beyond which object it is in,
+    so the whole file reduces to columns and one pass over the distinct tokens.
+    """
+    columns = philo_scan.read_columns(read_blob(path), level)
+    if columns is None:
+        return None
+
+    # Once per distinct surface form rather than once per token: a 2.5M-word
+    # document holds about 25k of them, and the memo spans the worker's whole
+    # run, so a form seen in an earlier document costs one dict lookup.
+    from_raw = normalizer.from_raw if normalizer.config.memoizable else (
+        lambda token: normalizer.normalize(normalizer.modernize(token)))
+    forms = [from_raw(columns.token(i)) for i in range(columns.n_distinct)]
+    kept = np.fromiter((bool(form) for form in forms), dtype=bool, count=len(forms))
+
+    return _emit_objects(columns, forms, kept, keep_all)
+
+
+def _emit_objects(columns, forms, kept, keep_all: bool):
+    object_ids = columns.object_ids
+    if object_ids.size == 0:
+        return
+    boundaries = np.flatnonzero(object_ids[1:] != object_ids[:-1]) + 1
+    starts = np.concatenate(([0], boundaries))
+    stops = np.concatenate((boundaries, [object_ids.size]))
+    buffer = columns.buffer
+    token_ids = columns.token_ids
+    start_byte = columns.start_byte
+    end_byte = columns.end_byte
+
+    for start, stop in zip(starts, stops):
+        ids = token_ids[start:stop]
+        if keep_all:
+            selected = ids
+            starts_out = start_byte[start:stop]
+            ends_out = end_byte[start:stop]
+        else:
+            mask = kept[ids]
+            selected = ids[mask]
+            starts_out = start_byte[start:stop][mask]
+            ends_out = end_byte[start:stop][mask]
+        text_object = TextObject(
+            forms=[forms[i] for i in selected],
+            start_bytes=starts_out.tolist(),
+            end_bytes=ends_out.tolist(),
+            first_position=buffer[columns.position_lo[start]:columns.position_hi[start]]
+                .tobytes().decode("utf8"),
+            raw_length=int(stop - start),
+            raw_start_byte=int(start_byte[start]),
+            raw_end_byte=int(end_byte[stop - 1]),
+        )
+        object_id = buffer[columns.position_lo[start]:columns.object_hi[start]].tobytes().decode("utf8")
+        yield text_object, object_id
 
 
 def sent_metadata(text_object: TextObject) -> dict[str, object]:

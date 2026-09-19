@@ -59,9 +59,9 @@ def write_corpus(root, documents):
 
 
 def read(root, want_index=True):
-    common = [line.strip() for line
-              in open(os.path.join(root, "index", "most_common_ngrams.txt"), encoding="utf-8")
-              if line.strip()]
+    common = [str(key) for key in
+              np.fromfile(os.path.join(root, "index", ngram_index.COMMON_NGRAMS),
+                          dtype=np.int64).tolist()]
     index = None
     if want_index:
         index = [line.rstrip("\n") for line
@@ -79,9 +79,16 @@ def key_totals(documents):
     return totals
 
 
-def expected_order(totals):
-    """Keys by count descending; ties ascending by key, the order buckets give."""
-    return [str(key) for key, _ in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))]
+def check_frequency_order(label, written, totals):
+    """The contract: every key once, counts never increasing down the file.
+
+    Ties are not ordered. Keys are hashes, so there is no meaningful order among
+    equally frequent ones, and the index does not spend time imposing one.
+    """
+    check(f"{label}: every key once", sorted(written), sorted(str(k) for k in totals))
+    counts = [totals[int(key)] for key in written]
+    if any(a < b for a, b in zip(counts, counts[1:])):
+        FAILURES.append(f"[{MODE}] {label}: counts increase somewhere in the file")
 
 
 def test_counts_come_from_the_binary_indexes():
@@ -102,7 +109,7 @@ def test_counts_come_from_the_binary_indexes():
         totals = key_totals(documents)
         check("distinct keys", distinct, len(totals))
         check("most_common lines", len(common), len(totals))
-        check("frequency order", common, expected_order(totals))
+        check_frequency_order("most_common", common, totals)
         # a_b_c 4, x_y_z 4, b_c_d 3, m_n_o 2, z_z_z 1
         check("counts", dict(totals), {1: 4, 3: 4, 2: 3, 4: 2, 5: 1})
         check("index.tab is the distinct ngram texts", sorted(set(index)), sorted(index))
@@ -158,7 +165,8 @@ def test_negative_keys():
         write_corpus(root, documents)
         ngram_index.build(root, write_index_tab=True)
         _, common = read(root)
-        check("negative key first, it is more frequent", common, ["-1128609534", "1092826535"])
+        check("negative key first, it is more frequent", common[0], "-1128609534")
+        check("both keys present", sorted(common), sorted(["-1128609534", "1092826535"]))
 
 
 def test_key_range_spread():
@@ -182,8 +190,7 @@ def test_high_counts_use_the_log_bands():
         write_corpus(root, documents)
         ngram_index.build(root, write_index_tab=False)
         _, common = read(root, want_index=False)
-        check("descending across bands", common,
-              [str(k) for k, _ in sorted(counts.items(), key=lambda kv: -kv[1])])
+        check_frequency_order("log bands", common, counts)
 
 
 def test_empty_corpus():
@@ -226,7 +233,7 @@ def test_index_tab_dedupes_across_documents():
         index, common = read(root)
         check("one line per distinct ngram", sorted(index),
               ["other_one\t6", "same_n_gram\t5"])
-        check("counts still total across documents", common, ["5", "6"])
+        check("both keys present", sorted(common), ["5", "6"])
 
 
 def main():
