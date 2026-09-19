@@ -223,7 +223,19 @@ class PreProcessor:
             # of text objects per handful of files.
             pending: list[Future] = []
             queue = iter(paths)
-            window = self.workers * 2
+            # Results are consumed in submission order, so nothing new is
+            # submitted while the oldest is still running and the window has to
+            # be deep enough to carry the pool past one slow document -- with
+            # the longest submitted first, that is exactly what happens at the
+            # start. A window of two per worker cost a tenth of the n-gram
+            # stage. It also bounds memory, since finished results wait in it:
+            # that only allows a deep window when the worker collapsed each
+            # object to whatever the caller's post-processing returned, which
+            # for n-gram generation is a metadata dict the caller goes on to
+            # hold for the whole corpus anyway. Whole text objects cannot be
+            # buffered that way.
+            compact = finish_in_worker and self.post_func is not None
+            window = self.workers * (32 if compact else 2)
             for path in queue:
                 pending.append(executor.submit(_process_file, path))
                 if len(pending) >= window:
