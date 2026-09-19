@@ -65,3 +65,23 @@ forkserver   ok             4776     0.37     0.50
 to a module the workers import.
 
 `TEXTPAIR_START_METHOD` overrides the choice if you need to force one.
+
+## check_scanner_shapes.py
+
+philo_scan reads the word JSON by scanning the buffer for the fields it needs
+rather than parsing each line. That is only safe if it agrees with a real parser
+on every shape of word JSON in the wild, and those differ: five to nine fields,
+and not in the same order -- frantext writes `pos` before `lemma`,
+rousseau_holbach the other way. This decodes the same lines both ways and
+compares them field by field.
+
+```bash
+python $T/check_scanner_shapes.py                       # every corpus it can find
+python $T/check_scanner_shapes.py --corpora 20 --lines 5000
+python $T/check_scanner_shapes.py --philo-root /path/to/philologic5
+```
+
+Last run: 411,342 lines across 152 corpora, 7 distinct key shapes, all agreeing.
+A shape the scanner does not understand leaves a sentinel and the reader falls
+back to a real parser, so a new one is slow rather than wrong -- but this is
+what tells you it happened.

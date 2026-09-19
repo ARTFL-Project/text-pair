@@ -88,7 +88,7 @@ class Normalizer:
         "config", "modernizer", "stopwords", "lemmas", "stem", "punct_map",
         "lowercase", "strip_punctuation", "strip_numbers", "min_word_length",
         "ascii", "convert_entities", "spacy_lemmatizer", "pos_to_keep",
-        "ents_to_keep", "_memo",
+        "ents_to_keep", "_memo", "_raw_memo",
     )
 
     def __init__(self, config: PreprocessConfig):
@@ -113,6 +113,7 @@ class Normalizer:
         self.pos_to_keep = frozenset(config.pos_to_keep)
         self.ents_to_keep = frozenset(config.ents_to_keep)
         self._memo: dict[str, str] = {}
+        self._raw_memo: dict[str, str] = {}
 
     def modernize(self, token: str) -> str:
         """Modernize a raw surface form. Applied before everything else."""
@@ -127,6 +128,19 @@ class Normalizer:
         except KeyError:
             result = self.normalize(token)
             self._memo[token] = result
+            return result
+
+    def from_raw(self, token: str) -> str:
+        """Modernize then normalize, memoized on the raw form.
+
+        One lookup where calling modernize and then __call__ is two, and the
+        reader does this once per token.
+        """
+        try:
+            return self._raw_memo[token]
+        except KeyError:
+            result = self.normalize(self.modernize(token))
+            self._raw_memo[token] = result
             return result
 
     def normalize(self, token: str, pos: str = "", ent_type: str = "", lemma: str = "") -> str:
