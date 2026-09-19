@@ -140,6 +140,10 @@ class Ngrams:
             text_object_type=self.config["text_object_type"],
             min_word_length=self.config["minimum_word_length"],
             ascii=self.config["ascii"],
+            # The n-gram text is only written for index.tab, which only the
+            # aligner's --debug tracer reads; without it the keys are hashed
+            # from the normalized forms and no n-gram string is built.
+            keep_ngram_text=self.debug,
             post_processing_function=self.text_to_ngram,
         )
         philo_type_count = self.count_texts(files[0])
@@ -181,7 +185,13 @@ class Ngrams:
         # The key is the low 64 bits of MurmurHash3-128, signed. 32 bits used to be
         # enough; at a few hundred million distinct n-grams it is not, and the collision
         # rate is first-order in the population -- see NGRAM_KEY_COLLISIONS.md.
-        hashes: List[int] = [hash64(form)[0] for form in forms]
+        #
+        # `keys` is set when the reader interned its tokens, in which case the
+        # n-grams were hashed from those without ever being built as strings.
+        if text_object.keys is not None:
+            hashes = text_object.keys
+        else:
+            hashes = [hash64(form)[0] for form in forms]
         ngram_binary.write_positions(
             f"{self.output_path}/ngrams/{text_object_id}.bin",
             hashes,

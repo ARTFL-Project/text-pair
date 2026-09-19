@@ -10,6 +10,31 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
+import numpy as np
+
+
+@dataclass(slots=True)
+class FormTable:
+    """The distinct normalized forms of a file, as bytes a kernel can index.
+
+    `offsets[i]:offsets[i+1]` is form i in `data`. Shared by every text object
+    read from the same file, since they were interned together.
+    """
+
+    data: np.ndarray
+    offsets: np.ndarray
+    longest: int
+
+    @classmethod
+    def build(cls, forms: list[str]) -> "FormTable":
+        encoded = [form.encode("utf8") for form in forms]
+        offsets = np.zeros(len(encoded) + 1, dtype=np.int64)
+        if encoded:
+            offsets[1:] = np.cumsum([len(item) for item in encoded], dtype=np.int64)
+        joined = b"".join(encoded)
+        data = np.frombuffer(joined, dtype=np.uint8) if joined else np.zeros(0, dtype=np.uint8)
+        return cls(data, offsets, max((len(item) for item in encoded), default=0))
+
 
 @dataclass(slots=True)
 class TextObject:
@@ -37,6 +62,13 @@ class TextObject:
     # metadata needs the true sentence span, not the surviving tokens' span.
     raw_start_byte: int = 0
     raw_end_byte: int = 0
+    # Which distinct form each surviving token is, and the table to resolve them
+    # against. Set only by the scanning reader, and only when nothing filtered
+    # out, so an n-gram's key can be built without its string.
+    form_ids: Any = None
+    form_table: Any = None
+    # n-gram keys, when they were computed without building the n-gram strings.
+    keys: Any = None
 
     def __len__(self) -> int:
         return len(self.forms)

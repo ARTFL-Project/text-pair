@@ -51,6 +51,10 @@ class PreprocessConfig:
 
     # N-grams. ngrams=0 disables the stage.
     ngrams: int = 0
+    # Whether the n-gram strings themselves are wanted. When they are not, and
+    # the reader interned its tokens, keys are hashed from the forms directly
+    # and no n-gram string is ever built.
+    keep_ngram_text: bool = True
     ngram_gap: int = 0
     ngram_word_order: bool = True
 

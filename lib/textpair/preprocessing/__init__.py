@@ -86,7 +86,8 @@ def _finish_object(
 ) -> Any:
     if config.ngrams:
         text_object = ngram_stage.generate(
-            text_object, config.ngrams, config.ngram_window, config.ngram_word_order
+            text_object, config.ngrams, config.ngram_window, config.ngram_word_order,
+            want_text=config.keep_ngram_text,
         )
     if post_func is not None:
         return post_func(text_object)

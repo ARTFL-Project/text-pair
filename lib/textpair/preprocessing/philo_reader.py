@@ -18,7 +18,7 @@ import numpy as np
 from . import philo_scan
 from .metadata import PHILO_LEVELS
 from .normalize import Normalizer
-from .tokens import TextObject
+from .tokens import FormTable, TextObject
 
 SENT_LEVEL = PHILO_LEVELS["sent"]
 
@@ -179,12 +179,20 @@ def _scanned_objects(path: str, level: int, normalizer: Normalizer, keep_all: bo
     from_raw = normalizer.from_raw if normalizer.config.memoizable else (
         lambda token: normalizer.normalize(normalizer.modernize(token)))
     forms = [from_raw(columns.token(i)) for i in range(columns.n_distinct)]
-    kept = np.fromiter((bool(form) for form in forms), dtype=bool, count=len(forms))
+    # The same rule TextObject.purge applies: a form of one space survives
+    # normalization (punctuation separated by spaces reduces to a space run) but
+    # is not a token. Dropping it here keeps forms and form_ids the same length,
+    # which is what lets the n-gram kernel index one by the other.
+    kept = np.fromiter((bool(form) and form != " " for form in forms),
+                       dtype=bool, count=len(forms))
 
-    return _emit_objects(columns, forms, kept, keep_all)
+    # Only when nothing was kept as a placeholder: the n-gram kernel reads the
+    # ids straight through, and an empty form has no bytes to contribute.
+    table = None if keep_all else FormTable.build(forms)
+    return _emit_objects(columns, forms, kept, keep_all, table)
 
 
-def _emit_objects(columns, forms, kept, keep_all: bool):
+def _emit_objects(columns, forms, kept, keep_all: bool, table=None):
     object_ids = columns.object_ids
     if object_ids.size == 0:
         return
@@ -211,6 +219,8 @@ def _emit_objects(columns, forms, kept, keep_all: bool):
             forms=[forms[i] for i in selected],
             start_bytes=starts_out.tolist(),
             end_bytes=ends_out.tolist(),
+            form_ids=selected if table is not None else None,
+            form_table=table,
             first_position=buffer[columns.position_lo[start]:columns.position_hi[start]]
                 .tobytes().decode("utf8"),
             raw_length=int(stop - start),
