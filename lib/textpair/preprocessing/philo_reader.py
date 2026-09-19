@@ -208,10 +208,12 @@ def _emit_objects(columns, forms, kept, keep_all: bool, table=None):
             starts_out = start_byte[start:stop]
             ends_out = end_byte[start:stop]
         else:
-            mask = kept[ids]
-            selected = ids[mask]
-            starts_out = start_byte[start:stop][mask]
-            ends_out = end_byte[start:stop][mask]
+            # The positions once, then three gathers. Indexing by the mask
+            # instead would rescan it for each of the three columns.
+            picked = np.flatnonzero(kept[ids])
+            selected = ids[picked]
+            starts_out = start_byte[start:stop][picked]
+            ends_out = end_byte[start:stop][picked]
         text_object = TextObject(
             forms=[forms[i] for i in selected],
             start_bytes=starts_out.tolist(),
