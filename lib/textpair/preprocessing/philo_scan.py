@@ -80,7 +80,7 @@ def _string_end(buf, start, limit):
 @njit(nogil=True, cache=True)
 def scan_lines(buf, line_starts, level, want_punct,
                token_lo, token_hi, token_escaped, start_byte, end_byte,
-               position_lo, position_hi, object_hi, is_punct):
+               position_lo, position_hi, object_hi, is_punct, new_object):
     """Fill the output columns from one line per entry of `line_starts`.
 
     `object_hi` ends the first `level` space-separated fields of the position,
@@ -93,6 +93,7 @@ def scan_lines(buf, line_starts, level, want_punct,
     wanted = 5 if want_punct else 4
     n = line_starts.size - 1
     for row in range(n):
+        new_object[row] = 1
         limit = line_starts[row + 1]
         i = line_starts[row]
         token_lo[row] = -1
@@ -182,6 +183,21 @@ def scan_lines(buf, line_starts, level, want_punct,
                 break
             i += 1
 
+        # Whether this row opens a new text object, by comparing its object id
+        # with the previous row's. Interning them instead would mean hashing
+        # every token's position to discover, in a document-level corpus, that
+        # there is exactly one.
+        if row > 0 and object_hi[row] >= 0 and object_hi[row - 1] >= 0:
+            length = object_hi[row] - position_lo[row]
+            if length == object_hi[row - 1] - position_lo[row - 1]:
+                same = True
+                for k in range(length):
+                    if buf[position_lo[row] + k] != buf[position_lo[row - 1] + k]:
+                        same = False
+                        break
+                if same:
+                    new_object[row] = 0
+
 
 @njit(nogil=True, cache=True)
 def intern_tokens(buf, token_lo, token_hi, table_keys, table_ids,
@@ -243,7 +259,7 @@ _TABLE_HEADROOM = 4
 class Columns:
     """A words file as parallel arrays, with its tokens interned."""
 
-    __slots__ = ("buffer", "token_ids", "start_byte", "end_byte", "object_ids",
+    __slots__ = ("buffer", "token_ids", "start_byte", "end_byte", "new_object",
                  "position_lo", "position_hi", "object_hi", "is_punct",
                  "distinct_lo", "distinct_hi", "distinct_escaped", "n_distinct")
 
@@ -291,7 +307,8 @@ def _intern(buffer, lo, hi, limit):
     return ids, distinct_lo[:found], distinct_hi[:found], found
 
 
-def read_columns(blob: bytes, level: int, want_punct: bool = False) -> Columns | None:
+def read_columns(blob: bytes, level: int, want_punct: bool = False,
+                 vocabulary: "Vocabulary | None" = None) -> Columns | None:
     """Scan a decompressed words file, or None if the scanner does not recognise it.
 
     None means some line did not yield the fields we need, which is the signal to
@@ -311,31 +328,218 @@ def read_columns(blob: bytes, level: int, want_punct: bool = False) -> Columns |
     object_hi = np.empty(rows, dtype=np.int64)
     token_escaped = np.empty(rows, dtype=np.uint8)
     is_punct = np.empty(rows, dtype=np.uint8)
+    new_object = np.empty(rows, dtype=np.uint8)
     scan_lines(buffer, ends, level, want_punct, token_lo, token_hi, token_escaped,
-               start_byte, end_byte, position_lo, position_hi, object_hi, is_punct)
+               start_byte, end_byte, position_lo, position_hi, object_hi, is_punct,
+               new_object)
 
     if token_lo[0] < 0 or np.any(token_lo < 0) or np.any(start_byte < 0) or np.any(object_hi < 0):
         return None
 
-    interned = _intern(buffer, token_lo, token_hi, rows)
-    if interned is None:
-        return None
-    token_ids, distinct_lo, distinct_hi, n_distinct = interned
+    if vocabulary is not None:
+        token_ids = vocabulary.intern(buffer, token_lo, token_hi)
+        distinct_lo = distinct_hi = np.zeros(0, dtype=np.int64)
+        n_distinct = vocabulary.count
+    else:
+        interned = _intern(buffer, token_lo, token_hi, rows)
+        if interned is None:
+            return None
+        token_ids, distinct_lo, distinct_hi, n_distinct = interned
 
-    objects = _intern(buffer, position_lo, object_hi, rows)
-    if objects is None:
-        return None
-    object_ids = objects[0]
-
-    # A token is escaped if any occurrence of it was.
-    distinct_escaped = np.zeros(n_distinct, dtype=np.uint8)
-    escaped_rows = np.flatnonzero(token_escaped)
-    if escaped_rows.size:
-        distinct_escaped[token_ids[escaped_rows]] = 1
+    # A token is escaped if any occurrence of it was. The vocabulary decides
+    # this from the bytes themselves, so it only matters for the local table.
+    if vocabulary is None:
+        distinct_escaped = np.zeros(n_distinct, dtype=np.uint8)
+        escaped_rows = np.flatnonzero(token_escaped)
+        if escaped_rows.size:
+            distinct_escaped[token_ids[escaped_rows]] = 1
+    else:
+        distinct_escaped = np.zeros(0, dtype=np.uint8)
 
     return Columns(buffer=buffer, token_ids=token_ids, start_byte=start_byte,
-                   end_byte=end_byte, object_ids=object_ids,
+                   end_byte=end_byte, new_object=new_object,
                    position_lo=position_lo, position_hi=position_hi,
                    object_hi=object_hi, is_punct=is_punct, distinct_lo=distinct_lo,
                    distinct_hi=distinct_hi, distinct_escaped=distinct_escaped,
                    n_distinct=n_distinct)
+
+
+# ----------------------------------------------------------------------
+# A worker's token vocabulary
+# ----------------------------------------------------------------------
+
+
+@njit(inline="always")
+def _fnv(buf, lo, hi):
+    h = np.uint64(14695981039346656037)
+    for i in range(lo, hi):
+        h ^= np.uint64(buf[i])
+        h *= np.uint64(1099511628211)
+    return h
+
+
+@njit(nogil=True, cache=True)
+def intern_into(buf, token_lo, token_hi, first_row, vocab_data, vocab_offsets,
+                table_hash, table_id, out_ids, state):
+    """Map token spans onto ids in a vocabulary that outlives this buffer.
+
+    Resumable: when the vocabulary runs out of room it records its progress in
+    `state` and returns the row it stopped at, so the caller can grow the arrays
+    and call again from there without losing what was already interned.
+    `state` is (count, bytes used).
+    """
+    count = state[0]
+    used = state[1]
+    mask = np.uint64(table_hash.size - 1)
+    for row in range(first_row, token_lo.size):
+        lo = token_lo[row]
+        hi = token_hi[row]
+        length = hi - lo
+        digest = _fnv(buf, lo, hi)
+        slot = digest & mask
+        while True:
+            at = table_id[slot]
+            if at == -1:
+                if used + length > vocab_data.size or count + 1 >= vocab_offsets.size:
+                    state[0] = count
+                    state[1] = used
+                    return row
+                for i in range(length):
+                    vocab_data[used + i] = buf[lo + i]
+                used += length
+                table_hash[slot] = np.int64(digest)
+                table_id[slot] = count
+                out_ids[row] = count
+                count += 1
+                vocab_offsets[count] = used
+                break
+            if table_hash[slot] == np.int64(digest):
+                start = vocab_offsets[at]
+                if vocab_offsets[at + 1] - start == length:
+                    same = True
+                    for i in range(length):
+                        if vocab_data[start + i] != buf[lo + i]:
+                            same = False
+                            break
+                    if same:
+                        out_ids[row] = at
+                        break
+            slot = (slot + np.uint64(1)) & mask
+    state[0] = count
+    state[1] = used
+    return token_lo.size
+
+
+@njit(nogil=True, cache=True)
+def rehash_vocabulary(vocab_data, vocab_offsets, count, table_hash, table_id):
+    """Refill a freshly enlarged table from the vocabulary."""
+    mask = np.uint64(table_hash.size - 1)
+    for entry in range(count):
+        lo = vocab_offsets[entry]
+        hi = vocab_offsets[entry + 1]
+        digest = _fnv(vocab_data, lo, hi)
+        slot = digest & mask
+        while table_id[slot] != -1:
+            slot = (slot + np.uint64(1)) & mask
+        table_hash[slot] = np.int64(digest)
+        table_id[slot] = entry
+
+
+class Vocabulary:
+    """Every distinct token a worker has seen, and its normalized form.
+
+    Interning per file means materializing a Python string for each of a
+    document's distinct tokens just to look up a form the worker already
+    computed -- about 6,400 per document, 23M over a corpus, for maybe 2M
+    genuinely distinct tokens. Carrying the table between files means a token is
+    turned into a string, modernized and normalized once, the first time this
+    worker meets it.
+
+    The normalized forms are kept twice: as Python strings, which text objects
+    hand to their consumers, and as the packed bytes the n-gram kernel hashes.
+    """
+
+    __slots__ = ("data", "offsets", "table_hash", "table_id", "state",
+                 "forms", "form_data", "form_used", "form_offsets", "longest", "kept")
+
+    def __init__(self):
+        self.data = np.empty(1 << 20, dtype=np.uint8)
+        self.offsets = np.zeros((1 << 16) + 1, dtype=np.int64)
+        self.table_hash = np.zeros(1 << 17, dtype=np.int64)
+        self.table_id = np.full(1 << 17, -1, dtype=np.int64)
+        self.state = np.zeros(2, dtype=np.int64)
+        self.forms: list[str] = []
+        self.form_data = np.empty(1 << 20, dtype=np.uint8)
+        self.form_used = 0
+        self.form_offsets = np.zeros((1 << 16) + 1, dtype=np.int64)
+        self.longest = 0
+        # Whether each form is a token at all. Matches TextObject.purge: a form
+        # of one space survives normalization but is not a token.
+        self.kept = np.zeros(1 << 16, dtype=bool)
+
+    @property
+    def count(self) -> int:
+        return int(self.state[0])
+
+    def intern(self, buffer: np.ndarray, token_lo: np.ndarray,
+               token_hi: np.ndarray) -> np.ndarray:
+        """Ids for every token span, extending the vocabulary as needed."""
+        out = np.empty(token_lo.size, dtype=np.int64)
+        row = 0
+        while True:
+            row = intern_into(buffer, token_lo, token_hi, row, self.data, self.offsets,
+                              self.table_hash, self.table_id, out, self.state)
+            self._maybe_grow()
+            if row >= token_lo.size:
+                return out
+
+    def _maybe_grow(self) -> None:
+        count = self.count
+        used = int(self.state[1])
+        if count + 1 >= self.offsets.size:
+            self.offsets = np.resize(self.offsets, self.offsets.size * 2)
+            self.offsets[count + 1 :] = 0
+        # Doubling the data when it is close to full, rather than exactly full,
+        # keeps a single long token from forcing a resize per call.
+        if used * 4 > self.data.size * 3:
+            grown = np.empty(self.data.size * 2, dtype=np.uint8)
+            grown[:used] = self.data[:used]
+            self.data = grown
+        if count * 2 > self.table_hash.size:
+            size = self.table_hash.size * 2
+            self.table_hash = np.zeros(size, dtype=np.int64)
+            self.table_id = np.full(size, -1, dtype=np.int64)
+            rehash_vocabulary(self.data, self.offsets, count, self.table_hash, self.table_id)
+
+    def resolve(self, normalize) -> None:
+        """Normalize every token interned since the last call."""
+        data = self.data
+        offsets = self.offsets
+        for entry in range(len(self.forms), self.count):
+            raw = data[offsets[entry] : offsets[entry + 1]].tobytes()
+            if b"\\" in raw:
+                import json
+
+                token = json.loads(b'"' + raw + b'"')
+            else:
+                token = raw.decode("utf8")
+            form = normalize(token)
+            self.forms.append(form)
+            encoded = form.encode("utf8")
+            if self.form_used + len(encoded) > self.form_data.size:
+                grown = np.empty(max(self.form_data.size * 2,
+                                     self.form_used + len(encoded)), dtype=np.uint8)
+                grown[: self.form_used] = self.form_data[: self.form_used]
+                self.form_data = grown
+            if entry + 1 >= self.form_offsets.size:
+                self.form_offsets = np.resize(self.form_offsets, self.form_offsets.size * 2)
+            if entry >= self.kept.size:
+                self.kept = np.resize(self.kept, self.kept.size * 2)
+            self.kept[entry] = bool(form) and form != " "
+            if encoded:
+                self.form_data[self.form_used : self.form_used + len(encoded)] = \
+                    np.frombuffer(encoded, dtype=np.uint8)
+            self.form_used += len(encoded)
+            self.form_offsets[entry + 1] = self.form_used
+            if len(encoded) > self.longest:
+                self.longest = len(encoded)
