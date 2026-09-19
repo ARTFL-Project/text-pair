@@ -21,6 +21,7 @@ from .metadata import PHILO_LEVELS, MetadataLookup
 from .normalize import Normalizer
 from .philo_reader import sent_metadata, split_text_objects
 from .tokens import TextObject
+from ..utils import tune_allocator
 
 __all__ = [
     "PreProcessor",
@@ -57,6 +58,7 @@ def _init_worker(
     post_func: Callable[[TextObject], Any] | None,
     finish: bool,
 ) -> None:
+    tune_allocator()
     _WORKER["config"] = config
     _WORKER["normalizer"] = Normalizer(config)
     _WORKER["options"] = options
@@ -198,6 +200,7 @@ class PreProcessor:
         self, paths: list[str], options: dict[str, Any], finish_in_worker: bool
     ) -> Iterator[Any]:
         """Yield results from every file, in parallel when it is worth it."""
+        tune_allocator()
         if self.workers == 1 or len(paths) == 1:
             for path in paths:
                 objects = read_and_normalize(path, self.config, self.normalizer, **options)
