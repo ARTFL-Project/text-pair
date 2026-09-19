@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CHECKS = (
     ("normalization", "test_normalization.py"),
     ("ngrams", "test_ngrams.py"),
+    ("ngram_kernels", "test_ngram_kernels.py"),
     ("config", "test_config.py"),
     ("reader", "test_reader.py"),
     ("worker_imports", "test_worker_imports.py"),
