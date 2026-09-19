@@ -236,6 +236,41 @@ def test_index_tab_dedupes_across_documents():
         check("both keys present", sorted(common), ["5", "6"])
 
 
+def test_the_order_documents_arrive_in_only_moves_tied_keys():
+    """The n-gram stage spills documents as they come back, not sorted.
+
+    So the same corpus handed over in a different order has to give the same
+    keys and the same counts, and may only disagree about which of two equally
+    frequent keys is written first. Repeating one order has to be reproducible.
+    """
+    documents = [
+        [("a_b_c", 11), ("b_c_d", 12)],
+        [("b_c_d", 12), ("x_y_z", 13)],
+        [("x_y_z", 13), ("a_b_c", 11)],
+        [("m_n_o", 14), ("a_b_c", 11)],
+        [("z_z_z", 15)],
+    ]
+    totals = key_totals(documents)
+    written = {}
+    for label, reverse in (("forward", False), ("reverse", True), ("again", False)):
+        with tempfile.TemporaryDirectory() as root:
+            write_corpus(root, documents)
+            directory = os.path.join(root, "ngrams")
+            paths = sorted(os.path.join(directory, name)
+                           for name in os.listdir(directory))
+            index = ngram_index.IncrementalIndex(root)
+            for path in reversed(paths) if reverse else paths:
+                index.add(path)
+            check(f"distinct keys, {label}", index.finish(), len(totals))
+            _, common = read(root, want_index=False)
+            check_frequency_order(f"most_common, {label}", common, totals)
+            written[label] = common
+    check("the same keys whichever order they arrive in",
+          sorted(written["forward"]), sorted(written["reverse"]))
+    check("the same order every time for one arrival order",
+          written["forward"], written["again"])
+
+
 def main():
     for mode in ("gnu", "bsd"):
         configure(mode)

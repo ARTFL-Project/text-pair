@@ -98,7 +98,10 @@ class Ngrams:
         if os.path.isfile(file_path):
             files = [file_path]
         else:
-            files = glob(os.path.join(file_path, "*"))
+            # Sorted, not in directory order: documents are spilled into the
+            # n-gram index as they come back, so the order they are submitted in
+            # is the order their counts are totalled in.
+            files = sorted(glob(os.path.join(file_path, "*")))
         # Use shutil/os rather than shelling out: unquoted paths passed to the
         # shell break (dangerously, for rm -rf) on paths containing spaces.
         shutil.rmtree(os.path.join(output_path, "ngrams"), ignore_errors=True)
@@ -147,13 +150,20 @@ class Ngrams:
             post_processing_function=self.text_to_ngram,
         )
         philo_type_count = self.count_texts(files[0])
+        # The index buckets each document while the workers are still running,
+        # so what is left once they finish is the totalling rather than the
+        # whole of it.
+        index = ngram_index.IncrementalIndex(output_path)
+        ngram_dir = os.path.join(output_path, "ngrams")
         with tqdm(total=philo_type_count, leave=False) as pbar:
             for local_metadata in preprocessor.process_texts(files):
                 combined_metadata.update(local_metadata)
+                for text_object_id in local_metadata:
+                    index.add(os.path.join(ngram_dir, f"{text_object_id}.bin"))
                 pbar.update()
 
         print("Saving ngram index and most common ngrams...", flush=True)
-        distinct = ngram_index.build(output_path, write_index_tab=self.debug)
+        distinct = index.finish(write_index_tab=self.debug)
         print(f"{distinct:,} distinct ngram keys indexed.", flush=True)
 
         print("Saving metadata...")

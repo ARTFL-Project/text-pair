@@ -25,7 +25,12 @@ over 70M distinct n-grams, where a 32-bit key had 566,635 of them.
 
 Nothing proportional to the corpus stays resident: the aggregation spills by key
 range, and frequency ordering is a counting sort into per-count buckets rather
-than a sort.
+than a sort. The spill runs while the n-gram stage is still writing documents,
+so what is left when the workers stop is the totalling.
+
+Equally frequent keys are in no particular order -- they are hashes, and
+imposing one would mean a sort the rest of this avoids -- so which of them
+lands inside a `proportion` cut depends on the order documents were indexed in.
 
 See PREPROCESSING_REWRITE.md for what this replaced and why.
 """
@@ -40,6 +45,8 @@ import tempfile
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
+from queue import Queue
+from threading import Thread
 from typing import Iterator
 
 import numpy as np
@@ -60,6 +67,10 @@ SPILL_BLOCK = 1 << 16
 # Threads for the index passes. Past about eight the file reads stop being the
 # limit and more only adds contention.
 _SPILL_THREADS = min(8, (os.cpu_count() or 4))
+# Documents handed to one lane before moving on to the next, when they are
+# spilled as they arrive. Large enough not to wake a lane per document, small
+# enough that every lane has work early in a run.
+_LANE_RUN = 32
 # Buckets aggregated ahead of the consumer. Each holds its key range's distinct
 # keys, so this is what bounds the aggregation's memory.
 _BUCKET_LOOKAHEAD = 8
@@ -81,35 +92,106 @@ FD_MARGIN = 64
 
 
 def build(output_path: str, write_index_tab: bool = False) -> int:
-    """Write index/most_common_ngrams.txt, and index/index.tab when asked.
+    """Write index/most_common_ngrams.bin, and index/index.tab when asked.
+
+    For a tree whose per-document n-grams are already on disk. The n-gram stage
+    feeds IncrementalIndex while it writes them instead, which is the same work
+    with the workers to overlap it with; this is that path with everything
+    handed over at once.
 
     Returns the number of distinct keys.
     """
-    index_dir = os.path.join(output_path, "index")
-    os.makedirs(index_dir, exist_ok=True)
-    common_path = os.path.join(index_dir, COMMON_NGRAMS)
-    index_path = os.path.join(index_dir, "index.tab")
-    scratch = os.path.join(output_path, "index_scratch")
-    shutil.rmtree(scratch, ignore_errors=True)
-    os.makedirs(scratch, exist_ok=True)
+    index = IncrementalIndex(output_path)
+    for path in sorted(glob(os.path.join(output_path, "ngrams", "*.bin"))):
+        index.add(path)
+    return index.finish(write_index_tab=write_index_tab)
 
-    try:
-        binaries = sorted(glob(os.path.join(output_path, "ngrams", "*.bin")))
-        buckets = _Buckets(scratch)
-        distinct = 0
-        for block in _aggregate(binaries, scratch):
-            buckets.add_banded(block)
-            distinct += block[0].size
-        buckets.write_descending(common_path)
 
-        if write_index_tab:
-            _write_index_tab(output_path, index_path, scratch)
-        elif os.path.exists(index_path):
-            # A stale index.tab from an earlier run would name the wrong ngrams.
-            os.remove(index_path)
-        return distinct
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+class IncrementalIndex:
+    """Buckets each document's keys as it is written, rather than afterwards.
+
+    Pass one of the aggregation is per-document, and the process running it sits
+    at under a fifth of a core while the workers run, so it happens then: by the
+    time the last document lands most of the corpus is already spilled and only
+    the totalling is left.
+
+    Which lane a document goes to follows the order documents are added, not
+    when a lane got round to its queue, so the totals are summed in a fixed
+    order. That order is not the one `build` uses, so the two disagree about
+    which of two equally frequent keys comes first; they agree on every count.
+    """
+
+    def __init__(self, output_path: str, threads: int | None = None):
+        self.output_path = output_path
+        self.scratch = os.path.join(output_path, "index_scratch")
+        shutil.rmtree(self.scratch, ignore_errors=True)
+        self.directory = os.path.join(self.scratch, "keys")
+        os.makedirs(self.directory, exist_ok=True)
+        self.lanes = max(threads or _SPILL_THREADS, 1)
+        self._added = 0
+        self._failure: BaseException | None = None
+        self._queues: list[Queue] = [Queue() for _ in range(self.lanes)]
+        self._threads = [
+            Thread(target=self._drain, args=(number,), daemon=True)
+            for number in range(self.lanes)
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def add(self, path: str) -> None:
+        """Hand over one document, once its n-gram index has been written."""
+        self._queues[(self._added // _LANE_RUN) % self.lanes].put(path)
+        self._added += 1
+
+    def _drain(self, number: int) -> None:
+        lane = _Lane(self.directory, number)
+        queue = self._queues[number]
+        while True:
+            path = queue.get()
+            if path is None:
+                break
+            # Keep draining after a failure so no producer blocks; finish raises.
+            if self._failure is None:
+                try:
+                    lane.add(path)
+                except BaseException as error:
+                    self._failure = error
+        try:
+            lane.close()
+        except BaseException as error:
+            if self._failure is None:
+                self._failure = error
+
+    def finish(self, write_index_tab: bool = False) -> int:
+        """Total the spilled counts and write the frequency-ordered key file.
+
+        Returns the number of distinct keys.
+        """
+        for queue in self._queues:
+            queue.put(None)
+        for thread in self._threads:
+            thread.join()
+        try:
+            if self._failure is not None:
+                raise self._failure
+            index_dir = os.path.join(self.output_path, "index")
+            os.makedirs(index_dir, exist_ok=True)
+            index_path = os.path.join(index_dir, "index.tab")
+            buckets = _Buckets(self.scratch)
+            distinct = 0
+            for output in _total_spilled(self.directory, self.lanes, self.lanes):
+                buckets.add_banded(output)
+                distinct += output[0].size
+            buckets.write_descending(os.path.join(index_dir, COMMON_NGRAMS))
+
+            if write_index_tab:
+                _write_index_tab(self.output_path, index_path, self.scratch)
+            elif os.path.exists(index_path):
+                # A stale index.tab from an earlier run would name the wrong ngrams.
+                os.remove(index_path)
+            return distinct
+        finally:
+            shutil.rmtree(self.scratch, ignore_errors=True)
 
 
 # ----------------------------------------------------------------------
@@ -117,43 +199,13 @@ def build(output_path: str, write_index_tab: bool = False) -> int:
 # ----------------------------------------------------------------------
 
 
-def _aggregate(binaries: list[str], scratch: str,
-               threads: int | None = None) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-    """Total occurrences per key, a key range at a time, ascending.
+def _total_spilled(directory: str, lanes: int, threads: int) -> Iterator[tuple]:
+    """Total each key range across the lanes that spilled it, ascending.
 
-    Pass one spills each document's (key, count) columns into the bucket its
-    keys fall in; pass two aggregates one bucket at a time. Keys arrive sorted
-    from the CSR, so splitting a document across buckets is a searchsorted and
-    some slices.
-
-    Both passes are threaded. Reading an index is file I/O and numpy, and the
-    aggregation kernel is nogil, so neither holds the interpreter. Order stays
-    fixed: a thread takes a contiguous run of documents and pass two reads the
-    threads back in order, so a bucket sees its contributions in the same
-    sequence whatever the threads did.
+    Runs ahead of the consumer by a bounded window: every bucket at once would
+    hold the whole corpus's distinct keys in memory.
     """
-    if threads is None:
-        threads = min(_SPILL_THREADS, max(len(binaries), 1))
-    threads = max(threads, 1)
-    # Spills are appended to, so a previous run's leftovers would read back as
-    # this run's data.
-    directory = os.path.join(scratch, "keys")
-    shutil.rmtree(directory, ignore_errors=True)
-    os.makedirs(directory, exist_ok=True)
-
-    chunks = _contiguous_chunks(binaries, threads)
-    if len(chunks) == 1:
-        _spill(chunks[0], directory, 0)
-    else:
-        with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
-            for future in [pool.submit(_spill, chunk, directory, number)
-                           for number, chunk in enumerate(chunks)]:
-                future.result()
-
-    # Pass two runs ahead of the consumer by a bounded window: every bucket at
-    # once would hold the whole corpus's distinct keys in memory.
-    lanes = len(chunks)
-    with ThreadPoolExecutor(max_workers=threads) as pool:
+    with ThreadPoolExecutor(max_workers=max(threads, 1)) as pool:
         pending: deque = deque()
         for bucket in range(KEY_BUCKETS):
             pending.append(pool.submit(_aggregate_bucket, directory, bucket, lanes))
@@ -167,61 +219,64 @@ def _aggregate(binaries: list[str], scratch: str,
                 yield result
 
 
-def _contiguous_chunks(items: list[str], count: int) -> list[list[str]]:
-    """Split into `count` runs, keeping each run contiguous and in order."""
-    if count <= 1 or len(items) <= 1:
-        return [items]
-    size = -(-len(items) // count)
-    return [items[at : at + size] for at in range(0, len(items), size)]
+class _Lane:
+    """One lane of the spill: the key ranges of the documents given to it.
 
+    Each document contributes a slice to most buckets, so writing slices straight
+    out is one call per (document, bucket). They are gathered per bucket and
+    flushed in blocks instead. A flush reopens its file rather than holding 512
+    of them open: at a block per flush that is a few thousand opens over a run,
+    against a descriptor count no macOS default would allow.
+    """
 
-def _spill(binaries: list[str], directory: str, lane: int) -> None:
-    """Bucket one thread's documents by key range, into that thread's files."""
-    from . import ngram_binary
+    __slots__ = ("directory", "number", "keys", "counts", "sizes", "interior")
 
-    # Each document contributes a slice to most buckets, so writing slices
-    # straight out is one call per (document, bucket). They are gathered per
-    # bucket and flushed in blocks instead. A flush reopens its file rather than
-    # holding 512 of them: at a block each that is a few thousand opens over a
-    # run, against a descriptor count no macOS default would allow.
-    pending_keys: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
-    pending_counts: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
-    pending_size = [0] * KEY_BUCKETS
-    interior = np.array(_KEY_EDGES[1:-1], dtype=np.int64)
+    def __init__(self, directory: str, number: int):
+        self.directory = directory
+        self.number = number
+        self.keys: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
+        self.counts: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
+        self.sizes = [0] * KEY_BUCKETS
+        self.interior = np.array(_KEY_EDGES[1:-1], dtype=np.int64)
 
-    def flush(bucket: int) -> None:
-        if not pending_size[bucket]:
-            return
-        stem = os.path.join(directory, f"{lane}-{bucket}")
-        with open(f"{stem}.k", "ab") as handle:
-            handle.write(np.concatenate(pending_keys[bucket]).tobytes())
-        with open(f"{stem}.c", "ab") as handle:
-            handle.write(np.concatenate(pending_counts[bucket]).tobytes())
-        pending_keys[bucket].clear()
-        pending_counts[bucket].clear()
-        pending_size[bucket] = 0
+    def add(self, path: str) -> None:
+        """Split one document's keys across the ranges they fall in."""
+        from . import ngram_binary
 
-    for path in binaries:
         with open(path, "rb") as handle:
             buffer = handle.read()
         keys, offsets = ngram_binary.columns(buffer, path)[:2]
         if keys.size == 0:
-            continue
+            return
         # A TPNG0001 index hands back int32 keys; the spill is int64 throughout.
         keys = keys.astype(KEY_DTYPE, copy=False)
         counts = (offsets[1:] - offsets[:-1]).astype(COUNT_DTYPE)
-        splits = np.searchsorted(keys, interior)
+        splits = np.searchsorted(keys, self.interior)
         previous = 0
         for bucket, stop in enumerate(np.append(splits, keys.size)):
             if stop > previous:
-                pending_keys[bucket].append(keys[previous:stop])
-                pending_counts[bucket].append(counts[previous:stop])
-                pending_size[bucket] += stop - previous
-                if pending_size[bucket] >= SPILL_BLOCK:
-                    flush(bucket)
+                self.keys[bucket].append(keys[previous:stop])
+                self.counts[bucket].append(counts[previous:stop])
+                self.sizes[bucket] += stop - previous
+                if self.sizes[bucket] >= SPILL_BLOCK:
+                    self.flush(bucket)
             previous = stop
-    for bucket in range(KEY_BUCKETS):
-        flush(bucket)
+
+    def flush(self, bucket: int) -> None:
+        if not self.sizes[bucket]:
+            return
+        stem = os.path.join(self.directory, f"{self.number}-{bucket}")
+        with open(f"{stem}.k", "ab") as handle:
+            handle.write(np.concatenate(self.keys[bucket]).tobytes())
+        with open(f"{stem}.c", "ab") as handle:
+            handle.write(np.concatenate(self.counts[bucket]).tobytes())
+        self.keys[bucket].clear()
+        self.counts[bucket].clear()
+        self.sizes[bucket] = 0
+
+    def close(self) -> None:
+        for bucket in range(KEY_BUCKETS):
+            self.flush(bucket)
 
 
 def _aggregate_bucket(directory: str, bucket: int, lanes: int):
