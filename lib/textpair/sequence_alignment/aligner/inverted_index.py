@@ -414,7 +414,8 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
                 packed_positions[written] = source_position_half | np.int64(target_at)
                 written += 1
         chain_out, n_alignments, chain_spans = match_passage(
-            packed_indices, packed_positions, n_matches, start_bytes, end_bytes,
+            packed_indices, packed_positions, n_matches, n_positions,
+            start_bytes, end_bytes,
             window_size, max_gap, flex_gap, min_matching, min_in_window,
             chain_best, chain_parent, chain_used, chain_members, chain_key,
             chain_order, chain_spans, chain_out)

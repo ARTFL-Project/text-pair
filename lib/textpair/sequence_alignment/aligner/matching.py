@@ -15,6 +15,11 @@ import numpy as np
 from numba import njit
 
 NCOL = 9
+# The blocked predecessor scan pays only where a source position expands to many
+# matches; with near-unique matches its per-block bookkeeping costs more than the flat
+# scan it replaces. eebo_ecco has pairs at a fan-out of 8,000.
+BLOCK_FANOUT = 8
+BLOCK_MIN_MATCHES = 256
 # A packed int64 holds the source value in the high half and the target in the low.
 TARGET_HALF = np.int64(0xFFFFFFFF)
 
@@ -116,37 +121,8 @@ def link_bound(window_size, max_gap, flex_gap, min_matching):
 
 
 @njit(nogil=True, cache=True)
-def match_passage(packed_indices, packed_positions, n, start_bytes, end_bytes,
-                  window_size, max_gap, flex_gap, min_matching, min_in_window,
-                  best, parent, used, chain, key, order, spans, out):
-    """Matches must be sorted by (source index, target index).
-
-    A passage is a chain of matches strictly increasing in both ngram indices, with
-    consecutive steps inside the run's gap allowance in either document, dense enough
-    that every window_size stretch of either document holds min_in_window of them. Every
-    test is a symmetric function of the two indices, so comparing a pair the other way
-    round gives the mirrored passages. The matcher this replaced walked the source once
-    and reserved the source range of each passage it emitted, which reports a phrase
-    occurring once in the source and n times in the target as one passage, and as n when
-    the same pair is compared the other way.
-
-    Chains are found longest-first by dynamic programming, so a passage is never cut
-    short by a nearer but unextendable match, and a chain is kept only when it covers a
-    stretch of either document that no kept chain covers yet. Reserving neither side
-    instead reports n*m passages for a phrase occurring n and m times; reserving both is
-    what makes the count about n+m, every occurrence on both sides reported once.
-
-    Every buffer is the caller's: best, parent, used, chain, order sized for n matches,
-    key for n + 1, and spans and out grown here and handed back so the next pair reuses
-    them. Returns (out, n_alignments, spans).
-    """
-    n_alignments = 0
-    if n == 0:
-        return out, 0, spans
-    max_link = link_bound(window_size, max_gap, flex_gap, min_matching)
-
-    # Longest chain ending at each match. The (source, target) order makes the candidate
-    # predecessors of a match the ones still inside its source window.
+def _chain_flat(packed_indices, n, max_link, best, parent, used):
+    """Longest chain ending at each match, scanning every match in the source window."""
     window_start = 0
     longest = 1
     for b in range(n):
@@ -189,6 +165,119 @@ def match_passage(packed_indices, packed_positions, n, start_bytes, end_bytes,
         used[b] = 0
         if best_b > longest:
             longest = best_b
+    return longest
+
+
+@njit(nogil=True, cache=True)
+def _chain_blocked(packed_indices, n, max_link, best, parent, used):
+    """The same scan, reaching each source block's candidates by binary search.
+
+    Matches sharing a source index are contiguous and their target indices ascend, so
+    the candidates a block contributes are a contiguous slice of it: exactly the ones
+    _chain_flat does not skip, visited in the order it visits them. Where a key repeats
+    thousands of times in the target, a block holds thousands of matches of which
+    almost none are within max_link, and the flat scan walks all of them -- 75 billion
+    iterations on one eebo_ecco pair, against 20 million here.
+
+    At most max_link blocks can precede a match inside the window, since their source
+    indices are distinct, so the ring holds every block that can still be reached.
+    """
+    ring = max_link + 2
+    block_at = np.empty(ring, np.int64)
+    block_source = np.empty(ring, np.int64)
+    n_seen = 0
+    current_source = np.int64(-1)
+    longest = 1
+    for b in range(n):
+        source_b = packed_indices[b] >> 32
+        target_b = packed_indices[b] & TARGET_HALF
+        if source_b != current_source:
+            current_source = source_b
+            block_at[n_seen % ring] = b
+            block_source[n_seen % ring] = source_b
+            n_seen += 1
+        best_b = np.int32(1)
+        parent_b = np.int32(-1)
+        best_step = np.int64(0)
+        best_near = np.int64(0)
+        target_floor = target_b - max_link
+        first = n_seen - 1 - max_link
+        if first < 0:
+            first = 0
+        for k in range(first, n_seen - 1):
+            source_a = block_source[k % ring]
+            if source_a < source_b - max_link:
+                continue
+            lo = block_at[k % ring]
+            hi = block_at[(k + 1) % ring]
+            left = lo
+            right = hi
+            while left < right:              # first target at or past target_floor
+                mid = (left + right) >> 1
+                if (packed_indices[mid] & TARGET_HALF) < target_floor:
+                    left = mid + 1
+                else:
+                    right = mid
+            source_step = source_b - source_a
+            for a in range(left, hi):
+                target_a = packed_indices[a] & TARGET_HALF
+                if target_a >= target_b:
+                    break
+                target_step = target_b - target_a
+                candidate = best[a] + np.int32(1)
+                step = source_step + target_step
+                near = source_step if source_step < target_step else target_step
+                if candidate > best_b or (candidate == best_b
+                                          and (step < best_step
+                                               or (step == best_step
+                                                   and near < best_near))):
+                    best_b = candidate
+                    parent_b = a
+                    best_step = step
+                    best_near = near
+        best[b] = best_b
+        parent[b] = parent_b
+        used[b] = 0
+        if best_b > longest:
+            longest = best_b
+    return longest
+
+
+@njit(nogil=True, cache=True)
+def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
+                  window_size, max_gap, flex_gap, min_matching, min_in_window,
+                  best, parent, used, chain, key, order, spans, out):
+    """Matches must be sorted by (source index, target index). `n_blocks` is how many
+    distinct source indices they hold, which picks the predecessor scan.
+
+    A passage is a chain of matches strictly increasing in both ngram indices, with
+    consecutive steps inside the run's gap allowance in either document, dense enough
+    that every window_size stretch of either document holds min_in_window of them. Every
+    test is a symmetric function of the two indices, so comparing a pair the other way
+    round gives the mirrored passages. The matcher this replaced walked the source once
+    and reserved the source range of each passage it emitted, which reports a phrase
+    occurring once in the source and n times in the target as one passage, and as n when
+    the same pair is compared the other way.
+
+    Chains are found longest-first by dynamic programming, so a passage is never cut
+    short by a nearer but unextendable match, and a chain is kept only when it covers a
+    stretch of either document that no kept chain covers yet. Reserving neither side
+    instead reports n*m passages for a phrase occurring n and m times; reserving both is
+    what makes the count about n+m, every occurrence on both sides reported once.
+
+    Every buffer is the caller's: best, parent, used, chain, order sized for n matches,
+    key for n + 1, and spans and out grown here and handed back so the next pair reuses
+    them. Returns (out, n_alignments, spans).
+    """
+    n_alignments = 0
+    if n == 0:
+        return out, 0, spans
+    max_link = link_bound(window_size, max_gap, flex_gap, min_matching)
+
+    if n_blocks > 0 and n >= BLOCK_MIN_MATCHES and n >= BLOCK_FANOUT * n_blocks:
+        longest = _chain_blocked(packed_indices, n, max_link, best, parent, used)
+    else:
+        longest = _chain_flat(packed_indices, n, max_link, best, parent, used)
     if longest < min_matching:
         return out, 0, spans                # no chain here can reach the threshold
 
