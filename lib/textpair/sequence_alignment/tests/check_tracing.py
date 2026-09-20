@@ -70,7 +70,8 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
         start_bytes = np.concatenate([np.asarray(s_sb, np.int32), np.asarray(t_sb, np.int32)])
         end_bytes = np.concatenate([np.asarray(s_eb, np.int32), np.asarray(t_eb, np.int32)])
         out, cnt, _spans = matching.match_passage(
-            pair, pos, n, start_bytes, end_bytes,
+            pair, pos, n, int(np.unique(np.asarray(s_idx)).shape[0]),
+            start_bytes, end_bytes,
             params["matching_window_size"], params["max_gap"], params["flex_gap"],
             params["minimum_matching_ngrams"],
             params["minimum_matching_ngrams_in_window"],
