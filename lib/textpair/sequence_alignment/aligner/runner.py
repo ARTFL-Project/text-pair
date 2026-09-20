@@ -10,9 +10,12 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+from contextlib import contextmanager
 from shlex import quote
 
 import numpy as np
+from tqdm import tqdm
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -292,8 +295,30 @@ def _jobs(rows, duplicates, docs, n_targets, target_base, threads, same_array):
     return jobs
 
 
+@contextmanager
+def _ticking(bar, seconds=5.0):
+    """Redraw `bar` on a timer as well as on update.
+
+    The bar advances only as a source finishes, and on a large corpus the first finish
+    is many minutes in -- long enough that an un-ticked bar looks like a hung run.
+    """
+    stop = threading.Event()
+
+    def tick():
+        while not stop.wait(seconds):
+            bar.refresh()
+
+    thread = threading.Thread(target=tick, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
+
+
 def _run_combination(params, source_docs, target_docs, source_metadata, target_metadata,
-                     same_array, chunk_dir, progress, trace=None):
+                     same_array, chunk_dir, trace=None):
     """Compare one (source batch, target batch) pair. Returns (count, duplicate rows)."""
     threads = params["threads"]
     if same_array:
@@ -322,7 +347,7 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
     duplicate_rows = []
     try:
         key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes, end_bytes = \
-            ngram_loader.load_corpus(paths, threads)
+            ngram_loader.load_corpus(paths, threads, show_progress=True)
         posting_keys, posting_slots, bucket_starts = inverted_index.build_postings(ngram_keys, threads)
         posting_docs, sweep_starts, per_source = inverted_index.index_postings(
             posting_keys, posting_slots, bucket_starts, key_offsets, n_sources, same_doc, threads)
@@ -343,14 +368,21 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                                             metas[target_slot],
                                                             float(percents[i]))))
 
-        inverted_index.run_match(ngram_keys, key_offsets, sweep_starts, posting_keys,
-                           posting_slots, posting_docs,
-                           per_source, same_doc, position_offsets, ngram_indices,
-                           start_bytes, end_bytes,
-                           threads, params, on_result, progress)
-        # The caller's progress line is finished here so the trace's own message is
-        # not overwritten by it.
-        print("\r\033[KComparing files... done.", flush=True)
+        # Weighted by comparisons, not documents: sources run longest-first, so a
+        # per-document count crawls at the start and its ETA is useless. The leading
+        # space in `unit` is load-bearing -- tqdm writes rate, unit and "/s" unseparated.
+        print("Comparing files: 1 comparison = 1 shared ngram-doc pair", flush=True)
+        with tqdm(total=int(per_source.sum()), desc="Comparing files", unit=" comparison",
+                  unit_scale=True, smoothing=0.05, mininterval=1.0) as bar, _ticking(bar):
+            def progress(work, done, total):
+                bar.update(work)
+                bar.set_postfix_str(f"{done:,}/{total:,} docs", refresh=False)
+
+            inverted_index.run_match(ngram_keys, key_offsets, sweep_starts, posting_keys,
+                               posting_slots, posting_docs,
+                               per_source, same_doc, position_offsets, ngram_indices,
+                               start_bytes, end_bytes,
+                               threads, params, on_result, progress)
         if trace is not None:
             print("Tracing compared pairs... ", end="", flush=True)
             written = tracing.write_traces(
@@ -464,13 +496,9 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
                 continue
             same_array = same_corpus and source_number == target_number
 
-            def progress(done, total):
-                print(f"\rComparing files... {100 * done // total}%", end="", flush=True)
-
-            print("Comparing files... 0%", end="", flush=True)
             batch_count, duplicate_rows = _run_combination(
                 params, source_batch, target_batch, source_meta, target_meta, same_array,
-                chunk_dir, progress, trace)
+                chunk_dir, trace)
             count += batch_count
             output.write_duplicates(output_path, duplicate_rows, append=True)
             if batched:
