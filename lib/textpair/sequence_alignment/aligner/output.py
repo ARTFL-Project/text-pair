@@ -290,14 +290,20 @@ class ChunkWriter:
             cache[slot] = fields
         return fields
 
-    def _text(self, slot):
+    def _text(self, slot, keep=None):
         buf = self._buf.get(slot)
         if buf is None:
             if len(self._buf) >= _MMAP_CACHE_LIMIT:
+                # `keep` is the source document of the job in progress: the caller holds
+                # its buffer across every target, so closing it here would fail the rest
+                # of the job with "mmap closed or invalid".
+                kept = self._buf.pop(keep, None)
                 for mapped in self._buf.values():
                     if mapped:
                         mapped.close()
                 self._buf.clear()
+                if kept is not None:
+                    self._buf[keep] = kept
             try:
                 handle = open(self.metas[slot]["filename"], "rb")
                 buf = mmap.mmap(handle.fileno(), 0, prot=mmap.PROT_READ)
@@ -339,7 +345,7 @@ class ChunkWriter:
                 record.update(self._prefixed(self._tgt, target_slot, "target_"))
                 record["source_doc_id"] = source_doc
                 record["target_doc_id"] = docs[target_slot]
-                target_buf = self._text(target_slot)
+                target_buf = self._text(target_slot, slot)
                 for k in range(i, j):
                     source_start_byte = int(rows[k, 2])
                     source_end_byte = int(rows[k, 3])
