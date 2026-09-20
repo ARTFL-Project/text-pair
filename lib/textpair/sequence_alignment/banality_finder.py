@@ -3,40 +3,112 @@
 import os
 import subprocess
 from math import floor
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import ahocorasick_rs
 import lz4.frame
+import msgspec
 import numpy as np
 import orjson
 import regex as re
+from numba import njit
 from tqdm import tqdm
 
 from . import ngram_binary
 
-def load_common_ngrams(path: str, proportion: float) -> set[int]:
-    """The most frequent `proportion` percent of keys, as a set.
+
+@njit(nogil=True, cache=True)
+def _fill_table(keys, table, used):
+    """Insert every key into an open-addressing table. Returns how many were new."""
+    mask = np.uint64(table.size - 1)
+    inserted = 0
+    for i in range(keys.size):
+        key = keys[i]
+        # Fibonacci hashing, as in ngram_index: these keys are already hashes,
+        # but they are the head of a frequency ordering rather than a spread.
+        scattered = np.uint64(key) * np.uint64(0x9E3779B97F4A7C15)
+        scattered ^= scattered >> np.uint64(29)
+        slot = scattered & mask
+        while used[slot] == 1 and table[slot] != key:
+            slot = (slot + np.uint64(1)) & mask
+        if used[slot] == 0:
+            inserted += 1
+            table[slot] = key
+            used[slot] = 1
+    return inserted
+
+
+@njit(nogil=True, cache=True)
+def _count_present(keys, table, used):
+    """How many of `keys` are in the table."""
+    mask = np.uint64(table.size - 1)
+    found = 0
+    for i in range(keys.size):
+        key = keys[i]
+        scattered = np.uint64(key) * np.uint64(0x9E3779B97F4A7C15)
+        scattered ^= scattered >> np.uint64(29)
+        slot = scattered & mask
+        while used[slot] == 1:
+            if table[slot] == key:
+                found += 1
+                break
+            slot = (slot + np.uint64(1)) & mask
+    return found
+
+
+class CommonNgrams:
+    """Membership in the most frequent keys of a corpus.
+
+    An open-addressing table rather than a set. A real config asks for the top
+    10%, which on frantext is 7.7M keys: 0.15GB here against 1.5GB as a Python
+    set, counting the list of boxed ints it has to be built from. Counting a
+    passage's hits is then one call rather than a loop over them.
+    """
+
+    __slots__ = ("table", "used", "size")
+
+    def __init__(self, keys: np.ndarray):
+        keys = np.ascontiguousarray(keys, dtype=np.int64)
+        # Under half full, so a miss ends at the first empty slot it reaches.
+        slots = 1 << max(int(keys.size * 2).bit_length(), 4)
+        self.table = np.zeros(slots, dtype=np.int64)
+        self.used = np.zeros(slots, dtype=np.uint8)
+        self.size = int(_fill_table(keys, self.table, self.used)) if keys.size else 0
+
+    def __len__(self) -> int:
+        return self.size
+
+    def count_in(self, keys: np.ndarray) -> int:
+        """How many of `keys`, an int64 array, are common."""
+        return int(_count_present(keys, self.table, self.used))
+
+
+def load_common_ngrams(path: str, proportion: float) -> CommonNgrams:
+    """The most frequent `proportion` percent of keys.
 
     ngram_index writes an int64 array ordered by descending corpus frequency.
     Older index directories have a text file of one decimal per line instead;
     both are read here so an index built before the change still works.
     """
     if path.endswith(".bin") and os.path.exists(path):
-        keys = np.fromfile(path, dtype=np.int64)
-        return set(keys[: floor(keys.size * proportion / 100)].tolist())
+        # Only the head of the file is wanted, and on a corpus this size the
+        # rest of it is half a gigabyte to read and throw away.
+        wanted = floor(os.path.getsize(path) // 8 * proportion / 100)
+        keys = np.fromfile(path, dtype=np.int64, count=wanted) if wanted else np.empty(0, np.int64)
+        return CommonNgrams(keys)
 
     legacy = path[: -len(".bin")] + ".txt" if path.endswith(".bin") else path
     with open(legacy, "rb") as handle:
         total = sum(1 for _ in handle)
     wanted = floor(total * proportion / 100)
-    keys: set[int] = set()
+    decoded: list[int] = []
     with open(legacy, encoding="utf8") as handle:
         for _ in range(wanted):
             try:
-                keys.add(int(next(handle)))
+                decoded.append(int(next(handle)))
             except ValueError:
                 pass
-    return keys
+    return CommonNgrams(np.array(decoded, dtype=np.int64))
 
 
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
@@ -57,6 +129,10 @@ class NgramDoc:
     The file is binary and mmap-shaped, so this is a read and two `np.frombuffer` views
     rather than a parse: 4.7ms of orjson per document became nothing measurable, and the
     filter opens one document per source in the results.
+
+    `start_bytes` is widened to int64 on the way in: searching the int32 column
+    the file stores for a Python int promotes the pair, which casts the whole
+    column on every call and cost eight times the search itself.
     """
 
     __slots__ = ["name", "keys", "start_bytes"]
@@ -64,15 +140,80 @@ class NgramDoc:
     def __init__(self, filepath):
         self.name = os.path.basename(filepath)
         with open(filepath, "rb") as input_file:
-            self.keys, self.start_bytes = ngram_binary.order_columns(
-                input_file.read(), filepath
-            )
+            keys, start_bytes = ngram_binary.order_columns(input_file.read(), filepath)
+        self.keys = keys
+        self.start_bytes = start_bytes.astype(np.int64)
+
+    def span(self, start_byte: int, end_byte: int) -> tuple[int, int]:
+        """Index range of the n-grams starting in [start_byte, end_byte).
+
+        Both bounds in one search: at these sizes the call costs more than the
+        binary search inside it.
+        """
+        bounds = self.start_bytes.searchsorted(
+            np.array((start_byte, end_byte), dtype=np.int64), "left")
+        return int(bounds[0]), int(bounds[1])
 
     def get_ngrams(self, start_byte, end_byte) -> list[int]:
         """The keys of every n-gram starting in [start_byte, end_byte)."""
-        start_index = int(np.searchsorted(self.start_bytes, start_byte, "left"))
-        end_index = int(np.searchsorted(self.start_bytes, end_byte, "left"))
-        return self.keys[start_index:end_index].tolist()
+        low, high = self.span(start_byte, end_byte)
+        return self.keys[low:high].tolist()
+
+
+class _Passage(msgspec.Struct):
+    """What the automatic filter reads out of an alignment.
+
+    A record carries around a hundred fields, nearly all of them metadata this
+    never looks at, so they are skipped rather than decoded into a dict only to
+    be encoded straight back.
+    """
+
+    source_ngrams: str
+    source_start_byte: Union[int, str]
+    source_end_byte: Union[int, str]
+    # UNSET only when the record has no banality field at all, which is what
+    # lets the verdict be spliced in rather than the record rewritten.
+    banality: Union[bool, None, msgspec.UnsetType] = msgspec.UNSET
+
+
+class _Verdict(msgspec.Struct):
+    """The banality flag alone, for the pass that only sorts records by it."""
+
+    banality: Union[bool, None] = None
+
+
+class _SourcePassage(msgspec.Struct):
+    """The source text alone, for phrase matching."""
+
+    source_passage: str
+
+
+_DECODE_PASSAGE = msgspec.json.Decoder(_Passage).decode
+_DECODE_VERDICT = msgspec.json.Decoder(_Verdict).decode
+_DECODE_SOURCE = msgspec.json.Decoder(_SourcePassage).decode
+_BANALITY_FIELD = {True: b',"banality":true', False: b',"banality":false'}
+# Documents kept open while scanning results. Oldest out first, and the
+# largest frantext document is 16MB of columns, so the ceiling is small.
+_DOCUMENTS_HELD = 8
+
+
+def _with_banality(line: bytes, banal: bool, present: Any) -> bytes:
+    """`line` with its banality field set to `banal`.
+
+    Spliced into the record rather than decoding a hundred fields and encoding
+    them back to change one. orjson wrote these files and reproduces them byte
+    for byte, so the result is what the round trip produced. Anything the
+    splice cannot account for goes through the round trip instead: a field
+    already present has to keep its place, and a record not ending where one
+    should is not ours to guess at.
+    """
+    if present is msgspec.UNSET:
+        body = line[:-1] if line.endswith(b"\n") else line
+        if body.endswith(b"}") and not body.endswith(b"{}"):
+            return body[:-1] + _BANALITY_FIELD[banal] + b"}\n"
+    alignment: dict[str, Any] = orjson.loads(line)
+    alignment["banality"] = banal
+    return orjson.dumps(alignment) + b"\n"
 
 
 def banality_auto_detect(
@@ -92,29 +233,34 @@ def banality_auto_detect(
         lz4.frame.open(f"{filepath}.temp.lz4", mode="wb") as output_file,
         lz4.frame.open(filepath) as input_file,
     ):
-        source_ngram_doc = None
+        # Results come grouped by source document, but not strictly: a frantext
+        # run opens 2,325 distinct documents 3,642 times. A few documents of
+        # history turns most of that back into a hit.
+        loaded: dict[str, NgramDoc] = {}
         for line in tqdm(
             input_file,
             total=count,
             desc="Running banality auto-detection...",
             leave=False,
         ):
-            alignment: dict[str, Any] = orjson.loads(line)
-            if source_ngram_doc is None or source_ngram_doc.name != alignment["source_ngrams"]:
-                source_ngram_doc = NgramDoc(os.path.join(ngram_doc_path, alignment["source_ngrams"]))
-            ngrams_in_file = source_ngram_doc.get_ngrams(
-                int(alignment["source_start_byte"]), int(alignment["source_end_byte"])
+            passage = _DECODE_PASSAGE(line)
+            source_ngram_doc = loaded.get(passage.source_ngrams)
+            if source_ngram_doc is None:
+                source_ngram_doc = NgramDoc(os.path.join(ngram_doc_path, passage.source_ngrams))
+                if len(loaded) >= _DOCUMENTS_HELD:
+                    del loaded[next(iter(loaded))]
+                loaded[passage.source_ngrams] = source_ngram_doc
+            low, high = source_ngram_doc.span(
+                int(passage.source_start_byte), int(passage.source_end_byte)
             )
-            common_ngram_matches = sum(1 for ngram in ngrams_in_file if ngram in common_ngrams)
-            if (
-                ngrams_in_file and common_ngram_matches / len(ngrams_in_file) * 100 >= threshold
-            ):  # if n % (or more) of ngrams are common ngrams
-                alignment["banality"] = True
-                banalities_found += 1
-            else:
-                alignment["banality"] = False
+            # if n % (or more) of ngrams are common ngrams
+            banality = high > low and (
+                common_ngrams.count_in(source_ngram_doc.keys[low:high]) / (high - low) * 100
+                >= threshold
+            )
+            banalities_found += banality
             # Always write to main file with banality flag set
-            output_file.write(orjson.dumps(alignment) + b"\n")  # type: ignore
+            output_file.write(_with_banality(line, banality, passage.banality))  # type: ignore
     os.replace(f"{filepath}.temp.lz4", filepath)
     return banalities_found
 
@@ -146,9 +292,8 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
             desc="Running phrase-based banality detection...",
             leave=False,
         ):
-            alignment: dict[str, Any] = orjson.loads(line)
             banality = False
-            if ac.find_matches_as_strings(clean_text(alignment["source_passage"])):
+            if ac.find_matches_as_strings(clean_text(_DECODE_SOURCE(line).source_passage)):
                 banality = True
                 passages_filtered += 1
                 filtered_passages.write(line)  # type: ignore
@@ -180,8 +325,7 @@ def separate_banalities(filepath: str, count: Optional[int]) -> int:
         lz4.frame.open(filepath) as input_file,
     ):
         for line in tqdm(input_file, total=count, desc="Separating banalities...", leave=False):
-            alignment: dict[str, Any] = orjson.loads(line)
-            if alignment.get("banality") is True:
+            if _DECODE_VERDICT(line).banality is True:
                 banalities_separated += 1
                 banal_output_file.write(line)  # type: ignore
             else:
