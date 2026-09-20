@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Web loading module"""
 
+import io
 import json
 import glob
 import os
@@ -14,7 +15,6 @@ import lz4.frame
 import orjson
 import psycopg2
 from pgvector.psycopg2 import register_vector
-from psycopg2.extras import execute_values
 from tqdm import tqdm
 
 from .parse_config import read_global_config
@@ -64,6 +64,8 @@ DEFAULT_FIELD_TYPES = {
     "llm_reasoning": "TEXT",
     "group_id": "INTEGER[]",  # Define directly as INTEGER[]
     "count": "INTEGER",
+    "banality": "BOOLEAN",
+    "embedding": "VECTOR",  # rendered before validation; never part of the generated DDL
 }
 
 FILTERED_FIELDS = {
@@ -85,6 +87,7 @@ FILTERED_FIELDS = {
 YEAR_FINDER = re.compile(r"^.*?(\d{1,}).*")
 TOKENIZER = re.compile(r"\w+")
 CONTROL_CHARS = dict.fromkeys(range(32))
+CONTROL_CHAR_FINDER = re.compile(r"[\x00-\x1f]").search
 
 
 class WebAppConfig:
@@ -225,63 +228,354 @@ def clean_text(text):
     return text
 
 
-def validate_field_type(fields, field_types, field_names, groups_file=False):
-    """Check field type and modify value type if needed"""
-    values = []
-    for field in field_names:
-        if field in FILTERED_FIELDS:
-            continue
-        value = fields.get(field)  # Use get without default "" initially
+# COPY ... FORMAT text delimits on tabs and newlines, and reads \N as NULL.
+COPY_ESCAPES = str.maketrans({"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"})
+NEEDS_ESCAPE = re.compile(r"[\\\t\n\r]").search
 
-        if field == "group_id":
-            if groups_file is False:
+
+def render_vector(value) -> str:
+    """Render an embedding as a pgvector literal.
+
+    9 significant digits is the shortest decimal that round-trips float32,
+    which is what pgvector stores whatever we send it.
+    """
+    if value is None:
+        return "\\N"
+    return "[" + ",".join(f"{v:.9g}" for v in value) + "]"
+
+
+class CopyStream(io.RawIOBase):
+    """Present an iterator of encoded rows as the file object copy_expert reads."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.buffer = bytearray()
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, target) -> int:
+        wanted = len(target)
+        buffer = self.buffer
+        for row in self.rows:  # generator resumes where the last call left it
+            buffer += row
+            if len(buffer) >= wanted:
+                break
+        read = min(wanted, len(buffer))
+        target[:read] = buffer[:read]
+        del buffer[:read]
+        return read
+
+
+ALIGNMENTS_PER_CHUNK = 2000
+# Below a couple of chunks the pool costs about what it saves.
+PARALLEL_LOAD_THRESHOLD = 5_000
+# Past this the parent's decompress-and-feed loop is the limit, not the cores.
+MAX_LOAD_WORKERS = 8
+
+_COPY_WORKER: dict[str, Any] = {}
+
+
+def load_workers(textpair_params) -> int:
+    """How many cores to load with, from --workers, capped where scaling stops."""
+    requested = int(getattr(textpair_params, "workers", 1) or 1)
+    return max(1, min(requested, MAX_LOAD_WORKERS))
+
+
+def prepare_alignment(alignment_fields, rowid, embeddings):
+    """Fill in the derived columns a stored alignment needs."""
+    alignment_fields["rowid"] = rowid
+    alignment_fields["passage_id"] = rowid
+    alignment_fields["source_passage_length"] = len(TOKENIZER.findall(alignment_fields["source_passage"]))
+    alignment_fields["target_passage_length"] = len(TOKENIZER.findall(alignment_fields["target_passage"]))
+    categories = alignment_fields.get("passage_categories") or []
+    alignment_fields["target_first_class"] = categories[0] if len(categories) > 0 else ""
+    alignment_fields["target_second_class"] = categories[1] if len(categories) > 1 else ""
+    alignment_fields["target_third_class"] = categories[2] if len(categories) > 2 else ""
+    if embeddings is not None:
+        alignment_fields["embedding"] = render_vector(embeddings[rowid - 1])  # rowid is 1-indexed
+    return alignment_fields
+
+
+def chunk_alignment_file(file, chunk_size):
+    """Yield (rowid of first line, raw lines) so a worker can number its own rows."""
+    rowid = 1
+    with lz4.frame.open(file) as input_file:
+        batch = []
+        for line in input_file:
+            batch.append(line)
+            if len(batch) == chunk_size:
+                yield rowid, b"".join(batch)
+                rowid += chunk_size
+                batch = []
+        if batch:
+            yield rowid, b"".join(batch)
+
+
+def _init_copy_worker(table_name, field_order, database_config, embeddings_spec):
+    """Give a worker its own validator, embedding view and database connection."""
+    import atexit
+
+    _COPY_WORKER["validate"] = RowValidator(field_order, DEFAULT_FIELD_TYPES)
+    _COPY_WORKER["statement"] = copy_statement(table_name, field_order)
+    _COPY_WORKER["embeddings"] = None
+    if embeddings_spec is not None:
+        import numpy as np
+
+        path, rows, dimensions = embeddings_spec
+        _COPY_WORKER["embeddings"] = np.memmap(path, dtype="float32", mode="r", shape=(rows, dimensions))
+    connection = psycopg2.connect(**database_config)
+    tune_load_session(connection.cursor())
+    _COPY_WORKER["connection"] = connection
+    atexit.register(connection.close)
+
+
+def _copy_alignment_chunk(job) -> int:
+    """Decode, validate and COPY one chunk. Runs in a worker process."""
+    first_rowid, blob = job
+    validate = _COPY_WORKER["validate"]
+    embeddings = _COPY_WORKER["embeddings"]
+    connection = _COPY_WORKER["connection"]
+
+    lines = []
+    rowid = first_rowid
+    for raw_line in blob.splitlines():
+        record = prepare_alignment(orjson.loads(raw_line), rowid, embeddings)
+        lines.append(render_copy_line(validate(record)))
+        rowid += 1
+
+    cursor = connection.cursor()
+    cursor.copy_expert(_COPY_WORKER["statement"], io.BytesIO(b"".join(lines)), size=1 << 20)
+    connection.commit()
+    return len(lines)
+
+
+def parallel_copy_alignments(file, table_name, field_order, count, workers, database_config, embeddings_spec):
+    """Decode and COPY the alignment file across processes.
+
+    Each worker COPYs on its own connection, so no rendered row ever travels
+    back to the parent and the COPY itself parallelizes too. Chunks may land
+    out of order; that is harmless because a row's identity is its rowid, which
+    comes from its chunk's offset in the file, not from insertion order.
+
+    Submission is windowed rather than handed to the pool all at once: the
+    executor pickles a task as soon as it is submitted, so an unbounded loop
+    would pull the whole decompressed file into the call queue.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+    from multiprocessing import get_context
+
+    from .preprocessing import worker_start_method
+
+    jobs = chunk_alignment_file(file, ALIGNMENTS_PER_CHUNK)
+    window = workers * 3
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=get_context(worker_start_method()),
+        initializer=_init_copy_worker,
+        initargs=(table_name, field_order, database_config, embeddings_spec),
+    ) as executor:
+        pending = []
+        for job in jobs:
+            pending.append(executor.submit(_copy_alignment_chunk, job))
+            if len(pending) >= window:
+                break
+        with tqdm(total=count, leave=False) as progress:
+            while pending:
+                done = pending.pop(0)
+                next_job = next(jobs, None)
+                if next_job is not None:
+                    pending.append(executor.submit(_copy_alignment_chunk, next_job))
+                progress.update(done.result())  # re-raises whatever the worker hit
+
+
+MAX_CONCURRENT_INDEX_BUILDS = 8
+# Each concurrent build gets its own, so the peak is the cap times this.
+CONCURRENT_INDEX_WORK_MEM = "512MB"
+
+
+def create_indexes(statements, database_config, workers):
+    """Run CREATE INDEX statements concurrently, each on its own connection.
+
+    Builds on one table take a SHARE lock, which is compatible with itself, so
+    they do not block each other. Worth doing because the trigram GIN indexes
+    over the passage columns take longer than everything else put together, and
+    Postgres cannot parallelize a single GIN build before version 18.
+
+    Those same GIN builds are started first: the phase cannot finish before the
+    slowest one does, so anything shorter should be filling in behind it.
+    """
+    statements = sorted(statements, key=lambda statement: "USING GIN" not in statement)
+    concurrency = min(len(statements), workers, MAX_CONCURRENT_INDEX_BUILDS)
+
+    def build(statement, work_mem):
+        connection = psycopg2.connect(**database_config)
+        try:
+            cursor = connection.cursor()
+            tune_load_session(cursor, work_mem)
+            cursor.execute(statement)
+            connection.commit()
+        finally:
+            connection.close()
+
+    if concurrency < 2:
+        for statement in statements:
+            build(statement, "1GB")
+        return
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(build, statement, CONCURRENT_INDEX_WORK_MEM) for statement in statements]
+        for future in futures:
+            future.result()  # re-raises whatever a build hit
+
+
+def tune_load_session(cursor, maintenance_work_mem="1GB"):
+    """Widen the session limits that bulk loading and index building run into.
+
+    All session-scoped, so nothing here outlives the load. Losing the tail of a
+    load on a crash is fine: these tables are dropped and rebuilt from the
+    result files anyway.
+    """
+    for setting in (
+        f"SET maintenance_work_mem = '{maintenance_work_mem}'",  # index builds, default 64MB
+        "SET max_parallel_maintenance_workers = 4",
+        "SET synchronous_commit = off",
+    ):
+        try:
+            cursor.execute(setting)
+        except psycopg2.Error:  # insufficient privileges or unknown on this server
+            cursor.connection.rollback()
+
+
+def render_copy_line(row) -> bytes:
+    """Render one validated row as a COPY text line.
+
+    Values are rendered inline rather than through a per-field call: at ~90
+    columns this runs several million times per load. Strings are only copied
+    when they actually contain a delimiter, which is the bulk of the saving.
+    """
+    fields = []
+    for value in row:
+        if type(value) is str:
+            fields.append(value.translate(COPY_ESCAPES) if NEEDS_ESCAPE(value) else value)
+        elif value is None:
+            fields.append("\\N")
+        elif value is True:
+            fields.append("true")
+        elif value is False:
+            fields.append("false")
+        elif type(value) is list:  # group_id, the only array column
+            fields.append("{" + ",".join(map(str, value)) + "}")
+        else:
+            fields.append(str(value))
+    return ("\t".join(fields) + "\n").encode("utf8")
+
+
+def copy_statement(table_name, field_order) -> str:
+    return f"COPY {table_name} ({', '.join(field_order)}) FROM STDIN WITH (FORMAT text)"
+
+
+def copy_into(cursor, table_name, field_order, rows):
+    """Stream validated rows into a table with COPY."""
+    cursor.copy_expert(
+        copy_statement(table_name, field_order),
+        CopyStream(render_copy_line(row) for row in rows),
+        size=1 << 20,
+    )
+
+
+class RowValidator:
+    """Coerces one result record into the column order a table expects.
+
+    The per-column decisions (which type branch applies, what a missing value
+    becomes) depend only on the schema, so they are made once here rather than
+    ~90 times per row. Kept byte-for-byte equivalent to the per-row version it
+    replaced, including the quirk that the TEXT branch matches the declared type
+    case-sensitively while the others do not.
+    """
+
+    GROUP_ID, RAW, BOOLEAN, YEAR, TEXT, PASSTHROUGH = range(6)
+
+    def __init__(self, field_names, field_types, groups_file=False):
+        self.plan = []
+        for field in field_names:
+            if field in FILTERED_FIELDS:
+                continue
+            declared = field_types.get(field, "TEXT")
+            declared_upper = declared.upper()
+            if field == "group_id":
+                # Group files already carry a plain integer; alignment files carry
+                # a list, or something that has to be coerced into one. Either way
+                # the value is taken as-is, with no missing-value default.
+                kind = self.GROUP_ID if groups_file is False else self.RAW
+            elif declared_upper == "BOOLEAN":
+                kind = self.BOOLEAN
+            elif declared_upper == "INTEGER" and not field.endswith("passage_length") and field != "rowid":
+                kind = self.YEAR
+            elif declared == "TEXT":
+                kind = self.TEXT
+            else:
+                kind = self.PASSTHROUGH
+            missing = None if declared_upper in ("INTEGER", "FLOAT", "BOOLEAN", "VECTOR") else ""
+            self.plan.append((field, kind, missing))
+
+    def __call__(self, fields) -> list:
+        values = []
+        for field, kind, missing in self.plan:
+            value = fields.get(field)
+
+            if kind == self.GROUP_ID:
                 if value is None:
-                    value = []  # Default to empty list if missing
+                    value = []
                 elif not isinstance(value, list):
                     try:
                         value = [int(value)]
                     except (ValueError, TypeError):
                         value = []
-            values.append(value)
-            continue
-
-        # Default value handling for other fields
-        if value is None:
-            field_type = field_types.get(field, "TEXT").upper()
-            if field_type == "INTEGER" or field_type == "FLOAT":
-                value = None
-            else:
-                value = ""
-
-        field_type = field_types.get(field, "TEXT")
-        # ... rest of validate_field_type remains the same ...
-        if field_type.upper() == "INTEGER" and not field.endswith("passage_length") and field != "rowid":
-            if value is None:
                 values.append(value)
                 continue
-            if isinstance(value, int):
-                value = str(value)
-            year_match = YEAR_FINDER.search(str(value))
-            if year_match:
-                matching_year = year_match.groups()[0]
-                neg_match = re.search(rf"^(\-{matching_year})", str(value))
-                if neg_match:
-                    try:
-                        value = int(neg_match.groups()[0])
-                    except ValueError:
-                        value = None
-                else:
-                    try:
-                        value = int(year_match.groups()[0])
-                    except ValueError:
-                        value = None
-            else:
-                value = None
-        elif field_type == "TEXT" and isinstance(value, str):
-            value = value.translate(CONTROL_CHARS)
-            value = clean_text(value)
-        values.append(value)
-    return values
+            if kind == self.RAW:
+                values.append(value)
+                continue
+
+            if value is None:
+                value = missing
+
+            if kind == self.TEXT:
+                if isinstance(value, str):
+                    # Both rewrites allocate, so only pay for them when the
+                    # string actually holds something that needs rewriting.
+                    if CONTROL_CHAR_FINDER(value):
+                        value = value.translate(CONTROL_CHARS)
+                    if "<" in value or ">" in value:
+                        value = clean_text(value)
+            elif kind == self.YEAR:
+                if value is not None:
+                    value = self.parse_year(value)
+            elif kind == self.BOOLEAN:
+                if isinstance(value, str):  # older result files wrote the flag as text
+                    value = value.strip().lower() in ("true", "t", "1", "yes")
+                elif value is not None:
+                    value = bool(value)
+
+            values.append(value)
+        return values
+
+    @staticmethod
+    def parse_year(value):
+        """First run of digits in the value, negated when the value opens with it."""
+        text = value if isinstance(value, str) else str(value)
+        match = YEAR_FINDER.search(text)
+        if match is None:
+            return None
+        digits = match.group(1)
+        try:
+            number = int(digits)
+        except ValueError:  # ints beyond the str-conversion limit
+            return None
+        return -number if text.startswith("-" + digits) else number
 
 
 def get_metadata_fields(metadata_file, direction):
@@ -311,13 +605,16 @@ def load_db(
     import numpy as np
 
     config = read_global_config()
-    database = psycopg2.connect(
-        user=config["DATABASE"]["database_user"],
-        password=config["DATABASE"]["database_password"],
-        database=config["DATABASE"]["database_name"],
-    )
+    database_config = {
+        "user": config["DATABASE"]["database_user"],
+        "password": config["DATABASE"]["database_password"],
+        "database": config["DATABASE"]["database_name"],
+    }
+    workers = load_workers(textpair_params)
+    database = psycopg2.connect(**database_config)
     cursor = database.cursor()
     cursor2 = database.cursor()
+    tune_load_session(cursor)
 
     # Register the vector type with psycopg2
     # Note: The vector extension must be created by a superuser before running this
@@ -325,6 +622,7 @@ def load_db(
 
     # Try to load embeddings if they exist
     embeddings_memmap = None
+    embeddings_spec = None  # what a worker needs to open the same view
     sbert_dim = None
     alignments_dir = os.path.dirname(file)
 
@@ -381,6 +679,7 @@ def load_db(
                 mode="r",
                 shape=(alignment_counts, sbert_dim),
             )
+            embeddings_spec = (embeddings_cache_path, alignment_counts, sbert_dim)
 
     fields_in_table = ["rowid INTEGER PRIMARY KEY"]
     field_names = DEFAULT_FIELDS
@@ -406,49 +705,29 @@ def load_db(
     fields_in_table.extend(fields_and_types)
     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
     cursor.execute(f"CREATE TABLE {table_name} ({', '.join(fields_in_table)})")
-    lines = 0
-    rows = []
-    rowid = 0
-    alignments = parse_file(file)
+
+    # RowValidator drops FILTERED_FIELDS from each row, so the column list
+    # has to drop them too or the values land in the wrong columns.
+    field_order = [f for f in field_names if f not in FILTERED_FIELDS]
+    validate = RowValidator(field_order, DEFAULT_FIELD_TYPES)
+
+    def alignment_rows():
+        rowid = 0
+        for alignment_fields in tqdm(parse_file(file), total=count, leave=False):
+            rowid += 1
+            yield validate(prepare_alignment(alignment_fields, rowid, embeddings_memmap))
+
     print("Populating main table...")
-    for alignment_fields in tqdm(alignments, total=count, leave=False):
-        rowid += 1
-        alignment_fields["rowid"] = rowid
-        alignment_fields["passage_id"] = rowid
-        alignment_fields["source_passage_length"] = len(TOKENIZER.findall(alignment_fields["source_passage"]))
-        alignment_fields["target_passage_length"] = len(TOKENIZER.findall(alignment_fields["target_passage"]))
+    if workers > 1 and count and count >= PARALLEL_LOAD_THRESHOLD:
+        database.commit()  # the workers connect separately and must see the table
+        parallel_copy_alignments(
+            file, table_name, field_order, count, workers, database_config, embeddings_spec
+        )
+    else:
+        copy_into(cursor, table_name, field_order, alignment_rows())
 
-        # Map passage_categories to target_*_class fields
-        if "passage_categories" in alignment_fields:
-            categories = alignment_fields.get("passage_categories", [])
-            alignment_fields["target_first_class"] = categories[0] if len(categories) > 0 else ""
-            alignment_fields["target_second_class"] = categories[1] if len(categories) > 1 else ""
-            alignment_fields["target_third_class"] = categories[2] if len(categories) > 2 else ""
-        else:
-            alignment_fields["target_first_class"] = ""
-            alignment_fields["target_second_class"] = ""
-            alignment_fields["target_third_class"] = ""
-
-        # Add embedding if available
-        if embeddings_memmap is not None:
-            embedding = embeddings_memmap[rowid - 1].tolist()  # rowid is 1-indexed, array is 0-indexed
-            alignment_fields["embedding"] = embedding
-
-        row = validate_field_type(alignment_fields, DEFAULT_FIELD_TYPES, field_names)
-        rows.append(row)
-        lines += 1
-        if lines == 100:
-            insert = f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES %s"
-            execute_values(cursor, insert, rows)
-            rows = []
-            lines = 0
-    if lines:
-        insert = f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES %s"
-        execute_values(cursor, insert, rows)
-        rows = []
-        lines = 0
-
-    print("Creating indexes for all searchable fields...")
+    print("Creating indexes...")
+    statements = []
     for field in searchable_fields:
         if field not in field_names:
             continue
@@ -460,68 +739,52 @@ def load_db(
             else:
                 field_type = "TEXT"
         if field_type == "TEXT":
-            cursor.execute(
+            statements.append(
                 f"CREATE INDEX {field}_{table_name}_trigrams_idx ON {table_name} USING GIN({field} gin_trgm_ops)"
             )
             if not field.endswith("passage"):
-                cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})")
-        elif not field.endswith("year") and field_type == "INTEGER":  # year is a special case used for results ordering
-            cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
-    cursor.execute(
+                statements.append(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})")
+        elif not field.endswith("year") and field_type in ("INTEGER", "BOOLEAN"):  # year is used for results ordering
+            statements.append(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
+    statements.append(
         f"CREATE INDEX year_{table_name}_idx ON {table_name} USING BTREE(source_year, target_year, source_start_byte)"
     )
-    cursor.execute(f"CREATE INDEX source_start_byte_{table_name}_idx ON {table_name} USING BTREE(source_start_byte)")
-    cursor.execute(f"CREATE INDEX source_end_byte_{table_name}_idx ON {table_name} USING BTREE(source_end_byte)")
-    cursor.execute(f"CREATE INDEX target_start_byte_{table_name}_idx ON {table_name} USING BTREE(target_start_byte)")
-    cursor.execute(f"CREATE INDEX target_end_byte_{table_name}_idx ON {table_name} USING BTREE(target_end_byte)")
-    cursor.execute(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
-    cursor.execute(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
-    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING GIN(group_id)")  # GIN index
+    statements.append(f"CREATE INDEX source_start_byte_{table_name}_idx ON {table_name} USING BTREE(source_start_byte)")
+    statements.append(f"CREATE INDEX source_end_byte_{table_name}_idx ON {table_name} USING BTREE(source_end_byte)")
+    statements.append(f"CREATE INDEX target_start_byte_{table_name}_idx ON {table_name} USING BTREE(target_start_byte)")
+    statements.append(f"CREATE INDEX target_end_byte_{table_name}_idx ON {table_name} USING BTREE(target_end_byte)")
+    statements.append(f"CREATE INDEX source_doc_id_{table_name}_idx ON {table_name} USING HASH(source_doc_id)")
+    statements.append(f"CREATE INDEX target_doc_id_{table_name}_idx ON {table_name} USING HASH(target_doc_id)")
+    statements.append(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING GIN(group_id)")
 
-    # Create vector similarity index if embeddings were added
+    # Result paging is a keyset scan over this order, so the index has to match
+    # the ORDER BY in api/text_pair.py exactly, COALESCE included. The sentinel
+    # reproduces NULLS LAST while keeping the sort key non-null, which is what
+    # lets the cursor be a plain row comparison.
+    statements.append(
+        f"""CREATE INDEX {table_name}_paging_idx ON {table_name} USING BTREE(
+                COALESCE(source_year, 2147483647), COALESCE(target_year, 2147483647),
+                source_start_byte, target_start_byte, rowid)"""
+    )
     if embeddings_memmap is not None:
-        print("Creating vector similarity index...")
-        cursor.execute(f"CREATE INDEX ON {table_name} USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)")
-        print("✓ Created vector similarity index")
+        statements.append(
+            f"CREATE INDEX {table_name}_embedding_idx ON {table_name} USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
+        )
 
+    database.commit()  # index builds run on their own connections and must see the rows
+    create_indexes(statements, database_config, workers)
+    cursor2.execute(f"DROP TABLE IF EXISTS {table_name}_ordered")  # superseded by the paging index
     database.commit()
 
-    print("Populating index table...")
-    ordered_table = table_name + "_ordered"
-    cursor2.execute(f"DROP TABLE if exists {ordered_table}")
-    cursor2.execute(
-        f"CREATE TABLE {ordered_table} (rowid_ordered INTEGER PRIMARY KEY, source_year_target_year INTEGER)"
-    )
-    cursor.execute(
-        f"SELECT rowid FROM {table_name} ORDER BY source_year, target_year, source_start_byte, target_start_byte ASC"
-    )
-    lines = 0
-    rows = []
-    rowid = 0
-    for row in tqdm(cursor, total=count, leave=False):
-        lines += 1
-        rowid += 1
-        rows.append((rowid, row[0]))
-        if lines == 100:
-            insert = f"INSERT INTO {ordered_table} (rowid_ordered, source_year_target_year) VALUES %s"
-            execute_values(cursor2, insert, rows)
-            rows = []
-            lines = 0
-    if lines:
-        insert = f"INSERT INTO {ordered_table} (rowid_ordered, source_year_target_year) VALUES %s"
-        execute_values(cursor2, insert, rows)
-        rows = []
-        lines = 0
-    print("Creating indexes...")
-    cursor2.execute(
-        f"CREATE INDEX {ordered_table}_source_year_target_year_rowid_idx ON {ordered_table} USING BTREE(rowid_ordered)"
-    )
-    database.commit()
+    # The planner is otherwise left guessing on a table that was empty at CREATE time.
+    print("Analyzing table...")
+    database.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor.execute(f"ANALYZE {table_name}")
     database.close()
     return field_names
 
 
-def load_groups_file(groups_file: str, alignments_table: str, searchable_fields: list[str]):
+def load_groups_file(groups_file: str, alignments_table: str, searchable_fields: list[str], workers: int = 1):
     """Load the groups file into the database."""
     config = read_global_config()
     table_name = f"{alignments_table}_groups"
@@ -535,25 +798,28 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
     fields_in_table.append("group_id INTEGER PRIMARY KEY")
     searchable_fields = [f for f in searchable_fields if f in field_names and f != "group_id"]
 
-    database = psycopg2.connect(
-        user=config["DATABASE"]["database_user"],
-        password=config["DATABASE"]["database_password"],
-        database=config["DATABASE"]["database_name"],
-    )
+    database_config = {
+        "user": config["DATABASE"]["database_user"],
+        "password": config["DATABASE"]["database_password"],
+        "database": config["DATABASE"]["database_name"],
+    }
+    database = psycopg2.connect(**database_config)
     cursor = database.cursor()
+    tune_load_session(cursor)
     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
     cursor.execute(f"CREATE TABLE {table_name} ({', '.join(fields_in_table)})")
 
     print("Populating groups table...")
-    with open(groups_file, encoding="utf8") as input_file:
-        for line in tqdm(input_file, total=row_count, desc="Storing alignment groups...", leave=False):
-            group = orjson.loads(line)
-            row = validate_field_type(group, DEFAULT_FIELD_TYPES, field_names, groups_file=True)
-            insert = (
-                f"INSERT INTO {table_name} ({', '.join(field_names)}) VALUES (" + ", ".join("%s" for _ in row) + ")"
-            )
-            cursor.execute(insert, row)
+    validate = RowValidator(field_names, DEFAULT_FIELD_TYPES, groups_file=True)
+    with open(groups_file, "rb") as input_file:
 
+        def group_rows():
+            for line in tqdm(input_file, total=row_count, desc="Storing alignment groups...", leave=False):
+                yield validate(orjson.loads(line))
+
+        copy_into(cursor, table_name, field_names, group_rows())
+
+    statements = []
     for field in searchable_fields:
         try:
             field_type = DEFAULT_FIELD_TYPES[field].upper()
@@ -563,16 +829,20 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
             else:
                 field_type = "TEXT"
         if field_type == "TEXT":
-            cursor.execute(
+            statements.append(
                 f"CREATE INDEX {field}_{table_name}_trigrams_idx ON {table_name} USING GIN({field} gin_trgm_ops)"
             )
             if not field.endswith("passage"):
-                cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})")
-        elif field_type == "INTEGER":
-            cursor.execute(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
-    cursor.execute(f"CREATE INDEX count_{table_name}_idx ON {table_name} USING BTREE(count)")
-    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
-    database.commit()
+                statements.append(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})")
+        elif field_type in ("INTEGER", "BOOLEAN"):
+            statements.append(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
+    statements.append(f"CREATE INDEX count_{table_name}_idx ON {table_name} USING BTREE(count)")
+    statements.append(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
+
+    database.commit()  # index builds run on their own connections and must see the rows
+    create_indexes(statements, database_config, workers)
+    database.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor.execute(f"ANALYZE {table_name}")
     database.close()
 
 
@@ -696,6 +966,7 @@ def create_web_app(
             groups_file,
             table,
             web_config.searchable_fields(),
+            load_workers(textpair_params),
         )
 
     if load_only_db is False:
