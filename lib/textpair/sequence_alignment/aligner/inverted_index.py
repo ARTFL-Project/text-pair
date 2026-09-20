@@ -552,7 +552,9 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
 
     `on_result(rows, duplicates, percents, stats)` is called once per source, from the
     calling thread, so results can be written out while later sources are still running.
-    `progress(done, total)` is called with the source counts after each result.
+    `progress(work, done, total)` is called after each result with that source's emission
+    count and the source counts. Weighting a bar by emissions rather than by documents is
+    what makes its ETA usable, since sources run longest-first.
     """
     n_docs = key_offsets.shape[0] - 1
     live = np.nonzero(per_source > 0)[0]
@@ -586,16 +588,16 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
             on_result(rows, dups, percents, stats)
             done += 1
             if progress:
-                progress(done, n_tasks)
+                progress(int(per_source[source]), done, n_tasks)
     else:
         with ThreadPoolExecutor(threads) as pool:
-            futures = [pool.submit(one, source) for source in order]
+            futures = {pool.submit(one, source): source for source in order}
             for future in as_completed(futures):
                 rows, _, stats, dups, percents = future.result()
                 on_result(rows, dups, percents, stats)
                 done += 1
                 if progress:
-                    progress(done, n_tasks)
+                    progress(int(per_source[futures[future]]), done, n_tasks)
     return n_tasks
 
 

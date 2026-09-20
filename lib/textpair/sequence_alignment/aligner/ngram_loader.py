@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from numba import njit
+from tqdm import tqdm
 
 from .. import ngram_binary
 
@@ -184,7 +185,7 @@ def is_binary(path):
     return path.endswith(".bin")
 
 
-def load_corpus(paths, threads):
+def load_corpus(paths, threads, show_progress=False):
     """Parse `paths` (one ngram file per document, in SortID order) into global arrays.
 
     Two passes so the arrays are allocated once and filled in place: a sizing pass,
@@ -202,6 +203,10 @@ def load_corpus(paths, threads):
     n = len(paths)
     nk = np.zeros(n, np.int64)
     npos = np.zeros(n, np.int64)
+    # One bar over both passes: pool.map yields in submission order, so draining it
+    # through tqdm counts documents without holding any of the results.
+    bar = tqdm(total=2 * n, desc="Loading ngram index", unit=" doc", unit_scale=True,
+               leave=False, disable=not show_progress)
 
     def count(i):
         if is_binary(paths[i]):
@@ -210,7 +215,8 @@ def load_corpus(paths, threads):
             nk[i], npos[i] = count_keys_pos(np.fromfile(paths[i], dtype=np.uint8))
 
     with ThreadPoolExecutor(threads) as pool:
-        list(pool.map(count, range(n)))
+        for _ in pool.map(count, range(n)):
+            bar.update(1)
 
     key_offsets = np.zeros(n + 1, np.int64)
     np.cumsum(nk, out=key_offsets[1:])
@@ -219,6 +225,7 @@ def load_corpus(paths, threads):
     n_keys = int(key_offsets[-1])
     n_pos = int(pos_base[-1])
     if n_pos >= 2 ** 31:
+        bar.close()
         # runner._size_batches raises source_batch to keep combinations under this, but
         # it can only size a binary index in advance -- counting a JSON one means
         # scanning it -- so a JSON corpus can still arrive here.
@@ -255,7 +262,9 @@ def load_corpus(paths, threads):
         store(i, *build_csr_sorted(k, c, ix, sb, eb))
 
     with ThreadPoolExecutor(threads) as pool:
-        list(pool.map(parse, range(n)))
+        for _ in pool.map(parse, range(n)):
+            bar.update(1)
+    bar.close()
     return key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes, end_bytes
 
 
