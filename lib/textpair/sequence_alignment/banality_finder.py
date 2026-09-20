@@ -176,6 +176,16 @@ class _Passage(msgspec.Struct):
     banality: Union[bool, None, msgspec.UnsetType] = msgspec.UNSET
 
 
+class _Filtered(msgspec.Struct):
+    """What both filters need, for the pass that runs them together."""
+
+    source_passage: str
+    source_ngrams: str
+    source_start_byte: Union[int, str]
+    source_end_byte: Union[int, str]
+    banality: Union[bool, None, msgspec.UnsetType] = msgspec.UNSET
+
+
 class _Verdict(msgspec.Struct):
     """The banality flag alone, for the pass that only sorts records by it."""
 
@@ -190,6 +200,7 @@ class _SourcePassage(msgspec.Struct):
 
 _DECODE_PASSAGE = msgspec.json.Decoder(_Passage).decode
 _DECODE_VERDICT = msgspec.json.Decoder(_Verdict).decode
+_DECODE_FILTERED = msgspec.json.Decoder(_Filtered).decode
 _DECODE_SOURCE = msgspec.json.Decoder(_SourcePassage).decode
 _BANALITY_FIELD = {True: b',"banality":true', False: b',"banality":false'}
 # Documents kept open while scanning results. Oldest out first, and the
@@ -302,6 +313,67 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
     os.replace(f"{filepath}.keep.lz4", filepath)
     print("done")
     return passages_filtered
+
+
+def filter_and_flag(
+    filepath: str,
+    banality_phrases_path: str,
+    common_ngrams_file: str,
+    ngram_doc_path: str,
+    count: Optional[int],
+    proportion: float,
+    threshold: float,
+) -> tuple[int, int]:
+    """Phrase filtering and automatic banality detection in one pass.
+
+    Run one after the other they read and rewrite the whole result file twice,
+    and decode each record twice, for two verdicts that need one decode
+    between them. Returns (passages filtered, banalities found); the files
+    written are the ones the two passes write separately, with the same
+    contents.
+    """
+    print("Building tree for phrase-based banality detection...", end="", flush=True)
+    matcher = ahocorasick_rs.AhoCorasick(clean_phrases(banality_phrases_path))
+    print("\r", end="")
+    common_ngrams = load_common_ngrams(common_ngrams_file, proportion)
+
+    passages_filtered = 0
+    banalities_found = 0
+    filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages.jsonl")
+    with (
+        lz4.frame.open(filtered_file_name, mode="wb") as filtered_passages,
+        lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
+        lz4.frame.open(filepath) as input_file,
+    ):
+        loaded: dict[str, NgramDoc] = {}
+        for line in tqdm(
+            input_file,
+            total=count,
+            desc="Filtering passages and detecting banalities...",
+            leave=False,
+        ):
+            passage = _DECODE_FILTERED(line)
+            if matcher.find_matches_as_strings(clean_text(passage.source_passage)):
+                passages_filtered += 1
+                filtered_passages.write(line)  # type: ignore
+                continue
+            document = loaded.get(passage.source_ngrams)
+            if document is None:
+                document = NgramDoc(os.path.join(ngram_doc_path, passage.source_ngrams))
+                if len(loaded) >= _DOCUMENTS_HELD:
+                    del loaded[next(iter(loaded))]
+                loaded[passage.source_ngrams] = document
+            low, high = document.span(
+                int(passage.source_start_byte), int(passage.source_end_byte)
+            )
+            # if n % (or more) of ngrams are common ngrams
+            banality = high > low and (
+                common_ngrams.count_in(document.keys[low:high]) / (high - low) * 100 >= threshold
+            )
+            banalities_found += banality
+            output_file.write(_with_banality(line, banality, passage.banality))  # type: ignore
+    os.replace(f"{filepath}.keep.lz4", filepath)
+    return passages_filtered, banalities_found
 
 
 def separate_banalities(filepath: str, count: Optional[int]) -> int:
