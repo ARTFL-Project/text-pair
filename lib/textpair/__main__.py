@@ -16,6 +16,7 @@ from .sequence_alignment import (
     Ngrams,
     banality_auto_detect,
     banality_llm_post_eval,
+    filter_and_flag,
     merge_alignments,
     phrase_matcher,
     separate_banalities,
@@ -305,24 +306,44 @@ async def run_alignment(params):
         ]
     ):
         print(f"\n### Postprocessing {count} pairwise alignments ###")
-        if params.matching_params["phrase_filter"]:
-            filtered_passages = phrase_matcher(results_file, params.matching_params["phrase_filter"], count)
-            print(f"{filtered_passages} pairwise alignments have been filtered based on the phrase filter provided.")
-            count = update_count(count, filtered_passages, params.output_path)
-            print(f"{count} pairwise alignments remaining.")
-        # Independent of the phrase filter above: the phrase list removes known
-        # boilerplate, auto-detection catches the rest.
-        if params.matching_params["banality_auto_detection"] is True:
+        # The phrase list removes known boilerplate and auto-detection catches
+        # the rest, so they are independent verdicts -- but on the same records,
+        # and run one after the other they read and rewrite the whole result
+        # file twice. With both on they share a pass.
+        phrase_filter = params.matching_params["phrase_filter"]
+        auto_detect = params.matching_params["banality_auto_detection"] is True
+        ngrams_in_order = f"{params.paths['source']['ngram_output_path']}/ngrams_in_order"
+        filtered_passages = 0
+        banalities_found = 0
+        if phrase_filter and auto_detect:
+            print("Running phrase filter and automatic banality detection...")
+            filtered_passages, banalities_found = filter_and_flag(
+                results_file,
+                phrase_filter,
+                params.paths["source"]["common_ngrams"],
+                ngrams_in_order,
+                count,
+                params.matching_params["most_common_ngram_proportion"],
+                params.matching_params["common_ngram_threshold"],
+            )
+        elif phrase_filter:
+            filtered_passages = phrase_matcher(results_file, phrase_filter, count)
+        elif auto_detect:
             print("Running automatic banality detection...")
             banalities_found = banality_auto_detect(
                 results_file,
                 params.paths["source"]["common_ngrams"],
-                f"{params.paths['source']['ngram_output_path']}/ngrams_in_order",
+                ngrams_in_order,
                 params.matching_params["store_banalities"],
                 count,
                 params.matching_params["most_common_ngram_proportion"],
                 params.matching_params["common_ngram_threshold"],
             )
+        if phrase_filter:
+            print(f"{filtered_passages} pairwise alignments have been filtered based on the phrase filter provided.")
+            count = update_count(count, filtered_passages, params.output_path)
+            print(f"{count} pairwise alignments remaining.")
+        if auto_detect:
             print(f"{banalities_found} pairwise alignment(s) have been identified as formulaic.")
             if params.matching_params["banality_llm_post_eval"] is True:
                 print("Running LLM post-evaluation on flagged banalities...")

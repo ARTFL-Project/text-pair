@@ -4,6 +4,7 @@ from .alignment_merger import merge_alignments
 from .banality_finder import (
     banality_auto_detect,
     banality_llm_post_eval,
+    filter_and_flag,
     phrase_matcher,
     separate_banalities,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "merge_alignments",
     "banality_auto_detect",
     "banality_llm_post_eval",
+    "filter_and_flag",
     "phrase_matcher",
     "separate_banalities",
     "Ngrams",
