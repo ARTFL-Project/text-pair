@@ -29,15 +29,13 @@ def clean_text(text: str) -> str:
     return text
 
 
-def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -> str:
-    """Grab all texts"""
-    if start_byte < 0:
-        start_byte = 0
-    length = end_byte - start_byte
-    with open(filename, "rb") as text_file:
-        text_file.seek(start_byte)
-        text: str = text_file.read(length).decode("utf8", "ignore")
+def clean_passage(raw: bytes) -> str:
+    """Decode a passage's bytes and drop the tags at its edges.
 
+    Split out of get_text for callers that read many passages and would rather
+    hold the file open themselves.
+    """
+    text: str = raw.decode("utf8", "ignore")
     # Remove leading and closing tags
     if text.startswith("<"):
         text = re.sub(r"^<[^>]+>", "", text, count=1).strip()
@@ -46,6 +44,16 @@ def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -
     # Remove unclosed tags at the end
     text = re.sub(r"<[^>]+$", "", text).strip()
     return clean_text(text)
+
+
+def get_text(start_byte: int, end_byte: int, filename: str, length: int = 300) -> str:
+    """Grab all texts"""
+    if start_byte < 0:
+        start_byte = 0
+    length = end_byte - start_byte
+    with open(filename, "rb") as text_file:
+        text_file.seek(start_byte)
+        return clean_passage(text_file.read(length))
 
 
 def text_object_upper_bound(config) -> str:

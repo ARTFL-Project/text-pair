@@ -3,13 +3,14 @@
 import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Union
 
 import lz4.frame
+import msgspec
 import orjson
 from tqdm import tqdm
 
-from textpair.utils import get_text
+from textpair.utils import clean_passage, get_text
 
 
 @dataclass(slots=True)
@@ -161,6 +162,74 @@ class RefinedGroupInfo:
     member_ids: set = field(default_factory=set)
 
 
+class _SourceText:
+    """Passage text, holding open the file it last read from.
+
+    Groups are written a file at a time -- four in five consecutive ones come
+    from the same file -- and opening it again was over a third of what
+    fetching a passage cost.
+    """
+
+    __slots__ = ("name", "handle")
+
+    def __init__(self):
+        self.name: str | None = None
+        self.handle = None
+
+    def read(self, start_byte: int, end_byte: int, filename: str) -> str:
+        if filename != self.name:
+            self.close()
+            self.handle = open(filename, "rb")
+            self.name = filename
+        if start_byte < 0:
+            start_byte = 0
+        self.handle.seek(start_byte)
+        return clean_passage(self.handle.read(end_byte - start_byte))
+
+    def close(self) -> None:
+        if self.handle is not None:
+            self.handle.close()
+        self.handle = None
+        self.name = None
+
+
+class _GroupFields(msgspec.Struct):
+    """Whether a record already carries the fields the rewrite sets.
+
+    Raw so the values are never parsed -- only their presence matters, and a
+    record that has them has to be rewritten rather than appended to.
+    """
+
+    group_id: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
+    count: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
+
+
+_DECODE_GROUP_FIELDS = msgspec.json.Decoder(_GroupFields).decode
+
+
+def with_group_ids(line: bytes, groups: list[int]) -> bytes:
+    """`line` with its group list set, and any stale count dropped.
+
+    The rewrite adds one field to a record of about a hundred, so the list is
+    spliced into the bytes rather than the record decoded and encoded back.
+    orjson wrote these files and reproduces them byte for byte, so the result
+    is what the round trip produced. A record that already carries either
+    field goes through the round trip, since one has to keep its place and the
+    other has to go.
+    """
+    present = _DECODE_GROUP_FIELDS(line)
+    if present.group_id is msgspec.UNSET and present.count is msgspec.UNSET:
+        body = line[:-1] if line.endswith(b"\n") else line
+        if body.endswith(b"}") and not body.endswith(b"{}"):
+            return body[:-1] + b',"group_id":' + orjson.dumps(groups) + b"}\n"
+    fields = orjson.loads(line)
+    fields["group_id"] = groups
+    # Remove old 'count' field if it exists, use final_group_counts later
+    if "count" in fields:
+        del fields["count"]
+    return orjson.dumps(fields) + b"\n"
+
+
 def read_alignment(line: bytes, passage_id: int):
     """Read alignment from line"""
     alignment: dict[str, Any] = orjson.loads(line)
@@ -168,10 +237,19 @@ def read_alignment(line: bytes, passage_id: int):
     return alignment
 
 
-def first_step_merge(results_file: str, count: int) -> tuple[dict[int, int], dict[int, SourcePassageGroup]]:
-    """Merge passages that are aligned to the same source passage"""
+def first_step_merge(
+    results_file: str, count: int
+) -> tuple[dict[int, int], dict[int, SourcePassageGroup], list[tuple[str, int, int]]]:
+    """Merge passages that are aligned to the same source passage.
+
+    Also returns each passage's source file and span, by passage id. The two
+    passes after this one need nothing else out of a record, and this one has
+    already decoded every one of them.
+    """
     passages: list[dict[str, str]] = []
     alignment_groups = AlignmentGroups()
+    spans: list[tuple[str, int, int]] = []
+    filenames: dict[str, str] = {}
     doc_id = None
     with lz4.frame.open(results_file) as input_file:
         for passage_id, line in tqdm(
@@ -181,6 +259,15 @@ def first_step_merge(results_file: str, count: int) -> tuple[dict[int, int], dic
             leave=False,
         ):
             new_pair = read_alignment(line, passage_id)
+            # One string per distinct file rather than one per record.
+            filename = new_pair["source_filename"]
+            spans.append(
+                (
+                    filenames.setdefault(filename, filename),
+                    new_pair["source_start_byte"],
+                    new_pair["source_end_byte"],
+                )
+            )
             source_doc_id: str = new_pair["source_doc_id"]
             match = False
             if source_doc_id in alignment_groups.merged_target_passages:
@@ -200,7 +287,7 @@ def first_step_merge(results_file: str, count: int) -> tuple[dict[int, int], dic
             passages = []
 
     print(f"Pass 1 finished. Found {len(alignment_groups.group_to_bytes)} initial groups.")
-    return alignment_groups.group_map, alignment_groups.group_to_bytes
+    return alignment_groups.group_map, alignment_groups.group_to_bytes, spans
 
     # group_id_count = Counter()
     # with (
@@ -221,7 +308,7 @@ def first_step_merge(results_file: str, count: int) -> tuple[dict[int, int], dic
 
 
 def refine_groups_strict_intersection(
-    results_file: str, initial_group_map: dict[int, int], count: int
+    spans: list[tuple[str, int, int]], initial_group_map: dict[int, int]
 ) -> tuple[dict[int, int], dict[int, dict]]:
     """
     Pass 2: Split initial groups based purely on direct source passage overlap
@@ -234,18 +321,19 @@ def refine_groups_strict_intersection(
     # 1. Group alignments by the *initial* group_id and source_filename
     groups_data = defaultdict(lambda: defaultdict(list))  # initial_group_id -> source_filename -> [AlignmentRefineInfo]
     print("Starting Pass 2: Refining Groups by Strict Intersection...")
-    with lz4.frame.open(results_file) as input_file:
-        for passage_id, line in tqdm(enumerate(input_file), total=count, desc="Pass 2 Reading...", leave=False):
-            alignment = read_alignment(line, passage_id)
-            initial_group_id = initial_group_map.get(passage_id)
-            if initial_group_id is not None:
-                info = AlignmentRefineInfo(
+    for passage_id, (source_filename, start_byte, end_byte) in tqdm(
+        enumerate(spans), total=len(spans), desc="Pass 2 Reading...", leave=False
+    ):
+        initial_group_id = initial_group_map.get(passage_id)
+        if initial_group_id is not None:
+            groups_data[initial_group_id][source_filename].append(
+                AlignmentRefineInfo(
                     passage_id=passage_id,
-                    source_filename=alignment["source_filename"],
-                    source_start_byte=alignment["source_start_byte"],
-                    source_end_byte=alignment["source_end_byte"],
+                    source_filename=source_filename,
+                    source_start_byte=start_byte,
+                    source_end_byte=end_byte,
                 )
-                groups_data[initial_group_id][info.source_filename].append(info)
+            )
 
     # 2. Process each initial group's alignments per source file
     refined_group_map = {}
@@ -328,7 +416,7 @@ def refine_groups_strict_intersection(
 
 # --- Pass 3: Assign Multiple Memberships ---
 def assign_multiple_memberships(
-    results_file: str, refined_group_definitions: dict[int, dict], count: int
+    spans: list[tuple[str, int, int]], refined_group_definitions: dict[int, dict]
 ) -> tuple[dict[int, list[int]], Counter]:
     """
     Pass 3: Assign passages to potentially multiple refined groups if their
@@ -341,32 +429,34 @@ def assign_multiple_memberships(
     final_group_counts = Counter()
     print("Starting Pass 3: Assigning Multiple Memberships...")
 
-    with lz4.frame.open(results_file) as input_file:
-        for passage_id, line in tqdm(enumerate(input_file), total=count, desc="Pass 3 Checking...", leave=False):
-            alignment = read_alignment(line, passage_id)
-            p_start = alignment["source_start_byte"]
-            p_end = alignment["source_end_byte"]
-            p_filename = alignment["source_filename"]  # Get source filename
-            assigned_groups = set()
+    # Pass 2 makes groups file-specific, so a passage can only overlap groups
+    # from its own file. Bucketing them by filename is what makes this a pass
+    # over the results rather than over the results times every group in the
+    # corpus: 31,254 passages against 24,056 groups was 752M comparisons.
+    groups_by_file = defaultdict(list)
+    for group_id, definition in refined_group_definitions.items():
+        groups_by_file[definition["source_filename"]].append(
+            (definition["start"], definition["end"], group_id)
+        )
 
-            # Check against all final intersections from Pass 2
-            for group_id, definition in refined_group_definitions.items():
-                # Check filename first for efficiency
-                if p_filename == definition["source_filename"]:
-                    intersect_start = definition["start"]
-                    intersect_end = definition["end"]
+    for passage_id, (source_filename, p_start, p_end) in tqdm(
+        enumerate(spans), total=len(spans), desc="Pass 3 Checking...", leave=False
+    ):
+        assigned_groups = set()
 
-                    # Check if passage's *original* span overlaps the group's *final* intersection
-                    if p_start < intersect_end and p_end > intersect_start:
-                        assigned_groups.add(group_id)
+        # Check against the final intersections from Pass 2 for this file
+        for intersect_start, intersect_end, group_id in groups_by_file.get(source_filename, ()):
+            # Check if passage's *original* span overlaps the group's *final* intersection
+            if p_start < intersect_end and p_end > intersect_start:
+                assigned_groups.add(group_id)
 
-            # Store the unique, sorted list of groups for this passage
-            if assigned_groups:
-                final_groups_list = sorted(list(assigned_groups))
-                final_passage_to_groups[passage_id] = final_groups_list
-                # Increment count for each group this passage belongs to
-                for group_id in final_groups_list:
-                    final_group_counts[group_id] += 1
+        # Store the unique, sorted list of groups for this passage
+        if assigned_groups:
+            final_groups_list = sorted(assigned_groups)
+            final_passage_to_groups[passage_id] = final_groups_list
+            # Increment count for each group this passage belongs to
+            for group_id in final_groups_list:
+                final_group_counts[group_id] += 1
 
     print(f"Pass 3 finished.")
     return dict(final_passage_to_groups), final_group_counts
@@ -378,7 +468,7 @@ def merge_alignments(results_file: str, count: int):
     print("Starting alignment grouping...")
 
     # Step 1: Initial broad grouping
-    initial_group_map, initial_group_sources = first_step_merge(results_file, count)
+    initial_group_map, initial_group_sources, spans = first_step_merge(results_file, count)
 
     if not initial_group_map:
         print("Aborting: No initial groups found in Pass 1.")
@@ -386,7 +476,7 @@ def merge_alignments(results_file: str, count: int):
 
     # Step 2: Refine groups by strict intersection
     refined_group_map, refined_group_definitions = refine_groups_strict_intersection(
-        results_file, initial_group_map, count
+        spans, initial_group_map
     )
 
     if not refined_group_definitions:
@@ -396,7 +486,7 @@ def merge_alignments(results_file: str, count: int):
 
     # Step 3: Assign multiple memberships
     final_passage_to_groups, final_group_counts = assign_multiple_memberships(
-        results_file, refined_group_definitions, count
+        spans, refined_group_definitions
     )
 
     # Step 4: Rewrite the results file with the final GROUP LIST
@@ -407,14 +497,9 @@ def merge_alignments(results_file: str, count: int):
         lz4.frame.open(results_file) as input_file,
     ):
         for passage_id, line in tqdm(enumerate(input_file), total=count, desc="Rewriting results...", leave=False):
-            fields = orjson.loads(line)
-            final_groups = final_passage_to_groups.get(passage_id, [])  # Get list, default empty
-            # Update field to store an array/list of group IDs
-            fields["group_id"] = final_groups
-            # Remove old 'count' field if it exists, use final_group_counts later
-            if "count" in fields:
-                del fields["count"]
-            output_file.write(orjson.dumps(fields) + b"\n")
+            # Get list, default empty
+            final_groups = final_passage_to_groups.get(passage_id, [])
+            output_file.write(with_group_ids(line, final_groups))
 
     # Replace original file with the new one
     os.remove(results_file)
@@ -424,19 +509,12 @@ def merge_alignments(results_file: str, count: int):
     # Step 5: Write the final source passage group file
     groups_file = os.path.join(os.path.dirname(results_file), "passage_group_source.jsonl")
     print(f"Writing final source group definitions to {groups_file}...")
+    source_text = _SourceText()
     with open(groups_file, "wb") as output_file:
-        # Find representative metadata (use first passage found for each initial group)
-        group_to_first_passage_id_initial = {}
-        for passage_id, init_group_id in initial_group_map.items():
-            if init_group_id not in group_to_first_passage_id_initial:
-                group_to_first_passage_id_initial[init_group_id] = passage_id
-            else:
-                group_to_first_passage_id_initial[init_group_id] = min(
-                    passage_id, group_to_first_passage_id_initial[init_group_id]
-                )
-
+        # Representative metadata is whatever was stored when the group was
+        # created, so which of its passages came first never entered into it.
         representative_metadata = {}
-        for init_group_id, passage_id in group_to_first_passage_id_initial.items():
+        for init_group_id in initial_group_map.values():
             source_info = initial_group_sources.get(init_group_id)
             if source_info:
                 representative_metadata[init_group_id] = source_info.metadata
@@ -462,7 +540,9 @@ def merge_alignments(results_file: str, count: int):
             metadata_to_use = representative_metadata.get(initial_group_id_for_meta, {})
 
             # Get the actual source text using the final intersection span
-            source_passage = get_text(definition["start"], definition["end"], definition["source_filename"])
+            source_passage = source_text.read(
+                definition["start"], definition["end"], definition["source_filename"]
+            )
 
             output_file.write(
                 orjson.dumps(
@@ -478,6 +558,7 @@ def merge_alignments(results_file: str, count: int):
                 )
                 + b"\n"
             )
+    source_text.close()
 
     print("Grouping alignments... done.")
     return groups_file
