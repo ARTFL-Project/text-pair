@@ -159,12 +159,14 @@ def parse_args(request):
         "limit",
         "offset",
         "centrality",
+        "banality",
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
-            if key in (
+            if key == "id_anchor":
+                other_args[key] = value
+            elif key in (
                 "page",
-                "id_anchor",
                 "timeSeriesInterval",
                 "start_byte",
                 "end_byte",
@@ -204,6 +206,35 @@ def parse_args(request):
     metadata_field_types["rowid"] = "INTEGER"
     sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
     return sql_fields, sql_values, other_args, list(metadata_field_types.keys())
+
+
+# Results are ordered by year then position, and paged through with a keyset
+# cursor rather than a materialized rank table. COALESCE reproduces the NULLS
+# LAST that plain ASC gives, so the sort key is never NULL and the cursor
+# comparison stays a plain row comparison an index can serve.
+NULL_SORT_SENTINEL = 2147483647
+PAGE_SORT_EXPRESSIONS = (
+    f"COALESCE(source_year, {NULL_SORT_SENTINEL})",
+    f"COALESCE(target_year, {NULL_SORT_SENTINEL})",
+    "source_start_byte",
+    "target_start_byte",
+    "rowid",
+)
+PAGE_CURSOR_FIELDS = ("source_year", "target_year", "source_start_byte", "target_start_byte", "rowid")
+
+
+def page_cursor(row) -> str:
+    """Encode a row's position in the result order, for the next request to anchor on."""
+    return ".".join(str(NULL_SORT_SENTINEL if row[f] is None else row[f]) for f in PAGE_CURSOR_FIELDS)
+
+
+def parse_page_cursor(value) -> list[int] | None:
+    """Decode a cursor, or None if it is absent or malformed (i.e. start from the top)."""
+    try:
+        anchor = [int(part) for part in str(value).split(".")]
+    except (TypeError, ValueError):
+        return None
+    return anchor if len(anchor) == len(PAGE_CURSOR_FIELDS) else None
 
 
 def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
@@ -296,7 +327,7 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
             continue
     if other_args.banality != "":
         sql_fields.append("banality=%s")
-        sql_values.append(other_args.banality)
+        sql_values.append(str(other_args.banality).lower() in ("true", "t", "1", "yes"))
 
     # Add classification filter condition
     for i in range(1, 4):  # Handle classification_filter_1, classification_filter_2, classification_filter_3
@@ -377,24 +408,20 @@ def search_alignments(request: Request):
     sql_fields, sql_values, other_args, column_names = parse_args(request)
     field_types = get_pg_type(other_args.db_table)
     group_id_type = field_types.get("group_id", "INTEGER")
-    if other_args.direction == "next":
-        if sql_fields:
-            query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE {sql_fields} AND o.source_year_target_year=m.rowid and \
-                    o.rowid_ordered > {other_args.id_anchor} ORDER BY o.rowid_ordered LIMIT 50"
-        else:
-            query = (
-                f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE o.source_year_target_year=m.rowid and \
-                    o.rowid_ordered > {other_args.id_anchor} ORDER BY o.rowid_ordered LIMIT 50"
-            )
-    else:
-        if sql_fields:
-            query = f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE {sql_fields} AND o.source_year_target_year=m.rowid and \
-                    o.rowid_ordered < {other_args.id_anchor} ORDER BY o.rowid_ordered desc LIMIT 50"
-        else:
-            query = (
-                f"SELECT o.rowid_ordered, m.* FROM {other_args.db_table} m, {other_args.db_table}_ordered o WHERE o.source_year_target_year=m.rowid and \
-                    o.rowid_ordered < {other_args.id_anchor} ORDER BY o.rowid_ordered desc LIMIT 50"
-            )
+    forward = other_args.direction == "next"
+    sort_key = ", ".join(PAGE_SORT_EXPRESSIONS)
+    conditions = [sql_fields] if sql_fields else []
+    sql_values = list(sql_values)
+
+    anchor = parse_page_cursor(other_args.id_anchor)
+    if anchor is not None:
+        placeholders = ", ".join("%s" for _ in PAGE_SORT_EXPRESSIONS)
+        conditions.append(f"({sort_key}) {'>' if forward else '<'} ({placeholders})")
+        sql_values.extend(anchor)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    order_by = sort_key if forward else ", ".join(f"{e} DESC" for e in PAGE_SORT_EXPRESSIONS)
+    query = f"SELECT * FROM {other_args.db_table} {where_clause} ORDER BY {order_by} LIMIT 50"
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
@@ -406,7 +433,7 @@ def search_alignments(request: Request):
     group_ids = []
     for row in cursor:
         metadata = {key: row[key] for key in column_names}
-        metadata["rowid_ordered"] = row["rowid_ordered"]
+        metadata["page_cursor"] = page_cursor(row)
         try:
             metadata["group_id"] = row["group_id"]
             if group_id_type == "ARRAY":
@@ -457,14 +484,14 @@ def search_alignments(request: Request):
     conn.close()
 
     previous_url = ""
-    current_path = re.sub(r"&(page|id_anchor|direction)=(previous|next|\d*)", "", request.url.path)
-    if other_args.page > 1:  # type: ignore
+    current_path = re.sub(r"&(page|id_anchor|direction)=[^&]*", "", request.url.path)
+    if other_args.page > 1 and alignments:  # type: ignore
         previous_url = (
-            f"{current_path}&page={other_args.page - 1}&id_anchor={alignments[0]['rowid_ordered']}&direction=previous"  # type: ignore
+            f"{current_path}&page={other_args.page - 1}&id_anchor={alignments[0]['page_cursor']}&direction=previous"  # type: ignore
         )
     try:
         next_url = (
-            f"{current_path}&page={other_args.page + 1}&id_anchor={alignments[-1]['rowid_ordered']}&direction=next"  # type: ignore
+            f"{current_path}&page={other_args.page + 1}&id_anchor={alignments[-1]['page_cursor']}&direction=next"  # type: ignore
         )
     except IndexError:
         next_url = ""

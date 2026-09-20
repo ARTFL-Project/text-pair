@@ -107,14 +107,14 @@ export default {
             let queryParams = { ...this.$route.query };
             queryParams.page = parseInt(this.results.page) - 1;
             queryParams.direction = "previous";
-            queryParams.id_anchor = this.results.alignments[0].rowid_ordered;
+            queryParams.id_anchor = this.results.alignments[0].page_cursor;
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
         },
         nextPage() {
             let queryParams = { ...this.$route.query };
             queryParams.page = parseInt(this.results.page) + 1;
             queryParams.direction = "next";
-            queryParams.id_anchor = this.results.alignments[this.results.alignments.length - 1].rowid_ordered;
+            queryParams.id_anchor = this.results.alignments[this.results.alignments.length - 1].page_cursor;
             this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
         },
         facetSearch(field) {
