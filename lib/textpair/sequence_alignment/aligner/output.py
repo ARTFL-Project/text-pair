@@ -443,7 +443,7 @@ class OutputPool:
         # are the larger consumer of CPU on a big corpus, so the wait is not short.
         bar = tqdm(total=self.queued, initial=min(self.written.value, self.queued),
                    desc="Writing results", unit=" chunk", unit_scale=True,
-                   mininterval=1.0, disable=self.queued == 0)
+                   mininterval=1.0, leave=False, disable=self.queued == 0)
         stats = []
         while len(stats) < len(self.procs):
             bar.update(min(self.written.value, self.queued) - bar.n)
