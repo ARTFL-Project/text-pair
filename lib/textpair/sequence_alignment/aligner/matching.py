@@ -45,6 +45,85 @@ def _pair_key(packed):
     return (low << 31) | high
 
 
+
+@njit(nogil=True, cache=True)
+def _merge_pass(src, src_off, dst, dst_off, m, width, packed_indices):
+    """One bottom-up merge pass. Ties take the left run, so the pass is stable."""
+    i = 0
+    while i < m:
+        mid = i + width
+        if mid > m:
+            mid = m
+        end = i + 2 * width
+        if end > m:
+            end = m
+        a = i
+        b = mid
+        o = i
+        if b < end:
+            ka = _pair_key(packed_indices[src[src_off + a]])
+            kb = _pair_key(packed_indices[src[src_off + b]])
+            while True:
+                if kb < ka:
+                    dst[dst_off + o] = src[src_off + b]
+                    o += 1
+                    b += 1
+                    if b >= end:
+                        break
+                    kb = _pair_key(packed_indices[src[src_off + b]])
+                else:
+                    dst[dst_off + o] = src[src_off + a]
+                    o += 1
+                    a += 1
+                    if a >= mid:
+                        break
+                    ka = _pair_key(packed_indices[src[src_off + a]])
+        while a < mid:
+            dst[dst_off + o] = src[src_off + a]
+            a += 1
+            o += 1
+        while b < end:
+            dst[dst_off + o] = src[src_off + b]
+            b += 1
+            o += 1
+        i = end
+
+
+@njit(nogil=True, cache=True)
+def _sort_block(order, lo, hi, packed_indices, buf):
+    """Stable ascending sort of order[lo:hi] by _pair_key. buf needs hi - lo slots."""
+    m = hi - lo
+    if m < 2:
+        return
+    run = 32
+    start = lo
+    while start < hi:
+        stop = start + run
+        if stop > hi:
+            stop = hi
+        for i in range(start + 1, stop):
+            entry = order[i]
+            entry_key = _pair_key(packed_indices[entry])
+            j = i - 1
+            while j >= start and _pair_key(packed_indices[order[j]]) > entry_key:
+                order[j + 1] = order[j]
+                j -= 1
+            order[j + 1] = entry
+        start = stop
+    width = run
+    in_order = True
+    while width < m:
+        if in_order:
+            _merge_pass(order, lo, buf, 0, m, width, packed_indices)
+        else:
+            _merge_pass(buf, 0, order, lo, m, width, packed_indices)
+        in_order = not in_order
+        width *= 2
+    if not in_order:
+        for i in range(m):
+            order[lo + i] = buf[i]
+
+
 @njit(nogil=True, cache=True)
 def _sort_rows(out, n):
     """By source index then target index: what merge_passages and the record order want.
@@ -303,18 +382,10 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
             order[key[bucket]] = b
             key[bucket] += 1
     block_start = 0
-    for rank in range(1, n_ends + 1):
-        if rank < n_ends and best[order[rank]] == best[order[block_start]]:
-            continue
-        for i in range(block_start + 1, rank):
-            entry = order[i]
-            entry_key = _pair_key(packed_indices[entry])
-            j = i - 1
-            while j >= block_start and _pair_key(packed_indices[order[j]]) > entry_key:
-                order[j + 1] = order[j]
-                j -= 1
-            order[j + 1] = entry
-        block_start = rank
+    for bucket in range(n_buckets):
+        block_end = key[bucket]
+        _sort_block(order, block_start, block_end, packed_indices, chain)
+        block_start = block_end
 
     for rank in range(n_ends):
         end = order[rank]
