@@ -32,6 +32,9 @@ CONFIG_KEYS = ("matchingWindowSize", "maxGap", "flexGap", "minimumMatchingNgrams
                "sortingField", "debug")
 
 _MMAP_CACHE_LIMIT = 4096
+# Extracted passages held per write() call. A chunk's records reach at most twice this
+# many distinct passages, so the working set fits and the cap only bounds carry-over.
+_TEXT_CACHE_LIMIT = 8192
 _DUMP_OPT = orjson.OPT_SORT_KEYS          # the format has object keys sorted
 
 
@@ -329,6 +332,11 @@ class ChunkWriter:
         docs = self.docs
         to_text = alignment_to_text
         dumps = orjson.dumps
+        # One source passage aligns to many targets, and each of those is a separate
+        # record, so without this every one of them re-decodes and re-scrubs the same
+        # bytes: two fifths of the extraction calls in a run are repeats.
+        cache = {}
+        cached = cache.get
         for slot, name, lo, hi in jobs:
             source_doc = docs[slot]
             lines = []
@@ -352,8 +360,22 @@ class ChunkWriter:
                     source_end_byte = int(rows[k, 3])
                     target_start_byte = int(rows[k, 6])
                     target_end_byte = int(rows[k, 7])
-                    source_text = to_text(source_buf, source_start_byte, source_end_byte, ctx)
-                    target_text = to_text(target_buf, target_start_byte, target_end_byte, ctx)
+                    key = (slot, source_start_byte, source_end_byte)
+                    source_text = cached(key)
+                    if source_text is None:
+                        source_text = to_text(source_buf, source_start_byte,
+                                              source_end_byte, ctx)
+                        if len(cache) >= _TEXT_CACHE_LIMIT:
+                            cache.clear()
+                        cache[key] = source_text
+                    key = (target_slot, target_start_byte, target_end_byte)
+                    target_text = cached(key)
+                    if target_text is None:
+                        target_text = to_text(target_buf, target_start_byte,
+                                              target_end_byte, ctx)
+                        if len(cache) >= _TEXT_CACHE_LIMIT:
+                            cache.clear()
+                        cache[key] = target_text
                     record["source_start_byte"] = source_start_byte
                     record["source_end_byte"] = source_end_byte
                     record["source_context_before"] = source_text[0]
