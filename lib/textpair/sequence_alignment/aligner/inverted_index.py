@@ -23,8 +23,10 @@ documents in SortID order: the documents a source is compared against are the su
 the group that follows the source's own entry. Emissions are therefore built one source
 at a time, which bounds them by the biggest source instead of by sum(df^2 / 2).
 """
+import os
+import queue
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from numba import njit
@@ -40,6 +42,15 @@ LSD_SHIFTS = (0, 13, 26, 39)       # 4 x 13 covers LOW_BITS exactly
 SIGN_BIT = np.uint64(0x8000000000000000)
 LOW_SHIFT = np.uint64(LOW_BITS)
 DIGIT_MASK = np.uint64(LSD_RADIX - 1)
+
+# A source's targets are cut into ranges when the source's own predicted work says it is
+# worth it. Not when the pool looks idle: the straggler starts in the first seconds of a
+# run, so by the time threads go idle it has been running for minutes. The environment
+# overrides exist so the byte-identity checks can force a split on any corpus.
+SPLIT_EMISSION_FLOOR = int(os.environ.get("TEXTPAIR_SPLIT_FLOOR", 50_000))
+SPLIT_MATCHES = int(os.environ.get("TEXTPAIR_SPLIT_MATCHES", 8_000_000))  # per range
+SPLIT_MAX = int(os.environ.get("TEXTPAIR_SPLIT_MAX", 16))   # past this the costliest
+                                    # single target, not the balance, sets the floor
 
 
 # --------------------------------------------------------------------------- postings
@@ -221,64 +232,21 @@ def sort_radix(keys, n, max_key, order, spare, digit_counts):
 
 
 @njit(nogil=True, cache=True)
-def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting_keys,
+def sweep_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting_keys,
                  posting_slots, posting_docs,
-                 target_counts, target_offsets, target_cursors, source_slots, target_slots,
-                 position_offsets, ngram_indices, start_bytes, end_bytes,
-                 min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
-                 min_matching, min_in_window, merge_byte, merge_ngram, multiplier):
-    """Own one source document end to end: sweep its keys for the documents that follow
-    it in each group, apply the two filters, then expand each surviving pair's matches
-    and hand them to matching.match_passage.
+                 target_counts, target_offsets, target_cursors,
+                 source_slots, target_slots):
+    """Group one source's emissions by target, into the CSR `align_targets` reads.
 
     The sweep runs twice, first to size every target's block and then to fill it, so only
     the grouped (source slot, target slot) pair is ever stored. The caller sizes
-    source_slots and target_slots for
-    this source's emissions and passes target_counts zeroed; target_counts is left
-    zeroed again on return.
+    source_slots and target_slots for this source's emissions and passes target_counts
+    zeroed; target_counts is left zeroed again on return.
 
-    Returns (rows, n_rows, stats, duplicate_slots, duplicate_percents), with
-    rows = int32[:, 2 + NCOL] of
-    (source, target, alignment) and duplicate_slots/duplicate_percents the duplicate pairs
-    that duplicate_files.csv needs and that still get a chunk file.
-    stats = [pairs_with_common, pairs_below_min, pairs_duplicate, pairs_compared,
-             sum_intersection_sizes, pairs_ge_min_in_docs]
+    Returns the emission count, which is also target_offsets[n_docs].
     """
-    out = np.empty((1024, NCOL + 2), np.int32)
-    n_rows = 0
-    # Scratch for one target at a time, reused across every target of this source. Held
-    # here rather than allocated per pair because 3,253 matches is 76 KiB of match
-    # arrays: reused it stays in L2 between pairs, freshly allocated every write is a
-    # cold first touch, and eccotcp compares 4.3 million pairs.
-    position_capacity = 64
-    source_positions = np.empty(position_capacity, np.int32)
-    source_indices = np.empty(position_capacity, np.int32)
-    target_block_starts = np.empty(position_capacity, np.int32)
-    target_block_ends = np.empty(position_capacity, np.int32)
-    order_buffer = np.empty(position_capacity, np.int32)
-    order_spare = np.empty(position_capacity, np.int32)
-    digit_counts = np.empty(256, np.int64)
-    match_capacity = 256
-    packed_indices = np.empty(match_capacity, np.int64)
-    packed_positions = np.empty(match_capacity, np.int64)
-    # match_passage's chaining buffers, kept across this source's targets for the same
-    # reason the match arrays are. `chain_spans` and `chain_out` grow inside the kernel
-    # and come back out, so a later pair inherits whatever size an earlier one needed.
-    chain_best = np.empty(match_capacity, np.int32)
-    chain_parent = np.empty(match_capacity, np.int32)
-    chain_used = np.empty(match_capacity, np.uint8)
-    chain_members = np.empty(match_capacity, np.int32)
-    chain_key = np.empty(match_capacity + 1, np.int32)
-    chain_order = np.empty(match_capacity, np.int32)
-    chain_spans = np.empty((64, 4), np.int32)
-    chain_out = np.empty((64, NCOL), np.int32)
-    duplicate_slots = np.empty((64, 2), np.int32)
-    duplicate_percents = np.empty(64, np.float64)
-    n_duplicates = 0
-    stats = np.zeros(6, np.int64)
     n_postings = posting_keys.shape[0]
     n_docs = key_offsets.shape[0] - 1
-
     first_key = key_offsets[s]
     last_key = key_offsets[s + 1]
     for i in range(first_key, last_key):                               # size the blocks
@@ -297,8 +265,8 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
         target_counts[t] = 0
     target_offsets[n_docs] = running_total
     if running_total == 0:
-        return out[:0], 0, stats, duplicate_slots[:0], duplicate_percents[:0]
-    for i in range(first_key, last_key):                               # n_rows them
+        return running_total
+    for i in range(first_key, last_key):                               # fill them
         u = np.uint64(ngram_keys[i]) ^ SIGN_BIT
         q = sweep_starts[i]
         while q < n_postings and posting_keys[q] == u:
@@ -309,9 +277,98 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
                 source_slots[p] = i
                 target_slots[p] = posting_slots[q]
             q += 1
+    return running_total
 
-    ns = last_key - first_key                 # sourceFile.NgramLength (distinct keys)
-    for t in range(n_docs):
+
+@njit(nogil=True, cache=True)
+def target_work(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, target_slots,
+                position_offsets, min_in_docs, dup_threshold, weights):
+    """Predicted matches per target: the weight run_match cuts its target ranges on.
+
+    weights[t] is 0 for a target `align_targets` will skip, and otherwise the n_matches
+    it will expand. The two filters below are duplicated from `align_targets` on purpose:
+    weights only choose range edges, so drift degrades the balance and cannot change the
+    output.
+    """
+    ns = key_offsets[s + 1] - key_offsets[s]
+    total = 0
+    for t in range(t_lo, t_hi):
+        q = target_offsets[t]
+        r = target_offsets[t + 1]
+        count = r - q
+        weights[t] = 0
+        if count == 0 or count < min_in_docs:
+            continue
+        nt = key_offsets[t + 1] - key_offsets[t]
+        if count / (ns if ns < nt else nt) * 100 > dup_threshold:
+            continue
+        work = 0
+        for k in range(q, r):
+            a = source_slots[k] + s
+            b = target_slots[k] + t
+            work += ((position_offsets[a + 1] - position_offsets[a])
+                     * (position_offsets[b + 1] - position_offsets[b]))
+        weights[t] = work
+        total += work
+    return total
+
+
+@njit(nogil=True, cache=True)
+def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, target_slots,
+                  position_offsets, ngram_indices, start_bytes, end_bytes,
+                  min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
+                  min_matching, min_in_window, merge_byte, merge_ngram, multiplier):
+    """Match source `s` against target slots [t_lo, t_hi) of the CSR `sweep_source` built:
+    apply the two filters, then expand each surviving pair's matches and hand them to
+    matching.match_passage.
+
+    Targets are independent, so a source's targets can be cut into contiguous ranges and
+    run on separate threads; concatenating the ranges in ascending t reproduces the
+    single call's rows exactly. Every buffer below belongs to this call, so ranges
+    running at the same time must not share one.
+
+    Returns (rows, n_rows, stats, duplicate_slots, duplicate_percents), with
+    rows = int32[:, 2 + NCOL] of
+    (source, target, alignment) and duplicate_slots/duplicate_percents the duplicate pairs
+    that duplicate_files.csv needs and that still get a chunk file.
+    stats = [pairs_with_common, pairs_below_min, pairs_duplicate, pairs_compared,
+             sum_intersection_sizes, pairs_ge_min_in_docs]
+    """
+    out = np.empty((1024, NCOL + 2), np.int32)
+    n_rows = 0
+    # Scratch for one target at a time, reused across every target in this range. Held
+    # here rather than allocated per pair because 3,253 matches is 76 KiB of match
+    # arrays: reused it stays in L2 between pairs, freshly allocated every write is a
+    # cold first touch, and eccotcp compares 4.3 million pairs.
+    position_capacity = 64
+    source_positions = np.empty(position_capacity, np.int32)
+    source_indices = np.empty(position_capacity, np.int32)
+    target_block_starts = np.empty(position_capacity, np.int32)
+    target_block_ends = np.empty(position_capacity, np.int32)
+    order_buffer = np.empty(position_capacity, np.int32)
+    order_spare = np.empty(position_capacity, np.int32)
+    digit_counts = np.empty(256, np.int64)
+    match_capacity = 256
+    packed_indices = np.empty(match_capacity, np.int64)
+    packed_positions = np.empty(match_capacity, np.int64)
+    # match_passage's chaining buffers, kept across this range's targets for the same
+    # reason the match arrays are. `chain_spans` and `chain_out` grow inside the kernel
+    # and come back out, so a later pair inherits whatever size an earlier one needed.
+    chain_best = np.empty(match_capacity, np.int32)
+    chain_parent = np.empty(match_capacity, np.int32)
+    chain_used = np.empty(match_capacity, np.uint8)
+    chain_members = np.empty(match_capacity, np.int32)
+    chain_key = np.empty(match_capacity + 1, np.int32)
+    chain_order = np.empty(match_capacity, np.int32)
+    chain_spans = np.empty((64, 4), np.int32)
+    chain_out = np.empty((64, NCOL), np.int32)
+    duplicate_slots = np.empty((64, 2), np.int32)
+    duplicate_percents = np.empty(64, np.float64)
+    n_duplicates = 0
+    stats = np.zeros(6, np.int64)
+
+    ns = key_offsets[s + 1] - key_offsets[s]   # sourceFile.NgramLength (distinct keys)
+    for t in range(t_lo, t_hi):
         q = target_offsets[t]
         r = target_offsets[t + 1]
         count = r - q
@@ -438,6 +495,30 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
     return (out[:n_rows], n_rows, stats, duplicate_slots[:n_duplicates],
             duplicate_percents[:n_duplicates])
 
+
+@njit(nogil=True, cache=True)
+def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting_keys,
+                 posting_slots, posting_docs,
+                 target_counts, target_offsets, target_cursors, source_slots, target_slots,
+                 position_offsets, ngram_indices, start_bytes, end_bytes,
+                 min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
+                 min_matching, min_in_window, merge_byte, merge_ngram, multiplier):
+    """Own one source document end to end: sweep it, then match every one of its targets.
+
+    run_match cuts the second half into target ranges for the few sources big enough to
+    pay for it; this is the unsplit path, and what the per-source benchmarks time.
+    """
+    n_docs = key_offsets.shape[0] - 1
+    sweep_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting_keys,
+                 posting_slots, posting_docs, target_counts, target_offsets,
+                 target_cursors, source_slots, target_slots)
+    return align_targets(s, 0, n_docs, key_offsets, target_offsets, source_slots,
+                         target_slots, position_offsets, ngram_indices, start_bytes,
+                         end_bytes, min_in_docs, dup_threshold, window_size, max_gap,
+                         flex_gap, min_matching, min_in_window, merge_byte, merge_ngram,
+                         multiplier)
+
+
 # ------------------------------------------------------- threaded phase drivers
 
 # Each phase below is a numpy/threads driver over the nogil kernels above. They live in
@@ -525,7 +606,8 @@ def index_postings(posting_keys, posting_slots, bucket_starts, key_offsets, n_so
 class _Scratch:
     """One thread's emission buffers, grown to the largest source the thread has owned."""
 
-    __slots__ = ("target_counts", "target_offsets", "target_cursors", "size", "arrays")
+    __slots__ = ("target_counts", "target_offsets", "target_cursors", "size", "arrays",
+                 "weights", "n_docs")
 
     def __init__(self, n_docs):
         self.target_counts = np.zeros(n_docs, np.int32)
@@ -533,12 +615,36 @@ class _Scratch:
         self.target_cursors = np.empty(n_docs, np.int64)
         self.size = 0
         self.arrays = ()
+        self.weights = None
+        self.n_docs = n_docs
 
     def sized(self, need):
         if self.size < need:
             self.arrays = (np.empty(need, np.int32), np.empty(need, np.int32))
             self.size = need
         return self.arrays
+
+    def weighing(self):
+        if self.weights is None:
+            self.weights = np.empty(self.n_docs, np.int64)
+        return self.weights
+
+    def release(self):
+        """Give the emission arrays away: a split source's ranges outlive this task."""
+        self.arrays = ()
+        self.size = 0
+
+
+class _Split:
+    """One source's target ranges in flight; the last to finish assembles the result."""
+
+    __slots__ = ("source", "parts", "left", "lock")
+
+    def __init__(self, source, n_ranges):
+        self.source = source
+        self.parts = [None] * n_ranges
+        self.left = n_ranges
+        self.lock = threading.Lock()
 
 
 def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots,
@@ -549,7 +655,12 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
     """Compare every source document with the documents it is paired with, longest first.
 
     One source per task: its emissions are built, grouped and matched inside the task, so
-    only the sources in flight hold emissions.
+    only the sources in flight hold emissions. A source whose predicted work is large
+    enough is cut after its sweep into contiguous ascending target ranges that run as
+    ordinary tasks in the same pool -- so concurrency stays capped at `threads` -- and
+    the range that finishes last concatenates them. Rows come out exactly as one
+    undivided call would have emitted them, which `runner._jobs` and
+    `alignment_merger.first_step_merge` both depend on.
 
     `on_result(rows, duplicates, percents, stats)` is called once per source, from the
     calling thread, so results can be written out while later sources are still running.
@@ -560,13 +671,17 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
     n_docs = key_offsets.shape[0] - 1
     live = np.nonzero(per_source > 0)[0]
     order = live[np.argsort(-per_source[live], kind="stable")]
-    args = (params["minimum_matching_ngrams_in_docs"], params["duplicate_threshold"],
+    min_in_docs = params["minimum_matching_ngrams_in_docs"]
+    dup_threshold = params["duplicate_threshold"]
+    args = (min_in_docs, dup_threshold,
             params["matching_window_size"], params["max_gap"], params["flex_gap"],
             params["minimum_matching_ngrams"], params["minimum_matching_ngrams_in_window"],
             params["merge_passages_on_byte_distance"],
             params["merge_passages_on_ngram_distance"],
             params["passage_distance_multiplier"])
     local = threading.local()
+    n_tasks = order.shape[0]
+    done = 0
 
     def one(source):
         scratch = getattr(local, "scratch", None)
@@ -581,8 +696,6 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
                                    source_slots, target_slots, position_offsets,
                                    ngram_indices, start_bytes, end_bytes, *args)
 
-    n_tasks = order.shape[0]
-    done = 0
     if threads == 1:
         for source in order:
             rows, _, stats, dups, percents = one(source)
@@ -590,16 +703,125 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
             done += 1
             if progress:
                 progress(int(per_source[source]), done, n_tasks)
-    else:
-        with ThreadPoolExecutor(threads) as pool:
-            futures = {pool.submit(one, source): source for source in order}
-            for future in as_completed(futures):
-                rows, _, stats, dups, percents = future.result()
-                on_result(rows, dups, percents, stats)
-                done += 1
-                if progress:
-                    progress(int(per_source[futures[future]]), done, n_tasks)
+        return n_tasks
+
+    results = queue.Queue()
+
+    def cut(source, scratch, offsets, source_slots, target_slots):
+        """Contiguous target ranges holding roughly equal predicted match counts."""
+        weights = scratch.weighing()
+        total = target_work(source, 0, n_docs, key_offsets, offsets, source_slots,
+                            target_slots, position_offsets, min_in_docs, dup_threshold,
+                            weights)
+        k = min(max(total // SPLIT_MATCHES, 1), SPLIT_MAX)
+        if k < 2:
+            return ((0, n_docs),)
+        cuts = np.searchsorted(np.cumsum(weights), (total * np.arange(1, k)) // k,
+                               side="left")
+        edges = np.maximum.accumulate(np.concatenate(([0], cuts, [n_docs])))
+        return tuple((int(edges[i]), int(edges[i + 1])) for i in range(k)
+                     if edges[i + 1] > edges[i])
+
+    def match_range(source, bounds, offsets, source_slots, target_slots):
+        return align_targets(source, bounds[0], bounds[1], key_offsets, offsets,
+                             source_slots, target_slots, position_offsets,
+                             ngram_indices, start_bytes, end_bytes, *args)
+
+    def finish(split, i, part):
+        split.parts[i] = part
+        with split.lock:
+            split.left -= 1
+            last = split.left == 0
+        if last:
+            results.put((split.source, _join(split.parts)))
+
+    def range_task(split, i, bounds, offsets, source_slots, target_slots):
+        try:
+            part = match_range(split.source, bounds, offsets, source_slots, target_slots)
+        except BaseException as exc:                      # or the drain never completes
+            part = exc
+        finish(split, i, part)
+
+    def source_task(source):
+        try:
+            scratch = getattr(local, "scratch", None)
+            if scratch is None:
+                scratch = local.scratch = _Scratch(n_docs)
+            source_slots, target_slots = scratch.sized(int(per_source[source]))
+            exclude_slot = int(same_doc[source]) if same_doc.shape[0] else -1
+            emitted = sweep_source(source, exclude_slot, ngram_keys, key_offsets,
+                                   sweep_starts, posting_keys, posting_slots,
+                                   posting_docs, scratch.target_counts,
+                                   scratch.target_offsets, scratch.target_cursors,
+                                   source_slots, target_slots)
+            if emitted == 0:
+                results.put((source, _nothing()))
+                return
+            ranges = ((0, n_docs),)
+            if emitted >= SPLIT_EMISSION_FLOOR and SPLIT_MAX > 1:
+                ranges = cut(source, scratch, scratch.target_offsets, source_slots,
+                             target_slots)
+            if len(ranges) == 1:
+                results.put((source, match_range(source, ranges[0],
+                                                 scratch.target_offsets, source_slots,
+                                                 target_slots)))
+                return
+            offsets = scratch.target_offsets.copy()   # the ranges outlive this task
+            scratch.release()
+        except BaseException as exc:
+            results.put((source, exc))
+            return
+        split = _Split(source, len(ranges))
+        for i in range(1, len(ranges)):
+            try:
+                pool.submit(range_task, split, i, ranges[i], offsets, source_slots,
+                            target_slots)
+            except BaseException as exc:
+                finish(split, i, exc)
+        range_task(split, 0, ranges[0], offsets, source_slots, target_slots)
+
+    # Sources are fed in rather than all submitted at once: the pool's queue is FIFO, so
+    # with every source already queued a split source's ranges would sit behind all of
+    # them. A window also bounds how many handed-over CSRs are alive at a time.
+    window = 2 * threads
+    submitted = 0
+    outstanding = 0
+    with ThreadPoolExecutor(threads) as pool:
+        while done < n_tasks:
+            while submitted < n_tasks and outstanding < window:
+                pool.submit(source_task, int(order[submitted]))
+                submitted += 1
+                outstanding += 1
+            source, result = results.get()
+            outstanding -= 1
+            if isinstance(result, BaseException):
+                raise result
+            rows, _, stats, dups, percents = result
+            on_result(rows, dups, percents, stats)
+            done += 1
+            if progress:
+                progress(int(per_source[source]), done, n_tasks)
     return n_tasks
+
+
+def _nothing():
+    """What a source with no emission at all returns."""
+    return (np.empty((0, NCOL + 2), np.int32), 0, np.zeros(6, np.int64),
+            np.empty((0, 2), np.int32), np.empty(0, np.float64))
+
+
+def _join(parts):
+    """Concatenate a source's target ranges, which are already in ascending target order."""
+    for part in parts:
+        if isinstance(part, BaseException):
+            return part
+    rows = np.concatenate([part[0] for part in parts])
+    stats = parts[0][2].copy()
+    for part in parts[1:]:
+        stats += part[2]
+    return (rows, rows.shape[0], stats,
+            np.concatenate([part[3] for part in parts]),
+            np.concatenate([part[4] for part in parts]))
 
 
 def warmup():
@@ -625,8 +847,19 @@ def warmup():
                          np.zeros(n_sources, np.int64))
     ones = np.array([0, 0], np.int32)
     one = np.ones(1, np.int32)
+    positions = np.array([0, 1, 1, 2], np.int32)
+    counts = np.zeros(2, np.int32)
+    offsets = np.zeros(3, np.int64)
+    cursors = np.zeros(2, np.int64)
     align_source(0, -1, keys, key_offsets, sweep_starts, posting_keys,
                         posting_slots, posting_docs,
-                        np.zeros(2, np.int32), np.zeros(3, np.int64), np.zeros(2, np.int64),
-                        one, one, np.array([0, 1, 1, 2], np.int32), ones, ones, ones,
+                        counts, offsets, cursors,
+                        one, one, positions, ones, ones, ones,
                         1, 200.0, 30, 15, False, 1, 1, True, True, 0.5)
+    # run_match calls these two directly, so each needs its own entry point compiled.
+    sweep_source(0, -1, keys, key_offsets, sweep_starts, posting_keys, posting_slots,
+                 posting_docs, counts, offsets, cursors, one, one)
+    target_work(0, 0, 2, key_offsets, offsets, one, one, positions, 1, 200.0,
+                np.zeros(2, np.int64))
+    align_targets(0, 0, 2, key_offsets, offsets, one, one, positions, ones, ones, ones,
+                  1, 200.0, 30, 15, False, 1, 1, True, True, 0.5)
