@@ -19,6 +19,7 @@ from html.entities import html5 as _HTML5
 
 import lz4.frame
 import orjson
+from tqdm import tqdm
 
 DUP_HEADER = ("source_title", "source_author", "source_filename", "source_philo_id",
               "source_byte_offsets", "target_title", "target_author", "target_filename",
@@ -393,7 +394,7 @@ class ChunkWriter:
 
 # --------------------------------------------------------------- worker process
 
-def _worker(jobq, resq, docs, metas, out_dir, context_size, go_escape, level):
+def _worker(jobq, resq, written, docs, metas, out_dir, context_size, go_escape, level):
     writer = ChunkWriter(docs, metas, out_dir, context_size, go_escape, level)
     busy = 0.0
     while True:
@@ -403,6 +404,10 @@ def _worker(jobq, resq, docs, metas, out_dir, context_size, go_escape, level):
         start = time.perf_counter()
         writer.write(*job)
         busy += time.perf_counter() - start
+        # One lock per submitted source, not per chunk: enough to pace a bar, and far
+        # too rare to show up against the write itself.
+        with written.get_lock():
+            written.value += len(job[1])
     resq.put(dict(pid=os.getpid(), n_rec=writer.n_rec, n_chunk=writer.n_chunk, busy=busy))
 
 
@@ -417,31 +422,45 @@ class OutputPool:
         os.makedirs(out_dir, exist_ok=True)
         self.jobq = ctx.Queue()
         self.resq = ctx.Queue()
+        self.written = ctx.Value("q", 0)     # chunks the writers have finished
+        self.queued = 0                      # chunks handed to them
         self.procs = [ctx.Process(target=_worker, daemon=True,
-                                  args=(self.jobq, self.resq, docs, metas, out_dir,
-                                        context_size, go_escape, level))
+                                  args=(self.jobq, self.resq, self.written, docs, metas,
+                                        out_dir, context_size, go_escape, level))
                       for _ in range(n_workers)]
         for proc in self.procs:
             proc.start()
 
     def submit(self, rows, jobs):
+        self.queued += len(jobs)
         self.jobq.put((rows, jobs))
 
     def close(self, timeout=600):
         for _ in self.procs:
             self.jobq.put(None)
+        # Matching finishes well before the writers do, so without this the run sits on
+        # a full "Comparing files" bar with no sign of what it is waiting for. Writers
+        # are the larger consumer of CPU on a big corpus, so the wait is not short.
+        bar = tqdm(total=self.queued, initial=min(self.written.value, self.queued),
+                   desc="Writing results", unit=" chunk", unit_scale=True,
+                   mininterval=1.0, disable=self.queued == 0)
         stats = []
         while len(stats) < len(self.procs):
+            bar.update(min(self.written.value, self.queued) - bar.n)
             try:
                 stats.append(self.resq.get(timeout=1))
             except Exception:
                 dead = [p for p in self.procs if p.exitcode not in (None, 0)]
                 if dead:
+                    bar.close()
                     raise RuntimeError(
                         f"output worker(s) died: {[(p.pid, p.exitcode) for p in dead]}")
                 timeout -= 1
                 if timeout <= 0:
+                    bar.close()
                     raise RuntimeError("output workers timed out")
+        bar.update(min(self.written.value, self.queued) - bar.n)
+        bar.close()
         for proc in self.procs:
             proc.join()
         return stats
