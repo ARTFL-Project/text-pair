@@ -60,6 +60,10 @@ _BOOL_PARAMS = ("flex_gap", "merge_passages_on_byte_distance",
                 "merge_passages_on_ngram_distance", "debug")
 _TYPED_PARAMS = frozenset(_INT_PARAMS + _FLOAT_PARAMS + _BOOL_PARAMS)
 
+# Records to aim for in one chunk file. Writer throughput does not depend on chunk size,
+# so this is set for the inode count and for the serial merge that opens every file.
+CHUNK_ROWS = 2000
+
 
 def _split_workers(total):
     """Matching threads and writer processes out of one worker budget.
@@ -237,21 +241,24 @@ def _batches(files, count):
     return [files[i:i + size] for i in range(0, len(files), size)]
 
 
-def chunk_ranges(position, n_targets, threads, same_array):
+def chunk_ranges(position, n_targets, threads, same_array, n_rows=0):
     """Target ranges of the chunk files written for one source document.
 
-    One file per worker, and the worker count itself depends on how many targets are
-    left, so the chunk file names depend on this split. The names carry the source
-    document first, which is what keeps a source's records together once the chunks
-    are concatenated in `sort -V` order: alignment_merger.first_step_merge reads that
-    stream once and flushes whenever source_doc_id changes.
+    As many ranges as the source's `n_rows` records justify at `CHUNK_ROWS` apiece, up to
+    `threads`. Splitting every source `threads` ways whatever it emitted is millions of
+    files on a large corpus, most of them holding a few records.
+
+    The chunk file names depend on this split. They carry the source document first,
+    which is what keeps a source's records together once the chunks are concatenated in
+    `sort -V` order: alignment_merger.first_step_merge reads that stream once and flushes
+    whenever source_doc_id changes.
     """
     start = position + 1 if same_array else 0
     if start >= n_targets:
         return []
     local_length = n_targets - start
-    needed = threads
-    if threads > 1:
+    needed = min(threads, max(1, n_rows // CHUNK_ROWS)) if n_rows > 0 else 1
+    if needed > 1:
         per_thread = local_length // needed
         while per_thread < 10:
             needed //= 2
@@ -261,7 +268,7 @@ def chunk_ranges(position, n_targets, threads, same_array):
             per_thread = local_length // needed
         increment = local_length // needed
     else:
-        increment = local_length - start        # the clamp below hides this
+        increment = local_length
     ranges = []
     end = start + increment
     for i in range(needed):
@@ -298,7 +305,7 @@ def _jobs(rows, duplicates, docs, n_targets, target_base, threads, same_array):
         lo, hi = row_range.get(slot, (0, 0))
         targets = rows[lo:hi, 1]
         dups = dup_targets.get(slot, ())
-        for first, last in chunk_ranges(slot, n_targets, threads, same_array):
+        for first, last in chunk_ranges(slot, n_targets, threads, same_array, hi - lo):
             low = target_base + first
             high = target_base + last
             begin = lo + int(np.searchsorted(targets, low, "left"))
