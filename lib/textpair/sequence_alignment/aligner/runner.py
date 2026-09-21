@@ -69,14 +69,14 @@ def _split_workers(total):
     """Matching threads and writer processes out of one worker budget.
 
     `threads` is everything the run may use, so the two share it rather than each taking
-    all of it. Evenly: writing an alignment costs about what finding it costs, and
-    neither side keeps scaling past half a large box. An odd budget gives the extra to
-    matching, which keeps scaling after the writers have stopped draining. At least one
-    writer, since a run with none never writes.
+    all of it. Two thirds to matching, which is roughly how the CPU divides between
+    finding an alignment and writing it: fewer writers than that and the drain at the end
+    of a run dominates, more and they sit idle while matching is still scaling. At least
+    one writer, since a run with none never writes.
     """
     total = max(2, int(total))
-    writers = max(1, total // 2)
-    return total - writers, writers
+    matchers = min(total - 1, max(1, 2 * total // 3))
+    return matchers, total - matchers
 
 
 def _as_bool(value):

@@ -92,7 +92,7 @@ The sequence aligner is executed via the `textpair` command. The basic command i
 -   `--is_philo_db`: Define if files are from a PhiloLogic database. If set to `True` metadata will be fetched using the PhiloLogic metadata index. Set to False by default.
 -   `--output_path`: path to results
 -   `--debug`: turn on debugging
--   `--workers`: Set number of workers/threads to use for parsing, ngram generation, and alignment. This is the total the run may use: alignment splits it evenly between matching threads and the processes that write the results.
+-   `--workers`: Set number of workers/threads to use for parsing, ngram generation, and alignment. This is the total the run may use: alignment splits it between matching threads and the processes that write the results, two thirds to matching.
 -   `--update_db`: update database without rebuilding web_app. Should be used in conjunction with the --file argument
 -   `--file`: alignment results file to load into database. Only used with the --update_db argument.
 -   `--source_metadata`: source metadata needed for loading database. Used only with the --update_db and --file argument.
