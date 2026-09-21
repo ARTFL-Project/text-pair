@@ -61,6 +61,20 @@ _BOOL_PARAMS = ("flex_gap", "merge_passages_on_byte_distance",
 _TYPED_PARAMS = frozenset(_INT_PARAMS + _FLOAT_PARAMS + _BOOL_PARAMS)
 
 
+def _split_workers(total):
+    """Matching threads and writer processes out of one worker budget.
+
+    `threads` is everything the run may use, so the two share it rather than each taking
+    all of it. Evenly: writing an alignment costs about what finding it costs, and
+    neither side keeps scaling past half a large box. An odd budget gives the extra to
+    matching, which keeps scaling after the writers have stopped draining. At least one
+    writer, since a run with none never writes.
+    """
+    total = max(2, int(total))
+    writers = max(1, total // 2)
+    return total - writers, writers
+
+
 def _as_bool(value):
     if isinstance(value, str):
         return value.strip().lower() in ("1", "t", "true", "yes", "y", "on")
@@ -383,7 +397,7 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                posting_slots, posting_docs,
                                per_source, same_doc, position_offsets, ngram_indices,
                                start_bytes, end_bytes,
-                               threads, params, on_result, progress)
+                               params["match_threads"], params, on_result, progress)
         # The bar cleared itself; take the legend with it, so a finished run shows
         # its results rather than the scaffolding that got there. Only on a terminal:
         # redirected to a file the escape would be written out literally.
@@ -420,7 +434,8 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
     source_metadata / target_metadata   paths to the corpora's metadata.json
     output_path                   directory for result_batches/, count.txt,
                                   duplicate_files.csv and alignment_config.ini
-    output_workers                chunk writer processes, 0 means `threads`
+    output_workers                chunk writer processes; 0 splits `threads` between
+                                  matching and writing instead of adding to it
     lz4_level                     chunk compression level, 3 by default
     **params                      any of DEFAULTS: threads, sort_by, source_batch,
                                   target_batch, matching_window_size, max_gap, flex_gap,
@@ -438,7 +453,15 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
     if unknown:
         raise TypeError(f"unknown alignment parameter(s): {', '.join(sorted(unknown))}")
     params = _normalize(params)
-    params["output_workers"] = int(output_workers) or params["threads"]
+    if int(output_workers) > 0:
+        params["match_threads"] = params["threads"]
+        params["output_workers"] = int(output_workers)
+    else:
+        params["match_threads"], params["output_workers"] = \
+            _split_workers(params["threads"])
+    print(f'{params["match_threads"] + params["output_workers"]} workers: '
+          f'{params["match_threads"]} matching, {params["output_workers"]} writing.',
+          flush=True)
     params["lz4_level"] = int(lz4_level)
     ngram_index = {}
     if params["debug"]:

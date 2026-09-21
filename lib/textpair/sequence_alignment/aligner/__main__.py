@@ -16,7 +16,6 @@ def main(argv=None):
     parser.add_argument("--target_files", default="")
     parser.add_argument("--source_metadata", default="")
     parser.add_argument("--target_metadata", default="")
-    parser.add_argument("--output_workers", type=int, default=0)
     parser.add_argument("--lz4_level", type=int, default=3)
     for name, value in DEFAULTS.items():
         if isinstance(value, bool):
@@ -26,11 +25,12 @@ def main(argv=None):
     args = vars(parser.parse_args(argv))
     fixed = {key: args.pop(key) for key in ("output_path", "source_files", "target_files",
                                             "source_metadata", "target_metadata",
-                                            "output_workers", "lz4_level")}
+                                            "lz4_level")}
     try:
+        # No writer-count flag: --threads is the whole budget, which align() splits.
         align(fixed["source_files"], fixed["source_metadata"], fixed["output_path"],
               target_files=fixed["target_files"], target_metadata=fixed["target_metadata"],
-              output_workers=fixed["output_workers"], lz4_level=fixed["lz4_level"], **args)
+              lz4_level=fixed["lz4_level"], **args)
     except (ValueError, TypeError) as error:
         print(error, file=sys.stderr)
         return 1
