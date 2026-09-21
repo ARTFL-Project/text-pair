@@ -441,7 +441,7 @@ def _merge_batch(chunk_dir, batch_file):
 
 
 def align(source_files, source_metadata, output_path, target_files="", target_metadata="",
-          output_workers=0, lz4_level=3, **params):
+          output_workers=0, lz4_level=1, **params):
     """Run the sequence aligner.
 
     source_files / target_files   directories of per-document ngram files, JSON or binary
@@ -450,7 +450,9 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
                                   duplicate_files.csv and alignment_config.ini
     output_workers                chunk writer processes; 0 splits `threads` between
                                   matching and writing instead of adding to it
-    lz4_level                     chunk compression level, 3 by default
+    lz4_level                     chunk compression level, 1 by default. The frame API
+                                  is LZ4HC from 3 up, which costs the writers about a
+                                  fifth of their time for a quarter off the bytes
     **params                      any of DEFAULTS: threads, sort_by, source_batch,
                                   target_batch, matching_window_size, max_gap, flex_gap,
                                   minimum_matching_ngrams,

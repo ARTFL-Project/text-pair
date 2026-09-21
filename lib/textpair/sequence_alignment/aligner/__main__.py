@@ -16,7 +16,7 @@ def main(argv=None):
     parser.add_argument("--target_files", default="")
     parser.add_argument("--source_metadata", default="")
     parser.add_argument("--target_metadata", default="")
-    parser.add_argument("--lz4_level", type=int, default=3)
+    parser.add_argument("--lz4_level", type=int, default=1)
     for name, value in DEFAULTS.items():
         if isinstance(value, bool):
             parser.add_argument(f"--{name}", default=str(value).lower())
