@@ -427,10 +427,17 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
 
 
 def _merge_batch(chunk_dir, batch_file):
-    """Concatenate a combination's chunks into one batch file."""
+    """Concatenate a combination's chunks into one batch file.
+
+    lz4 frames concatenate, so this is a byte copy rather than a decompress and a
+    recompress. The chunks are deleted after, not by the merge: the next combination
+    writes into the same directory and must not find them.
+    """
     command = (f"find {quote(chunk_dir)} -type f -print0 | sort -zV | "
-               f"xargs -0 --no-run-if-empty lz4cat --rm | lz4 -q > {quote(batch_file)}")
+               f"xargs -0 --no-run-if-empty cat > {quote(batch_file)} && "
+               f"find {quote(chunk_dir)} -type f -delete")
     subprocess.run(["bash", "-c", command], check=False)
+    output.ensure_stream(batch_file)
 
 
 def align(source_files, source_metadata, output_path, target_files="", target_metadata="",
