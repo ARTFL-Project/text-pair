@@ -411,6 +411,17 @@ def _worker(jobq, resq, written, docs, metas, out_dir, context_size, go_escape, 
     resq.put(dict(pid=os.getpid(), n_rec=writer.n_rec, n_chunk=writer.n_chunk, busy=busy))
 
 
+def ensure_stream(path):
+    """Leave a readable lz4 stream at `path` even if nothing was written to it.
+
+    Concatenating no files leaves an empty file, and `lz4.frame.open` raises EOFError on
+    one. A combination that found no alignments has to be readable like any other.
+    """
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        with open(path, "wb") as handle:
+            handle.write(lz4.frame.compress(b""))
+
+
 class OutputPool:
     """Forked writer pool. Fork before the ngram arrays are allocated so the workers
     inherit the cleaned metadata and only tens of MB of page tables get copied."""

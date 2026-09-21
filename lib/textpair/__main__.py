@@ -224,6 +224,7 @@ def run_python_aligner(params) -> None:
 async def run_alignment(params):
     """Main function to start sequence alignment"""
     from . import classify_passages, create_web_app, parse_files
+    from .sequence_alignment.aligner.output import ensure_stream
 
     if params.only_align is False:
         if params.text_parsing["parse_source_files"] is True:
@@ -282,17 +283,17 @@ async def run_alignment(params):
         shutil.move(os.path.join(result_batch_path, filename), results_file)
         shutil.rmtree(result_batch_path, ignore_errors=True)
     else:
-        print(
-            "Merging alignments into one file (this may take a while)... ",
-            end="",
-            flush=True,
-        )
+        print("Merging alignments into one file... ", end="", flush=True)
         # NUL-delimited so batch paths containing spaces survive the pipeline.
+        # A plain cat: lz4 frames concatenate, and every reader of this file streams it
+        # through lz4.frame.open, which spans frames. Decompressing and recompressing
+        # here cost as much as the alignment itself.
         merge_command = (
             f"find {quote(result_batch_path)} -type f -print0 | sort -zV | "
-            f"xargs -0 lz4cat --rm | lz4 -q > {quote(results_file)}"
+            f"xargs -0 cat > {quote(results_file)}"
         )
         os.system(merge_command)
+        ensure_stream(results_file)
         shutil.rmtree(result_batch_path, ignore_errors=True)
         print("done.")
     count = get_count(os.path.join(params.output_path, "results/count.txt"))
