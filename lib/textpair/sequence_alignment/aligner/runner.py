@@ -8,11 +8,9 @@ import gc
 import math
 import os
 import shutil
-import subprocess
 import sys
 import threading
 from contextlib import contextmanager
-from shlex import quote
 
 import numpy as np
 from tqdm import tqdm
@@ -426,20 +424,6 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
     return count, [row for _, _, row in duplicate_rows]
 
 
-def _merge_batch(chunk_dir, batch_file):
-    """Concatenate a combination's chunks into one batch file.
-
-    lz4 frames concatenate, so this is a byte copy rather than a decompress and a
-    recompress. The chunks are deleted after, not by the merge: the next combination
-    writes into the same directory and must not find them.
-    """
-    command = (f"find {quote(chunk_dir)} -type f -print0 | sort -zV | "
-               f"xargs -0 --no-run-if-empty cat > {quote(batch_file)} && "
-               f"find {quote(chunk_dir)} -type f -delete")
-    subprocess.run(["bash", "-c", command], check=False)
-    output.ensure_stream(batch_file)
-
-
 def align(source_files, source_metadata, output_path, target_files="", target_metadata="",
           output_workers=0, lz4_level=1, **params):
     """Run the sequence aligner.
@@ -518,12 +502,14 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
         target_meta = source_meta
         same_corpus = True
 
-    batch_path = os.path.join(output_path, "result_batches")
-    batched = len(source_batches) > 1 or len(target_batches) > 1
-    chunk_dir = os.path.join(batch_path, "result_chunks") if batched else batch_path
-    if not batched:
-        # result_batches is replaced wholesale for a single combination.
-        shutil.rmtree(batch_path, ignore_errors=True)
+    # Every combination writes its chunks here, and nothing is merged per combination:
+    # a chunk name carries its source document first, so one `sort -V` over the whole
+    # directory keeps a source's records together however many combinations emitted
+    # them. Merging per combination instead ordered the stream by batch, which split a
+    # source across several stretches and made alignment_merger.first_step_merge group
+    # it as if it were several documents.
+    chunk_dir = os.path.join(output_path, "result_batches")
+    shutil.rmtree(chunk_dir, ignore_errors=True)
     os.makedirs(chunk_dir, exist_ok=True)
     output.write_duplicates(output_path, ())
     trace = ({"output_path": output_path, "ngram_index": ngram_index,
@@ -546,11 +532,6 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
                 chunk_dir, trace)
             count += batch_count
             output.write_duplicates(output_path, duplicate_rows, append=True)
-            if batched:
-                print("Merging results... ", end="", flush=True)
-                _merge_batch(chunk_dir, os.path.join(
-                    batch_path, f"batch-{source_number + 1}-{target_number + 1}.lz4"))
-                print("done.", flush=True)
             gc.collect()
     print(f"{count} pairwise alignments found...", flush=True)
     output.write_count(output_path, count)
