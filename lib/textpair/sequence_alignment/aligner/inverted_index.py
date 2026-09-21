@@ -49,8 +49,10 @@ DIGIT_MASK = np.uint64(LSD_RADIX - 1)
 # overrides exist so the byte-identity checks can force a split on any corpus.
 SPLIT_EMISSION_FLOOR = int(os.environ.get("TEXTPAIR_SPLIT_FLOOR", 50_000))
 SPLIT_MATCHES = int(os.environ.get("TEXTPAIR_SPLIT_MATCHES", 8_000_000))  # per range
-SPLIT_MAX = int(os.environ.get("TEXTPAIR_SPLIT_MAX", 16))   # past this the costliest
-                                    # single target, not the balance, sets the floor
+# 0: cut a source into at most as many ranges as there are matching threads, which is
+# what it takes to fill the pool once the straggler is all that is left. Finer than that
+# buys nothing, since the costliest single target, not the balance, then sets the floor.
+SPLIT_MAX = int(os.environ.get("TEXTPAIR_SPLIT_MAX", 0))
 
 
 # --------------------------------------------------------------------------- postings
@@ -682,6 +684,7 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
     local = threading.local()
     n_tasks = order.shape[0]
     done = 0
+    split_max = SPLIT_MAX or threads
 
     def one(source):
         scratch = getattr(local, "scratch", None)
@@ -713,7 +716,7 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
         total = target_work(source, 0, n_docs, key_offsets, offsets, source_slots,
                             target_slots, position_offsets, min_in_docs, dup_threshold,
                             weights)
-        k = min(max(total // SPLIT_MATCHES, 1), SPLIT_MAX)
+        k = min(max(total // SPLIT_MATCHES, 1), split_max)
         if k < 2:
             return ((0, n_docs),)
         cuts = np.searchsorted(np.cumsum(weights), (total * np.arange(1, k)) // k,
@@ -758,7 +761,7 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
                 results.put((source, _nothing()))
                 return
             ranges = ((0, n_docs),)
-            if emitted >= SPLIT_EMISSION_FLOOR and SPLIT_MAX > 1:
+            if emitted >= SPLIT_EMISSION_FLOOR and split_max > 1:
                 ranges = cut(source, scratch, scratch.target_offsets, source_slots,
                              target_slots)
             if len(ranges) == 1:
