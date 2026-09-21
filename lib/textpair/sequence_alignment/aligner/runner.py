@@ -373,7 +373,8 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
         # space in `unit` is load-bearing -- tqdm writes rate, unit and "/s" unseparated.
         print("Comparing files: 1 comparison = 1 shared ngram-doc pair", flush=True)
         with tqdm(total=int(per_source.sum()), desc="Comparing files", unit=" comparison",
-                  unit_scale=True, smoothing=0.05, mininterval=1.0) as bar, _ticking(bar):
+                  unit_scale=True, smoothing=0.05, mininterval=1.0,
+                  leave=False) as bar, _ticking(bar):
             def progress(work, done, total):
                 bar.update(work)
                 bar.set_postfix_str(f"{done:,}/{total:,} docs", refresh=False)
@@ -383,6 +384,11 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                per_source, same_doc, position_offsets, ngram_indices,
                                start_bytes, end_bytes,
                                threads, params, on_result, progress)
+        # The bar cleared itself; take the legend with it, so a finished run shows
+        # its results rather than the scaffolding that got there. Only on a terminal:
+        # redirected to a file the escape would be written out literally.
+        if sys.stdout.isatty():
+            print("\033[F\033[K", end="", flush=True)
         if trace is not None:
             print("Tracing compared pairs... ", end="", flush=True)
             written = tracing.write_traces(
