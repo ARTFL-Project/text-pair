@@ -98,6 +98,88 @@ def run(work_dir, frames, per_frame, workers, with_field=False):
     return found, records_of(path), total
 
 
+def write_phrases(path):
+    """A phrase list: one of these appears in every third synthetic passage."""
+    with open(path, "w", encoding="utf8") as handle:
+        handle.write("banal phrase here\n")
+        handle.write("another stock phrase\n")
+    return path
+
+
+def write_flagged(path, frames, per_frame, documents=6):
+    """Like write_alignments but with a banality verdict already decided, which is the
+    state separate_banalities runs against."""
+    record = 0
+    with open(path, "wb") as raw:
+        for _ in range(frames):
+            lines = []
+            for _ in range(per_frame):
+                start = (record % 30) * 10
+                lines.append(orjson.dumps({
+                    "source_doc_id": str(record % documents),
+                    "source_ngrams": f"{record % documents}.bin",
+                    "source_start_byte": start,
+                    "source_end_byte": start + 300,
+                    "source_passage": f"passage {record}",
+                    "banality": record % 3 == 0,
+                }) + b"\n")
+                record += 1
+            raw.write(lz4.frame.compress(b"".join(lines), compression_level=1))
+    return record
+
+
+def write_phrasey(path, frames, per_frame, documents=6):
+    """Passages where every third one carries a listed phrase."""
+    record = 0
+    with open(path, "wb") as raw:
+        for _ in range(frames):
+            lines = []
+            for _ in range(per_frame):
+                start = (record % 30) * 10
+                text = ("a banal phrase here and more" if record % 3 == 0
+                        else f"ordinary passage {record}")
+                lines.append(orjson.dumps({
+                    "source_doc_id": str(record % documents),
+                    "source_ngrams": f"{record % documents}.bin",
+                    "source_start_byte": start,
+                    "source_end_byte": start + 300,
+                    "source_passage": text,
+                }) + b"\n")
+                record += 1
+            raw.write(lz4.frame.compress(b"".join(lines), compression_level=1))
+    return record
+
+
+def second_file(path, name):
+    """The other file a two-output pass writes, beside the alignments."""
+    return path.replace("alignments.jsonl", name)
+
+
+def run_filter(work_dir, frames, per_frame, workers):
+    order, common = build_corpus(work_dir)
+    path = os.path.join(work_dir, "alignments.jsonl.lz4")
+    total = write_phrasey(path, frames, per_frame)
+    phrases = write_phrases(os.path.join(work_dir, "phrases.txt"))
+    counts = bf.filter_and_flag(path, phrases, common, order, total, 100.0, 40.0, workers)
+    return counts, records_of(path), records_of(second_file(path, "filtered_passages.jsonl"))
+
+
+def run_phrase(work_dir, frames, per_frame, workers):
+    build_corpus(work_dir)
+    path = os.path.join(work_dir, "alignments.jsonl.lz4")
+    total = write_phrasey(path, frames, per_frame)
+    phrases = write_phrases(os.path.join(work_dir, "phrases.txt"))
+    filtered = bf.phrase_matcher(path, phrases, total, workers)
+    return filtered, records_of(path), records_of(second_file(path, "filtered_passages.jsonl"))
+
+
+def run_separate(work_dir, frames, per_frame, workers):
+    path = os.path.join(work_dir, "alignments.jsonl.lz4")
+    total = write_flagged(path, frames, per_frame)
+    separated = bf.separate_banalities(path, total, workers)
+    return separated, records_of(path), records_of(second_file(path, "banal_alignments.jsonl"))
+
+
 def main():
     root = tempfile.mkdtemp(prefix="textpair_banality_")
     try:
@@ -121,6 +203,43 @@ def main():
         parallel = run(root, 9, 100, 16, with_field=True)
         check("existing banality field: same records as serial", serial[1] == parallel[1])
         check("existing banality field: same verdict count", serial[0] == parallel[0])
+
+        # The other three passes over the file, each writing two outputs. A real config
+        # reaches filter_and_flag rather than banality_auto_detect, and separate_banalities
+        # runs after it whenever store_banalities is off, so both have to hold too.
+        for label, runner in (("filter_and_flag", run_filter),
+                              ("phrase_matcher", run_phrase),
+                              ("separate_banalities", run_separate)):
+            serial = runner(root, 9, 200, 1)
+            for workers in (3, 12, 96):
+                parallel = runner(root, 9, 200, workers)
+                check(f"{label}, {workers} workers: same kept records",
+                      serial[1] == parallel[1])
+                check(f"{label}, {workers} workers: same second file",
+                      serial[2] == parallel[2])
+                check(f"{label}, {workers} workers: same counts {serial[0]}",
+                      serial[0] == parallel[0])
+
+        # A pass that matches nothing must still leave readable files: an empty file is
+        # not an lz4 stream, and a phrase list that hits nothing is entirely normal.
+        for workers in (1, 8):
+            empty = os.path.join(root, "nomatch")
+            os.makedirs(empty, exist_ok=True)
+            build_corpus(empty)
+            path = os.path.join(empty, "alignments.jsonl.lz4")
+            total = write_alignments(path, 4, 50)
+            phrases = os.path.join(empty, "phrases.txt")
+            with open(phrases, "w", encoding="utf8") as handle:
+                handle.write("nothing here matches this phrase at all\n")
+            filtered = bf.phrase_matcher(path, phrases, total, workers)
+            second = second_file(path, "filtered_passages.jsonl")
+            check(f"no phrase matches, {workers} worker(s): nothing filtered",
+                  filtered == 0)
+            check(f"no phrase matches, {workers} worker(s): every record kept",
+                  records_of(path).count(b"\n") == total)
+            check(f"no phrase matches, {workers} worker(s): empty file still readable",
+                  records_of(second) == b"")
+            shutil.rmtree(empty, ignore_errors=True)
 
         # Frame boundaries have to be found without decompressing anything.
         path = os.path.join(root, "bounds.lz4")
