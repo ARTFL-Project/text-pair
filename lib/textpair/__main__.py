@@ -337,7 +337,6 @@ async def run_alignment(params):
                 results_file,
                 params.paths["source"]["common_ngrams"],
                 ngrams_in_order,
-                params.matching_params["store_banalities"],
                 count,
                 params.matching_params["most_common_ngram_proportion"],
                 params.matching_params["common_ngram_threshold"],

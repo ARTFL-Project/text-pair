@@ -94,7 +94,7 @@ def run(work_dir, frames, per_frame, workers, with_field=False):
     order, common = build_corpus(work_dir)
     path = os.path.join(work_dir, f"alignments_{frames}_{workers}.lz4")
     total = write_alignments(path, frames, per_frame, with_field=with_field)
-    found = bf.banality_auto_detect(path, common, order, False, total, 100.0, 40.0, workers)
+    found = bf.banality_auto_detect(path, common, order, total, 100.0, 40.0, workers)
     return found, records_of(path), total
 
 

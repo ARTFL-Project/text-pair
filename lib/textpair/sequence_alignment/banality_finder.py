@@ -79,9 +79,6 @@ class CommonNgrams:
         self.used = np.zeros(slots, dtype=np.uint8)
         self.size = int(_fill_table(keys, self.table, self.used)) if keys.size else 0
 
-    def __len__(self) -> int:
-        return self.size
-
     def count_in(self, keys: np.ndarray) -> int:
         """How many of `keys`, an int64 array, are common."""
         return int(_count_present(keys, self.table, self.used))
@@ -512,7 +509,6 @@ def banality_auto_detect(
     filepath: str,
     common_ngrams_file: str,
     ngram_doc_path: str,
-    store_banalities: bool,
     count: Optional[int],
     proportion: float,
     threshold: float,
@@ -1005,19 +1001,3 @@ async def banality_llm_post_eval(
         print("Server stopped.")
 
     return banalities_confirmed
-
-
-if __name__ == "__main__":
-    import sys
-
-    file_path = sys.argv[1]
-    # ngrams_file = sys.argv[2]
-    # ngram_doc_path = sys.argv[3]
-    # percentage = float(sys.argv[4])
-    # with open(file_path.replace("alignments.jsonl.lz4", "count.txt"), "rb") as input_file:
-    #     count = int(input_file.read().strip())
-    # total = banality_auto_detect(file_path, ngrams_file, ngram_doc_path, True, count, 0.25, percentage)
-    phrase_path = sys.argv[2]
-    total = phrase_matcher(file_path, phrase_path, int(sys.argv[3]))
-    print(total, "banalities found.")
-    # total = asyncio.run(zero_shot_banality_detection(file_path, "facebook/bart-large-mnli", store_banalities=True))
