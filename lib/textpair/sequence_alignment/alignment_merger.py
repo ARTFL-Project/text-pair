@@ -55,21 +55,6 @@ def _filled(typecode: str, size: int, value: int) -> array:
     return values
 
 
-class _GroupSources:
-    """Each initial group's representative passage id; its record is read back when needed."""
-
-    __slots__ = ("passage_ids",)
-
-    def __init__(self):
-        self.passage_ids = array("q")
-
-    def add(self, passage_id: int) -> None:
-        self.passage_ids.append(passage_id)
-
-    def __len__(self) -> int:
-        return len(self.passage_ids)
-
-
 class _DenseMap:
     """Passage id -> int in a flat array, since passage ids are dense. -1 is absent."""
 
@@ -167,14 +152,12 @@ class _DocumentSpans:
 class AlignmentGroups:
     """Holding alignment group data"""
 
-    __slots__ = ("group_id", "merged_target_passages", "group_map", "group_sources",
-                 "span_order", "found_groups")
+    __slots__ = ("group_id", "merged_target_passages", "group_map", "span_order", "found_groups")
 
     def __init__(self, expected: int = 0):
         self.group_id = -1
         self.merged_target_passages: dict[str, _DocumentSpans] = {}
         self.group_map = _DenseMap(expected)
-        self.group_sources = _GroupSources()
         self.span_order = 0
         self.found_groups: dict[tuple[str, int, int], int] = {}
 
@@ -192,7 +175,6 @@ class AlignmentGroups:
         self.group_id += 1
         self.add_target_span(passage, self.group_id)
         self.group_map[passage.passage_id] = self.group_id
-        self.group_sources.add(passage.passage_id)
 
     def passage_group_update(self, passage: _Alignment) -> None:
         """Update current group"""
@@ -409,7 +391,7 @@ def _segment_plan(results_file: str, count: int, workers: int):
     return segments, _segment_bases(results_file, segments, count)
 
 
-def first_step_merge(results_file: str, count: int) -> tuple[_DenseMap, _GroupSources, _Spans]:
+def first_step_merge(results_file: str, count: int) -> tuple[_DenseMap, int, _Spans]:
     """Merge passages that are aligned to the same source passage.
 
     Also returns each passage's source file and span, by passage id. The two
@@ -449,24 +431,30 @@ def first_step_merge(results_file: str, count: int) -> tuple[_DenseMap, _GroupSo
             alignment_groups.merge_passages(passages)
             passages = []
 
-    return alignment_groups.group_map, alignment_groups.group_sources, spans
+    return alignment_groups.group_map, alignment_groups.group_id + 1, spans
 
 
 class _RefinedGroups:
-    """Each refined group's file and intersection, by id. An empty intersection marks it gone."""
+    """Each refined group's file and intersection, by id. An empty intersection marks it gone.
 
-    __slots__ = ("file_ids", "starts", "ends")
+    `representatives` holds the member whose record supplies the group's metadata: the last
+    to join, which starts where the intersection does since members arrive in start order.
+    """
+
+    __slots__ = ("file_ids", "starts", "ends", "representatives")
 
     def __init__(self):
         self.file_ids = array("i")
         self.starts = array("q")
         self.ends = array("q")
+        self.representatives = array("q")
 
-    def add(self, file_id: int, start_byte: int, end_byte: int) -> int:
+    def add(self, file_id: int, start_byte: int, end_byte: int, passage_id: int) -> int:
         """Start a group over [start_byte, end_byte) and return its id"""
         self.file_ids.append(file_id)
         self.starts.append(start_byte)
         self.ends.append(end_byte)
+        self.representatives.append(passage_id)
         return len(self.file_ids) - 1
 
     def live(self, group_id: int) -> bool:
@@ -506,6 +494,7 @@ def refine_groups_strict_intersection(
     refined_groups = _RefinedGroups()
     group_starts = refined_groups.starts
     group_ends = refined_groups.ends
+    group_representatives = refined_groups.representatives
 
     for initial_group_id, files_in_group in tqdm(groups_data.items(), desc=_label(2), leave=False):
         for file_id, alignments_in_file in files_in_group.items():
@@ -537,6 +526,7 @@ def refine_groups_strict_intersection(
                 if best_fit_group >= 0:
                     # --- Join Existing Refined Group ---
                     refined_group_map[p_id] = best_fit_group
+                    group_representatives[best_fit_group] = p_id
                     # Update intersection (shrinking)
                     if p_start > group_starts[best_fit_group]:
                         group_starts[best_fit_group] = p_start
@@ -546,7 +536,7 @@ def refine_groups_strict_intersection(
 
                 else:
                     # --- Start New Refined Group ---
-                    touched = refined_groups.add(file_id, p_start, p_end)
+                    touched = refined_groups.add(file_id, p_start, p_end, p_id)
                     active_refined_groups_for_file.append(touched)
                     refined_group_map[p_id] = touched
 
@@ -700,8 +690,8 @@ def assign_multiple_memberships(
 def merge_alignments(results_file: str, count: int, workers: int = 1):
     """Merge alignments using the 3-pass method"""
     # Step 1: Initial broad grouping
-    initial_group_map, initial_group_sources, spans = first_step_merge(results_file, count)
-    if not len(initial_group_sources):
+    initial_group_map, initial_groups, spans = first_step_merge(results_file, count)
+    if not initial_groups:
         _status()
         print("  No passage groups found.")
         return None
@@ -723,8 +713,8 @@ def merge_alignments(results_file: str, count: int, workers: int = 1):
     # Step 4: Write the final source passage group file
     groups_file = os.path.join(os.path.dirname(results_file), "passage_group_source.jsonl")
     groups = write_group_sources(
-        results_file, groups_file, initial_group_map, initial_group_sources,
-        refined_group_map, refined_groups, final_group_counts, spans, segments, bases,
+        results_file, groups_file, refined_group_map, refined_groups, final_group_counts,
+        spans, segments, bases,
     )
 
     # Step 5: Rewrite the results file with the final group lists
@@ -802,8 +792,6 @@ def rewrite_results(results_file: str, target: str, group_lists: _GroupLists,
 def write_group_sources(
     results_file: str,
     groups_file: str,
-    initial_group_map: _DenseMap,
-    initial_group_sources: _GroupSources,
     refined_group_map: _DenseMap,
     refined_groups: _RefinedGroups,
     final_group_counts: array,
@@ -811,46 +799,29 @@ def write_group_sources(
     segments: list[tuple[int, int]],
     bases: dict[int, int],
 ) -> int:
-    """Write one record a refined group, with its representative passage's metadata.
+    """Write one record a refined group, with its representative member's metadata.
 
     Representatives are read back off the results file, so groups come out in
     file order; the database load keys on group_id and does not mind. Returns
     the number of groups written.
     """
-    # Pass 2 only splits initial groups, so any member's initial group will do.
-    representative_of = _DenseMap(len(refined_groups))
-    for passage_id in tqdm(range(len(spans)), desc=_label(4), leave=False):
-        refined_id = refined_group_map[passage_id]
-        if refined_id >= 0 and representative_of[refined_id] < 0 and refined_groups.live(refined_id):
-            initial_id = initial_group_map[passage_id]
-            if initial_id >= 0:
-                representative_of[refined_id] = initial_group_sources.passage_ids[initial_id]
-
-    # The groups each representative passage speaks for, in file order.
     _status(_label(4))
-    wanted: dict[int, list[int]] = defaultdict(list)
-    for refined_id in range(len(refined_groups)):
-        representative = representative_of[refined_id]
-        if representative >= 0:
-            wanted[representative].append(refined_id)
-
-    total = sum(len(groups) for groups in wanted.values())
+    total = sum(1 for group_id in range(len(refined_groups)) if refined_groups.live(group_id))
     if len(segments) < 2:
         with contextlib.ExitStack() as stack:
             input_file = stack.enter_context(lz4.frame.open(results_file))
             output_file = stack.enter_context(open(groups_file, "wb"))
-            bar = stack.enter_context(
-                tqdm(total=total, desc=_label(4), leave=False))
-            _group_source_records(input_file, output_file, wanted, refined_groups,
+            bar = stack.enter_context(tqdm(total=total, desc=_label(4), leave=False))
+            _group_source_records(input_file, output_file, refined_group_map, refined_groups,
                                   final_group_counts, spans, 0, bar=bar)
         return total
 
-    _SHARED.update(bases=bases, wanted=wanted, refined_groups=refined_groups,
+    _SHARED.update(bases=bases, refined_group_map=refined_group_map, refined_groups=refined_groups,
                    final_group_counts=final_group_counts, spans=spans)
     try:
         parts = _run_segments(_group_source_segment, results_file, segments, total, _label(4))
     finally:
-        for key in ("bases", "wanted", "refined_groups", "final_group_counts", "spans"):
+        for key in ("bases", "refined_group_map", "refined_groups", "final_group_counts", "spans"):
             _SHARED.pop(key, None)
     # Plain jsonl, not lz4, so the parts join as they are.
     _status(_label(4))
@@ -858,41 +829,42 @@ def write_group_sources(
     return total
 
 
-def _group_source_records(input_file, output_file, wanted: dict[int, list[int]],
+def _group_source_records(input_file, output_file, refined_group_map: _DenseMap,
                           refined_groups: _RefinedGroups, final_group_counts: array,
                           spans: _Spans, passage_id: int, progress=None, bar=None) -> None:
     """Write a record for every group whose representative is in this range."""
+    representatives = refined_groups.representatives
     source_text = _SourceText()
     pending = 0
     for batch in read_line_batches(input_file):
         records = []
         for line in batch:
-            groups = wanted.get(passage_id)
-            if groups is None:
+            refined_id = refined_group_map[passage_id]
+            if (refined_id < 0 or representatives[refined_id] != passage_id
+                    or not refined_groups.live(refined_id)):
                 passage_id += 1
                 continue
             fields = orjson.loads(line)
             fields["passage_id"] = passage_id
             passage_id += 1
             metadata = {k: v for k, v in fields.items() if not k.startswith("target_")}
-            for refined_id in groups:
-                filename = spans.names[refined_groups.file_ids[refined_id]]
-                start_byte = refined_groups.starts[refined_id]
-                end_byte = refined_groups.ends[refined_id]
-                records.append(
-                    orjson.dumps(
-                        {
-                            **metadata,  # Use metadata from representative initial group
-                            "source_filename": filename,  # Use correct filename
-                            "source_passage": source_text.read(start_byte, end_byte, filename),
-                            "group_id": refined_id,
-                            "source_start_byte": start_byte,
-                            "source_end_byte": end_byte,
-                            "count": final_group_counts[refined_id],
-                        }
-                    )
-                    + b"\n"
+            filename = spans.names[refined_groups.file_ids[refined_id]]
+            start_byte = refined_groups.starts[refined_id]
+            end_byte = refined_groups.ends[refined_id]
+            records.append(
+                orjson.dumps(
+                    {
+                        **metadata,  # from the representative, a member of this group
+                        "source_filename": filename,
+                        "source_passage": source_text.read(start_byte, end_byte, filename),
+                        "group_id": refined_id,
+                        "source_start_byte": start_byte,
+                        "source_end_byte": end_byte,
+                        "count": final_group_counts[refined_id],
+                    }
                 )
+                + b"\n"
+            )
         if records:
             output_file.write(b"".join(records))
             if bar is not None:
@@ -909,7 +881,7 @@ def _group_source_segment(job: tuple[str, int, int, str]) -> str:
     with contextlib.ExitStack() as stack:
         input_file = stack.enter_context(_lz4_window(path, offset, size))
         output_file = stack.enter_context(open(part, "wb"))
-        _group_source_records(input_file, output_file, _SHARED["wanted"],
+        _group_source_records(input_file, output_file, _SHARED["refined_group_map"],
                               _SHARED["refined_groups"], _SHARED["final_group_counts"],
                               _SHARED["spans"], _SHARED["bases"][offset], _SHARED["progress"])
     return part
