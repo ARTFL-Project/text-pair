@@ -180,6 +180,88 @@ def run_separate(work_dir, frames, per_frame, workers):
     return separated, records_of(path), records_of(second_file(path, "banal_alignments.jsonl"))
 
 
+def has_field(blob, field=b'"banality"'):
+    """True if every record carries the field, False if none does."""
+    lines = [line for line in blob.split(b"\n") if line.strip()]
+    hits = sum(field in line for line in lines)
+    return hits == len(lines) if hits else False
+
+
+def check_combinations(root):
+    """Each detector on its own, both together, and banalities kept or separated."""
+    workers = 8
+
+    # Phrase filter alone: hits go to the filtered file, the rest are kept untouched.
+    work = os.path.join(root, "combo_phrase")
+    os.makedirs(work, exist_ok=True)
+    build_corpus(work)
+    path = os.path.join(work, "alignments.jsonl.lz4")
+    total = write_phrasey(path, 6, 120)
+    phrases = write_phrases(os.path.join(work, "phrases.txt"))
+    filtered = bf.phrase_matcher(path, phrases, total, workers)
+    kept = records_of(path)
+    check("phrase filter alone: hits are filtered out", filtered == total // 3)
+    check("phrase filter alone: the rest are kept",
+          kept.count(b"\n") == total - filtered)
+    check("phrase filter alone: no banality verdict is added", not has_field(kept))
+
+    # Auto-detection alone: every record gets a verdict, nothing is filtered.
+    work = os.path.join(root, "combo_auto")
+    os.makedirs(work, exist_ok=True)
+    order, common = build_corpus(work)
+    path = os.path.join(work, "alignments.jsonl.lz4")
+    total = write_phrasey(path, 6, 120)
+    found = bf.banality_auto_detect(path, common, order, total, 100.0, 40.0, workers)
+    kept = records_of(path)
+    check("auto-detection alone: nothing is removed", kept.count(b"\n") == total)
+    check("auto-detection alone: every record carries a verdict", has_field(kept))
+    check("auto-detection alone: some records are banal", 0 < found <= total)
+    check("auto-detection alone: no filtered file is written",
+          not os.path.exists(second_file(path, "filtered_passages.jsonl")))
+
+    # Both: phrase hits leave, and everything kept carries a verdict.
+    work = os.path.join(root, "combo_both")
+    os.makedirs(work, exist_ok=True)
+    order, common = build_corpus(work)
+    path = os.path.join(work, "alignments.jsonl.lz4")
+    total = write_phrasey(path, 6, 120)
+    phrases = write_phrases(os.path.join(work, "phrases.txt"))
+    filtered, found = bf.filter_and_flag(path, phrases, common, order, total,
+                                         100.0, 40.0, workers)
+    kept = records_of(path)
+    check("both: phrase hits are filtered out", filtered == total // 3)
+    check("both: what is kept carries a verdict", has_field(kept))
+    check("both: the filtered file holds the hits",
+          records_of(second_file(path, "filtered_passages.jsonl")).count(b"\n") == filtered)
+
+    # store_banalities off: the flagged records move to their own file.
+    work = os.path.join(root, "combo_separate")
+    os.makedirs(work, exist_ok=True)
+    path = os.path.join(work, "alignments.jsonl.lz4")
+    total = write_flagged(path, 6, 120)
+    separated = bf.separate_banalities(path, total, workers)
+    kept = records_of(path)
+    banal = records_of(second_file(path, "banal_alignments.jsonl"))
+    check("store_banalities off: the banal records are separated",
+          separated == banal.count(b"\n") > 0)
+    check("store_banalities off: they are gone from the alignments",
+          kept.count(b"\n") == total - separated)
+    check("store_banalities off: nothing is lost",
+          kept.count(b"\n") + banal.count(b"\n") == total)
+
+    # store_banalities on: separate_banalities is simply not called, so the verdicts
+    # stay in the alignments for the database to flag.
+    work = os.path.join(root, "combo_keep")
+    os.makedirs(work, exist_ok=True)
+    path = os.path.join(work, "alignments.jsonl.lz4")
+    total = write_flagged(path, 6, 120)
+    before = records_of(path)
+    check("store_banalities on: the flagged records stay put",
+          before.count(b"\n") == total and has_field(before))
+    check("store_banalities on: no separate file is written",
+          not os.path.exists(second_file(path, "banal_alignments.jsonl")))
+
+
 def main():
     root = tempfile.mkdtemp(prefix="textpair_banality_")
     try:
@@ -240,6 +322,11 @@ def main():
             check(f"no phrase matches, {workers} worker(s): empty file still readable",
                   records_of(second) == b"")
             shutil.rmtree(empty, ignore_errors=True)
+
+        # The four ways the two detectors can be configured, and what each is supposed to
+        # leave behind. textpair/__main__ picks between these on `phrase_filter` and
+        # `banality_auto_detection`, and either has to work without the other.
+        check_combinations(root)
 
         # Frame boundaries have to be found without decompressing anything.
         path = os.path.join(root, "bounds.lz4")
