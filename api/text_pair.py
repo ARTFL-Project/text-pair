@@ -8,7 +8,6 @@ import re
 import time
 from collections import Counter, OrderedDict, defaultdict, namedtuple
 from pathlib import Path
-from typing import Any
 
 import networkx as nx
 import numpy as np
@@ -401,6 +400,66 @@ def get_favicon(db_path: str):
     return Response(resource_content, media_type="image/x-icon")
 
 
+def group_counts(cursor, groups_table: str, group_ids) -> dict[int, int]:
+    """Each group's stored `count`: the documents its passage appears in."""
+    if not group_ids:
+        return {}
+    cursor.execute(f'SELECT group_id, "count" FROM {groups_table} WHERE group_id = ANY(%s)', (list(group_ids),))
+    return {row[0]: row[1] for row in cursor}
+
+
+def facing(row, side: str) -> dict:
+    """An alignment with `side` presented as its target, source and target fields swapped if need be."""
+    if side == "target":
+        return {**row, "direction": "target"}
+    flipped = {}
+    for key, value in row.items():
+        if key.startswith("source_"):
+            flipped["target_" + key[7:]] = value
+        elif key.startswith("target_"):
+            flipped["source_" + key[7:]] = value
+        else:
+            flipped[key] = value
+    flipped["direction"] = "target"
+    return flipped
+
+
+def occurrences(rows, group: dict) -> list[dict]:
+    """Every place the group's passage is reused, once each, as an alignment facing it.
+
+    Both sides of every alignment count, except the anchor's own document. Overlapping
+    spans in one document are one place; its alignment is the one tied most closely to
+    the group's passage, which is what the page diffs the reuse against.
+    """
+    anchor_doc = group["source_doc_id"]
+    start, end = group["source_start_byte"], group["source_end_byte"]
+    by_file: defaultdict[str, list] = defaultdict(list)
+    for row in rows:
+        for side, other in (("target", "source"), ("source", "target")):
+            if row[f"{side}_doc_id"] == anchor_doc:
+                continue
+            if row[f"{other}_doc_id"] == anchor_doc:
+                tie = min(row[f"{other}_end_byte"], end) - max(row[f"{other}_start_byte"], start)
+                rank = (0, -tie)
+            else:
+                rank = (1, 0)
+            by_file[row[f"{side}_filename"]].append(
+                (row[f"{side}_start_byte"], row[f"{side}_end_byte"], rank, row, side))
+    found = []
+    for spans in by_file.values():
+        spans.sort(key=lambda item: (item[0], item[1]))
+        place, reach = [], -1
+        for item in spans + [None]:
+            if place and (item is None or item[0] >= reach):
+                best = min(place, key=lambda candidate: candidate[2])
+                found.append(facing(best[3], best[4]))
+                place, reach = [], -1
+            if item is not None:
+                place.append(item)
+                reach = max(reach, item[1])
+    return found
+
+
 @app.get("/search_alignments/")
 @app.get("/text-pair-api/search_alignments/")
 def search_alignments(request: Request):
@@ -453,33 +512,11 @@ def search_alignments(request: Request):
         f"""SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{other_args.db_table}_groups')"""
     )
     if cursor.fetchone()[0] is True:
-        counts_per_group: dict[int, int] = {}
-        for group_id in set(group_ids):
-            cursor.execute(
-                f"""SELECT source_doc_id FROM {other_args.db_table}_groups WHERE group_id=%s""",
-                (group_id,),
-            )
-            try:
-                source_doc_id = cursor.fetchone()[0]
-            except:
-                return {
-                    "group_id": group_id,
-                    "error": "No source_doc_id found for this group_id",
-                }
-            if group_id_type == "ARRAY":
-                count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
-                params = (group_id, source_doc_id)
-            else:  # Assume INTEGER
-                count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s"
-                params = (group_id, source_doc_id)
-            cursor.execute(count_query, params)
-            counts_per_group[group_id] = cursor.fetchone()[0]
+        counts_per_group = group_counts(cursor, f"{other_args.db_table}_groups", set(group_ids))
         for alignment in alignments:
-            if group_id_type == "ARRAY":
-                group_ids = [int(gid) for gid in alignment["group_id"]]
-                alignment["count"] = sum(counts_per_group[gid] for gid in group_ids)
-            else:
-                alignment["count"] = counts_per_group[alignment["group_id"]]
+            ids = alignment["group_id"] if group_id_type == "ARRAY" else [alignment["group_id"]]
+            # in more than one family, an alignment is as reused as the most reused of them
+            alignment["count"] = max((counts_per_group.get(int(gid), 0) for gid in ids), default=0)
     conn.rollback()
     conn.close()
 
@@ -726,8 +763,6 @@ def get_passage_group(request: Request, group_id: int):
     field_types = get_pg_type(alignment_table)
     group_id_type = field_types.get("group_id", "INTEGER").upper()
     groups_table = f"{alignment_table}_groups"
-    filtered_passages: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-    original_passage: dict[str, Any] = {}
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
@@ -737,34 +772,24 @@ def get_passage_group(request: Request, group_id: int):
 
     # Query groups_table
     cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
-    original_passage_result = cursor.fetchone()
-    original_passage = {k: v for k, v in original_passage_result.items()}
+    original_passage = dict(cursor.fetchone())
+    anchor_doc = original_passage["source_doc_id"]
 
     # Query the main alignment_table using the correct operator based on its group_id type
     if group_id_type == "ARRAY":
-        query = f"SELECT * FROM {alignment_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
-        params = (group_id, original_passage["source_doc_id"])
+        query = f"SELECT * FROM {alignment_table} WHERE group_id @> ARRAY[%s]::integer[]"
     else:  # Backward compatibility for INTEGER type
-        query = f"SELECT * FROM {alignment_table} WHERE group_id=%s AND source_doc_id=%s"
-        params = (group_id, original_passage["source_doc_id"])
-
-    cursor.execute(query, params)
-
-    # Process results from the alignment_table query
-    for row in cursor:
-        filtered_passages[row["target_filename"]].append(
-            {
-                **row,
-                "direction": "target",
-            }
-        )
+        query = f"SELECT * FROM {alignment_table} WHERE group_id=%s"
+    cursor.execute(query, (group_id,))
+    rows = cursor.fetchall()
     conn.rollback()
     conn.close()
+
+    reuses = occurrences(rows, original_passage)
     passage_list = []
     results = defaultdict(list)
-    for passages in filtered_passages.values():
-        for passage in passages:
-            results[passage["target_year"]].append(passage)
+    for passage in reuses:
+        results[passage["target_year"]].append(passage)
     for key, value in results.items():
         value.sort(key=lambda x: (x["target_title"], x["target_start_byte"]), reverse=True)
         passage_list.append({"year": key, "result": value})
@@ -778,76 +803,31 @@ def get_passage_group(request: Request, group_id: int):
 def get_sorted_results(request: Request):
     """Sort results based on the number of passages within each group"""
     sql_fields, sql_values, other_args, _ = parse_args(request)
-    field_types = get_pg_type(other_args.db_table)
-    group_id_type = field_types.get("group_id", "INTEGER").upper()
-
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-    # Select group_id and source_doc_id, applying filters if any
-    query = f"SELECT source_doc_id, group_id FROM {other_args.db_table}"
-    if sql_fields:
-        query += f" WHERE {sql_fields}"
-    cursor.execute(query, sql_values)
-
-    # Store potential group IDs and their source docs
-    # Check type of retrieved value here
-    potential_groups: dict[int, str] = {}  # group_id -> source_doc_id
-    for row in cursor:
-        gid_value = row["group_id"]
-        source_doc_id = row["source_doc_id"]
-        if isinstance(gid_value, int):  # Check if it's an integer
-            if gid_value is not None:
-                potential_groups[gid_value] = source_doc_id
-        elif isinstance(gid_value, list):  # Check if it's a list (from ARRAY)
-            for single_gid in gid_value:
-                if single_gid is not None:
-                    try:
-                        potential_groups[int(single_gid)] = source_doc_id
-                    except (ValueError, TypeError):
-                        continue
-        elif gid_value is None:
-            continue
-
-    counts_per_group: dict[int, int] = {}
     groups_table = f"{other_args.db_table}_groups"
 
-    for group_id in potential_groups:
-        # Verify against the _groups table for the canonical source_doc_id
-        cursor.execute(
-            f"""SELECT source_doc_id FROM {groups_table} WHERE group_id=%s""",
-            (group_id,),
-        )
-        group_source_result = cursor.fetchone()
-        if not group_source_result:
-            continue
-        group_source_doc_id = group_source_result[0]
-
-        # Count occurrences in the main table using the correct query type
-        if group_id_type == "ARRAY":  # Check for ARRAY type
-            count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id @> ARRAY[%s]::integer[] AND source_doc_id=%s"
-            params = (group_id, group_source_doc_id)
-        else:  # Assume INTEGER if not ARRAY
-            count_query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE group_id=%s AND source_doc_id=%s"
-            params = (group_id, group_source_doc_id)
-
-        cursor.execute(count_query, params)
-        count_result = cursor.fetchone()
-        if count_result:
-            counts_per_group[group_id] = count_result[0]
-
-    results = {"total_count": len(counts_per_group), "groups": []}
-    sorted_group_ids = sorted(counts_per_group.items(), key=lambda x: x[1], reverse=True)[:100]
-
-    for group_id, count in sorted_group_ids:
-        cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
-        group_data = cursor.fetchone()
-        if group_data:
-            results["groups"].append({**group_data, "count": count})
+    # The groups table holds how many documents each passage appears in; filters, when
+    # there are any, only decide which passages are in the running.
+    where, params = "", ()
+    if sql_fields:
+        cursor.execute(f"SELECT group_id FROM {other_args.db_table} WHERE {sql_fields}", sql_values)
+        candidates: set[int] = set()
+        for row in cursor:
+            gid_value = row["group_id"]
+            if isinstance(gid_value, list):
+                candidates.update(int(gid) for gid in gid_value if gid is not None)
+            elif gid_value is not None:
+                candidates.add(int(gid_value))
+        where, params = "WHERE group_id = ANY(%s)", (list(candidates),)
+    cursor.execute(f"SELECT COUNT(*) FROM {groups_table} {where}", params)
+    total = cursor.fetchone()[0]
+    cursor.execute(f'SELECT * FROM {groups_table} {where} ORDER BY "count" DESC, group_id LIMIT 100', params)
+    results = {"total_count": total, "groups": [dict(row) for row in cursor]}
 
     conn.rollback()
     conn.close()

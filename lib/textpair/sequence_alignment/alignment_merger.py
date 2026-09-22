@@ -1,16 +1,24 @@
-"""Merge Overlapping Alignments"""
+"""Group alignments into passage families: one per reused passage, anchored on its earliest occurrence.
+
+Every alignment has two ends, spans of text in two documents. At each place in a
+document, the ends that overlap are carved into sites, each built around the passage
+most of them cover. A family is then the earliest site of a passage together with the
+sites aligned directly with it.
+"""
 
 import contextlib
+import multiprocessing as mp
 import os
 import sys
 from array import array
 from bisect import bisect_left
-from collections import defaultdict
 from typing import Union
 
 import lz4.frame
 import msgspec
+import numpy as np
 import orjson
+from numba import njit
 from tqdm import tqdm
 
 from textpair.utils import clean_passage
@@ -26,7 +34,7 @@ from .banality_finder import (
 )
 
 
-_STEPS = ("finding groups", "refining groups", "assigning passages",
+_STEPS = ("reading alignments", "finding passages", "forming families",
           "writing group sources", "rewriting results")
 
 
@@ -41,207 +49,445 @@ def _status(text: str = "") -> None:
         sys.stderr.flush()
 
 
-_FILL_CHUNK = 1 << 16
+_INSIDE = 0.5    # a window joins a site when at least this much of it lies in the site's core
+_FLOOR = 0.1     # ... and it is at least this long next to the core
+_CONTAIN = 0.8   # a window holding this much of a core, but too long to join, is listed under it
+_ADOPT = 0.5     # a site joins the family holding most of its partners once this share are placed
+_SENTENCE_WORDS = 3  # words a group's passage may move back to start its sentence: never a passage
+_UNDATED = 9999
+_NONE = -(1 << 62)
 
 
-def _filled(typecode: str, size: int, value: int) -> array:
-    """`size` copies of `value`, without building a full-size temporary to copy from."""
-    values = array(typecode)
-    chunk = array(typecode, (value,)) * _FILL_CHUNK
-    while len(values) + _FILL_CHUNK <= size:
-        values.extend(chunk)
-    if len(values) < size:
-        values.extend(chunk[: size - len(values)])
-    return values
+class _Ends(msgspec.Struct):
+    """What grouping reads from a record: its two spans, and the years of their documents."""
 
-
-class _DenseMap:
-    """Passage id -> int in a flat array, since passage ids are dense. -1 is absent."""
-
-    __slots__ = ("_values",)
-
-    def __init__(self, expected: int):
-        self._values = _filled("i", max(expected, 1), -1)
-
-    def __setitem__(self, index: int, value: int) -> None:
-        values = self._values
-        if index >= len(values):
-            values.extend(_filled("i", index + 1 - len(values), -1))
-        values[index] = value
-
-    def __getitem__(self, index: int) -> int:
-        return self._values[index] if index < len(self._values) else -1
-
-    def __len__(self) -> int:
-        return len(self._values)
-
-
-class _Alignment(msgspec.Struct):
-    """The fields grouping needs from a record; the rest is read back for representatives only."""
-
-    source_doc_id: str
     source_filename: str
     source_start_byte: int
     source_end_byte: int
-    target_doc_id: str
+    target_filename: str
     target_start_byte: int
     target_end_byte: int
-    passage_id: int = -1
+    source_year: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
+    target_year: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
+    # where each document's words_and_philo_ids dump is; read once per document
+    source_parsed_filename: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
+    target_parsed_filename: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
+    source_doc_id: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
+    target_doc_id: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
 
 
-_DECODE_ALIGNMENT = msgspec.json.Decoder(_Alignment).decode
+_DECODE_ENDS = msgspec.json.Decoder(_Ends).decode
 
 
-_BUCKET_BITS = 10  # index granularity, 1 KiB
-_LONG_SPAN = 8192  # longer spans are kept out of the buckets
+def _value(raw):
+    return None if raw is msgspec.UNSET else orjson.loads(bytes(raw))
 
 
-class _DocumentSpans:
-    """One document's target spans, searchable by containment.
+def _year(raw) -> int:
+    """A document's year, for ordering; undated ones come last."""
+    if raw is msgspec.UNSET:
+        return _UNDATED
+    try:
+        return int(str(orjson.loads(bytes(raw)))[:4])
+    except ValueError:
+        return _UNDATED
 
-    A covering span shorter than `_LONG_SPAN` starts within `_LONG_SPAN` of the
-    passage's end, so only those buckets are searched; long spans always are.
-    The earliest-added match wins, so search order does not matter. Buckets are
-    flat (start, end, group, order) arrays.
+
+def read_ends(results_file: str, count: int):
+    """Every alignment's two spans: end 2k is record k's source, end 2k + 1 its target.
+
+    Returns the file names, each file's year and (words dump, doc id), and each end's
+    file, start and end.
     """
-
-    __slots__ = ("buckets", "long_spans")
-
-    def __init__(self):
-        self.buckets: dict[int, array] = {}
-        self.long_spans = array("q")
-
-    def add(self, start_byte: int, end_byte: int, group_id: int, order: int) -> None:
-        if end_byte - start_byte > _LONG_SPAN:
-            target = self.long_spans
-        else:
-            key = start_byte >> _BUCKET_BITS
-            target = self.buckets.get(key)
-            if target is None:
-                target = self.buckets[key] = array("q")
-        target.extend((start_byte, end_byte, group_id, order))
-
-    def containing(self, start_byte: int, end_byte: int) -> int | None:
-        """Group of the first-added span covering [start_byte, end_byte], if any."""
-        best_order = -1
-        best_group = None
-        spans = self.long_spans
-        for position in range(0, len(spans), 4):
-            if spans[position] <= start_byte and spans[position + 1] >= end_byte:
-                order = spans[position + 3]
-                if best_order < 0 or order < best_order:
-                    best_order = order
-                    best_group = spans[position + 2]
-        buckets = self.buckets
-        first = (end_byte - _LONG_SPAN) >> _BUCKET_BITS
-        if first < 0:
-            first = 0
-        for bucket in range(first, (start_byte >> _BUCKET_BITS) + 1):
-            spans = buckets.get(bucket)
-            if spans is None:
-                continue
-            for position in range(0, len(spans), 4):
-                if spans[position] <= start_byte and spans[position + 1] >= end_byte:
-                    order = spans[position + 3]
-                    if best_order < 0 or order < best_order:
-                        best_order = order
-                        best_group = spans[position + 2]
-        return best_group
+    names: list[str] = []
+    ids: dict[str, int] = {}
+    years: list[int] = []
+    dumps: list[tuple] = []
+    files, starts, ends = array("i"), array("q"), array("q")
+    with lz4.frame.open(results_file) as input_file:
+        progress = tqdm(total=count, desc=_label(1), leave=False)
+        for batch in read_line_batches(input_file):
+            for line in batch:
+                r = _DECODE_ENDS(line)
+                source = ids.get(r.source_filename)
+                if source is None:
+                    source = ids[r.source_filename] = len(names)
+                    names.append(r.source_filename)
+                    years.append(_year(r.source_year))
+                    dumps.append((_value(r.source_parsed_filename), _value(r.source_doc_id)))
+                target = ids.get(r.target_filename)
+                if target is None:
+                    target = ids[r.target_filename] = len(names)
+                    names.append(r.target_filename)
+                    years.append(_year(r.target_year))
+                    dumps.append((_value(r.target_parsed_filename), _value(r.target_doc_id)))
+                files.extend((source, target))
+                starts.extend((r.source_start_byte, r.target_start_byte))
+                ends.extend((r.source_end_byte, r.target_end_byte))
+            progress.update(len(batch))
+        progress.close()
+    if not files:
+        return [names, np.empty(0, np.int64), dumps, np.empty(0, np.int32), np.empty(0, np.int64), np.empty(0, np.int64)]
+    # a list, so the grouping can take the spans over and free them once it has the windows
+    return [names, np.array(years, np.int64), dumps, np.frombuffer(files, np.int32),
+            np.frombuffer(starts, np.int64), np.frombuffer(ends, np.int64)]
 
 
-class AlignmentGroups:
-    """Holding alignment group data"""
-
-    __slots__ = ("group_id", "merged_target_passages", "group_map", "span_order", "found_groups")
-
-    def __init__(self, expected: int = 0):
-        self.group_id = -1
-        self.merged_target_passages: dict[str, _DocumentSpans] = {}
-        self.group_map = _DenseMap(expected)
-        self.span_order = 0
-        self.found_groups: dict[tuple[str, int, int], int] = {}
-
-    def add_target_span(self, passage: _Alignment, group_id: int) -> None:
-        """Record a passage's target span under its target document"""
-        doc_id = passage.target_doc_id
-        spans = self.merged_target_passages.get(doc_id)
-        if spans is None:
-            spans = self.merged_target_passages[doc_id] = _DocumentSpans()
-        spans.add(passage.target_start_byte, passage.target_end_byte, group_id, self.span_order)
-        self.span_order += 1
-
-    def passage_group_init(self, passage: _Alignment) -> None:
-        """Initialize new group"""
-        self.group_id += 1
-        self.add_target_span(passage, self.group_id)
-        self.group_map[passage.passage_id] = self.group_id
-
-    def passage_group_update(self, passage: _Alignment) -> None:
-        """Update current group"""
-        self.add_target_span(passage, self.group_id)
-        self.group_map[passage.passage_id] = self.group_id
-
-    def merge_passages(self, passages: list[_Alignment]) -> None:
-        """Merge passages that are aligned to the same source passage"""
-        passages.sort(
-            key=lambda x: (
-                x.source_start_byte,
-                x.source_start_byte - x.source_end_byte,
-            )
-        )  # sort by smaller start byte and bigger end_byte
-        current_end = None
-        for passage in passages:
-            if current_end is None or passage.source_start_byte >= current_end:
-                self.passage_group_init(passage)
-                current_end = passage.source_end_byte
-            else:
-                self.passage_group_update(passage)
-                if passage.source_end_byte > current_end:
-                    current_end = passage.source_end_byte
-
-    def find_group(self, new_pair: _Alignment) -> bool:
-        """Find group for new pair.
-
-        Hits are cached, since spans are only added and the earliest match stays
-        earliest. Misses are not: a later span can cover them.
-        """
-        start_byte = new_pair.source_start_byte
-        end_byte = new_pair.source_end_byte
-        key = (new_pair.source_doc_id, start_byte, end_byte)
-        group_id = self.found_groups.get(key)
-        if group_id is None:
-            group_id = self.merged_target_passages[key[0]].containing(start_byte, end_byte)
-            if group_id is None:
-                return False
-            self.found_groups[key] = group_id
-        self.add_target_span(new_pair, group_id)
-        self.group_map[new_pair.passage_id] = group_id
-        return True
+@njit(nogil=True, cache=True)
+def _windows(files, starts, ends, order):
+    """Distinct spans in (file, start, end) order, each end's window, and each window's first end."""
+    n_windows = 0
+    for j in range(order.shape[0]):
+        k, p = order[j], order[j - 1]
+        if j == 0 or files[k] != files[p] or starts[k] != starts[p] or ends[k] != ends[p]:
+            n_windows += 1
+    window_of = np.empty(order.shape[0], np.int32)
+    wf = np.empty(n_windows, np.int32)
+    ws = np.empty(n_windows, np.int64)
+    we = np.empty(n_windows, np.int64)
+    first_end = np.empty(n_windows, np.int64)
+    w = -1
+    for j in range(order.shape[0]):
+        k = order[j]
+        if w < 0 or files[k] != wf[w] or starts[k] != ws[w] or ends[k] != we[w]:
+            w += 1
+            wf[w], ws[w], we[w], first_end[w] = files[k], starts[k], ends[k], k
+        elif k < first_end[w]:
+            first_end[w] = k
+        window_of[k] = w
+    return window_of, wf, ws, we, first_end
 
 
-class _Spans:
-    """Every passage's source file and span, by passage id, in flat arrays."""
+@njit(nogil=True, cache=True)
+def _clusters(wf, ws, we):
+    """Where each run of windows joined by overlap begins, plus the end of the last."""
+    bounds = np.empty(wf.shape[0] + 1, np.int64)
+    n, reach = 0, -1
+    for w in range(wf.shape[0]):
+        if w == 0 or wf[w] != wf[w - 1] or ws[w] >= reach:
+            bounds[n] = w
+            n += 1
+            reach = we[w]
+        elif we[w] > reach:
+            reach = we[w]
+    bounds[n] = wf.shape[0]
+    return bounds[: n + 1].copy()
 
-    __slots__ = ("names", "file_ids", "starts", "ends", "_ids")
 
-    def __init__(self):
-        self.names: list[str] = []
-        self.file_ids = array("i")
-        self.starts = array("q")
-        self.ends = array("q")
-        self._ids: dict[str, int] = {}
+@njit(nogil=True, cache=True)
+def _depth_add(mx, add, size, lo, hi, v):
+    """Add v to the depth of segments [lo, hi); each node keeps its own add and its subtree's max."""
+    lo += size
+    hi += size
+    l0, r0 = lo, hi - 1
+    while lo < hi:
+        if lo & 1:
+            add[lo] += v
+            mx[lo] += v
+            lo += 1
+        if hi & 1:
+            hi -= 1
+            add[hi] += v
+            mx[hi] += v
+        lo >>= 1
+        hi >>= 1
+    for node in (l0 >> 1, r0 >> 1):
+        while node >= 1:
+            mx[node] = max(mx[2 * node], mx[2 * node + 1]) + add[node]
+            node >>= 1
 
-    def append(self, filename: str, start_byte: int, end_byte: int) -> None:
-        file_id = self._ids.get(filename)
-        if file_id is None:
-            file_id = self._ids[filename] = len(self.names)
-            self.names.append(filename)
-        self.file_ids.append(file_id)
-        self.starts.append(start_byte)
-        self.ends.append(end_byte)
 
-    def __len__(self) -> int:
-        return len(self.file_ids)
+@njit(nogil=True, cache=True)
+def _deepest(mx, add, size):
+    """The leftmost segment of greatest depth."""
+    node = 1
+    while node < size:
+        node = 2 * node if mx[2 * node] == mx[node] - add[node] else 2 * node + 1
+    return node - size
+
+
+@njit(nogil=True, cache=True)
+def _end_set(tree, size, i, value):
+    i += size
+    tree[i] = value
+    i >>= 1
+    while i >= 1:
+        tree[i] = max(tree[2 * i], tree[2 * i + 1])
+        i >>= 1
+
+
+@njit(nogil=True, cache=True)
+def _ending_past(tree, size, limit, beyond, out, stack):
+    """Live windows among the first `limit` that end past `beyond`, in index order."""
+    found, top = 0, 1
+    stack[0] = 1
+    while top:
+        top -= 1
+        node = stack[top]
+        if tree[node] <= beyond:
+            continue
+        leftmost = node
+        while leftmost < size:
+            leftmost <<= 1
+        if leftmost - size >= limit:
+            continue
+        if node >= size:
+            out[found] = node - size
+            found += 1
+            continue
+        stack[top] = 2 * node + 1
+        stack[top + 1] = 2 * node
+        top += 2
+    return found
+
+
+@njit(nogil=True, cache=True)
+def _carve(starts, ends, bounds, inside, floor, contain):
+    """Sites for every cluster of windows. Returns each window's site, each site's core and
+    first member, and the (site, window) pairs of longer windows listed under a site.
+
+    A site is built at the point most live windows cover: its core is where at least
+    half of those overlap, and it takes the windows lying mostly inside the core.
+    """
+    site_of = np.full(starts.shape[0], -1, np.int64)
+    core_s = np.empty(starts.shape[0], np.int64)
+    core_e = np.empty(starts.shape[0], np.int64)
+    first = np.empty(starts.shape[0], np.int64)
+    held_site = np.empty(16, np.int64)
+    held_window = np.empty(16, np.int64)
+    n_sites = n_held = 0
+    for c in range(bounds.shape[0] - 1):
+        c0, c1 = bounds[c], bounds[c + 1]
+        k = c1 - c0
+        s, e = starts[c0:c1], ends[c0:c1]
+        xs = np.unique(np.concatenate((s, e)))
+        n_seg = max(xs.shape[0] - 1, 1)
+        size = 1
+        while size < n_seg:
+            size <<= 1
+        mx = np.zeros(2 * size, np.int64)
+        add = np.zeros(2 * size, np.int64)
+        for j in range(n_seg, size):
+            mx[size + j] = _NONE
+            add[size + j] = _NONE
+        for node in range(size - 1, 0, -1):
+            mx[node] = max(mx[2 * node], mx[2 * node + 1])
+        lo = np.searchsorted(xs, s)
+        hi = np.searchsorted(xs, e)
+        esize = 1
+        while esize < k:
+            esize <<= 1
+        tree = np.full(2 * esize, _NONE, np.int64)
+        alive = 0
+        for i in range(k):
+            if e[i] > s[i]:
+                _depth_add(mx, add, size, lo[i], hi[i], 1)
+                tree[esize + i] = e[i]
+                alive += 1
+            else:  # an empty span covers nothing: a site of its own
+                site_of[c0 + i] = n_sites
+                core_s[n_sites], core_e[n_sites], first[n_sites] = s[i], e[i], c0 + i
+                n_sites += 1
+        for node in range(esize - 1, 0, -1):
+            tree[node] = max(tree[2 * node], tree[2 * node + 1])
+        out = np.empty(k, np.int64)
+        stack = np.empty(2 * esize + 2, np.int64)
+        while alive:
+            point = xs[_deepest(mx, add, size)]
+            g = _ending_past(tree, esize, np.searchsorted(s, point, side="right"), point, out, stack)
+            need = (g + 1) // 2
+            cs = np.sort(s[out[:g]])[need - 1]
+            ce = np.sort(e[out[:g]])[g - need]
+            core = ce - cs
+            m = _ending_past(tree, esize, np.searchsorted(s, ce, side="left"), cs, out, stack)
+            n_members = 0
+            best, best_overlap = -1, _NONE
+            for j in range(m):
+                i = out[j]
+                overlap = min(e[i], ce) - max(s[i], cs)
+                if overlap > best_overlap:
+                    best, best_overlap = i, overlap
+                if overlap >= inside * (e[i] - s[i]) and (e[i] - s[i]) >= floor * core:
+                    out[n_members] = i  # members fill the front of `out`, behind j
+                    n_members += 1
+                elif overlap >= contain * core:
+                    if n_held == held_site.shape[0]:
+                        held_site = np.concatenate((held_site, np.empty_like(held_site)))
+                        held_window = np.concatenate((held_window, np.empty_like(held_window)))
+                    held_site[n_held], held_window[n_held] = n_sites, c0 + i
+                    n_held += 1
+            if n_members == 0:  # nothing sits inside: the window overlapping it most stands alone
+                out[0] = best
+                n_members = 1
+            for j in range(n_members):
+                i = out[j]
+                site_of[c0 + i] = n_sites
+                _depth_add(mx, add, size, lo[i], hi[i], -1)
+                _end_set(tree, esize, i, _NONE)
+                alive -= 1
+            core_s[n_sites], core_e[n_sites], first[n_sites] = cs, ce, c0 + out[0]
+            n_sites += 1
+    return (site_of, core_s[:n_sites].copy(), core_e[:n_sites].copy(), first[:n_sites].copy(),
+            held_site[:n_held].copy(), held_window[:n_held].copy())
+
+
+@njit(nogil=True, cache=True)
+def _anchor(order, offsets, partners, adopt):
+    """Families over sites taken in `order`: a site joins the family most of its placed
+    partners are in, or else anchors a new one and takes its unplaced partners."""
+    family = np.full(order.shape[0], -1, np.int64)
+    anchors = np.empty(order.shape[0], np.int64)
+    placed = np.empty(max(partners.shape[0], 1), np.int64)
+    n_families = 0
+    for sid in order:
+        if family[sid] >= 0:
+            continue
+        p0, p1 = offsets[sid], offsets[sid + 1]
+        n_placed = 0
+        for j in range(p0, p1):
+            if family[partners[j]] >= 0:
+                placed[n_placed] = family[partners[j]]
+                n_placed += 1
+        if n_placed and n_placed >= adopt * (p1 - p0):
+            ranked = np.sort(placed[:n_placed])
+            best, best_count, run = ranked[0], 0, 0
+            for j in range(n_placed):
+                run = run + 1 if j and ranked[j] == ranked[j - 1] else 1
+                if run > best_count:
+                    best, best_count = ranked[j], run
+            family[sid] = best
+            continue
+        family[sid] = n_families
+        anchors[n_families] = sid
+        for j in range(p0, p1):
+            if family[partners[j]] < 0:
+                family[partners[j]] = n_families
+        n_families += 1
+    return family, anchors[:n_families].copy()
+
+
+@njit(nogil=True, cache=True)
+def _families_of(k, window_of, site_of, family, listed_offsets, listed, out):
+    """Alignment k's families, sorted and distinct, into `out`; returns how many."""
+    a, b = window_of[2 * k], window_of[2 * k + 1]
+    fa, fb = family[site_of[a]], family[site_of[b]]
+    extra = listed_offsets[a + 1] - listed_offsets[a] + listed_offsets[b + 1] - listed_offsets[b]
+    if not extra:  # the usual case: just the two ends
+        if fa == fb:
+            out[0] = fa
+            return 1
+        out[0], out[1] = min(fa, fb), max(fa, fb)
+        return 2
+    found = np.empty(2 + extra, np.int64)
+    found[0], found[1] = fa, fb
+    j = 2
+    for w in (a, b):
+        for x in range(listed_offsets[w], listed_offsets[w + 1]):
+            found[j] = listed[x]
+            j += 1
+    found = np.unique(found)
+    out[:found.shape[0]] = found
+    return found.shape[0]
+
+
+@njit(nogil=True, cache=True)
+def _group_lists(window_of, site_of, family, listed_offsets, listed):
+    """Each alignment's families: its two ends', and any listing either end as a longer passage."""
+    n = window_of.shape[0] // 2
+    widest = 2
+    for w in range(listed_offsets.shape[0] - 1):
+        widest = max(widest, 2 + 2 * (listed_offsets[w + 1] - listed_offsets[w]))
+    out = np.empty(widest, np.int64)
+    offsets = np.zeros(n + 1, np.int64)
+    for k in range(n):
+        offsets[k + 1] = offsets[k] + _families_of(k, window_of, site_of, family, listed_offsets, listed, out)
+    members = np.empty(offsets[n], np.int64)
+    for k in range(n):
+        found = _families_of(k, window_of, site_of, family, listed_offsets, listed, out)
+        members[offsets[k]:offsets[k] + found] = out[:found]
+    return offsets, members
+
+
+class _Families:
+    """What the two output steps need from the grouping."""
+
+    __slots__ = ("names", "site_file", "core_s", "core_e", "anchors", "shown_s", "documents",
+                 "rep_passage", "rep_family", "rep_side", "list_offsets", "list_members")
+
+    def group_ids(self, passage_id: int) -> bytes:
+        o = self.list_offsets
+        if passage_id + 1 >= o.shape[0]:
+            return b"[]"
+        return orjson.dumps(self.list_members[o[passage_id]:o[passage_id + 1]], option=orjson.OPT_SERIALIZE_NUMPY)
+
+    __getitem__ = group_ids
+
+
+def group_passages(corpus: list, run_dir: str = "", workers: int = 1) -> _Families:
+    """Sites, then families, then what each alignment and each family row gets.
+
+    Takes `corpus` from `read_ends` and empties it: the per-end spans are the largest
+    thing held, and nothing needs them once the windows are built.
+    """
+    names, years, dumps, files, starts, ends = corpus
+    corpus.clear()
+    _status(_label(2))
+    order = np.lexsort((ends, starts, files))
+    window_of, wf, ws, we, first_end = _windows(files, starts, ends, order)
+    del order, files, starts, ends
+    site_of, core_s, core_e, first, held_site, held_window = _carve(
+        ws, we, _clusters(wf, ws, we), _INSIDE, _FLOOR, _CONTAIN)
+    site_file = wf[first]
+    n_sites, n_files = core_s.shape[0], len(names)
+
+    _status(_label(3))
+    a = site_of[window_of[0::2]]
+    b = site_of[window_of[1::2]]
+    keep = a != b
+    keys = np.unique(np.concatenate((a[keep] * n_sites + b[keep], b[keep] * n_sites + a[keep])))
+    del a, b, keep
+    offsets = np.concatenate(([0], np.cumsum(np.bincount(keys // n_sites, minlength=n_sites)))).astype(np.int64)
+    partners = (keys % n_sites).astype(np.int64)
+    del keys
+    rank = np.empty(n_files, np.int64)
+    rank[sorted(range(n_files), key=names.__getitem__)] = np.arange(n_files)
+    visit = np.lexsort((np.arange(n_sites), core_s, rank[site_file], years[site_file]))
+    family, anchors = _anchor(visit, offsets, partners, _ADOPT)
+    # two families anchored on the very same passage are one family
+    keys = np.stack((site_file[anchors], core_s[anchors], core_e[anchors]), axis=1)
+    _, first_of, inverse = np.unique(keys, axis=0, return_index=True, return_inverse=True)
+    if first_of.shape[0] < anchors.shape[0]:
+        kept = np.sort(first_of)
+        family = np.searchsorted(kept, first_of[inverse.ravel()])[family]
+        anchors = anchors[kept]
+    n_families = anchors.shape[0]
+    # a family's passage is shown from its sentence's start when that is only a few words back
+    shown_s = _sentence_starts_for(names, dumps, run_dir, site_file[anchors], core_s[anchors], workers)
+
+    listed_family = family[held_site]
+    pairs = np.unique(held_window * n_families + listed_family) if held_site.size else np.empty(0, np.int64)
+    listed_offsets = np.concatenate(([0], np.cumsum(np.bincount(pairs // n_families, minlength=wf.shape[0])))).astype(np.int64)
+    list_offsets, list_members = _group_lists(window_of, site_of, family, listed_offsets, pairs % n_families)
+
+    # a family's documents are those of the alignments carrying it: what its page shows
+    per_alignment = np.repeat(np.arange(list_offsets.shape[0] - 1), np.diff(list_offsets))
+    doc_keys = np.unique(np.concatenate((list_members * n_files + wf[window_of[2 * per_alignment]],
+                                         list_members * n_files + wf[window_of[2 * per_alignment + 1]])))
+    del per_alignment
+    documents = np.bincount(doc_keys // n_files, minlength=n_families)
+    del doc_keys
+
+    result = _Families()
+    result.names = names
+    result.site_file, result.core_s, result.core_e = site_file, core_s, core_e
+    result.anchors, result.shown_s, result.documents = anchors, shown_s, documents
+    rep_end = first_end[first[anchors]]  # a family's row comes from its anchor's first window
+    by_passage = np.argsort(rep_end // 2, kind="stable")
+    result.rep_passage = (rep_end // 2)[by_passage]
+    result.rep_family = by_passage
+    result.rep_side = (rep_end % 2)[by_passage]
+    result.list_offsets, result.list_members = list_offsets, list_members
+    return result
 
 
 class _SourceText:
@@ -273,6 +519,93 @@ class _SourceText:
             self.handle.close()
         self.handle = None
         self.name = None
+
+
+class _Token(msgspec.Struct):
+    """A word or punctuation mark in a words_and_philo_ids dump."""
+
+    position: str  # doc div1 div2 div3 para sent word ...
+    start_byte: int
+    philo_type: str = "word"
+
+
+_DECODE_TOKEN = msgspec.json.Decoder(_Token).decode
+
+
+def _sentence_starts(path: str, upto: int):
+    """Each token's start, its sentence's start, and how many words of that sentence precede
+    it, as far as `upto`."""
+    starts, firsts, before = array("q"), array("q"), array("q")
+    current, first, words = None, 0, 0
+    try:
+        with lz4.frame.open(path) as handle:
+            for batch in read_line_batches(handle):
+                for line in batch:
+                    token = _DECODE_TOKEN(line)
+                    sentence = token.position.split(" ", 6)[:6]
+                    if sentence != current:
+                        current, first, words = sentence, token.start_byte, 0
+                    starts.append(token.start_byte)
+                    firsts.append(first)
+                    before.append(words)
+                    words += token.philo_type == "word"
+                if starts and starts[-1] > upto:
+                    break
+    except (OSError, ValueError, msgspec.DecodeError):
+        return array("q"), array("q"), array("q")
+    return starts, firsts, before
+
+
+def _words_dump(filename: str, parsed, doc_id, run_dir: str) -> str | None:
+    """A document's words_and_philo_ids dump: the path its records name, or the one beside its TEI."""
+    candidates = [parsed if os.path.isabs(parsed) else os.path.join(run_dir, parsed)] if parsed else []
+    candidates.append(os.path.join(os.path.dirname(os.path.dirname(filename)), "words_and_philo_ids", f"{doc_id}.lz4"))
+    return next((path for path in candidates if os.path.exists(path)), None)
+
+
+def _sentence_starts_in(task: tuple) -> list[int]:
+    """Where the sentence holding the first word at or after each byte starts, if only a few
+    words back; otherwise the byte itself."""
+    path, wanted = task
+    starts, firsts, before = _sentence_starts(path, wanted[-1])
+    found = []
+    for byte in wanted:
+        j = bisect_left(starts, byte)
+        near = j < len(starts) and before[j] <= _SENTENCE_WORDS and firsts[j] <= byte
+        found.append(firsts[j] if near else byte)
+    return found
+
+
+def _sentence_starts_for(names, dumps, run_dir, site_file, byte, workers: int) -> np.ndarray:
+    """`byte` moved back to the start of its sentence, where the document's dump says so."""
+    moved = byte.copy()
+    order = np.lexsort((byte, site_file))
+    tasks, positions = [], []
+    lo = 0
+    while lo < order.shape[0]:
+        f = site_file[order[lo]]
+        hi = lo
+        while hi < order.shape[0] and site_file[order[hi]] == f:
+            hi += 1
+        path = _words_dump(names[f], *dumps[f], run_dir)
+        if path is not None:
+            tasks.append((path, byte[order[lo:hi]].tolist()))
+            positions.append(order[lo:hi])
+        lo = hi
+    if not tasks:
+        return moved
+    bar = tqdm(total=len(tasks), desc=_label(3, "finding sentence starts"), leave=False)
+    if workers > 1 and len(tasks) > 1:
+        with mp.get_context("fork").Pool(min(workers, len(tasks))) as pool:
+            for where, found in zip(positions, pool.imap(_sentence_starts_in, tasks)):
+                moved[where] = found
+                bar.update()
+    else:
+        for where, task in zip(positions, tasks):
+            moved[where] = _sentence_starts_in(task)
+            bar.update()
+    bar.close()
+    return moved
 
 
 class _GroupFields(msgspec.Struct):
@@ -391,335 +724,26 @@ def _segment_plan(results_file: str, count: int, workers: int):
     return segments, _segment_bases(results_file, segments, count)
 
 
-def first_step_merge(results_file: str, count: int) -> tuple[_DenseMap, int, _Spans]:
-    """Merge passages that are aligned to the same source passage.
-
-    Also returns each passage's source file and span, by passage id. The two
-    passes after this one need nothing else out of a record, and this one has
-    already decoded every one of them.
-    """
-    passages: list[_Alignment] = []
-    alignment_groups = AlignmentGroups(count)
-    spans = _Spans()
-    doc_id = None
-    merged_target_passages = alignment_groups.merged_target_passages
-    find_group = alignment_groups.find_group
-    append_span = spans.append
-    passage_id = 0
-    with lz4.frame.open(results_file) as input_file:
-        progress = tqdm(total=count, desc=_label(1), leave=False)
-        for batch in read_line_batches(input_file):
-            for line in batch:
-                new_pair = _DECODE_ALIGNMENT(line)
-                new_pair.passage_id = passage_id
-                passage_id += 1
-                append_span(new_pair.source_filename, new_pair.source_start_byte, new_pair.source_end_byte)
-                source_doc_id: str = new_pair.source_doc_id
-                if source_doc_id in merged_target_passages and find_group(new_pair):
-                    continue
-
-                current_doc_id = source_doc_id
-                if doc_id != current_doc_id and doc_id is not None:
-                    alignment_groups.merge_passages(passages)
-                    passages = []
-                doc_id = current_doc_id
-                passages.append(new_pair)
-            progress.update(len(batch))
-        progress.close()
-
-        if len(passages) > 0:
-            alignment_groups.merge_passages(passages)
-            passages = []
-
-    return alignment_groups.group_map, alignment_groups.group_id + 1, spans
-
-
-class _RefinedGroups:
-    """Each refined group's file and intersection, by id. An empty intersection marks it gone.
-
-    `representatives` holds the member whose record supplies the group's metadata: the last
-    to join, which starts where the intersection does since members arrive in start order.
-    """
-
-    __slots__ = ("file_ids", "starts", "ends", "representatives")
-
-    def __init__(self):
-        self.file_ids = array("i")
-        self.starts = array("q")
-        self.ends = array("q")
-        self.representatives = array("q")
-
-    def add(self, file_id: int, start_byte: int, end_byte: int, passage_id: int) -> int:
-        """Start a group over [start_byte, end_byte) and return its id"""
-        self.file_ids.append(file_id)
-        self.starts.append(start_byte)
-        self.ends.append(end_byte)
-        self.representatives.append(passage_id)
-        return len(self.file_ids) - 1
-
-    def live(self, group_id: int) -> bool:
-        return self.starts[group_id] < self.ends[group_id]
-
-    def __len__(self) -> int:
-        return len(self.file_ids)
-
-
-def refine_groups_strict_intersection(
-    spans: _Spans, initial_group_map: _DenseMap
-) -> tuple[_DenseMap, _RefinedGroups]:
-    """
-    Pass 2: Split initial groups based purely on direct source passage overlap
-            using the shrinking intersection logic. Assigns each passage to ONE refined group.
-    Returns:
-        - refined_group_map: Mapping from original passage_id to the refined group_id.
-        - refined_groups: Each refined group's final intersection span and source file.
-    """
-    # 1. Group alignments by the *initial* group_id and source file, as flat (start, end, id) arrays
-    groups_data: dict[int, dict[int, array]] = defaultdict(dict)
-    file_ids = spans.file_ids
-    starts = spans.starts
-    ends = spans.ends
-    for passage_id in tqdm(range(len(spans)), desc=_label(2), leave=False):
-        initial_group_id = initial_group_map[passage_id]
-        if initial_group_id >= 0:
-            files_in_group = groups_data[initial_group_id]
-            file_id = file_ids[passage_id]
-            alignments_in_file = files_in_group.get(file_id)
-            if alignments_in_file is None:
-                alignments_in_file = files_in_group[file_id] = array("q")
-            alignments_in_file.extend((starts[passage_id], ends[passage_id], passage_id))
-
-    # 2. Process each initial group's alignments per source file
-    refined_group_map = _DenseMap(len(spans))
-    refined_groups = _RefinedGroups()
-    group_starts = refined_groups.starts
-    group_ends = refined_groups.ends
-    group_representatives = refined_groups.representatives
-
-    for initial_group_id, files_in_group in tqdm(groups_data.items(), desc=_label(2), leave=False):
-        for file_id, alignments_in_file in files_in_group.items():
-            # Sort alignments within this file by start byte
-            order = sorted(range(0, len(alignments_in_file), 3), key=alignments_in_file.__getitem__)
-
-            # Track active refined groups *for this specific file* within the initial group
-            active_refined_groups_for_file: list[int] = []
-
-            for record in order:
-                p_start = alignments_in_file[record]
-                p_end = alignments_in_file[record + 1]
-                p_id = alignments_in_file[record + 2]
-
-                # Try to join an existing *refined* group within this file.
-                # Starts only grow, so a group ending at or before this start is dropped for good.
-                best_fit_group = -1
-                still_live = []
-                for position, current_refined_group in enumerate(active_refined_groups_for_file):
-                    if group_ends[current_refined_group] <= p_start:
-                        continue
-                    still_live.append(current_refined_group)
-                    if p_end > group_starts[current_refined_group]:
-                        best_fit_group = current_refined_group  # First fit
-                        still_live.extend(active_refined_groups_for_file[position + 1 :])
-                        break
-                active_refined_groups_for_file = still_live
-
-                if best_fit_group >= 0:
-                    # --- Join Existing Refined Group ---
-                    refined_group_map[p_id] = best_fit_group
-                    group_representatives[best_fit_group] = p_id
-                    # Update intersection (shrinking)
-                    if p_start > group_starts[best_fit_group]:
-                        group_starts[best_fit_group] = p_start
-                    if p_end < group_ends[best_fit_group]:
-                        group_ends[best_fit_group] = p_end
-                    touched = best_fit_group
-
-                else:
-                    # --- Start New Refined Group ---
-                    touched = refined_groups.add(file_id, p_start, p_end, p_id)
-                    active_refined_groups_for_file.append(touched)
-                    refined_group_map[p_id] = touched
-
-                # --- Cleanup: only the group just touched can have emptied ---
-                if group_starts[touched] >= group_ends[touched]:
-                    active_refined_groups_for_file.remove(touched)
-
-    return refined_group_map, refined_groups
-
-
-class _GroupSpans:
-    """One file's refined groups, searchable by overlap.
-
-    Held in start order with a running maximum end, so a query stops once no
-    earlier group can reach it. Ties on start may sort either way: a query's
-    result is a set.
-    """
-
-    __slots__ = ("starts", "ends", "ids", "max_ends")
-
-    def __init__(self, group_ids: array, starts: array, ends: array):
-        order = sorted(group_ids, key=starts.__getitem__)
-        self.starts = array("q", [starts[group_id] for group_id in order])
-        self.ends = array("q", [ends[group_id] for group_id in order])
-        self.ids = array("i", order)
-        self.max_ends = _filled("q", max(len(order), 1), 0)
-        running = 0
-        for position, end in enumerate(self.ends):
-            if end > running:
-                running = end
-            self.max_ends[position] = running
-
-    def overlapping(self, start_byte: int, end_byte: int) -> list[int]:
-        """Groups whose intersection overlaps [start_byte, end_byte)"""
-        ends = self.ends
-        max_ends = self.max_ends
-        found = []
-        position = bisect_left(self.starts, end_byte) - 1
-        while position >= 0 and max_ends[position] > start_byte:
-            if ends[position] > start_byte:
-                found.append(self.ids[position])
-            position -= 1
-        return found
-
-
-class _GroupLists:
-    """Each passage's group list, as an index into the distinct lists.
-
-    A list is kept as JSON for the rewrite and as ids in `members` for the
-    counts. The JSON goes in one buffer: each bytes object orjson returns keeps
-    its whole encoding buffer alive. Index 0 is the empty list.
-    """
-
-    __slots__ = ("indexes", "blob", "bounds", "members", "offsets", "repeats")
-
-    def __init__(self, expected: int):
-        self.indexes = _filled("i", max(expected, 1), 0)
-        self.blob = bytearray(b"[]")
-        self.bounds = array("q", (0, 2))
-        self.members = array("i")
-        self.offsets = array("q", (0, 0))
-        self.repeats = array("q", (0,))
-
-    def add(self, group_ids: list[int]) -> int:
-        """Record a list not seen before and return its index"""
-        self.blob += orjson.dumps(group_ids)
-        self.bounds.append(len(self.blob))
-        self.members.extend(group_ids)
-        self.offsets.append(len(self.members))
-        self.repeats.append(0)
-        return len(self.bounds) - 2
-
-    def assign(self, passage_id: int, index: int) -> None:
-        indexes = self.indexes
-        if passage_id >= len(indexes):
-            indexes.extend(_filled("i", passage_id + 1 - len(indexes), 0))
-        indexes[passage_id] = index
-        self.repeats[index] += 1
-
-    def counts(self, groups: int) -> array:
-        """Passages per refined group, over every list and what repeated it"""
-        totals = _filled("q", max(groups, 1), 0)
-        members = self.members
-        offsets = self.offsets
-        for index in range(1, len(self.repeats)):
-            repeats = self.repeats[index]
-            if repeats:
-                for position in range(offsets[index], offsets[index + 1]):
-                    totals[members[position]] += repeats
-        return totals
-
-    def __getitem__(self, passage_id: int) -> bytearray:
-        index = self.indexes[passage_id] if passage_id < len(self.indexes) else 0
-        return self.blob[self.bounds[index] : self.bounds[index + 1]]
-
-
-# --- Pass 3: Assign Multiple Memberships ---
-def assign_multiple_memberships(
-    spans: _Spans, refined_groups: _RefinedGroups
-) -> tuple[_GroupLists, array]:
-    """
-    Pass 3: Assign passages to potentially multiple refined groups if their
-            original source span overlaps a group's final intersection span.
-    Returns:
-        - group_lists: Each passage's list of refined group_ids, as JSON.
-        - final_group_counts: Each refined group_id's final passage count.
-    """
-    _status(_label(3))
-    group_lists = _GroupLists(len(spans))
-
-    # Pass 2 makes groups file-specific, so a passage can only overlap groups
-    # from its own file. Bucketing them by filename is what makes this a pass
-    # over the results rather than over the results times every group in the
-    # corpus: 31,254 passages against 24,056 groups was 752M comparisons.
-    per_file: dict[int, array] = {}
-    group_files = refined_groups.file_ids
-    for group_id in range(len(refined_groups)):
-        if refined_groups.live(group_id):
-            file_id = group_files[group_id]
-            bucket = per_file.get(file_id)
-            if bucket is None:
-                bucket = per_file[file_id] = array("i")
-            bucket.append(group_id)
-    groups_by_file = {
-        file_id: _GroupSpans(group_ids, refined_groups.starts, refined_groups.ends)
-        for file_id, group_ids in per_file.items()
-    }
-    del per_file
-
-    # Spans repeat a lot, so each distinct one is looked up once.
-    seen: dict[tuple[int, int, int], int] = {}
-    file_ids = spans.file_ids
-    starts = spans.starts
-    ends = spans.ends
-    for passage_id in tqdm(range(len(spans)), desc=_label(3), leave=False):
-        span = (file_ids[passage_id], starts[passage_id], ends[passage_id])
-        index = seen.get(span)
-        if index is None:
-            found = groups_by_file[span[0]].overlapping(span[1], span[2]) if span[0] in groups_by_file else []
-            # Store the unique, sorted list of groups for this passage
-            index = group_lists.add(sorted(found)) if found else 0
-            seen[span] = index
-        if index:
-            group_lists.assign(passage_id, index)
-
-    _status(_label(3))
-    return group_lists, group_lists.counts(len(refined_groups))
-
-
-# --- Main Orchestration and File Writing ---
 def merge_alignments(results_file: str, count: int, workers: int = 1):
-    """Merge alignments using the 3-pass method"""
-    # Step 1: Initial broad grouping
-    initial_group_map, initial_groups, spans = first_step_merge(results_file, count)
-    if not initial_groups:
+    """Group alignments into passage families and write the group file"""
+    corpus = read_ends(results_file, count)
+    if not corpus[3].shape[0]:
         _status()
         print("  No passage groups found.")
         return None
-
-    # Step 2: Refine groups by strict intersection
-    refined_group_map, refined_groups = refine_groups_strict_intersection(spans, initial_group_map)
-    if not any(refined_groups.live(group_id) for group_id in range(len(refined_groups))):
-        _status()
-        print("  No passage groups left after refinement.")
-        return None
-
-    # Step 3: Assign multiple memberships
-    group_lists, final_group_counts = assign_multiple_memberships(spans, refined_groups)
+    # a relative words_and_philo_ids path in the records is rooted in the run's directory
+    run_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(results_file))))
+    families = group_passages(corpus, run_dir, workers)
 
     # Both output steps read the records back, so they share one split of the file
     _status(_label(4))
     segments, bases = _segment_plan(results_file, count, workers)
 
-    # Step 4: Write the final source passage group file
     groups_file = os.path.join(os.path.dirname(results_file), "passage_group_source.jsonl")
-    groups = write_group_sources(
-        results_file, groups_file, refined_group_map, refined_groups, final_group_counts,
-        spans, segments, bases,
-    )
+    groups = write_group_sources(results_file, groups_file, families, segments, bases)
 
-    # Step 5: Rewrite the results file with the final group lists
     temp_results_file = f"{results_file}.temp_final.lz4"
-    rewrite_results(results_file, temp_results_file, group_lists, count, segments, bases)
+    rewrite_results(results_file, temp_results_file, families, count, segments, bases)
     os.remove(results_file)
     os.rename(temp_results_file, results_file)
 
@@ -728,7 +752,7 @@ def merge_alignments(results_file: str, count: int, workers: int = 1):
     return groups_file
 
 
-def _rewrite_records(input_file, output_file, group_lists: _GroupLists, passage_id: int,
+def _rewrite_records(input_file, output_file, group_lists: _Families, passage_id: int,
                      progress=None, bar=None) -> int:
     """Put each record's group list into it. Returns the id after the last record."""
     pending = 0
@@ -762,7 +786,7 @@ def _rewrite_segment(job: tuple[str, int, int, str]) -> str:
     return part
 
 
-def rewrite_results(results_file: str, target: str, group_lists: _GroupLists,
+def rewrite_results(results_file: str, target: str, group_lists: _Families,
                     count: int, segments: list[tuple[int, int]], bases: dict[int, int]) -> None:
     """Write the results file back with a group list on every record.
 
@@ -789,39 +813,28 @@ def rewrite_results(results_file: str, target: str, group_lists: _GroupLists,
     _join_parts(parts, target)
 
 
-def write_group_sources(
-    results_file: str,
-    groups_file: str,
-    refined_group_map: _DenseMap,
-    refined_groups: _RefinedGroups,
-    final_group_counts: array,
-    spans: _Spans,
-    segments: list[tuple[int, int]],
-    bases: dict[int, int],
-) -> int:
-    """Write one record a refined group, with its representative member's metadata.
+def write_group_sources(results_file: str, groups_file: str, families: _Families,
+                        segments: list[tuple[int, int]], bases: dict[int, int]) -> int:
+    """Write one row per family: its anchor's passage, from its sentence's start when that is
+    a few words back, with the metadata of the record that first has it, and `count`, the
+    documents its alignments span. Returns the rows written.
 
-    Representatives are read back off the results file, so groups come out in
-    file order; the database load keys on group_id and does not mind. Returns
-    the number of groups written.
+    Rows come out in the order their records appear; the database load keys on group_id.
     """
-    _status(_label(4))
-    total = sum(1 for group_id in range(len(refined_groups)) if refined_groups.live(group_id))
+    total = families.anchors.shape[0]
     if len(segments) < 2:
         with contextlib.ExitStack() as stack:
             input_file = stack.enter_context(lz4.frame.open(results_file))
             output_file = stack.enter_context(open(groups_file, "wb"))
             bar = stack.enter_context(tqdm(total=total, desc=_label(4), leave=False))
-            _group_source_records(input_file, output_file, refined_group_map, refined_groups,
-                                  final_group_counts, spans, 0, bar=bar)
+            _group_source_records(input_file, output_file, families, 0, bar=bar)
         return total
 
-    _SHARED.update(bases=bases, refined_group_map=refined_group_map, refined_groups=refined_groups,
-                   final_group_counts=final_group_counts, spans=spans)
+    _SHARED.update(bases=bases, families=families)
     try:
         parts = _run_segments(_group_source_segment, results_file, segments, total, _label(4))
     finally:
-        for key in ("bases", "refined_group_map", "refined_groups", "final_group_counts", "spans"):
+        for key in ("bases", "families"):
             _SHARED.pop(key, None)
     # Plain jsonl, not lz4, so the parts join as they are.
     _status(_label(4))
@@ -829,42 +842,49 @@ def write_group_sources(
     return total
 
 
-def _group_source_records(input_file, output_file, refined_group_map: _DenseMap,
-                          refined_groups: _RefinedGroups, final_group_counts: array,
-                          spans: _Spans, passage_id: int, progress=None, bar=None) -> None:
-    """Write a record for every group whose representative is in this range."""
-    representatives = refined_groups.representatives
+def _as_source(fields: dict, side: int) -> dict:
+    """A record's fields for one of its ends, named as source fields and in source order."""
+    if side == 0:
+        return {k: v for k, v in fields.items() if not k.startswith("target_")}
+    return {k: fields.get("target_" + k[7:]) if k.startswith("source_") else v
+            for k, v in fields.items() if not k.startswith("target_")}
+
+
+def _group_source_records(input_file, output_file, families: _Families, passage_id: int,
+                          progress=None, bar=None) -> None:
+    """Write the row of every family whose record is in this range."""
+    reps = families.rep_passage
+    j = int(np.searchsorted(reps, passage_id))
     source_text = _SourceText()
     pending = 0
     for batch in read_line_batches(input_file):
         records = []
         for line in batch:
-            refined_id = refined_group_map[passage_id]
-            if (refined_id < 0 or representatives[refined_id] != passage_id
-                    or not refined_groups.live(refined_id)):
-                passage_id += 1
-                continue
-            fields = orjson.loads(line)
-            fields["passage_id"] = passage_id
+            if j < reps.shape[0] and reps[j] == passage_id:
+                fields = orjson.loads(line)
+                fields["passage_id"] = passage_id
+                while j < reps.shape[0] and reps[j] == passage_id:
+                    family = int(families.rep_family[j])
+                    side = int(families.rep_side[j])
+                    site = families.anchors[family]
+                    filename = families.names[families.site_file[site]]
+                    start_byte, end_byte = int(families.shown_s[family]), int(families.core_e[site])
+                    records.append(
+                        orjson.dumps(
+                            {
+                                **_as_source(fields, side),
+                                "source_filename": filename,
+                                "source_passage": source_text.read(start_byte, end_byte, filename),
+                                "group_id": family,
+                                "source_start_byte": start_byte,
+                                "source_end_byte": end_byte,
+                                "count": int(families.documents[family]),
+                            }
+                        )
+                        + b"\n"
+                    )
+                    j += 1
             passage_id += 1
-            metadata = {k: v for k, v in fields.items() if not k.startswith("target_")}
-            filename = spans.names[refined_groups.file_ids[refined_id]]
-            start_byte = refined_groups.starts[refined_id]
-            end_byte = refined_groups.ends[refined_id]
-            records.append(
-                orjson.dumps(
-                    {
-                        **metadata,  # from the representative, a member of this group
-                        "source_filename": filename,
-                        "source_passage": source_text.read(start_byte, end_byte, filename),
-                        "group_id": refined_id,
-                        "source_start_byte": start_byte,
-                        "source_end_byte": end_byte,
-                        "count": final_group_counts[refined_id],
-                    }
-                )
-                + b"\n"
-            )
         if records:
             output_file.write(b"".join(records))
             if bar is not None:
@@ -876,14 +896,13 @@ def _group_source_records(input_file, output_file, refined_group_map: _DenseMap,
 
 
 def _group_source_segment(job: tuple[str, int, int, str]) -> str:
-    """One frame range's group records, into its own part file."""
+    """One frame range's group rows, into its own part file."""
     path, offset, size, part = job
     with contextlib.ExitStack() as stack:
         input_file = stack.enter_context(_lz4_window(path, offset, size))
         output_file = stack.enter_context(open(part, "wb"))
-        _group_source_records(input_file, output_file, _SHARED["refined_group_map"],
-                              _SHARED["refined_groups"], _SHARED["final_group_counts"],
-                              _SHARED["spans"], _SHARED["bases"][offset], _SHARED["progress"])
+        _group_source_records(input_file, output_file, _SHARED["families"],
+                              _SHARED["bases"][offset], _SHARED["progress"])
     return part
 
 

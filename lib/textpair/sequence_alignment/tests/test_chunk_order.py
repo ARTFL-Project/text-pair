@@ -4,11 +4,11 @@
     test_chunk_order.py [--source-files DIR --source-metadata FILE
                          [--target-files DIR --target-metadata FILE]] [--threads N]
 
-`alignment_merger.first_step_merge` reads the concatenated alignments once and flushes its
-passage group whenever `source_doc_id` changes, so a document whose records arrive in two
-separate stretches is merged twice as if it were two documents, silently. Nothing enforces
-that; it follows from the chunk names carrying the source document first, and from the
-`sort -V` the chunks are concatenated with (textpair/__main__.py).
+Banality detection keeps the last few source documents' n-grams loaded as it scans the
+concatenated alignments, so a document whose records arrive in separate stretches is loaded
+again for each of them. Nothing enforces that they don't; it follows from the chunk names
+carrying the source document first, and from the `sort -V` the chunks are concatenated with
+(textpair/__main__.py).
 
 The unit checks build chunk names with runner._jobs and sort them with the real `sort -V`.
 Given a corpus, the end-to-end check aligns it, concatenates as the pipeline does and

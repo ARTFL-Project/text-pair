@@ -5,9 +5,7 @@
 
 The pass splits the results file on lz4 frame boundaries and rewrites each range in its
 own process, so what is checked here is that the split, the windowed reads, the
-re-framing and the concatenation put the records back byte for byte and in order --
-`alignment_merger.first_step_merge` reads that stream once and flushes whenever
-source_doc_id changes, so a record out of place is a document merged twice.
+re-framing and the concatenation put the records back byte for byte and in order.
 
 Everything is synthesised: a frame layout to split, an n-gram index to look up and a
 frequent-key file to count against. No corpus needed.
