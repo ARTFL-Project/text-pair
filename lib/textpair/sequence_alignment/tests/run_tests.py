@@ -48,6 +48,7 @@ CHECKS = (
     ("match_order", "test_match_order.py", (), True),
     ("chunk_order", "test_chunk_order.py", (), True),
     ("aligner_paths", "test_aligner_paths.py", (), False),
+    ("banality_parallel", "test_banality_parallel.py", (), False),
     ("matcher_symmetry", "test_matcher_symmetry.py", (), True),
     ("reference_output", "check_reference_output.py", ("--fixtures",), False),
     # Needs a corpus: there is no fixture-scale binary index to compare against.

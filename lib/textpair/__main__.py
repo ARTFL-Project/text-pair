@@ -339,6 +339,7 @@ async def run_alignment(params):
                 count,
                 params.matching_params["most_common_ngram_proportion"],
                 params.matching_params["common_ngram_threshold"],
+                params.workers,
             )
         if phrase_filter:
             print(f"{filtered_passages} pairwise alignments have been filtered based on the phrase filter provided.")

@@ -1,8 +1,12 @@
 """Banality detection"""
 
+import io
+import multiprocessing as mp
 import os
+import struct
 import subprocess
 from math import floor
+from shlex import quote
 from typing import Any, Optional, Union
 
 import ahocorasick_rs
@@ -208,6 +212,208 @@ _BANALITY_FIELD = {True: b',"banality":true', False: b',"banality":false'}
 _DOCUMENTS_HELD = 8
 
 
+_LZ4_MAGIC = 0x184D2204
+_LZ4_SKIPPABLE = 0x184D2A50          # magic | 0x0..0xF
+
+
+def frame_bounds(path: str) -> list[tuple[int, int]]:
+    """(offset, length) of every lz4 frame in `path`, from the headers alone.
+
+    An alignments file is a concatenation of frames, one per chunk the writers emitted,
+    and any frame-aligned range of it decodes on its own. So these are independent units
+    of work already in output order: a worker takes a run of them, rewrites it, and the
+    results concatenate back with the records in the order they came.
+    """
+    bounds: list[tuple[int, int]] = []
+    with open(path, "rb") as handle:
+        while True:
+            start = handle.tell()
+            head = handle.read(4)
+            if len(head) < 4:
+                break
+            magic = struct.unpack("<I", head)[0]
+            if magic & 0xFFFFFFF0 == _LZ4_SKIPPABLE:
+                handle.seek(struct.unpack("<I", handle.read(4))[0], 1)
+                bounds.append((start, handle.tell() - start))
+                continue
+            if magic != _LZ4_MAGIC:
+                raise ValueError(f"{path}: not an lz4 frame at offset {start}")
+            flag, _block_descriptor = handle.read(2)
+            if flag >> 6 != 1:
+                raise ValueError(f"{path}: unsupported frame version at offset {start}")
+            handle.seek(8 * bool(flag & 0x08) + 4 * bool(flag & 0x01) + 1, 1)
+            block_checksum = 4 * bool(flag & 0x10)
+            while True:
+                raw = handle.read(4)
+                if len(raw) < 4:
+                    raise ValueError(f"{path}: truncated block at offset {start}")
+                size = struct.unpack("<I", raw)[0]
+                if size == 0:
+                    break
+                handle.seek((size & 0x7FFFFFFF) + block_checksum, 1)
+            handle.seek(4 * bool(flag & 0x04), 1)
+            bounds.append((start, handle.tell() - start))
+    return bounds
+
+
+def _segments(bounds: list[tuple[int, int]], parts: int) -> list[tuple[int, int]]:
+    """`bounds` grouped into at most `parts` runs of roughly equal bytes."""
+    total = sum(length for _, length in bounds)
+    if parts < 2 or len(bounds) < 2 or total == 0:
+        return [(bounds[0][0], total)] if bounds else []
+    target = total / parts
+    out: list[tuple[int, int]] = []
+    start = bounds[0][0]
+    taken = 0
+    for offset, length in bounds:
+        taken += length
+        if taken >= target and len(out) < parts - 1:
+            out.append((start, taken))
+            start = offset + length
+            taken = 0
+    if taken:
+        out.append((start, taken))
+    return out
+
+
+class _Window(io.RawIOBase):
+    """One byte range of a file as a stream.
+
+    A frame-aligned range decodes on its own only if the reader stops at the end of it,
+    which a plain handle will not do.
+    """
+
+    def __init__(self, path: str, offset: int, size: int):
+        self._handle = open(path, "rb")
+        self._handle.seek(offset)
+        self._left = size
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        if self._left <= 0:
+            return 0
+        view = memoryview(buffer)
+        if len(view) > self._left:
+            view = view[: self._left]
+        read = self._handle.readinto(view)
+        self._left -= read
+        return read
+
+    def close(self):
+        try:
+            self._handle.close()
+        finally:
+            super().close()
+
+
+def _lz4_window(path: str, offset: int, size: int):
+    return lz4.frame.open(io.BufferedReader(_Window(path, offset, size)), "rb")
+
+
+def _concatenate(parts: list[str], target: str):
+    """lz4 frames concatenate, so joining the parts is a byte copy.
+
+    Through `cat` rather than a read/write loop: it moves the bytes inside the kernel,
+    which on a file this size is the difference between the copy costing more than the
+    pass and costing a fraction of it.
+    """
+    subprocess.run(["bash", "-c", "cat " + " ".join(quote(part) for part in parts)
+                    + " > " + quote(target)], check=False)
+    for part in parts:
+        os.remove(part)
+
+
+# Set before the workers are forked, so a table of over a gigabyte is inherited rather
+# than pickled to each of them.
+_SHARED: dict[str, Any] = {}
+# Records a worker gets through between two touches of the shared progress counter.
+_PROGRESS_STRIDE = 2000
+# Below this a pass is quicker than forking for it.
+_PARALLEL_FLOOR = 200_000
+# Records per output frame, as bytes of them. A pass splits the file it reads on frame
+# boundaries, so writing one frame per worker would leave the next pass only as many
+# pieces as this one had workers. Near what the chunk writers produce.
+_FRAME_BYTES = 4 << 20
+
+
+class _Framer:
+    """A record sink that closes an lz4 frame every `_FRAME_BYTES` and starts another.
+
+    Frames concatenate, so a file of many of them reads back as one stream while staying
+    divisible for whatever pass comes next.
+    """
+
+    __slots__ = ("_handle", "_buffer", "_held", "_limit", "_level")
+
+    def __init__(self, handle, limit: int = _FRAME_BYTES, level: int = 1):
+        self._handle = handle
+        self._buffer: list[bytes] = []
+        self._held = 0
+        self._limit = limit
+        self._level = level
+
+    def write(self, record: bytes):
+        self._buffer.append(record)
+        self._held += len(record)
+        if self._held >= self._limit:
+            self.flush()
+
+    def flush(self):
+        if self._buffer:
+            self._handle.write(lz4.frame.compress(b"".join(self._buffer),
+                                                  compression_level=self._level))
+            self._buffer.clear()
+            self._held = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.flush()
+
+
+def _work_split(path: str, workers: int) -> list[tuple[int, int]]:
+    """Frame ranges to hand out, or one range meaning "do it here".
+
+    A file written by anything other than the chunk writers is one frame, and a small
+    one is not worth a pool, so both come back as a single segment.
+    """
+    if workers < 2 or os.path.getsize(path) < _PARALLEL_FLOOR:
+        return [(0, os.path.getsize(path))]
+    try:
+        bounds = frame_bounds(path)
+    except (ValueError, OSError):
+        return [(0, os.path.getsize(path))]
+    return _segments(bounds, workers)
+
+
+def _run_segments(worker, path: str, segments: list[tuple[int, int]],
+                  count: Optional[int], description: str):
+    """Run `worker` over `segments` in a forked pool, drawing one bar over all of them.
+
+    Returns (summed first result, the part files in segment order). The parts are the
+    workers' output in input order, so concatenating them preserves the record order the
+    passage merger depends on.
+    """
+    ctx = mp.get_context("fork")
+    progress = ctx.Value("q", 0)
+    _SHARED["progress"] = progress
+    jobs = [(path, offset, size, f"{path}.part{index:05d}")
+            for index, (offset, size) in enumerate(segments)]
+    with ctx.Pool(len(jobs)) as pool:
+        pending = pool.map_async(worker, jobs)
+        with tqdm(total=count, desc=description, leave=False) as bar:
+            while not pending.ready():
+                pending.wait(0.5)
+                bar.update(min(progress.value, bar.total or progress.value) - bar.n)
+            bar.update(min(progress.value, bar.total or progress.value) - bar.n)
+        results = pending.get()
+    totals = [result[0] for result in results]
+    return sum(totals), [result[-1] for result in results]
+
+
 def _with_banality(line: bytes, banal: bool, present: Any) -> bytes:
     """`line` with its banality field set to `banal`.
 
@@ -227,6 +433,68 @@ def _with_banality(line: bytes, banal: bool, present: Any) -> bytes:
     return orjson.dumps(alignment) + b"\n"
 
 
+def _flag_banalities(lines, common_ngrams, ngram_doc_path, threshold, output_file,
+                     progress=None) -> int:
+    """Write every record of `lines` with its banality verdict. Returns how many were banal.
+
+    `progress`, when given, is a shared counter the caller draws a bar from: one update
+    per _PROGRESS_STRIDE records, since the lock costs more than the verdict does.
+    """
+    banalities_found = 0
+    since = 0
+    # Results come grouped by source document, but not strictly: a frantext
+    # run opens 2,325 distinct documents 3,642 times. A few documents of
+    # history turns most of that back into a hit.
+    loaded: dict[str, NgramDoc] = {}
+    for line in lines:
+        passage = _DECODE_PASSAGE(line)
+        source_ngram_doc = loaded.get(passage.source_ngrams)
+        if source_ngram_doc is None:
+            source_ngram_doc = NgramDoc(os.path.join(ngram_doc_path, passage.source_ngrams))
+            if len(loaded) >= _DOCUMENTS_HELD:
+                del loaded[next(iter(loaded))]
+            loaded[passage.source_ngrams] = source_ngram_doc
+        low, high = source_ngram_doc.span(
+            int(passage.source_start_byte), int(passage.source_end_byte)
+        )
+        # if n % (or more) of ngrams are common ngrams
+        banality = high > low and (
+            common_ngrams.count_in(source_ngram_doc.keys[low:high]) / (high - low) * 100
+            >= threshold
+        )
+        banalities_found += banality
+        # Always write to main file with banality flag set
+        output_file.write(_with_banality(line, banality, passage.banality))
+        if progress is not None:
+            since += 1
+            if since >= _PROGRESS_STRIDE:
+                with progress.get_lock():
+                    progress.value += since
+                since = 0
+    if progress is not None and since:
+        with progress.get_lock():
+            progress.value += since
+    return banalities_found
+
+
+def _detect_segment(job: tuple[str, int, int, str]) -> tuple[int, str]:
+    """One frame range of the results file, rewritten with its verdicts.
+
+    The common-ngram table is inherited through the fork rather than passed: it is over
+    a gigabyte on a corpus of any size, and the workers only read it.
+    """
+    path, offset, size, out_path = job
+    with (
+        _lz4_window(path, offset, size) as input_file,
+        open(out_path, "wb") as raw,
+        _Framer(raw) as output_file,
+    ):
+        found = _flag_banalities(input_file, _SHARED["common_ngrams"],
+                                 _SHARED["ngram_doc_path"], _SHARED["threshold"],
+                                 output_file, _SHARED["progress"])
+    return found, out_path
+
+
 def banality_auto_detect(
     filepath: str,
     common_ngrams_file: str,
@@ -235,44 +503,33 @@ def banality_auto_detect(
     count: Optional[int],
     proportion: float,
     threshold: float,
+    workers: int = 1,
 ):
     """Detect banalities automatically based on frequent ngram over-representation"""
     common_ngrams = load_common_ngrams(common_ngrams_file, proportion)
+    temp = f"{filepath}.temp.lz4"
+    segments = _work_split(filepath, workers)
 
-    banalities_found = 0
-    with (
-        lz4.frame.open(f"{filepath}.temp.lz4", mode="wb") as output_file,
-        lz4.frame.open(filepath) as input_file,
-    ):
-        # Results come grouped by source document, but not strictly: a frantext
-        # run opens 2,325 distinct documents 3,642 times. A few documents of
-        # history turns most of that back into a hit.
-        loaded: dict[str, NgramDoc] = {}
-        for line in tqdm(
-            input_file,
-            total=count,
-            desc="Running banality auto-detection...",
-            leave=False,
+    if len(segments) < 2:
+        with (
+            open(temp, "wb") as raw,
+            _Framer(raw) as output_file,
+            lz4.frame.open(filepath) as input_file,
         ):
-            passage = _DECODE_PASSAGE(line)
-            source_ngram_doc = loaded.get(passage.source_ngrams)
-            if source_ngram_doc is None:
-                source_ngram_doc = NgramDoc(os.path.join(ngram_doc_path, passage.source_ngrams))
-                if len(loaded) >= _DOCUMENTS_HELD:
-                    del loaded[next(iter(loaded))]
-                loaded[passage.source_ngrams] = source_ngram_doc
-            low, high = source_ngram_doc.span(
-                int(passage.source_start_byte), int(passage.source_end_byte)
-            )
-            # if n % (or more) of ngrams are common ngrams
-            banality = high > low and (
-                common_ngrams.count_in(source_ngram_doc.keys[low:high]) / (high - low) * 100
-                >= threshold
-            )
-            banalities_found += banality
-            # Always write to main file with banality flag set
-            output_file.write(_with_banality(line, banality, passage.banality))  # type: ignore
-    os.replace(f"{filepath}.temp.lz4", filepath)
+            banalities_found = _flag_banalities(
+                tqdm(input_file, total=count, desc="Running banality auto-detection...",
+                     leave=False),
+                common_ngrams, ngram_doc_path, threshold, output_file)
+        os.replace(temp, filepath)
+        return banalities_found
+
+    _SHARED.update(common_ngrams=common_ngrams, ngram_doc_path=ngram_doc_path,
+                   threshold=threshold)
+    banalities_found, parts = _run_segments(
+        _detect_segment, filepath, segments, count,
+        "Running banality auto-detection...")
+    _concatenate(parts, temp)
+    os.replace(temp, filepath)
     return banalities_found
 
 
