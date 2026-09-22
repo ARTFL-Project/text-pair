@@ -359,9 +359,13 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
     n_sources = len(source_docs)
 
     # Fork the writers before the ngram arrays exist: they inherit the cleaned metadata
-    # and only a few tens of MB of page tables get copied.
-    pool = output.OutputPool(params["output_workers"], docs, metas, chunk_dir,
-                             params["context_size"], level=params["lz4_level"])
+    # and only a few tens of MB of page tables get copied. One process per worker in the
+    # whole budget, but only `output_workers` of them write while matching holds the
+    # rest; the pool is opened up when matching finishes.
+    pool = output.OutputPool(params["match_threads"] + params["output_workers"],
+                             docs, metas, chunk_dir, params["context_size"],
+                             level=params["lz4_level"],
+                             active=params["output_workers"])
     count = 0
     duplicate_rows = []
     try:
@@ -403,6 +407,9 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                per_source, same_doc, position_offsets, ngram_indices,
                                start_bytes, end_bytes,
                                params["match_threads"], params, on_result, progress)
+        # Matching is done, so the threads it held are idle: give the writers the whole
+        # budget for whatever they still have queued.
+        pool.expand()
         # The bar cleared itself; take the legend with it, so a finished run shows
         # its results rather than the scaffolding that got there. Only on a terminal:
         # redirected to a file the escape would be written out literally.
@@ -459,9 +466,6 @@ def align(source_files, source_metadata, output_path, target_files="", target_me
     else:
         params["match_threads"], params["output_workers"] = \
             _split_workers(params["threads"])
-    print(f'{params["match_threads"] + params["output_workers"]} workers: '
-          f'{params["match_threads"]} matching, {params["output_workers"]} writing.',
-          flush=True)
     params["lz4_level"] = int(lz4_level)
     ngram_index = {}
     if params["debug"]:
