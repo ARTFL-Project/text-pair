@@ -345,7 +345,7 @@ class _Framer:
     divisible for whatever pass comes next.
     """
 
-    __slots__ = ("_handle", "_buffer", "_held", "_limit", "_level")
+    __slots__ = ("_handle", "_buffer", "_held", "_limit", "_level", "_wrote")
 
     def __init__(self, handle, limit: int = _FRAME_BYTES, level: int = 1):
         self._handle = handle
@@ -353,6 +353,7 @@ class _Framer:
         self._held = 0
         self._limit = limit
         self._level = level
+        self._wrote = False
 
     def write(self, record: bytes):
         self._buffer.append(record)
@@ -366,12 +367,18 @@ class _Framer:
                                                   compression_level=self._level))
             self._buffer.clear()
             self._held = 0
+            self._wrote = True
 
     def __enter__(self):
         return self
 
     def __exit__(self, *_):
         self.flush()
+        if not self._wrote:
+            # No records at all: a phrase list that matched nothing still has to leave a
+            # readable file, and an empty one is not an lz4 stream.
+            self._handle.write(lz4.frame.compress(b""))
+            self._wrote = True
 
 
 def _work_split(path: str, workers: int) -> list[tuple[int, int]]:
@@ -393,9 +400,10 @@ def _run_segments(worker, path: str, segments: list[tuple[int, int]],
                   count: Optional[int], description: str):
     """Run `worker` over `segments` in a forked pool, drawing one bar over all of them.
 
-    Returns (summed first result, the part files in segment order). The parts are the
-    workers' output in input order, so concatenating them preserves the record order the
-    passage merger depends on.
+    Returns what the workers returned, in segment order -- so a caller concatenating the
+    part files out of it preserves the record order the passage merger depends on. The
+    passes differ in how many counters and output files they produce, so aggregating is
+    left to them.
     """
     ctx = mp.get_context("fork")
     progress = ctx.Value("q", 0)
@@ -409,9 +417,18 @@ def _run_segments(worker, path: str, segments: list[tuple[int, int]],
                 pending.wait(0.5)
                 bar.update(min(progress.value, bar.total or progress.value) - bar.n)
             bar.update(min(progress.value, bar.total or progress.value) - bar.n)
-        results = pending.get()
-    totals = [result[0] for result in results]
-    return sum(totals), [result[-1] for result in results]
+        return pending.get()
+
+
+def _bump(progress, since: int) -> int:
+    """Add `since` to the shared counter if it is worth the lock. Returns what is left."""
+    if progress is None:
+        return 0
+    if since >= _PROGRESS_STRIDE:
+        with progress.get_lock():
+            progress.value += since
+        return 0
+    return since
 
 
 def _with_banality(line: bytes, banal: bool, present: Any) -> bytes:
@@ -447,6 +464,8 @@ def _flag_banalities(lines, common_ngrams, ngram_doc_path, threshold, output_fil
     # history turns most of that back into a hit.
     loaded: dict[str, NgramDoc] = {}
     for line in lines:
+        since += 1
+        since = _bump(progress, since)
         passage = _DECODE_PASSAGE(line)
         source_ngram_doc = loaded.get(passage.source_ngrams)
         if source_ngram_doc is None:
@@ -465,12 +484,6 @@ def _flag_banalities(lines, common_ngrams, ngram_doc_path, threshold, output_fil
         banalities_found += banality
         # Always write to main file with banality flag set
         output_file.write(_with_banality(line, banality, passage.banality))
-        if progress is not None:
-            since += 1
-            if since >= _PROGRESS_STRIDE:
-                with progress.get_lock():
-                    progress.value += since
-                since = 0
     if progress is not None and since:
         with progress.get_lock():
             progress.value += since
@@ -525,10 +538,10 @@ def banality_auto_detect(
 
     _SHARED.update(common_ngrams=common_ngrams, ngram_doc_path=ngram_doc_path,
                    threshold=threshold)
-    banalities_found, parts = _run_segments(
-        _detect_segment, filepath, segments, count,
-        "Running banality auto-detection...")
-    _concatenate(parts, temp)
+    results = _run_segments(_detect_segment, filepath, segments, count,
+                            "Running banality auto-detection...")
+    banalities_found = sum(found for found, _ in results)
+    _concatenate([part for _, part in results], temp)
     os.replace(temp, filepath)
     return banalities_found
 
@@ -542,34 +555,134 @@ def clean_phrases(file: str):
                 yield phrase
 
 
-def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[int]):
+def _phrase_records(lines, matcher, output_file, filtered_passages, progress=None) -> int:
+    """Send every record of `lines` to one file or the other on the phrase verdict."""
+    passages_filtered = 0
+    since = 0
+    for line in lines:
+        since += 1
+        since = _bump(progress, since)
+        if matcher.find_matches_as_strings(clean_text(_DECODE_SOURCE(line).source_passage)):
+            passages_filtered += 1
+            filtered_passages.write(line)
+        else:
+            output_file.write(line)
+    if progress is not None and since:
+        with progress.get_lock():
+            progress.value += since
+    return passages_filtered
+
+
+def _phrase_segment(job: tuple[str, int, int, str]) -> tuple[int, str, str]:
+    """One frame range through the phrase filter."""
+    path, offset, size, base = job
+    keep_path, filtered_path = f"{base}.keep", f"{base}.filtered"
+    with (
+        _lz4_window(path, offset, size) as input_file,
+        open(keep_path, "wb") as keep_raw,
+        _Framer(keep_raw) as output_file,
+        open(filtered_path, "wb") as filtered_raw,
+        _Framer(filtered_raw) as filtered_passages,
+    ):
+        filtered = _phrase_records(input_file, _SHARED["matcher"], output_file,
+                                   filtered_passages, _SHARED["progress"])
+    return filtered, keep_path, filtered_path
+
+
+def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[int],
+                   workers: int = 1):
     """Detect banalities based on user provided phrases"""
     print("Building tree for phrase-based banality detection...", end="", flush=True)
-    ac = ahocorasick_rs.AhoCorasick(clean_phrases(banality_phrases_path))
+    matcher = ahocorasick_rs.AhoCorasick(clean_phrases(banality_phrases_path))
     print("\r", end="")
-    passages_filtered = 0
     filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages.jsonl")
-    with (
-        lz4.frame.open(filtered_file_name, mode="wb") as filtered_passages,
-        lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
-        lz4.frame.open(filepath) as input_file,
-    ):
-        for line in tqdm(
-            input_file,
-            total=count,
-            desc="Running phrase-based banality detection...",
-            leave=False,
+    keep = f"{filepath}.keep.lz4"
+    segments = _work_split(filepath, workers)
+
+    if len(segments) < 2:
+        with (
+            open(filtered_file_name, "wb") as filtered_raw,
+            _Framer(filtered_raw) as filtered_passages,
+            open(keep, "wb") as keep_raw,
+            _Framer(keep_raw) as output_file,
+            lz4.frame.open(filepath) as input_file,
         ):
-            banality = False
-            if ac.find_matches_as_strings(clean_text(_DECODE_SOURCE(line).source_passage)):
-                banality = True
-                passages_filtered += 1
-                filtered_passages.write(line)  # type: ignore
-            if banality is False:
-                output_file.write(line)  # type: ignore
-    os.replace(f"{filepath}.keep.lz4", filepath)
+            passages_filtered = _phrase_records(
+                tqdm(input_file, total=count,
+                     desc="Running phrase-based banality detection...", leave=False),
+                matcher, output_file, filtered_passages)
+        os.replace(keep, filepath)
+        print("done")
+        return passages_filtered
+
+    _SHARED["matcher"] = matcher
+    results = _run_segments(_phrase_segment, filepath, segments, count,
+                            "Running phrase-based banality detection...")
+    passages_filtered = sum(result[0] for result in results)
+    _concatenate([result[1] for result in results], keep)
+    _concatenate([result[2] for result in results], filtered_file_name)
+    os.replace(keep, filepath)
     print("done")
     return passages_filtered
+
+
+def _filter_records(lines, matcher, common_ngrams, ngram_doc_path, threshold,
+                    output_file, filtered_passages, progress=None) -> tuple[int, int]:
+    """Phrase verdict then banality verdict, for every record of `lines`.
+
+    Returns (passages filtered, banalities found). A phrase hit is filtered out and never
+    reaches the n-gram test, which is the order the two passes ran in separately.
+    """
+    passages_filtered = 0
+    banalities_found = 0
+    since = 0
+    loaded: dict[str, NgramDoc] = {}
+    for line in lines:
+        since += 1
+        since = _bump(progress, since)
+        passage = _DECODE_FILTERED(line)
+        if matcher.find_matches_as_strings(clean_text(passage.source_passage)):
+            passages_filtered += 1
+            filtered_passages.write(line)
+            continue
+        document = loaded.get(passage.source_ngrams)
+        if document is None:
+            document = NgramDoc(os.path.join(ngram_doc_path, passage.source_ngrams))
+            if len(loaded) >= _DOCUMENTS_HELD:
+                del loaded[next(iter(loaded))]
+            loaded[passage.source_ngrams] = document
+        low, high = document.span(
+            int(passage.source_start_byte), int(passage.source_end_byte)
+        )
+        # if n % (or more) of ngrams are common ngrams
+        banality = high > low and (
+            common_ngrams.count_in(document.keys[low:high]) / (high - low) * 100 >= threshold
+        )
+        banalities_found += banality
+        output_file.write(_with_banality(line, banality, passage.banality))
+    if progress is not None and since:
+        with progress.get_lock():
+            progress.value += since
+    return passages_filtered, banalities_found
+
+
+def _filter_segment(job: tuple[str, int, int, str]) -> tuple[int, int, str, str]:
+    """One frame range through both filters. The phrase tree and the frequent-key table
+    are inherited through the fork, being large and read-only."""
+    path, offset, size, base = job
+    keep_path, filtered_path = f"{base}.keep", f"{base}.filtered"
+    with (
+        _lz4_window(path, offset, size) as input_file,
+        open(keep_path, "wb") as keep_raw,
+        _Framer(keep_raw) as output_file,
+        open(filtered_path, "wb") as filtered_raw,
+        _Framer(filtered_raw) as filtered_passages,
+    ):
+        filtered, banal = _filter_records(
+            input_file, _SHARED["matcher"], _SHARED["common_ngrams"],
+            _SHARED["ngram_doc_path"], _SHARED["threshold"],
+            output_file, filtered_passages, _SHARED["progress"])
+    return filtered, banal, keep_path, filtered_path
 
 
 def filter_and_flag(
@@ -580,6 +693,7 @@ def filter_and_flag(
     count: Optional[int],
     proportion: float,
     threshold: float,
+    workers: int = 1,
 ) -> tuple[int, int]:
     """Phrase filtering and automatic banality detection in one pass.
 
@@ -593,47 +707,73 @@ def filter_and_flag(
     matcher = ahocorasick_rs.AhoCorasick(clean_phrases(banality_phrases_path))
     print("\r", end="")
     common_ngrams = load_common_ngrams(common_ngrams_file, proportion)
-
-    passages_filtered = 0
-    banalities_found = 0
     filtered_file_name = filepath.replace("alignments.jsonl", "filtered_passages.jsonl")
-    with (
-        lz4.frame.open(filtered_file_name, mode="wb") as filtered_passages,
-        lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
-        lz4.frame.open(filepath) as input_file,
-    ):
-        loaded: dict[str, NgramDoc] = {}
-        for line in tqdm(
-            input_file,
-            total=count,
-            desc="Filtering passages and detecting banalities...",
-            leave=False,
+    keep = f"{filepath}.keep.lz4"
+    segments = _work_split(filepath, workers)
+
+    if len(segments) < 2:
+        with (
+            open(filtered_file_name, "wb") as filtered_raw,
+            _Framer(filtered_raw) as filtered_passages,
+            open(keep, "wb") as keep_raw,
+            _Framer(keep_raw) as output_file,
+            lz4.frame.open(filepath) as input_file,
         ):
-            passage = _DECODE_FILTERED(line)
-            if matcher.find_matches_as_strings(clean_text(passage.source_passage)):
-                passages_filtered += 1
-                filtered_passages.write(line)  # type: ignore
-                continue
-            document = loaded.get(passage.source_ngrams)
-            if document is None:
-                document = NgramDoc(os.path.join(ngram_doc_path, passage.source_ngrams))
-                if len(loaded) >= _DOCUMENTS_HELD:
-                    del loaded[next(iter(loaded))]
-                loaded[passage.source_ngrams] = document
-            low, high = document.span(
-                int(passage.source_start_byte), int(passage.source_end_byte)
-            )
-            # if n % (or more) of ngrams are common ngrams
-            banality = high > low and (
-                common_ngrams.count_in(document.keys[low:high]) / (high - low) * 100 >= threshold
-            )
-            banalities_found += banality
-            output_file.write(_with_banality(line, banality, passage.banality))  # type: ignore
-    os.replace(f"{filepath}.keep.lz4", filepath)
+            passages_filtered, banalities_found = _filter_records(
+                tqdm(input_file, total=count,
+                     desc="Filtering passages and detecting banalities...", leave=False),
+                matcher, common_ngrams, ngram_doc_path, threshold,
+                output_file, filtered_passages)
+        os.replace(keep, filepath)
+        return passages_filtered, banalities_found
+
+    _SHARED.update(matcher=matcher, common_ngrams=common_ngrams,
+                   ngram_doc_path=ngram_doc_path, threshold=threshold)
+    results = _run_segments(_filter_segment, filepath, segments, count,
+                            "Filtering passages and detecting banalities...")
+    passages_filtered = sum(result[0] for result in results)
+    banalities_found = sum(result[1] for result in results)
+    _concatenate([result[2] for result in results], keep)
+    _concatenate([result[3] for result in results], filtered_file_name)
+    os.replace(keep, filepath)
     return passages_filtered, banalities_found
 
 
-def separate_banalities(filepath: str, count: Optional[int]) -> int:
+def _separate_records(lines, output_file, banal_output_file, progress=None) -> int:
+    """Send every record of `lines` to one file or the other on its banality flag."""
+    banalities_separated = 0
+    since = 0
+    for line in lines:
+        since += 1
+        since = _bump(progress, since)
+        if _DECODE_VERDICT(line).banality is True:
+            banalities_separated += 1
+            banal_output_file.write(line)
+        else:
+            output_file.write(line)
+    if progress is not None and since:
+        with progress.get_lock():
+            progress.value += since
+    return banalities_separated
+
+
+def _separate_segment(job: tuple[str, int, int, str]) -> tuple[int, str, str]:
+    """One frame range sorted into kept and banal."""
+    path, offset, size, base = job
+    keep_path, banal_path = f"{base}.keep", f"{base}.banal"
+    with (
+        _lz4_window(path, offset, size) as input_file,
+        open(keep_path, "wb") as keep_raw,
+        _Framer(keep_raw) as output_file,
+        open(banal_path, "wb") as banal_raw,
+        _Framer(banal_raw) as banal_output_file,
+    ):
+        separated = _separate_records(input_file, output_file, banal_output_file,
+                                      _SHARED["progress"])
+    return separated, keep_path, banal_path
+
+
+def separate_banalities(filepath: str, count: Optional[int], workers: int = 1) -> int:
     """
     Separate passages flagged as banal into a separate file and remove them from main alignments.
     Should be called AFTER all banality detection and LLM evaluation is complete.
@@ -645,22 +785,30 @@ def separate_banalities(filepath: str, count: Optional[int]) -> int:
     Returns:
         Number of banalities separated
     """
-    banalities_separated = 0
     banal_file_name = filepath.replace("alignments.jsonl", "banal_alignments.jsonl")
+    keep = f"{filepath}.keep.lz4"
+    segments = _work_split(filepath, workers)
 
-    with (
-        lz4.frame.open(banal_file_name, mode="wb") as banal_output_file,
-        lz4.frame.open(f"{filepath}.keep.lz4", mode="wb") as output_file,
-        lz4.frame.open(filepath) as input_file,
-    ):
-        for line in tqdm(input_file, total=count, desc="Separating banalities...", leave=False):
-            if _DECODE_VERDICT(line).banality is True:
-                banalities_separated += 1
-                banal_output_file.write(line)  # type: ignore
-            else:
-                output_file.write(line)  # type: ignore
+    if len(segments) < 2:
+        with (
+            open(banal_file_name, "wb") as banal_raw,
+            _Framer(banal_raw) as banal_output_file,
+            open(keep, "wb") as keep_raw,
+            _Framer(keep_raw) as output_file,
+            lz4.frame.open(filepath) as input_file,
+        ):
+            banalities_separated = _separate_records(
+                tqdm(input_file, total=count, desc="Separating banalities...", leave=False),
+                output_file, banal_output_file)
+        os.replace(keep, filepath)
+        return banalities_separated
 
-    os.replace(f"{filepath}.keep.lz4", filepath)
+    results = _run_segments(_separate_segment, filepath, segments, count,
+                            "Separating banalities...")
+    banalities_separated = sum(result[0] for result in results)
+    _concatenate([result[1] for result in results], keep)
+    _concatenate([result[2] for result in results], banal_file_name)
+    os.replace(keep, filepath)
     return banalities_separated
 
 

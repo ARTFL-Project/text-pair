@@ -326,9 +326,11 @@ async def run_alignment(params):
                 count,
                 params.matching_params["most_common_ngram_proportion"],
                 params.matching_params["common_ngram_threshold"],
+                params.workers,
             )
         elif phrase_filter:
-            filtered_passages = phrase_matcher(results_file, phrase_filter, count)
+            filtered_passages = phrase_matcher(results_file, phrase_filter, count,
+                                               params.workers)
         elif auto_detect:
             print("Running automatic banality detection...")
             banalities_found = banality_auto_detect(
@@ -364,7 +366,8 @@ async def run_alignment(params):
                     banalities_found -= rescued_count  # Adjust the count
             if params.matching_params["store_banalities"] is False:
                 # Separate banalities into a different file after all evaluation is complete
-                banalities_found = separate_banalities(results_file, count)
+                banalities_found = separate_banalities(results_file, count,
+                                                       params.workers)
                 print(
                     f"{banalities_found} pairwise alignment(s) have been identified as formulaic and have been removed from matches."
                 )
