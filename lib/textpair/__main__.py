@@ -306,7 +306,7 @@ async def run_alignment(params):
             params.matching_params["banality_llm_eval"],
         ]
     ):
-        print(f"\n### Postprocessing {count} pairwise alignments ###")
+        print(f"\n### Postprocessing {count:,} pairwise alignments ###")
         # The phrase list removes known boilerplate and auto-detection catches
         # the rest, so they are independent verdicts -- but on the same records,
         # and run one after the other they read and rewrite the whole result
@@ -317,7 +317,7 @@ async def run_alignment(params):
         filtered_passages = 0
         banalities_found = 0
         if phrase_filter and auto_detect:
-            print("Running phrase filter and automatic banality detection...")
+            print("Filtering phrases and detecting formulaic passages...")
             filtered_passages, banalities_found = filter_and_flag(
                 results_file,
                 phrase_filter,
@@ -329,10 +329,11 @@ async def run_alignment(params):
                 params.workers,
             )
         elif phrase_filter:
+            print("Filtering phrases...")
             filtered_passages = phrase_matcher(results_file, phrase_filter, count,
                                                params.workers)
         elif auto_detect:
-            print("Running automatic banality detection...")
+            print("Detecting formulaic passages...")
             banalities_found = banality_auto_detect(
                 results_file,
                 params.paths["source"]["common_ngrams"],
@@ -343,11 +344,10 @@ async def run_alignment(params):
                 params.workers,
             )
         if phrase_filter:
-            print(f"{filtered_passages} pairwise alignments have been filtered based on the phrase filter provided.")
             count = update_count(count, filtered_passages, params.output_path)
-            print(f"{count} pairwise alignments remaining.")
+            print(f"  {filtered_passages:,} matched the phrase list, "
+                  "written to filtered_passages.jsonl.lz4")
         if auto_detect:
-            print(f"{banalities_found} pairwise alignment(s) have been identified as formulaic.")
             if params.matching_params["banality_llm_post_eval"] is True:
                 print("Running LLM post-evaluation on flagged banalities...")
                 rescued_count = await banality_llm_post_eval(
@@ -361,21 +361,18 @@ async def run_alignment(params):
                     api_key=params.llm_params.get("llm_api_key", ""),
                 )
                 if rescued_count > 0:
-                    print(f"{rescued_count} passages were rescued (reclassified as substantive) after LLM evaluation.")
+                    print(f"  {rescued_count:,} reclassified as substantive by the LLM")
                     banalities_found -= rescued_count  # Adjust the count
             if params.matching_params["store_banalities"] is False:
                 # Separate banalities into a different file after all evaluation is complete
                 banalities_found = separate_banalities(results_file, count,
                                                        params.workers)
-                print(
-                    f"{banalities_found} pairwise alignment(s) have been identified as formulaic and have been removed from matches."
-                )
                 count = update_count(count, banalities_found, params.output_path)
-                print(f"{count} pairwise alignments remaining.")
+                print(f"  {banalities_found:,} formulaic, "
+                      "written to banal_alignments.jsonl.lz4")
             else:
-                print(
-                    f"{banalities_found} pairwise alignments identified as formulaic and will be flagged as banalities in the database."
-                )
+                print(f"  {banalities_found:,} formulaic, flagged in place for the database")
+        print(f"  {count:,} pairwise alignments remaining.")
 
     # Passage classification
     if params.passage_classification["classify_passage"] is True:

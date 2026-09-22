@@ -613,7 +613,6 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
     filtered, _ = _detect_pass(
         filepath, count, workers, "Running phrase-based banality detection...",
         matcher=_phrase_tree(banality_phrases_path))
-    print("done")
     return filtered
 
 
