@@ -416,16 +416,20 @@ class ChunkWriter:
 
 # --------------------------------------------------------------- worker process
 
-def _worker(jobq, resq, written, docs, metas, out_dir, context_size, go_escape, level):
+def _worker(jobq, resq, written, tokens, docs, metas, out_dir, context_size, go_escape,
+            level):
     writer = ChunkWriter(docs, metas, out_dir, context_size, go_escape, level)
     busy = 0.0
     while True:
         job = jobq.get()
         if job is None:
             break
-        start = time.perf_counter()
-        writer.write(*job)
-        busy += time.perf_counter() - start
+        # A token per chunk, not per record: it costs microseconds against a write of
+        # milliseconds, and `with` returns it even if the write raises.
+        with tokens:
+            start = time.perf_counter()
+            writer.write(*job)
+            busy += time.perf_counter() - start
         # One lock per submitted source, not per chunk: enough to pace a bar, and far
         # too rare to show up against the write itself.
         with written.get_lock():
@@ -446,23 +450,39 @@ def ensure_stream(path):
 
 class OutputPool:
     """Forked writer pool. Fork before the ngram arrays are allocated so the workers
-    inherit the cleaned metadata and only tens of MB of page tables get copied."""
+    inherit the cleaned metadata and only tens of MB of page tables get copied.
+
+    `n_workers` processes are forked but only `active` of them write at a time, so the
+    run holds to one worker budget while matching is using the rest. `expand()` hands
+    out the remaining tokens once matching is done and its threads have gone idle.
+    """
 
     def __init__(self, n_workers, docs, metas, out_dir, context_size,
-                 go_escape=True, level=3):
+                 go_escape=True, level=3, active=0):
         import multiprocessing as mp
         ctx = mp.get_context("fork")
         os.makedirs(out_dir, exist_ok=True)
+        active = min(n_workers, active or n_workers)
         self.jobq = ctx.Queue()
         self.resq = ctx.Queue()
         self.written = ctx.Value("q", 0)     # chunks the writers have finished
         self.queued = 0                      # chunks handed to them
+        self.tokens = ctx.Semaphore(active)
+        self.held = n_workers - active       # tokens expand() has yet to hand out
         self.procs = [ctx.Process(target=_worker, daemon=True,
-                                  args=(self.jobq, self.resq, self.written, docs, metas,
-                                        out_dir, context_size, go_escape, level))
+                                  args=(self.jobq, self.resq, self.written, self.tokens,
+                                        docs, metas, out_dir, context_size, go_escape,
+                                        level))
                       for _ in range(n_workers)]
         for proc in self.procs:
             proc.start()
+
+    def expand(self):
+        """Let every writer run. Matching has finished, so its share of the budget is
+        idle and the writers are the only thing left between here and the end."""
+        for _ in range(self.held):
+            self.tokens.release()
+        self.held = 0
 
     def submit(self, rows, jobs):
         self.queued += len(jobs)
