@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from numba import njit
 
-from .matching import NCOL, match_passage, merge_passages
+from .matching import NCOL, align_pair
 
 MSD_BITS = 12                      # 4096 MSD buckets: 32 KB histogram per thread
 MSD_BUCKETS = 1 << MSD_BITS
@@ -302,7 +302,7 @@ def target_work(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, target
         if count == 0 or count < min_in_docs:
             continue
         nt = key_offsets[t + 1] - key_offsets[t]
-        if count / (ns if ns < nt else nt) * 100 > dup_threshold:
+        if count / (ns if ns > nt else nt) * 100 > dup_threshold:
             continue
         work = 0
         for k in range(q, r):
@@ -322,7 +322,7 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
                   min_matching, min_in_window, merge_byte, merge_ngram, multiplier):
     """Match source `s` against target slots [t_lo, t_hi) of the CSR `sweep_source` built:
     apply the two filters, then expand each surviving pair's matches and hand them to
-    matching.match_passage.
+    matching.align_pair.
 
     Targets are independent, so a source's targets can be cut into contiguous ranges and
     run on separate threads; concatenating the ranges in ascending t reproduces the
@@ -382,12 +382,12 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
             stats[1] += 1
             continue
         stats[5] += 1
-        # The share of the smaller document's ngrams the two have in common: the same
-        # reading of "one of these is a reprint of the other" whichever way round the
-        # pair is compared. Dividing by the source's own count made a short document
-        # inside a long one a duplicate one way only.
+        # The share of the larger document's ngrams the two have in common, so a pair is
+        # a duplicate only when each is mostly the other, whichever way round it is
+        # compared. The smaller document's share would also skip a short text quoted
+        # whole inside a long one, which is reuse to report, not a reprint.
         nt = key_offsets[t + 1] - key_offsets[t]
-        pct = count / (ns if ns < nt else nt) * 100
+        pct = count / (ns if ns > nt else nt) * 100
         if pct > dup_threshold:
             stats[2] += 1
             if n_duplicates == duplicate_slots.shape[0]:
@@ -472,17 +472,13 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
                                            | np.int64(ngram_indices[target_at]))
                 packed_positions[written] = source_position_half | np.int64(target_at)
                 written += 1
-        chain_out, n_alignments, chain_spans = match_passage(
+        alignments, n_alignments, chain_spans, chain_out = align_pair(
             packed_indices, packed_positions, n_matches, n_positions,
             start_bytes, end_bytes,
             window_size, max_gap, flex_gap, min_matching, min_in_window,
+            merge_byte, merge_ngram, multiplier,
             chain_best, chain_parent, chain_used, chain_members, chain_key,
             chain_order, chain_spans, chain_out)
-        alignments = chain_out
-        if merge_byte or merge_ngram:
-            alignments, n_alignments = merge_passages(
-                alignments, n_alignments, merge_byte, merge_ngram, window_size,
-                multiplier)
         if n_alignments > 0:
             while n_rows + n_alignments > out.shape[0]:
                 new = np.empty((out.shape[0] * 2, NCOL + 2), np.int32)

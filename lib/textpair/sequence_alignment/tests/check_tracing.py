@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drift guard for tracing._walk against matching.match_passage.
+"""Drift guard for tracing's mirrors of matching.match_passage and matching.align_pair.
 
     check_tracing.py [--source-files DIR --source-metadata FILE] [--threads N]
         [--max-matches N]
@@ -11,9 +11,10 @@ corpus is slow -- write_traces re-derives every pair, which --max-matches cannot
 since a trace has to describe the whole pair. Point it at a corpus deliberately.
 
 The trace is produced after matching by walking each pair's matches a second time, in
-`tracing._walk`, so that nothing is on the matching path. That walk must behave exactly
-like `matching.match_passage`. This feeds both the same matches, for every pair of a
-corpus, and asserts they emit the same alignments. It also aligns the corpus with and
+`tracing._walk` and `tracing.pair_rows`, so that nothing is on the matching path. They
+must behave exactly like `matching.match_passage` and `matching.align_pair`. This feeds
+each pair the same matches, for every pair of a corpus, and asserts they emit the same
+alignments, before merging and after. It also aligns the corpus with and
 without `debug` and checks the counts and the trace's accounting agree.
 
 With no arguments it runs the fixture corpora, which is fast but thin. Point it at a real
@@ -57,8 +58,10 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
             continue
         pairs += 1
         truncated += stopped_early
-        rows, _blocks, _hidden = tracing._walk(match, n, params,
-                                             params["debug_minimum_ngrams"])
+        chains, _blocks, _hidden, _longest = tracing._walk(
+            match, n, params, params["debug_minimum_ngrams"])
+        rows, _blocks, _hidden, _merged, _coalesced = tracing.pair_rows(
+            match, n, params, params["debug_minimum_ngrams"])
         # The kernel takes the packed layout: indices together in one int64 and byte
         # offsets reached through positions. Lay the pair's offsets out so position k is
         # its source and position n + k its target.
@@ -69,17 +72,27 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
                | np.arange(n, 2 * n, dtype=np.int64))
         start_bytes = np.concatenate([np.asarray(s_sb, np.int32), np.asarray(t_sb, np.int32)])
         end_bytes = np.concatenate([np.asarray(s_eb, np.int32), np.asarray(t_eb, np.int32)])
-        out, cnt, _spans = matching.match_passage(
-            pair, pos, n, int(np.unique(np.asarray(s_idx)).shape[0]),
-            start_bytes, end_bytes,
-            params["matching_window_size"], params["max_gap"], params["flex_gap"],
-            params["minimum_matching_ngrams"],
-            params["minimum_matching_ngrams_in_window"],
-            np.empty(n, np.int32), np.empty(n, np.int32), np.empty(n, np.uint8),
-            np.empty(n, np.int32), np.empty(n + 1, np.int32), np.empty(n, np.int32),
-            np.empty((64, 4), np.int32), np.empty((64, matching.NCOL), np.int32))
-        if [tuple(int(v) for v in row) for row in out[:cnt]] != \
-                [tuple(int(v) for v in row) for row in rows]:
+        n_blocks = int(np.unique(np.asarray(s_idx)).shape[0])
+
+        def buffers():
+            return (np.empty(n, np.int32), np.empty(n, np.int32), np.empty(n, np.uint8),
+                    np.empty(n, np.int32), np.empty(n + 1, np.int32),
+                    np.empty(n, np.int32),
+                    np.empty((64, 4), np.int32), np.empty((64, matching.NCOL), np.int32))
+        common = (params["matching_window_size"], params["max_gap"], params["flex_gap"],
+                  params["minimum_matching_ngrams"],
+                  params["minimum_matching_ngrams_in_window"])
+        out, cnt, _spans, _longest = matching.match_passage(
+            pair, pos, n, n_blocks, start_bytes, end_bytes, *common, *buffers())
+        final, final_cnt, _spans, _out = matching.align_pair(
+            pair, pos, n, n_blocks, start_bytes, end_bytes, *common,
+            params["merge_passages_on_byte_distance"],
+            params["merge_passages_on_ngram_distance"],
+            params["passage_distance_multiplier"], *buffers())
+        def as_tuples(array, count):
+            return [tuple(int(v) for v in row) for row in array[:count]]
+        if as_tuples(out, cnt) != [tuple(r) for r in chains] or \
+                as_tuples(final, final_cnt) != [tuple(r) for r in rows]:
             mismatches += 1
     return pairs, mismatches, truncated
 
@@ -101,7 +114,8 @@ def check_corpus(name, source_files, source_metadata, threads, failures, overrid
                                                       params, threads, max_matches)
         capped = (f", {truncated} of them capped at {max_matches:,} matches"
                   if truncated else "")
-        check(f"_walk matches the kernel on all {pairs} pair(s){capped}", mismatches, 0)
+        check(f"_walk and pair_rows match the kernels on all {pairs} pair(s){capped}",
+              mismatches, 0)
 
         common = dict(source_files=source_files, source_metadata=source_metadata,
                       threads=threads, **(overrides or {}))
@@ -110,7 +124,7 @@ def check_corpus(name, source_files, source_metadata, threads, failures, overrid
         check("debug does not change the alignment count",
               align(output_path=traced, debug=True, **common), count)
 
-        matches = merged_away = 0
+        matches = merged_away = coalesced = 0
         debug_dir = os.path.join(traced, "debug_output")
         for trace in sorted(os.listdir(debug_dir)) if os.path.isdir(debug_dir) else []:
             with open(os.path.join(debug_dir, trace), encoding="utf8") as handle:
@@ -118,7 +132,10 @@ def check_corpus(name, source_files, source_metadata, threads, failures, overrid
             matches += len(re.findall(r"## MATCH ##", text))
             merged_away += sum(int(n) for n in
                                re.findall(r"^(\d+) passage\(s\) merged", text, re.M))
-        check("the trace accounts for every alignment", matches - merged_away, count)
+            coalesced += sum(int(n) for n in
+                             re.findall(r"^(\d+) passage\(s\) coalesced", text, re.M))
+        check("the trace accounts for every alignment",
+              matches - coalesced - merged_away, count)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

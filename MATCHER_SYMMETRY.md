@@ -6,7 +6,9 @@
 classical_chinese `cc_clean` (62), from `/disk1/shared/text-pair-validation/corpora`
 **Measured:** 2026-09-17, 64-core machine, 32 threads
 **Status:** landed. `match_passage` and `merge_passages` are the symmetric kernels; the
-asymmetric ones they replaced are gone.
+asymmetric ones they replaced are gone. **Superseded in part on 2026-09-23**: measured
+against the Go aligner, the chains lost 3.9% of its runs, and `align_pair` now adds the
+old walk, run from both documents. See "Losses against the Go aligner" below.
 
 ---
 
@@ -344,16 +346,112 @@ settings, with the trace accounting for every alignment. The fixture references 
 byte for byte. The aligner is deterministic across runs and thread counts: five runs of
 classical_chinese, three at 32 threads and two at 1, all gave 45,109.
 
+## Losses against the Go aligner
+
+Measured 2026-09-23 on full frantext (3,630 documents) with
+`/shared/alignments/frantext/sa_config.ini` (`flex_gap = true`), against `master`
+end to end: `text_preprocessing` ngrams, `compareNgrams`. Comparisons are of the raw
+aligner output, before the phrase filter and banality detection.
+
+| | records |
+|---|---|
+| Go | 46,452 |
+| Python, chains only | 63,689 |
+| Python, chains + anchored scan | 65,866 |
+
+Running the Python aligner on `master`'s own JSON ngrams gives 63,692 records and the
+same losses, so preprocessing and the 64-bit keys account for almost none of it. A port
+of Go's `matchPassage` and `mergeWithPrevious`, statement for statement, reproduces
+`compareNgrams` on all 15,809 frantext pairs (`flex_gap` on) and all 1,329 `cc_clean`
+pairs (off); everything below uses it to re-derive Go's runs, before merging.
+
+**The chains missed 1,904 of Go's 48,202 runs (3.9%)**, and 1,684 of the 48,995 it
+finds with the documents' roles exchanged: runs with less than 90% of their bytes
+covered by a record overlapping them in both documents. By mechanism, over the 778
+pairs holding one:
+
+| | runs | |
+|---|---|---|
+| cover rule | 1,679 | a valid chain, rejected because both stretches overlap kept passages |
+| gap exception | 125 | Go accepts a step past `max_gap` while the window is dense |
+| DP fragmentation | 55 | the matches went to a longer chain, cut into pieces too short to keep |
+| window test | 4 | tail differences |
+
+Plus 15 records in 6 pairs lost to the duplicate rule (40 duplicate pairs against Go's
+34, a strict superset).
+
+- **The cover rule** is the per-pairing residue this note set aside as "the same
+  repeated material paired differently". Go pairs each stretch of the source with the
+  first stretch of the target that continues it, so for a citation occurring *n* and *m*
+  times it reports a star to the first occurrence; the cover picks other pairings.
+  Both documents stay covered, but the pairings Go reported are gone.
+- **Fragmentation** is the price of loose linking noted under flex_gap, and it loses
+  whole passages. At 2049/2798 the matches (159806,8123) (159809,8112) (159810,8113)
+  (159811,8114) (159816,8131) (159817,8132) (159821,8138) hold a 4-match run anchored at
+  (159806,8123). The DP's longest chain instead goes through 159811, the walk cuts it at
+  the 17-step target gap into two 3-match pieces, and both are dropped with their
+  matches marked used.
+- **The gap exception** is a rule of Go's: exceeding `max_gap` in the source only ends
+  a run when the window is also sparse or the match leaves it. At 1509/2054 Go carries a
+  proclamation across a 26-ngram insertion, 500 bytes; the chains stop at 92.
+
+Patching the chains does not converge: an allowance derived from `best[a]` brings the
+lost runs from 1,863 to 1,650 on those pairs, a symmetric gap exception makes it worse
+(1,751), and adding star pairings to the cover leaves 742.
+
+### What replaced it
+
+`align_pair` keeps the chains and adds **the anchored scan**, Go's walk run once through
+each document. Each of the three sets is merged on its own, then passages overlapping
+in both documents are coalesced. The union is symmetric by construction, and merging
+before coalescing keeps every passage the chains give inside a result.
+
+| frantext | |
+|---|---|
+| Go runs not covered | **1** of 48,202, and **0** of 48,995 reversed |
+| chains-only records not fully contained | **0** of 63,689 (62,458 identical) |
+| records | 65,866, +3.4% |
+| symmetry, both flex_gap settings | exact: same counts, 0 of 65,866 without a counterpart |
+
+The one run left is `aim_aim_aim` four times in a row at 2668/2848, a pair Go only
+compared because a 32-bit collision (`repercut_etat_conscienc` / `pet_cimeti_aim`) gave
+it a fourth shared key. At the record level 101 Go records are under 90% covered; all
+of their runs are covered, and the rest is Go's merger bridging unmatched text, up to
+152 KB on 141/2946, which the symmetric merger does not do.
+
+On `ecco_clean` every one of the chains' 6,340,308 records is identical (6,311,153) or
+fully contained, with 6,424,597 records in all.
+
+The duplicate rule now divides by the **larger** document's count, so a pair is skipped
+only when each is mostly the other. That flags a subset of what Go flagged either way
+round (the intersection, where `min` flagged the union), so it loses nothing.
+
+**Cost**, matching phase only, 32 threads, warm cache:
+
+| | chains only | + anchored scan |
+|---|---|---|
+| frantext | 0.24 s, 6.0 CPU-s | 0.24 s, 6.0 CPU-s |
+| ecco_clean | 18.9 s, 605 CPU-s | 25.9 s, 826 CPU-s (1.36x) |
+
+Two exact skips keep it there. The scan only runs where the DP's longest chain reaches
+`min(minimum_matching_ngrams, minimum_matching_ngrams_in_window)`: a run either is a
+chain or has that many normally linked matches before its first step past the gap.
+Within a pair, stretches of the walked document separated by gaps wider than the window
+can grow are independent, and a stretch holding no match with `best` at that length has
+no run in it. The largest remaining cost is ordering every match by target for the
+reverse walk (about 90 CPU-s on ecco_clean); building the mirrored match arrays in
+`align_targets` instead would remove it. Not done: the skip needs `best` for each match,
+which the mirrored arrays would have to map back to.
+
 ## Open items
 
-- The duplicate rule now divides by the smaller document's ngram count. `min` flags the
-  union of what the two directions flagged before — 35 pairs on frantext against 29 and
-  24 — so a handful of near-duplicate pairs that used to yield alignments one way round
-  now yield none either way. `max` would flag the intersection instead and lose nothing;
-  `min` was chosen as the closer reading of the rule it replaced, and is the one thing
-  here that is a judgement rather than a fix.
-- eccotcp was measured for cost but not for symmetry: `test_matcher_symmetry.py` on
-  `ecco_clean` is two full runs of a 3 million alignment corpus.
+- ~~The duplicate rule divides by the smaller document's ngram count.~~ It divides by
+  the larger now; see "Losses against the Go aligner".
+- **ecco_clean is not exactly symmetric**, `flex_gap` on: the chains alone report
+  6,340,308 records one way and 6,340,303 the other, 9 and 3 of them without a
+  counterpart, and with the anchored scan 6,424,597 against 6,424,594, 6 and 1. Within
+  the test's tolerance, and consistent with the mirror ties below reaching the output
+  on a dense enough corpus.
 - The mirror tie could be closed outright by emitting both alternatives, which is
   symmetric and adds records. Not done: nothing currently produces one in the output.
 - Nothing downstream was re-tuned. 38% more records changes what `banality_finder.py`,

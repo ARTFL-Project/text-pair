@@ -5,10 +5,11 @@ An alignment row is int32[9]: source start byte, source end byte, source first i
 source last index, target start byte, target end byte, target first index,
 target last index, total matching ngrams.
 
-Both kernels are symmetric: comparing a pair of documents the other way round gives the
-mirrored passages. `MATCHER_SYMMETRY.md` measures the asymmetric matcher they replaced,
-which agreed with itself on 52% of frantext passages when the document order was
-reversed, and records what it cost to fix.
+Every kernel is symmetric: comparing a pair of documents the other way round gives the
+mirrored passages. `MATCHER_SYMMETRY.md` measures the asymmetric matcher the chains
+replaced, which agreed with itself on 52% of frantext passages when the document order
+was reversed, and records what it cost to fix. The anchored scan is that matcher's walk,
+run from both documents so that it is symmetric too.
 """
 import math
 import numpy as np
@@ -22,6 +23,9 @@ BLOCK_FANOUT = 8
 BLOCK_MIN_MATCHES = 256
 # A packed int64 holds the source value in the high half and the target in the low.
 TARGET_HALF = np.int64(0xFFFFFFFF)
+# _order_by_target's digit: two passes cover any document under 4 million ngrams.
+RADIX_BITS = 11
+RADIX = 1 << RADIX_BITS
 
 
 @njit(nogil=True, cache=True)
@@ -151,7 +155,7 @@ def _overlaps_kept(lo, hi, spans, n_spans, side):
 def _keep(out, n_alignments, spans, packed_indices, packed_positions, chain,
           first, last, count, start_bytes, end_bytes):
     """Emit chain[first:last] as a passage unless both of its stretches are already
-    covered by a kept passage. Grows out and spans together."""
+    covered by a kept passage."""
     source_lo = packed_indices[chain[first]] >> 32
     source_hi = packed_indices[chain[last]] >> 32
     target_lo = packed_indices[chain[first]] & TARGET_HALF
@@ -159,27 +163,37 @@ def _keep(out, n_alignments, spans, packed_indices, packed_positions, chain,
     if (_overlaps_kept(source_lo, source_hi, spans, n_alignments, 0)
             and _overlaps_kept(target_lo, target_hi, spans, n_alignments, 1)):
         return out, n_alignments, spans
-    if n_alignments == out.shape[0]:
-        out = _grow(out)
-        bigger = np.empty((out.shape[0], 4), np.int32)
+    if n_alignments == spans.shape[0]:
+        bigger = np.empty((spans.shape[0] * 2, 4), np.int32)
         bigger[:n_alignments] = spans[:n_alignments]
         spans = bigger
     spans[n_alignments, 0] = source_lo
     spans[n_alignments, 1] = source_hi
     spans[n_alignments, 2] = target_lo
     spans[n_alignments, 3] = target_hi
-    head = packed_positions[chain[first]]
-    tail = packed_positions[chain[last]]
+    out, n_alignments = _emit(out, n_alignments, packed_indices, packed_positions,
+                              chain[first], chain[last], count, start_bytes, end_bytes)
+    return out, n_alignments, spans
+
+
+@njit(nogil=True, cache=True)
+def _emit(out, n_alignments, packed_indices, packed_positions, first, last, count,
+          start_bytes, end_bytes):
+    """Append the passage running from match `first` to match `last`."""
+    if n_alignments == out.shape[0]:
+        out = _grow(out)
+    head = packed_positions[first]
+    tail = packed_positions[last]
     out[n_alignments, 0] = start_bytes[head >> 32]
     out[n_alignments, 1] = end_bytes[tail >> 32]
-    out[n_alignments, 2] = source_lo
-    out[n_alignments, 3] = source_hi
+    out[n_alignments, 2] = packed_indices[first] >> 32
+    out[n_alignments, 3] = packed_indices[last] >> 32
     out[n_alignments, 4] = start_bytes[head & TARGET_HALF]
     out[n_alignments, 5] = end_bytes[tail & TARGET_HALF]
-    out[n_alignments, 6] = target_lo
-    out[n_alignments, 7] = target_hi
+    out[n_alignments, 6] = packed_indices[first] & TARGET_HALF
+    out[n_alignments, 7] = packed_indices[last] & TARGET_HALF
     out[n_alignments, 8] = count
-    return out, n_alignments + 1, spans
+    return out, n_alignments + 1
 
 
 @njit(nogil=True, cache=True)
@@ -323,6 +337,212 @@ def _chain_blocked(packed_indices, n, max_link, best, parent, used):
 
 
 @njit(nogil=True, cache=True)
+def _order_by_target(packed_indices, n, order, spare):
+    """The matches by (target index, source index), as indices into them: a stable LSD
+    radix sort on the target index of matches already ordered by source index. Returns
+    whichever of the two buffers holds the result."""
+    low = packed_indices[0] & TARGET_HALF
+    high = low
+    for i in range(n):
+        order[i] = i
+        target = packed_indices[i] & TARGET_HALF
+        if target < low:
+            low = target
+        if target > high:
+            high = target
+    counts = np.empty(RADIX, np.int64)
+    span = high - low
+    shift = 0
+    source, destination = order, spare
+    while (span >> shift) > 0:
+        counts[:] = 0
+        for i in range(n):
+            counts[(((packed_indices[source[i]] & TARGET_HALF) - low) >> shift)
+                   & (RADIX - 1)] += 1
+        running = 0
+        for digit in range(RADIX):
+            count = counts[digit]
+            counts[digit] = running
+            running += count
+        for i in range(n):
+            entry = source[i]
+            digit = (((packed_indices[entry] & TARGET_HALF) - low) >> shift) & (RADIX - 1)
+            destination[counts[digit]] = entry
+            counts[digit] += 1
+        source, destination = destination, source
+        shift += RADIX_BITS
+    return source
+
+
+@njit(nogil=True, cache=True)
+def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, skip,
+                   start_bytes, end_bytes, window_size, max_gap, flex_gap, min_matching,
+                   min_in_window, out, n_alignments):
+    """The Go aligner's walk: through one document in order, each run anchored at a
+    match's first partner in the other. `mirrored` walks the target, through `order`,
+    the matches by (target, source). It pairs repeated material differently from the
+    chains, and a step past the gap allowance in the walked document is accepted while
+    the window already holds min_in_window matches.
+
+    `best` is the chains' lengths; `skip` is scratch for n ranks.
+    """
+    # A run's first `lead` steps cannot overshoot the gap, so its lead-th match ends a
+    # chain of at least lead. No step goes further than the window can grow, so stretches
+    # between wider gaps are independent, and one with no such match has no run: skip[r]
+    # is where rank r's stretch ends if so, else -1.
+    lead = min_matching if min_matching < min_in_window else min_in_window
+    widest = window_size
+    if flex_gap:
+        widest += min_matching
+        if max_gap + min_matching < window_size:
+            widest += window_size - max_gap - min_matching
+    first = 0
+    strong = False
+    previous = np.int64(-1)
+    for rank in range(n + 1):
+        entry = np.int64(0)
+        w = np.int64(0)
+        if rank < n:
+            entry = order[rank] if mirrored else rank
+            if mirrored:
+                w = packed_indices[entry] & TARGET_HALF
+            else:
+                w = packed_indices[entry] >> 32
+        if rank == n or (rank > first and w - previous > widest):
+            for r in range(first, rank):
+                skip[r] = -1 if strong else rank
+            first = rank
+            strong = False
+        if rank < n:
+            if best[entry] >= lead:
+                strong = True
+            previous = w
+    resume = 0
+    anchor_rank = -1
+    while anchor_rank + 1 < n:
+        anchor_rank += 1
+        if skip[anchor_rank] >= 0:
+            anchor_rank = skip[anchor_rank] - 1
+            continue
+        anchor = order[anchor_rank] if mirrored else anchor_rank
+        if mirrored:
+            walked = packed_indices[anchor] & TARGET_HALF
+            other = packed_indices[anchor] >> 32
+        else:
+            walked = packed_indices[anchor] >> 32
+            other = packed_indices[anchor] & TARGET_HALF
+        if walked < resume:
+            continue
+        walked_boundary = walked + window_size
+        other_boundary = other + window_size
+        last_walked = walked
+        last_other = other
+        walked_limit = walked + max_gap
+        other_limit = other + max_gap
+        previous_walked = walked
+        last = anchor
+        in_run = True
+        in_alignment = 1
+        in_window = 1
+        gap = max_gap
+        window = window_size
+        for rank in range(anchor_rank + 1, n):
+            entry = order[rank] if mirrored else rank
+            if mirrored:
+                w = packed_indices[entry] & TARGET_HALF
+                o = packed_indices[entry] >> 32
+            else:
+                w = packed_indices[entry] >> 32
+                o = packed_indices[entry] & TARGET_HALF
+            if w == previous_walked:
+                continue
+            if o > other_limit or o <= last_other:
+                if w <= walked_limit:
+                    continue
+                in_run = False
+            if w > walked_limit and in_window < min_in_window:
+                in_run = False
+            if w > walked_boundary or o > other_boundary:
+                if in_window < min_in_window:
+                    in_run = False
+                elif w > walked_limit or o > other_limit:
+                    in_run = False
+                else:
+                    walked_boundary = w + window
+                    other_boundary = o + window
+                    in_window = 0
+            if not in_run:
+                break
+            last_walked = w
+            walked_limit = w + gap
+            last_other = o
+            other_limit = o + gap
+            previous_walked = w
+            in_window += 1
+            in_alignment += 1
+            if flex_gap:
+                if in_alignment == min_matching:
+                    gap += min_matching
+                    window += min_matching
+                elif in_alignment > min_matching and gap < window_size:
+                    gap += 1
+                    window += 1
+            last = entry
+        if in_alignment >= min_matching:
+            out, n_alignments = _emit(out, n_alignments, packed_indices, packed_positions,
+                                      anchor, last, in_alignment, start_bytes, end_bytes)
+        resume = last_walked + 1 if not in_run else last_walked
+    return out, n_alignments
+
+
+@njit(nogil=True, cache=True)
+def _coalesce(out, n):
+    """Passages overlapping in both documents become one passage spanning them all."""
+    out, n = _sort_rows(out, n)
+    parent = np.empty(n, np.int64)
+    for i in range(n):
+        parent[i] = i
+    for i in range(n):
+        for j in range(i + 1, n):
+            if out[j, 2] > out[i, 3]:
+                break                       # sorted by source start: none later overlaps
+            if out[j, 6] <= out[i, 7] and out[i, 6] <= out[j, 7]:
+                root_i = _root(parent, i)
+                root_j = _root(parent, j)
+                if root_i < root_j:
+                    parent[root_j] = root_i
+                elif root_j < root_i:
+                    parent[root_i] = root_j
+    n_out = 0
+    for i in range(n):
+        root = _root(parent, i)
+        if root == i:
+            continue
+        # A root precedes its members and is never itself a member, so it accumulates
+        # in place.
+        if out[i, 2] < out[root, 2]:
+            out[root, 0] = out[i, 0]
+            out[root, 2] = out[i, 2]
+        if out[i, 3] > out[root, 3]:
+            out[root, 1] = out[i, 1]
+            out[root, 3] = out[i, 3]
+        if out[i, 6] < out[root, 6]:
+            out[root, 4] = out[i, 4]
+            out[root, 6] = out[i, 6]
+        if out[i, 7] > out[root, 7]:
+            out[root, 5] = out[i, 5]
+            out[root, 7] = out[i, 7]
+        if out[i, 8] > out[root, 8]:        # the matches overlap, so not their sum
+            out[root, 8] = out[i, 8]
+    for i in range(n):
+        if parent[i] == i:
+            if n_out != i:
+                out[n_out] = out[i]
+            n_out += 1
+    return _sort_rows(out, n_out)
+
+
+@njit(nogil=True, cache=True)
 def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
                   window_size, max_gap, flex_gap, min_matching, min_in_window,
                   best, parent, used, chain, key, order, spans, out):
@@ -346,11 +566,11 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
 
     Every buffer is the caller's: best, parent, used, chain, order sized for n matches,
     key for n + 1, and spans and out grown here and handed back so the next pair reuses
-    them. Returns (out, n_alignments, spans).
+    them. Returns (out, n_alignments, spans, longest), longest being the longest chain.
     """
     n_alignments = 0
     if n == 0:
-        return out, 0, spans
+        return out, 0, spans, 0
     max_link = link_bound(window_size, max_gap, flex_gap, min_matching)
 
     if n_blocks > 0 and n >= BLOCK_MIN_MATCHES and n >= BLOCK_FANOUT * n_blocks:
@@ -358,7 +578,7 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
     else:
         longest = _chain_flat(packed_indices, n, max_link, best, parent, used)
     if longest < min_matching:
-        return out, 0, spans                # no chain here can reach the threshold
+        return out, 0, spans, longest       # no chain here can reach the threshold
 
     # Chain ends, longest first, over only the matches that could end one: a counting
     # sort on the length, then each length's block by its coordinate pair as an
@@ -457,7 +677,7 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
                     gap_allowance += 1
                     window += 1
     out, n_alignments = _sort_rows(out, n_alignments)
-    return out, n_alignments, spans
+    return out, n_alignments, spans, longest
 
 
 @njit(nogil=True, cache=True)
@@ -543,3 +763,62 @@ def merge_passages(al, n, merge_byte, merge_ngram, window_size, multiplier):
             out[n_out, 8] += al[j, 8]
         n_out += 1
     return _sort_rows(out, n_out)
+
+
+@njit(nogil=True, cache=True)
+def _merged(rows, n, merging, merge_byte, merge_ngram, window_size, multiplier):
+    rows, n = _sort_rows(rows, n)
+    if not merging:
+        return rows, n
+    return merge_passages(rows, n, merge_byte, merge_ngram, window_size, multiplier)
+
+
+@njit(nogil=True, cache=True)
+def align_pair(packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
+               window_size, max_gap, flex_gap, min_matching, min_in_window,
+               merge_byte, merge_ngram, multiplier,
+               best, parent, used, chain, key, order, spans, out):
+    """One pair's passages: the chains, and the anchored scan walking each document,
+    each set merged on its own and then coalesced.
+
+    The chains alone lose some of what the Go aligner found: a chain longest under the
+    loose link can be cut into pieces too short to keep, and on repeated material the
+    cover pairs occurrences differently. Merging each set before coalescing keeps every
+    passage the chains give inside one of the results.
+
+    Buffers are match_passage's. Returns (rows, n_rows, spans, out), spans and out being
+    the grown buffers to hand the next pair.
+    """
+    out, n_chains, spans, longest = match_passage(
+        packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
+        window_size, max_gap, flex_gap, min_matching, min_in_window,
+        best, parent, used, chain, key, order, spans, out)
+    # A scan's run either is a chain or reaches its first step past the gap with
+    # min_in_window matches linked normally, so below both nothing here can pass.
+    if longest < min_matching and longest < min_in_window:
+        return out[:0], 0, spans, out
+    merging = merge_byte or merge_ngram
+    chains, n_chains = _merged(out, n_chains, merging, merge_byte, merge_ngram,
+                               window_size, multiplier)
+    forward = np.empty((64, NCOL), np.int32)
+    forward, n_forward = _anchored_scan(
+        packed_indices, packed_positions, n, order, False, best, key, start_bytes,
+        end_bytes,
+        window_size, max_gap, flex_gap, min_matching, min_in_window, forward, 0)
+    forward, n_forward = _merged(forward, n_forward, merging, merge_byte, merge_ngram,
+                                 window_size, multiplier)
+    by_target = _order_by_target(packed_indices, n, order, chain)
+    backward = np.empty((64, NCOL), np.int32)
+    backward, n_backward = _anchored_scan(
+        packed_indices, packed_positions, n, by_target, True, best, key, start_bytes,
+        end_bytes,
+        window_size, max_gap, flex_gap, min_matching, min_in_window, backward, 0)
+    backward, n_backward = _merged(backward, n_backward, merging, merge_byte, merge_ngram,
+                                   window_size, multiplier)
+    total = n_chains + n_forward + n_backward
+    rows = np.empty((total, NCOL), np.int32)
+    rows[:n_chains] = chains[:n_chains]
+    rows[n_chains:n_chains + n_forward] = forward[:n_forward]
+    rows[n_chains + n_forward:total] = backward[:n_backward]
+    rows, total = _coalesce(rows, total)
+    return rows, total, spans, out

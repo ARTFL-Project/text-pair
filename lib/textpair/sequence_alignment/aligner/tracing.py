@@ -1,15 +1,16 @@
 """Per-pair matching traces, produced after matching rather than during it.
 
 `write_traces` re-derives each compared pair's matches from the loaded corpus and walks
-them again, so nothing here is on the matching path: `matching.match_passage` and
-`inverted_index.align_source` do not know this module exists. The cost is that the walk below
-must behave exactly like `matching.match_passage`, which `tests/check_tracing.py`
-checks by comparing the alignments the two produce.
+them again, so nothing here is on the matching path: `matching.align_pair` and
+`inverted_index.align_source` do not know this module exists. The cost is that `_walk` and
+`pair_rows` must behave exactly like `matching.match_passage` and `matching.align_pair`,
+which `tests/check_tracing.py` checks by comparing the alignments they produce.
 
 One file per traced pair lands in `<output_path>/debug_output`, named
-`<source_doc_id>_<target_doc_id>`, holding a block per kept or rejected passage and a
-closing line when merging removed passages. `ngram_index` resolves an ngram's int32 key
-to its text; without it the keys cannot be named and the ngram lines come out empty.
+`<source_doc_id>_<target_doc_id>`, holding a block per kept or rejected passage and
+closing lines when merging or coalescing removed passages. `ngram_index` resolves an
+ngram's int32 key to its text; without it the keys cannot be named and the ngram lines
+come out empty.
 
 Rejected passages shorter than `debug_minimum_ngrams` ngrams are replaced by one counted
 summary line per pair, since they outnumber the near misses by about a hundred to one.
@@ -34,6 +35,8 @@ END_OF_CHAIN = 4        # no further match could extend the chain
 TRUNCATED = 8           # the chain stopped at a match an earlier passage had taken
 DROP_SHORT = 16         # fewer than minimum_matching_ngrams matches
 DROP_COVERED = 32       # both stretches already covered by a passage that was kept
+ANCHORED_SOURCE = 64    # found by the anchored scan walking the source
+ANCHORED_TARGET = 128   # found by the anchored scan walking the target
 _END_NAMES = (
     (END_GAP, "the next match is beyond max_gap in one of the documents"),
     (END_WINDOW_SPARSE, "past the window boundary with too few matches in window"),
@@ -41,6 +44,8 @@ _END_NAMES = (
     (TRUNCATED, "the chain ran into matches an earlier passage had taken"),
     (DROP_SHORT, "fewer than minimum_matching_ngrams matches"),
     (DROP_COVERED, "both stretches are already covered by a passage that was kept"),
+    (ANCHORED_SOURCE, "found by the anchored scan walking the source"),
+    (ANCHORED_TARGET, "found by the anchored scan walking the target"),
 )
 
 
@@ -141,8 +146,9 @@ class Corpus:
 def _walk(match, n, params, floor):
     """Mirror of matching.match_passage, recording a block per kept or rejected passage.
 
-    Returns (rows, blocks, hidden): the alignments as that kernel would emit them, the
-    trace of each passage, and a histogram of the rejected ones the floor hid.
+    Returns (rows, blocks, hidden, longest): the alignments as that kernel would emit
+    them, the trace of each passage, a histogram of the rejected ones the floor hid, and
+    the longest chain.
     """
     (source_indices, source_start_bytes, source_end_bytes,
      target_indices, target_start_bytes, target_end_bytes, match_keys) = match
@@ -182,7 +188,7 @@ def _walk(match, n, params, floor):
         best[b], parent[b] = best_b, parent_b
         longest = max(longest, best_b)
     if longest < min_matching:
-        return rows, blocks, hidden
+        return rows, blocks, hidden, longest
 
     def pair_key(i):
         source, target = int(source_indices[i]), int(target_indices[i])
@@ -309,7 +315,155 @@ def _walk(match, n, params, floor):
     # which is not that order. `blocks` stays in the order the matcher produced them,
     # since that is what the trace is for.
     rows.sort(key=lambda row: (row[2], row[6]))
-    return rows, blocks, hidden
+    return rows, blocks, hidden, longest
+
+
+def pair_rows(match, n, params, floor):
+    """Mirror of matching.align_pair: the chains and both anchored scans, each merged,
+    then coalesced.
+
+    Returns (rows, blocks, hidden, merged_away, coalesced), the last two counting the
+    passages merging and coalescing folded into others.
+    """
+    (source_indices, source_start_bytes, source_end_bytes,
+     target_indices, target_start_bytes, target_end_bytes, match_keys) = match
+    rows, blocks, hidden, longest = _walk(match, n, params, floor)
+    if (longest < params["minimum_matching_ngrams"]
+            and longest < params["minimum_matching_ngrams_in_window"]):
+        return [], blocks, hidden, 0, 0
+    sets = [rows]
+    for mirrored in (False, True):
+        runs = []
+        for members in _anchored_scan(source_indices, target_indices, n, params,
+                                      mirrored):
+            first, last = members[0], members[-1]
+            runs.append((int(source_start_bytes[first]), int(source_end_bytes[last]),
+                         int(source_indices[first]), int(source_indices[last]),
+                         int(target_start_bytes[first]), int(target_end_bytes[last]),
+                         int(target_indices[first]), int(target_indices[last]),
+                         len(members)))
+            blocks.append((True,) + runs[-1][:8] + ([match_keys[i] for i in members],
+                          ANCHORED_TARGET if mirrored else ANCHORED_SOURCE))
+        sets.append(sorted(runs, key=lambda row: (row[2], row[6])))
+    merged_away = 0
+    if (params["merge_passages_on_byte_distance"]
+            or params["merge_passages_on_ngram_distance"]):
+        for k, rows in enumerate(sets):
+            if not rows:
+                continue
+            merged, after = matching.merge_passages(
+                np.array(rows, np.int32), len(rows),
+                params["merge_passages_on_byte_distance"],
+                params["merge_passages_on_ngram_distance"],
+                params["matching_window_size"], params["passage_distance_multiplier"])
+            merged_away += len(rows) - after
+            sets[k] = [tuple(int(v) for v in merged[i]) for i in range(after)]
+    combined = [row for rows in sets for row in rows]
+    rows = _coalesce(combined)
+    return rows, blocks, hidden, merged_away, len(combined) - len(rows)
+
+
+def _anchored_scan(source_indices, target_indices, n, params, mirrored):
+    """Mirror of matching._anchored_scan. Yields each run's matches, in order."""
+    window_size = params["matching_window_size"]
+    max_gap = params["max_gap"]
+    flex_gap = params["flex_gap"]
+    min_matching = params["minimum_matching_ngrams"]
+    min_in_window = params["minimum_matching_ngrams_in_window"]
+    if mirrored:
+        walked_of, other_of = target_indices, source_indices
+        order = sorted(range(n), key=lambda i: (int(target_indices[i]),
+                                                int(source_indices[i])))
+    else:
+        walked_of, other_of = source_indices, target_indices
+        order = range(n)
+    walked_at = [int(walked_of[i]) for i in order]
+    other_at = [int(other_of[i]) for i in order]
+    resume = 0
+    for anchor_rank in range(n):
+        walked, other = walked_at[anchor_rank], other_at[anchor_rank]
+        if walked < resume:
+            continue
+        walked_boundary, other_boundary = walked + window_size, other + window_size
+        last_walked, last_other = walked, other
+        walked_limit, other_limit = walked + max_gap, other + max_gap
+        previous_walked = walked
+        members = [anchor_rank]
+        in_run = True
+        in_alignment = in_window = 1
+        gap, window = max_gap, window_size
+        for rank in range(anchor_rank + 1, n):
+            w, o = walked_at[rank], other_at[rank]
+            if w == previous_walked:
+                continue
+            if o > other_limit or o <= last_other:
+                if w <= walked_limit:
+                    continue
+                in_run = False
+            if w > walked_limit and in_window < min_in_window:
+                in_run = False
+            if w > walked_boundary or o > other_boundary:
+                if in_window < min_in_window:
+                    in_run = False
+                elif w > walked_limit or o > other_limit:
+                    in_run = False
+                else:
+                    walked_boundary, other_boundary = w + window, o + window
+                    in_window = 0
+            if not in_run:
+                break
+            last_walked, walked_limit = w, w + gap
+            last_other, other_limit = o, o + gap
+            previous_walked = w
+            in_window += 1
+            in_alignment += 1
+            if flex_gap:
+                if in_alignment == min_matching:
+                    gap += min_matching
+                    window += min_matching
+                elif in_alignment > min_matching and gap < window_size:
+                    gap += 1
+                    window += 1
+            members.append(rank)
+        if in_alignment >= min_matching:
+            yield [order[r] for r in members]
+        resume = last_walked + 1 if not in_run else last_walked
+
+
+def _coalesce(rows):
+    """Mirror of matching._coalesce."""
+    rows = sorted(rows, key=lambda row: (row[2], row[6]))
+    parent = list(range(len(rows)))
+
+    def root(x):
+        while parent[x] != x:
+            x = parent[x]
+        return x
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            if rows[j][2] > rows[i][3]:
+                break
+            if rows[j][6] <= rows[i][7] and rows[i][6] <= rows[j][7]:
+                a, b = root(i), root(j)
+                if a != b:
+                    parent[max(a, b)] = min(a, b)
+    merged = {}
+    for i, row in enumerate(rows):
+        r = root(i)
+        if r not in merged:
+            merged[r] = list(row)
+            continue
+        m = merged[r]
+        if row[2] < m[2]:
+            m[0], m[2] = row[0], row[2]
+        if row[3] > m[3]:
+            m[1], m[3] = row[1], row[3]
+        if row[6] < m[6]:
+            m[4], m[6] = row[4], row[6]
+        if row[7] > m[7]:
+            m[5], m[7] = row[5], row[7]
+        m[8] = max(m[8], row[8])
+    return sorted((tuple(m) for m in merged.values()), key=lambda row: (row[2], row[6]))
 
 
 def _why(reason):
@@ -358,31 +512,25 @@ def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_i
     floor = params["debug_minimum_ngrams"]
     min_in_docs = params["minimum_matching_ngrams_in_docs"]
     dup_threshold = params["duplicate_threshold"]
-    merging = (params["merge_passages_on_byte_distance"]
-               or params["merge_passages_on_ngram_distance"])
     written = 0
     for source, target in _pairs(docs, n_sources, same_doc, pair_filter):
         source_keys = corpus.keys(source)
         shared = np.intersect1d(source_keys, corpus.keys(target), assume_unique=True)
         if shared.shape[0] < min_in_docs:
             continue
-        smaller = min(source_keys.shape[0], corpus.keys(target).shape[0])
-        if shared.shape[0] / smaller * 100 > dup_threshold:
+        larger = max(source_keys.shape[0], corpus.keys(target).shape[0])
+        if shared.shape[0] / larger * 100 > dup_threshold:
             continue                                   # a duplicate, never matched
         match, n, _stopped = corpus.matches(source, target)
         if not n:
             continue
-        rows, blocks, hidden = _walk(match, n, params, floor)
+        _rows, blocks, hidden, merged_away, coalesced = pair_rows(match, n, params, floor)
         parts = [_render(block, ngram_index) for block in blocks]
-        if merging and rows:
-            alignments = np.array(rows, np.int32)
-            _merged, after = matching.merge_passages(
-                alignments, len(rows), params["merge_passages_on_byte_distance"],
-                params["merge_passages_on_ngram_distance"],
-                params["matching_window_size"], params["passage_distance_multiplier"])
-            if len(rows) > after:
-                parts.append(f"\n\n{len(rows) - after} passage(s) merged with "
-                             "previous passage")
+        if merged_away:
+            parts.append(f"\n\n{merged_away} passage(s) merged with previous passage")
+        if coalesced:
+            parts.append(f"\n\n{coalesced} passage(s) coalesced with an overlapping "
+                         "passage")
         if hidden:
             summary = ", ".join(f"{hidden[n_keys]} at {n_keys} ngram(s)"
                                 for n_keys in sorted(hidden))
