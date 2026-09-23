@@ -49,6 +49,7 @@ CHECKS = (
     ("chunk_order", "test_chunk_order.py", (), True),
     ("aligner_paths", "test_aligner_paths.py", (), False),
     ("banality_parallel", "test_banality_parallel.py", (), False),
+    ("writer_descriptors", "test_writer_descriptors.py", (), False),
     ("passage_families", "test_passage_families.py", (), False),
     ("matcher_symmetry", "test_matcher_symmetry.py", (), True),
     ("reference_output", "check_reference_output.py", ("--fixtures",), False),
