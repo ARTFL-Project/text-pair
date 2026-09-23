@@ -214,8 +214,11 @@ def link_bound(window_size, max_gap, flex_gap, min_matching):
 
 
 @njit(nogil=True, cache=True)
-def _chain_flat(packed_indices, n, max_link, best, parent, used):
-    """Longest chain ending at each match, scanning every match in the source window."""
+def _chain_flat(packed_indices, n, max_link, near_gap, best, parent, used):
+    """Longest chain ending at each match, scanning every match in the source window.
+
+    Also sets bit 2 of used[a] when a match follows a within near_gap in both documents:
+    the anchored scan skips anchors without one."""
     window_start = 0
     longest = 1
     for b in range(n):
@@ -237,6 +240,8 @@ def _chain_flat(packed_indices, n, max_link, best, parent, used):
                 continue
             candidate = best[a] + np.int32(1)
             source_step = source_b - source_a
+            if source_step <= near_gap and target_step <= near_gap:
+                used[a] |= 2
             step = source_step + target_step
             # Among equally long chains, the nearest predecessor, measured by the two
             # steps as an unordered pair: their total first, then the smaller of them,
@@ -262,7 +267,7 @@ def _chain_flat(packed_indices, n, max_link, best, parent, used):
 
 
 @njit(nogil=True, cache=True)
-def _chain_blocked(packed_indices, n, max_link, best, parent, used):
+def _chain_blocked(packed_indices, n, max_link, near_gap, best, parent, used):
     """The same scan, reaching each source block's candidates by binary search.
 
     Matches sharing a source index are contiguous and their target indices ascend, so
@@ -317,6 +322,8 @@ def _chain_blocked(packed_indices, n, max_link, best, parent, used):
                 if target_a >= target_b:
                     break
                 target_step = target_b - target_a
+                if source_step <= near_gap and target_step <= near_gap:
+                    used[a] |= 2
                 candidate = best[a] + np.int32(1)
                 step = source_step + target_step
                 near = source_step if source_step < target_step else target_step
@@ -337,55 +344,81 @@ def _chain_blocked(packed_indices, n, max_link, best, parent, used):
 
 
 @njit(nogil=True, cache=True)
-def _order_by_target(packed_indices, n, order, spare):
+def _order_by_target(packed_indices, n, order, spare, keys):
     """The matches by (target index, source index), as indices into them: a stable LSD
-    radix sort on the target index of matches already ordered by source index. Returns
-    whichever of the two buffers holds the result."""
+    radix sort on the target index of matches already ordered by source index. `keys`
+    is scratch for n. Returns whichever of `order` and `spare` holds the result."""
     low = packed_indices[0] & TARGET_HALF
     high = low
     for i in range(n):
-        order[i] = i
         target = packed_indices[i] & TARGET_HALF
         if target < low:
             low = target
         if target > high:
             high = target
-    counts = np.empty(RADIX, np.int64)
-    span = high - low
-    shift = 0
-    source, destination = order, spare
-    while (span >> shift) > 0:
-        counts[:] = 0
+    for i in range(n):
+        keys[i] = (packed_indices[i] & TARGET_HALF) - low
+    if n < 64:
         for i in range(n):
-            counts[(((packed_indices[source[i]] & TARGET_HALF) - low) >> shift)
-                   & (RADIX - 1)] += 1
+            order[i] = i
+        for i in range(1, n):
+            entry = order[i]
+            key = keys[entry]
+            j = i - 1
+            while j >= 0 and keys[order[j]] > key:
+                order[j + 1] = order[j]
+                j -= 1
+            order[j + 1] = entry
+        return order
+    span = high - low
+    passes = 0
+    while (span >> (passes * RADIX_BITS)) > 0:
+        passes += 1
+    if passes == 0:
+        for i in range(n):
+            order[i] = i
+        return order
+    counts = np.zeros((passes, RADIX), np.int64)
+    for i in range(n):                          # every digit's histogram in one pass
+        key = keys[i]
+        for p in range(passes):
+            counts[p, (key >> (p * RADIX_BITS)) & (RADIX - 1)] += 1
+    for p in range(passes):
         running = 0
         for digit in range(RADIX):
-            count = counts[digit]
-            counts[digit] = running
+            count = counts[p, digit]
+            counts[p, digit] = running
             running += count
+    for i in range(n):                          # the first pass reads in match order
+        digit = keys[i] & (RADIX - 1)
+        order[counts[0, digit]] = i
+        counts[0, digit] += 1
+    source, destination = order, spare
+    for p in range(1, passes):
+        shift = p * RADIX_BITS
         for i in range(n):
             entry = source[i]
-            digit = (((packed_indices[entry] & TARGET_HALF) - low) >> shift) & (RADIX - 1)
-            destination[counts[digit]] = entry
-            counts[digit] += 1
+            digit = (keys[entry] >> shift) & (RADIX - 1)
+            destination[counts[p, digit]] = entry
+            counts[p, digit] += 1
         source, destination = destination, source
-        shift += RADIX_BITS
     return source
 
 
 @njit(nogil=True, cache=True)
-def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, skip,
-                   start_bytes, end_bytes, window_size, max_gap, flex_gap, min_matching,
-                   min_in_window, out, n_alignments):
+def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, used,
+                   skip, start_bytes, end_bytes, window_size, max_gap, flex_gap,
+                   min_matching, min_in_window, out, n_alignments):
     """The Go aligner's walk: through one document in order, each run anchored at a
     match's first partner in the other. `mirrored` walks the target, through `order`,
     the matches by (target, source). It pairs repeated material differently from the
     chains, and a step past the gap allowance in the walked document is accepted while
     the window already holds min_in_window matches.
 
-    `best` is the chains' lengths; `skip` is scratch for n ranks.
+    `best` and `used` are match_passage's; `skip` is scratch for n ranks.
     """
+    if n == 0:
+        return out, n_alignments
     # A run's first `lead` steps cannot overshoot the gap, so its lead-th match ends a
     # chain of at least lead. No step goes further than the window can grow, so stretches
     # between wider gaps are independent, and one with no such match has no run: skip[r]
@@ -417,6 +450,11 @@ def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, s
             if best[entry] >= lead:
                 strong = True
             previous = w
+    final = order[n - 1] if mirrored else n - 1
+    if mirrored:
+        last_of_all = packed_indices[final] & TARGET_HALF
+    else:
+        last_of_all = packed_indices[final] >> 32
     resume = 0
     anchor_rank = -1
     while anchor_rank + 1 < n:
@@ -432,6 +470,12 @@ def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, s
             walked = packed_indices[anchor] >> 32
             other = packed_indices[anchor] & TARGET_HALF
         if walked < resume:
+            continue
+        # With nothing inside max_gap after it, the run takes no match and breaks, which
+        # resumes past the anchor -- unless no match is left to break it.
+        if (not (used[anchor] & 2) and max_gap <= window_size
+                and last_of_all > walked + max_gap):
+            resume = walked + 1
             continue
         walked_boundary = walked + window_size
         other_boundary = other + window_size
@@ -572,11 +616,14 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
     if n == 0:
         return out, 0, spans, 0
     max_link = link_bound(window_size, max_gap, flex_gap, min_matching)
+    # Past the window, a first step inside max_gap can still end a run, so no skip then.
+    near_gap = max_gap if max_gap <= window_size else -1
 
     if n_blocks > 0 and n >= BLOCK_MIN_MATCHES and n >= BLOCK_FANOUT * n_blocks:
-        longest = _chain_blocked(packed_indices, n, max_link, best, parent, used)
+        longest = _chain_blocked(packed_indices, n, max_link, near_gap, best, parent,
+                                 used)
     else:
-        longest = _chain_flat(packed_indices, n, max_link, best, parent, used)
+        longest = _chain_flat(packed_indices, n, max_link, near_gap, best, parent, used)
     if longest < min_matching:
         return out, 0, spans, longest       # no chain here can reach the threshold
 
@@ -609,21 +656,21 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
 
     for rank in range(n_ends):
         end = order[rank]
-        if used[end]:
+        if used[end] & 1:
             continue
         length = 0
         at = np.int32(end)
-        while at >= 0 and not used[at]:
+        while at >= 0 and not (used[at] & 1):
             chain[length] = at
             length += 1
             at = parent[at]
         if length < min_matching:
-            used[end] = 1
+            used[end] |= 1
             continue
         for c in range(length // 2):        # the walk collected the chain backwards
             chain[c], chain[length - 1 - c] = chain[length - 1 - c], chain[c]
         for c in range(length):
-            used[chain[c]] = 1
+            used[chain[c]] |= 1
         # Walk it applying the run's real gap allowance and the window test, cutting
         # where either fails and keeping both sides rather than dropping everything past
         # the first failure.
@@ -802,16 +849,16 @@ def align_pair(packed_indices, packed_positions, n, n_blocks, start_bytes, end_b
                                window_size, multiplier)
     forward = np.empty((64, NCOL), np.int32)
     forward, n_forward = _anchored_scan(
-        packed_indices, packed_positions, n, order, False, best, key, start_bytes,
+        packed_indices, packed_positions, n, order, False, best, used, key, start_bytes,
         end_bytes,
         window_size, max_gap, flex_gap, min_matching, min_in_window, forward, 0)
     forward, n_forward = _merged(forward, n_forward, merging, merge_byte, merge_ngram,
                                  window_size, multiplier)
-    by_target = _order_by_target(packed_indices, n, order, chain)
+    by_target = _order_by_target(packed_indices, n, order, chain, parent)
     backward = np.empty((64, NCOL), np.int32)
     backward, n_backward = _anchored_scan(
-        packed_indices, packed_positions, n, by_target, True, best, key, start_bytes,
-        end_bytes,
+        packed_indices, packed_positions, n, by_target, True, best, used, key,
+        start_bytes, end_bytes,
         window_size, max_gap, flex_gap, min_matching, min_in_window, backward, 0)
     backward, n_backward = _merged(backward, n_backward, merging, merge_byte, merge_ngram,
                                    window_size, multiplier)
