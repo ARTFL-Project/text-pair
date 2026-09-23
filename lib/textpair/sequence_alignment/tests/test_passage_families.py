@@ -8,7 +8,9 @@ so that one rule decides the outcome: overlapping windows of one passage merging
 window running past two passages not fusing them, the floor on fragments, sliding
 windows over a long copy staying bounded, a passage aligned only with a member
 joining its family, a family whose earliest occurrence is only ever a target, and a
-group's passage moved back a few words to start its sentence. Serial and parallel runs must then write the same files.
+group's passage moved back up to five words to start its sentence -- never past a comma or
+the like, though an apostrophe does not stop it, and on a word, not an opening quote -- unless
+that would make it another group's passage exactly. Serial and parallel runs must then write the same files.
 """
 import os
 import shutil
@@ -83,7 +85,7 @@ def build(root):
                        ("E", 1600), ("F", 1700), ("G", 1700), ("H", 1700), ("I", 1700), ("J", 1700),
                        ("K", 1600), ("L", 1700), ("M", 1700), ("N", 1700), ("O", 1700),
                        ("P", 1600), ("R", 1700), ("S", 1600), ("T", 1700), ("U", 1800),
-                       ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700), ("Q", 1700)):
+                       ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700), ("Q", 1700), ("Y2", 1600), ("Y3", 1600)):
         c.doc(name, year)
     # one passage in A, reached through three windows of different extents
     c.align("A", 100, 400, "B", 0, 300)
@@ -106,12 +108,39 @@ def build(root):
     # X is aligned with W alone, and W with V: X belongs with them, not on its own
     c.align("V", 0, 200, "W", 0, 200)
     c.align("W", 0, 200, "X", 0, 200)
-    # passages starting inside sentences of Y (a word every 10 bytes): three words in, four
+    # passages starting inside sentences of Y (a word every 10 bytes): five words in, six
     # words in, and far into a long sentence
     c.dump("Y", [(0, 120), (120, 400), (400, 1500)])
-    c.align("Y", 150, 380, "Z", 0, 230)
-    c.align("Y", 440, 700, "Q", 0, 260)
+    c.align("Y", 170, 380, "Z", 0, 210)
+    c.align("Y", 460, 700, "Q", 0, 240)
     c.align("Y", 1200, 1400, "Q", 300, 500)
+    # in Y2 a short passage four long words into its sentence, and a window running from the
+    # sentence's start over it: moving the short one back would give it the other's passage
+    c.dump("Y2", [(0, 40), (40, 80), (80, 120), (120, 150)] and [(0, 400)])
+    words = [0, 40, 80, 120] + list(range(150, 400, 10))
+    doc = sorted(c.docs).index("Y2") + 1
+    with lz4.frame.open(os.path.join(root, "words", "Y2.lz4"), "wb") as handle:
+        handle.write(b"".join(orjson.dumps({"token": "w", "position": f"{doc} 1 1 1 1 1 {i} {b} 0",
+                                            "start_byte": b, "end_byte": b + 5}) + b"\n"
+                              for i, b in enumerate(words, 1)))
+    c.align("Y2", 150, 200, "Z", 400, 450)
+    c.align("Y2", 150, 199, "Z", 500, 549)
+    c.align("Y2", 151, 200, "Z", 600, 649)
+    c.align("Y2", 0, 200, "Q", 600, 800)
+    # in Y3 a comma, then an apostrophe, between a passage and its sentence's start, and a
+    # sentence opening on a quote
+    tokens = [(0, "Or"), (10, ","), (20, "le")] + [(b, "w") for b in range(30, 200, 10)]
+    tokens += [(200, "de"), (210, "l"), (220, "'")] + [(b, "w") for b in range(230, 400, 10)]
+    tokens += [(400, '"')] + [(b, "w") for b in range(410, 600, 10)]
+    doc = sorted(c.docs).index("Y3") + 1
+    with lz4.frame.open(os.path.join(root, "words", "Y3.lz4"), "wb") as handle:
+        handle.write(b"".join(orjson.dumps({"token": t, "position": f"{doc} 1 1 1 1 {1 + (b >= 200) + (b >= 400)} {i} {b} 0",
+                                            "start_byte": b, "end_byte": b + 5,
+                                            "philo_type": "punct" if t in ",'\"" else "word"}) + b"\n"
+                              for i, (b, t) in enumerate(tokens, 1)))
+    c.align("Y3", 30, 190, "Z", 700, 860)
+    c.align("Y3", 230, 390, "Q", 900, 1060)
+    c.align("Y3", 430, 590, "Z", 1100, 1260)
     # S is the earliest occurrence but only ever a target
     c.align("T", 0, 200, "S", 0, 200)
     c.align("T", 0, 200, "U", 0, 200)
@@ -176,11 +205,17 @@ def main():
         check("... whose metadata is taken from the target side it appears on",
               s_rows and s_rows[0]["source_doc_id"] == "S" and s_rows[0]["source_title"] == "title S")
         y = {r["source_end_byte"]: r["source_start_byte"] for r in row_at("Y")}
-        check("a group's passage three words into its sentence starts at the sentence", y.get(380) == 120)
-        check("... four words in, it keeps its start", y.get(700) == 440)
+        check("a group's passage five words into its sentence starts at the sentence", y.get(380) == 120)
+        check("... six words in, it keeps its start", y.get(700) == 460)
         check("... and far into a long sentence, too", y.get(1400) == 1200)
+        y2 = sorted(r["source_start_byte"] for r in row_at("Y2") if r["source_end_byte"] == 200)
+        check("... and when that would give it another group's passage exactly", y2 == [0, 150])
+        y3 = {r["source_end_byte"]: r["source_start_byte"] for r in row_at("Y3")}
+        check("... never back past a comma", y3.get(190) == 20)
+        check("... though an apostrophe does not stop it", y3.get(390) == 200)
+        check("... and it starts on a word, not on an opening quote", y3.get(590) == 410)
         check("... while the reuses keep their own spans",
-              any(r["source_filename"] == path["Y"] and r["source_start_byte"] == 150 for r in results))
+              any(r["source_filename"] == path["Y"] and r["source_start_byte"] == 170 for r in results))
         check("every alignment is in a family", all(r["group_id"] for r in results))
         check("every row has the same fields in the same order", len({tuple(r) for r in rows.values()}) == 1)
 

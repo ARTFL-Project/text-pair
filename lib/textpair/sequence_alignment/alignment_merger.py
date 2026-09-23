@@ -18,6 +18,7 @@ import lz4.frame
 import msgspec
 import numpy as np
 import orjson
+import regex
 from numba import njit
 from tqdm import tqdm
 
@@ -53,7 +54,10 @@ _INSIDE = 0.5    # a window joins a site when at least this much of it lies in t
 _FLOOR = 0.1     # ... and it is at least this long next to the core
 _CONTAIN = 0.8   # a window holding this much of a core, but too long to join, is listed under it
 _ADOPT = 0.5     # a site joins the family holding most of its partners once this share are placed
-_SENTENCE_WORDS = 3  # words a group's passage may move back to start its sentence: never a passage
+_SENTENCE_WORDS = 5  # words a group's passage may move back to start its sentence: never a passage
+# punctuation a group's passage never moves back past: what Unicode says ends a clause or
+# sentence, in any script -- not apostrophes, hyphens, quotes or brackets
+_STOPS = regex.compile(r"\p{Terminal_Punctuation}")
 _UNDATED = 9999
 _NONE = -(1 << 62)
 
@@ -461,8 +465,12 @@ def group_passages(corpus: list, run_dir: str = "", workers: int = 1) -> _Famili
         family = np.searchsorted(kept, first_of[inverse.ravel()])[family]
         anchors = anchors[kept]
     n_families = anchors.shape[0]
-    # a family's passage is shown from its sentence's start when that is only a few words back
-    shown_s = _sentence_starts_for(names, dumps, run_dir, site_file[anchors], core_s[anchors], workers)
+    # a family's passage is shown from the first word of its sentence, or the first after the
+    # punctuation nearest before it, when that is only a few words back and no two families
+    # then show the same passage
+    head_file, head_s, head_e = site_file[anchors], core_s[anchors], core_e[anchors]
+    shown_s = _sentence_starts_for(names, dumps, run_dir, head_file, head_s, workers)
+    shown_s = _kept_apart(head_file, head_s, head_e, shown_s)
 
     listed_family = family[held_site]
     pairs = np.unique(held_window * n_families + listed_family) if held_site.size else np.empty(0, np.int64)
@@ -526,6 +534,7 @@ class _Token(msgspec.Struct):
 
     position: str  # doc div1 div2 div3 para sent word ...
     start_byte: int
+    token: str = ""
     philo_type: str = "word"
 
 
@@ -533,10 +542,10 @@ _DECODE_TOKEN = msgspec.json.Decoder(_Token).decode
 
 
 def _sentence_starts(path: str, upto: int):
-    """Each token's start, its sentence's start, and how many words of that sentence precede
-    it, as far as `upto`."""
+    """Each token's start; the first of the words leading up to it, back to its sentence's start
+    or the last mark that separates clauses; and how many words that is, as far as `upto`."""
     starts, firsts, before = array("q"), array("q"), array("q")
-    current, first, words = None, 0, 0
+    current, first, words = None, None, 0
     try:
         with lz4.frame.open(path) as handle:
             for batch in read_line_batches(handle):
@@ -544,9 +553,16 @@ def _sentence_starts(path: str, upto: int):
                     token = _DECODE_TOKEN(line)
                     sentence = token.position.split(" ", 6)[:6]
                     if sentence != current:
-                        current, first, words = sentence, token.start_byte, 0
+                        current, first, words = sentence, None, 0
                     starts.append(token.start_byte)
-                    firsts.append(first)
+                    if token.philo_type == "punct" and _STOPS.search(token.token):
+                        firsts.append(token.start_byte)  # a passage starting here stays put
+                        before.append(0)
+                        first, words = None, 0
+                        continue
+                    if first is None and token.philo_type == "word":
+                        first = token.start_byte
+                    firsts.append(token.start_byte if first is None else first)
                     before.append(words)
                     words += token.philo_type == "word"
                 if starts and starts[-1] > upto:
@@ -564,7 +580,8 @@ def _words_dump(filename: str, parsed, doc_id, run_dir: str) -> str | None:
 
 
 def _sentence_starts_in(task: tuple) -> list[int]:
-    """Where the sentence holding the first word at or after each byte starts, if only a few
+    """The first of the words leading up to the first token at or after each byte -- the first
+    word of its sentence, or the first after a mark that separates clauses -- if only a few
     words back; otherwise the byte itself."""
     path, wanted = task
     starts, firsts, before = _sentence_starts(path, wanted[-1])
@@ -576,8 +593,30 @@ def _sentence_starts_in(task: tuple) -> list[int]:
     return found
 
 
+def _kept_apart(files, starts, ends, shown) -> np.ndarray:
+    """`shown`, except that no two families show the very same passage.
+
+    Where moves would make them, the family whose own passage starts earliest keeps its
+    move and the others keep their own start -- again until none do, since a start kept
+    can meet another family's move.
+    """
+    shown = shown.copy()
+    while True:
+        _, inverse, counts = np.unique(np.stack((files, shown, ends), axis=1), axis=0,
+                                       return_inverse=True, return_counts=True)
+        inverse = inverse.ravel()
+        crowded = np.flatnonzero(counts[inverse] > 1)
+        if not crowded.size:
+            return shown
+        order = crowded[np.lexsort((starts[crowded], inverse[crowded]))]
+        later = np.ones(order.shape[0], bool)
+        later[0] = False
+        later[1:] = inverse[order][1:] == inverse[order][:-1]
+        shown[order[later]] = starts[order[later]]
+
+
 def _sentence_starts_for(names, dumps, run_dir, site_file, byte, workers: int) -> np.ndarray:
-    """`byte` moved back to the start of its sentence, where the document's dump says so."""
+    """`byte` moved back to the start of its sentence or clause, where the document's dump says so."""
     moved = byte.copy()
     order = np.lexsort((byte, site_file))
     tasks, positions = [], []
