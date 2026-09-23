@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Checks the corpus n-gram index against counts computed independently.
 
+The frequencies are documents per key, for the keys in at least MIN_DOCUMENTS of them.
+
     test_ngram_index.py
 
 Frequencies come from the per-document binary indexes, so a fixture here writes
@@ -59,36 +61,29 @@ def write_corpus(root, documents):
 
 
 def read(root, want_index=True):
-    common = [str(key) for key in
-              np.fromfile(os.path.join(root, "index", ngram_index.COMMON_NGRAMS),
-                          dtype=np.int64).tolist()]
+    documents, keys, frequencies = ngram_index.read_document_frequencies(
+        os.path.join(root, "index", ngram_index.DOCUMENT_FREQUENCIES))
     index = None
     if want_index:
         index = [line.rstrip("\n") for line
                  in open(os.path.join(root, "index", "index.tab"), encoding="utf-8")
                  if line.strip()]
-    return index, common
+    return index, documents, keys.tolist(), dict(zip(keys.tolist(), frequencies.tolist()))
 
 
-def key_totals(documents):
-    """Occurrences per key, which is what the aligner matches on."""
-    totals = collections.Counter()
+def document_counts(documents):
+    """Documents holding each key, which is what the banality filter reads."""
+    counts = collections.Counter()
     for entries in documents:
-        for _, key in entries:
-            totals[key] += 1
-    return totals
+        for key in {key for _, key in entries}:
+            counts[key] += 1
+    return counts
 
 
-def check_frequency_order(label, written, totals):
-    """The contract: every key once, counts never increasing down the file.
-
-    Ties are not ordered. Keys are hashes, so there is no meaningful order among
-    equally frequent ones, and the index does not spend time imposing one.
-    """
-    check(f"{label}: every key once", sorted(written), sorted(str(k) for k in totals))
-    counts = [totals[int(key)] for key in written]
-    if any(a < b for a, b in zip(counts, counts[1:])):
-        FAILURES.append(f"[{MODE}] {label}: counts increase somewhere in the file")
+def expected(documents):
+    """The keys in at least MIN_DOCUMENTS documents, and how many hold each."""
+    return {key: count for key, count in document_counts(documents).items()
+            if count >= ngram_index.MIN_DOCUMENTS}
 
 
 def test_counts_come_from_the_binary_indexes():
@@ -105,31 +100,40 @@ def test_counts_come_from_the_binary_indexes():
     with tempfile.TemporaryDirectory() as root:
         write_corpus(root, documents)
         distinct = ngram_index.build(root, write_index_tab=True)
-        index, common = read(root)
-        totals = key_totals(documents)
-        check("distinct keys", distinct, len(totals))
-        check("most_common lines", len(common), len(totals))
-        check_frequency_order("most_common", common, totals)
-        # a_b_c 4, x_y_z 4, b_c_d 3, m_n_o 2, z_z_z 1
-        check("counts", dict(totals), {1: 4, 3: 4, 2: 3, 4: 2, 5: 1})
+        index, count, keys, frequencies = read(root)
+        check("distinct keys", distinct, 5)
+        check("documents", count, len(documents))
+        # a_b_c 3 documents, x_y_z 3, b_c_d 3, m_n_o 2, z_z_z 1
+        check("frequencies", frequencies, {1: 3, 2: 3, 3: 3})
+        check("frequencies against a recount", frequencies, expected(documents))
+        check("ascending keys", keys, sorted(keys))
         check("index.tab is the distinct ngram texts", sorted(set(index)), sorted(index))
         check("index.tab entries", len(index), 5)
 
 
-def test_colliding_keys_get_one_line_with_the_summed_count():
+def test_repeats_inside_a_document_count_once():
+    """A key repeated in one document is that document's, not the corpus's."""
+    documents = [[("refrain", 7)] * 100, [("shared", 8)], [("shared", 8)], [("shared", 8)]]
+    with tempfile.TemporaryDirectory() as root:
+        write_corpus(root, documents)
+        ngram_index.build(root)
+        check("only the key in three documents", read(root, want_index=False)[3], {8: 3})
+
+
+def test_colliding_keys_are_counted_once_per_document():
     """Two ngrams, one key: the aligner sees one key, so the index reports one."""
     documents = [
         [("qu_il_le", 172795159)] * 5,
         [("la_liaison_fut", 172795159)] * 2,
+        [("qu_il_le", 172795159), ("la_liaison_fut", 172795159)],
         [("other_n_gram", 99)],
     ]
     with tempfile.TemporaryDirectory() as root:
         write_corpus(root, documents)
         distinct = ngram_index.build(root, write_index_tab=True)
-        index, common = read(root)
+        index, _, _, frequencies = read(root)
         check("distinct keys", distinct, 2)
-        check("the colliding key is listed once", common.count("172795159"), 1)
-        check("and ranked by the summed count", common[0], "172795159")
+        check("the colliding key, in three documents", frequencies, {172795159: 3})
         # index.tab still carries both texts, which is what the tracer needs.
         check("both texts in index.tab", sorted(index),
               ["la_liaison_fut\t172795159", "other_n_gram\t99", "qu_il_le\t172795159"])
@@ -142,8 +146,8 @@ def test_index_tab_is_only_written_when_asked():
         ngram_index.build(root, write_index_tab=False)
         path = os.path.join(root, "index", "index.tab")
         check("no index.tab by default", os.path.exists(path), False)
-        _, common = read(root, want_index=False)
-        check("most_common still written", sorted(common), ["1", "2"])
+        _, count, keys, _ = read(root, want_index=False)
+        check("frequencies still written", (count, keys), (1, []))
 
 
 def test_a_stale_index_tab_is_removed():
@@ -158,49 +162,43 @@ def test_a_stale_index_tab_is_removed():
         check("stale index.tab removed", os.path.exists(path), False)
 
 
-def test_negative_keys():
-    """mmh3 returns signed int32, so about half the keys are negative."""
-    documents = [[("a_b_c", -1128609534), ("d_e_f", 1092826535), ("a_b_c", -1128609534)]]
+def test_rebuilding_frequencies_leaves_index_tab_alone():
+    """For a finished tree, whose n-gram text is gone, as banality_finder rebuilds it."""
+    documents = [[("a_b_c", 1)]] * 3
     with tempfile.TemporaryDirectory() as root:
         write_corpus(root, documents)
-        ngram_index.build(root, write_index_tab=True)
-        _, common = read(root)
-        check("negative key first, it is more frequent", common[0], "-1128609534")
-        check("both keys present", sorted(common), sorted(["-1128609534", "1092826535"]))
+        path = os.path.join(root, "index", "index.tab")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("a_b_c\t1\n")
+        stale = os.path.join(root, "index", "most_common_ngrams.bin")
+        np.arange(3, dtype=np.int64).tofile(stale)
+        ngram_index.build(root, write_index_tab=None)
+        check("index.tab kept", open(path, encoding="utf-8").read(), "a_b_c\t1\n")
+        check("the old frequency order removed", os.path.exists(stale), False)
+        check("frequencies", read(root, want_index=False)[3], {1: 3})
 
 
 def test_key_range_spread():
-    """Keys are bucketed by range during aggregation; span the int32 space."""
-    keys = [-2147483648, -1073741824, -1, 0, 1, 1073741824, 2147483647]
-    documents = [[(f"ngram_{i}", key)] * (i + 1) for i, key in enumerate(keys)]
+    """Keys are bucketed by range during aggregation; span the int64 space."""
+    keys = [-(1 << 63), -(1 << 62), -1128609534, -1, 0, 1, 1 << 40, (1 << 63) - 1]
+    documents = [[(f"ngram_{i}", key) for i, key in enumerate(keys)]] * 3
     with tempfile.TemporaryDirectory() as root:
         write_corpus(root, documents)
         distinct = ngram_index.build(root, write_index_tab=False)
-        _, common = read(root, want_index=False)
+        _, _, written, frequencies = read(root, want_index=False)
         check("every key survives bucketing", distinct, len(keys))
-        check("most frequent first", common[0], str(keys[-1]))
-        check("least frequent last", common[-1], str(keys[0]))
-
-
-def test_high_counts_use_the_log_bands():
-    """Counts above EXACT_MAX share power-of-two bands and are sorted within them."""
-    counts = {10: 1, 11: 255, 12: 256, 13: 700, 14: 5000, 15: 70000}
-    documents = [[(f"n_{key}", key)] * count for key, count in counts.items()]
-    with tempfile.TemporaryDirectory() as root:
-        write_corpus(root, documents)
-        ngram_index.build(root, write_index_tab=False)
-        _, common = read(root, want_index=False)
-        check_frequency_order("log bands", common, counts)
+        check("ascending across the buckets", written, sorted(keys))
+        check("all in three documents", set(frequencies.values()), {3})
 
 
 def test_empty_corpus():
     with tempfile.TemporaryDirectory() as root:
         write_corpus(root, [[]])
         distinct = ngram_index.build(root, write_index_tab=True)
-        index, common = read(root)
+        index, count, keys, _ = read(root)
         check("no distinct keys", distinct, 0)
         check("empty index", index, [])
-        check("empty most_common", common, [])
+        check("no frequencies", (count, keys), (1, []))
 
 
 def test_index_tab_preserves_leading_whitespace():
@@ -209,7 +207,7 @@ def test_index_tab_preserves_leading_whitespace():
     with tempfile.TemporaryDirectory() as root:
         write_corpus(root, documents)
         ngram_index.build(root, write_index_tab=True)
-        index, _ = read(root)
+        index = read(root)[0]
         check("both forms kept", set(index),
               {"  _idem_avec\t42", "_idem_avec\t43", "   \t44"})
 
@@ -220,9 +218,8 @@ def test_index_tab_ngrams_containing_spaces():
     with tempfile.TemporaryDirectory() as root:
         write_corpus(root, documents)
         ngram_index.build(root, write_index_tab=True)
-        index, common = read(root)
+        index = read(root)[0]
         check("spaces preserved", set(index), {"a b_c d_e f\t7", "plain_n_gram\t8"})
-        check("more frequent first", common, ["7", "8"])
 
 
 def test_index_tab_dedupes_across_documents():
@@ -230,29 +227,23 @@ def test_index_tab_dedupes_across_documents():
     with tempfile.TemporaryDirectory() as root:
         write_corpus(root, documents)
         ngram_index.build(root, write_index_tab=True)
-        index, common = read(root)
+        index = read(root)[0]
         check("one line per distinct ngram", sorted(index),
               ["other_one\t6", "same_n_gram\t5"])
-        check("both keys present", sorted(common), ["5", "6"])
 
 
-def test_the_order_documents_arrive_in_only_moves_tied_keys():
-    """The n-gram stage spills documents as they come back, not sorted.
-
-    So the same corpus handed over in a different order has to give the same
-    keys and the same counts, and may only disagree about which of two equally
-    frequent keys is written first. Repeating one order has to be reproducible.
-    """
+def test_the_order_documents_arrive_in_changes_nothing():
+    """The n-gram stage spills documents as they come back, not sorted, so the same
+    corpus handed over in any order has to give the same file, byte for byte."""
     documents = [
         [("a_b_c", 11), ("b_c_d", 12)],
         [("b_c_d", 12), ("x_y_z", 13)],
         [("x_y_z", 13), ("a_b_c", 11)],
         [("m_n_o", 14), ("a_b_c", 11)],
-        [("z_z_z", 15)],
+        [("z_z_z", 15), ("b_c_d", 12)],
     ]
-    totals = key_totals(documents)
     written = {}
-    for label, reverse in (("forward", False), ("reverse", True), ("again", False)):
+    for label, reverse in (("forward", False), ("reverse", True)):
         with tempfile.TemporaryDirectory() as root:
             write_corpus(root, documents)
             directory = os.path.join(root, "ngrams")
@@ -261,14 +252,14 @@ def test_the_order_documents_arrive_in_only_moves_tied_keys():
             index = ngram_index.IncrementalIndex(root)
             for path in reversed(paths) if reverse else paths:
                 index.add(path)
-            check(f"distinct keys, {label}", index.finish(), len(totals))
-            _, common = read(root, want_index=False)
-            check_frequency_order(f"most_common, {label}", common, totals)
-            written[label] = common
-    check("the same keys whichever order they arrive in",
-          sorted(written["forward"]), sorted(written["reverse"]))
-    check("the same order every time for one arrival order",
-          written["forward"], written["again"])
+            check(f"distinct keys, {label}", index.finish(), 5)
+            with open(os.path.join(root, "index", ngram_index.DOCUMENT_FREQUENCIES),
+                      "rb") as handle:
+                written[label] = handle.read()
+            check(f"frequencies, {label}", read(root, want_index=False)[3],
+                  expected(documents))
+    check("the same file whichever order they arrive in",
+          written["forward"], written["reverse"])
 
 
 def main():

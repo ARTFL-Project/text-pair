@@ -1,11 +1,9 @@
 """Corpus-wide n-gram index.
 
-  most_common_ngrams.bin int64 keys by corpus frequency, descending. The
-                         banality filter reads the first `proportion` percent,
-                         so this order is load-bearing. Always written. Binary
-                         because formatting 77M keys as decimal was a third of
-                         this stage, and the reader turns them straight back
-                         into ints.
+  document_frequencies.bin  how many documents hold each key, for the keys in at
+                         least MIN_DOCUMENTS of them, ascending by key, after a
+                         header giving the corpus's document count. Read by the
+                         banality filter. Always written.
   index.tab              `ngram<TAB>key` for every distinct n-gram. Read only by
                          the aligner's --debug tracer, which builds a
                          key -> ngram dict, so it is written only when the
@@ -13,24 +11,13 @@
                          tracer is gated on.
 
 Frequencies come from `ngrams/*.bin`, not from n-gram text: each document's CSR
-already holds its distinct keys and the offsets that give their counts, so the
-whole corpus is a numpy aggregation over integer columns. Counting the text
-instead meant a per-distinct-n-gram Python loop, which at 70M n-grams was most
-of the generation stage.
-
-It is also the frequency the aligner acts on. Its inverted index is over keys,
-so a key's corpus frequency is the sum over the n-grams that hash to it -- with
-a 64-bit key that is one n-gram short of certainty, 1.3e-04 collisions expected
-over 70M distinct n-grams, where a 32-bit key had 566,635 of them.
+already holds its distinct keys, so the whole corpus is a numpy aggregation over
+integer columns. It is also the frequency the aligner acts on, since its inverted
+index is over keys.
 
 Nothing proportional to the corpus stays resident: the aggregation spills by key
-range, and frequency ordering is a counting sort into per-count buckets rather
-than a sort. The spill runs while the n-gram stage is still writing documents,
-so what is left when the workers stop is the totalling.
-
-Equally frequent keys are in no particular order -- they are hashes, and
-imposing one would mean a sort the rest of this avoids -- so which of them
-lands inside a `proportion` cut depends on the order documents were indexed in.
+range, and the spill runs while the n-gram stage is still writing documents, so
+what is left when the workers stop is the totalling.
 
 See PREPROCESSING_REWRITE.md for what this replaced and why.
 """
@@ -39,6 +26,7 @@ from __future__ import annotations
 
 import os
 import resource
+import struct
 import shutil
 import subprocess
 import tempfile
@@ -51,9 +39,6 @@ from typing import Iterator
 
 import numpy as np
 from numba import njit
-
-# Counts at or below this get an exact bucket; above it, power-of-two bands.
-EXACT_MAX = 255
 
 # Key-range buckets for the counting pass. Each holds total_postings / KEY_BUCKETS
 # (key, count) pairs, so this is what bounds memory during aggregation.
@@ -76,12 +61,16 @@ _LANE_RUN = 32
 _BUCKET_LOOKAHEAD = 8
 _KEY_EDGES = [((bucket << (64 - KEY_BITS)) - (1 << 63)) for bucket in range(KEY_BUCKETS + 1)]
 
-# Keys are the low 64 bits of mmh3's 128-bit hash, signed. Counts stay int32: they are
-# per-document occurrence counts, and widening them would inflate the spill for nothing.
+# Keys are the low 64 bits of mmh3's 128-bit hash, signed.
 KEY_DTYPE = np.int64
 
-# The frequency-ordered key list, read by the banality filter.
-COMMON_NGRAMS = "most_common_ngrams.bin"
+# Documents per key, read by the banality filter.
+DOCUMENT_FREQUENCIES = "document_frequencies.bin"
+# An alignment puts every key it matches in two documents, so only a third says the
+# key is common rather than shared; keys in fewer are left out.
+MIN_DOCUMENTS = 3
+FREQUENCY_MAGIC = b"TPDF0001"
+FREQUENCY_HEADER = struct.Struct("<8sqq")      # magic, documents, keys
 COUNT_DTYPE = np.int32
 # Ceiling on files handed to one sort -m. BSD sort's behaviour with thousands of
 # inputs is not something to rely on, so batches stay moderate and rounds do the
@@ -91,13 +80,14 @@ MAX_BATCH = 1024
 FD_MARGIN = 64
 
 
-def build(output_path: str, write_index_tab: bool = False) -> int:
-    """Write index/most_common_ngrams.bin, and index/index.tab when asked.
+def build(output_path: str, write_index_tab: bool | None = False) -> int:
+    """Write index/document_frequencies.bin, and index/index.tab when asked.
 
     For a tree whose per-document n-grams are already on disk. The n-gram stage
     feeds IncrementalIndex while it writes them instead, which is the same work
     with the workers to overlap it with; this is that path with everything
-    handed over at once.
+    handed over at once. `write_index_tab` None leaves an existing index.tab alone,
+    for rebuilding the frequencies of a tree whose n-gram text is gone.
 
     Returns the number of distinct keys.
     """
@@ -105,6 +95,22 @@ def build(output_path: str, write_index_tab: bool = False) -> int:
     for path in sorted(glob(os.path.join(output_path, "ngrams", "*.bin"))):
         index.add(path)
     return index.finish(write_index_tab=write_index_tab)
+
+
+def read_document_frequencies(path: str) -> tuple[int, np.ndarray, np.ndarray]:
+    """(documents in the corpus, keys ascending, documents holding each key)."""
+    with open(path, "rb") as handle:
+        header = handle.read(FREQUENCY_HEADER.size)
+        if len(header) < FREQUENCY_HEADER.size:
+            raise ValueError(f"truncated document frequencies file: {path}")
+        magic, documents, count = FREQUENCY_HEADER.unpack(header)
+        if magic != FREQUENCY_MAGIC:
+            raise ValueError(f"{path} is not a document frequencies file")
+        keys = np.fromfile(handle, dtype=KEY_DTYPE, count=count)
+        frequencies = np.fromfile(handle, dtype=COUNT_DTYPE, count=count)
+    if keys.size != count or frequencies.size != count:
+        raise ValueError(f"truncated document frequencies file: {path}")
+    return documents, keys, frequencies
 
 
 class IncrementalIndex:
@@ -162,8 +168,8 @@ class IncrementalIndex:
             if self._failure is None:
                 self._failure = error
 
-    def finish(self, write_index_tab: bool = False) -> int:
-        """Total the spilled counts and write the frequency-ordered key file.
+    def finish(self, write_index_tab: bool | None = False) -> int:
+        """Total the spilled counts and write the document frequencies.
 
         Returns the number of distinct keys.
         """
@@ -177,16 +183,33 @@ class IncrementalIndex:
             index_dir = os.path.join(self.output_path, "index")
             os.makedirs(index_dir, exist_ok=True)
             index_path = os.path.join(index_dir, "index.tab")
-            buckets = _Buckets(self.scratch)
             distinct = 0
-            for output in _total_spilled(self.directory, self.lanes, self.lanes):
-                buckets.add_banded(output)
-                distinct += output[0].size
-            buckets.write_descending(os.path.join(index_dir, COMMON_NGRAMS))
+            path = os.path.join(index_dir, DOCUMENT_FREQUENCIES)
+            with open(f"{path}.part", "wb") as output:
+                output.write(FREQUENCY_HEADER.pack(FREQUENCY_MAGIC, self._added, 0))
+                kept = 0
+                spill_path = os.path.join(self.scratch, "frequencies")
+                with open(spill_path, "wb") as spill:
+                    # Key ranges arrive ascending, each sorted, so the keys go out in
+                    # order; the frequencies follow them in a second column.
+                    for keys, frequencies, total in _total_spilled(
+                            self.directory, self.lanes, self.lanes):
+                        output.write(keys.tobytes())
+                        spill.write(frequencies.tobytes())
+                        kept += keys.size
+                        distinct += total
+                with open(spill_path, "rb") as spill:
+                    shutil.copyfileobj(spill, output)
+                output.seek(0)
+                output.write(FREQUENCY_HEADER.pack(FREQUENCY_MAGIC, self._added, kept))
+            os.replace(f"{path}.part", path)
+            stale = os.path.join(index_dir, "most_common_ngrams.bin")
+            if os.path.exists(stale):
+                os.remove(stale)
 
             if write_index_tab:
                 _write_index_tab(self.output_path, index_path, self.scratch)
-            elif os.path.exists(index_path):
+            elif write_index_tab is not None and os.path.exists(index_path):
                 # A stale index.tab from an earlier run would name the wrong ngrams.
                 os.remove(index_path)
             return distinct
@@ -229,13 +252,12 @@ class _Lane:
     against a descriptor count no macOS default would allow.
     """
 
-    __slots__ = ("directory", "number", "keys", "counts", "sizes", "interior")
+    __slots__ = ("directory", "number", "keys", "sizes", "interior")
 
     def __init__(self, directory: str, number: int):
         self.directory = directory
         self.number = number
         self.keys: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
-        self.counts: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
         self.sizes = [0] * KEY_BUCKETS
         self.interior = np.array(_KEY_EDGES[1:-1], dtype=np.int64)
 
@@ -245,18 +267,16 @@ class _Lane:
 
         with open(path, "rb") as handle:
             buffer = handle.read()
-        keys, offsets = ngram_binary.columns(buffer, path)[:2]
+        keys = ngram_binary.columns(buffer, path)[0]
         if keys.size == 0:
             return
         # A TPNG0001 index hands back int32 keys; the spill is int64 throughout.
         keys = keys.astype(KEY_DTYPE, copy=False)
-        counts = (offsets[1:] - offsets[:-1]).astype(COUNT_DTYPE)
         splits = np.searchsorted(keys, self.interior)
         previous = 0
         for bucket, stop in enumerate(np.append(splits, keys.size)):
             if stop > previous:
                 self.keys[bucket].append(keys[previous:stop])
-                self.counts[bucket].append(counts[previous:stop])
                 self.sizes[bucket] += stop - previous
                 if self.sizes[bucket] >= SPILL_BLOCK:
                     self.flush(bucket)
@@ -268,10 +288,7 @@ class _Lane:
         stem = os.path.join(self.directory, f"{self.number}-{bucket}")
         with open(f"{stem}.k", "ab") as handle:
             handle.write(np.concatenate(self.keys[bucket]).tobytes())
-        with open(f"{stem}.c", "ab") as handle:
-            handle.write(np.concatenate(self.counts[bucket]).tobytes())
         self.keys[bucket].clear()
-        self.counts[bucket].clear()
         self.sizes[bucket] = 0
 
     def close(self) -> None:
@@ -280,9 +297,9 @@ class _Lane:
 
 
 def _aggregate_bucket(directory: str, bucket: int, lanes: int):
-    """Sum one key range across every thread's spill, in thread order."""
+    """One key range's keys in at least MIN_DOCUMENTS documents, ascending, with how
+    many documents hold each, and how many distinct keys the range had."""
     key_blocks = []
-    count_blocks = []
     for lane in range(lanes):
         stem = os.path.join(directory, f"{lane}-{bucket}")
         # A lane that never flushed this key range left no file behind.
@@ -292,32 +309,15 @@ def _aggregate_bucket(directory: str, bucket: int, lanes: int):
         os.remove(f"{stem}.k")
         if keys.size:
             key_blocks.append(keys)
-            count_blocks.append(np.fromfile(f"{stem}.c", dtype=COUNT_DTYPE))
-        os.remove(f"{stem}.c")
     if not key_blocks:
         return None
     keys = key_blocks[0] if len(key_blocks) == 1 else np.concatenate(key_blocks)
-    counts = count_blocks[0] if len(count_blocks) == 1 else np.concatenate(count_blocks)
-    return _band_sort(*_sum_by_key(keys, counts))
-
-
-def _band_sort(keys: np.ndarray, counts: np.ndarray):
-    """Order one key range's keys by the bucket their count falls in.
-
-    Done here rather than in the consumer because it is nearly all of what
-    bucketing costs, and there are threads sitting behind this one waiting to
-    hand over. What is left for the consumer is the writes, which have to stay
-    in key-range order and so cannot be threaded.
-    """
-    bands = np.where(
-        counts <= EXACT_MAX,
-        counts,
-        EXACT_MAX + np.maximum(_bit_length(counts) - 8, 1),
-    )
-    order = np.argsort(bands, kind="stable")
-    bands = bands[order]
-    starts = np.flatnonzero(np.r_[True, bands[1:] != bands[:-1]])
-    return keys[order], counts[order], bands, starts
+    distinct, documents = _sum_by_key(keys)
+    common = documents >= MIN_DOCUMENTS
+    distinct_count = distinct.size
+    distinct, documents = distinct[common], documents[common]
+    order = np.argsort(distinct)
+    return distinct[order], documents[order].astype(COUNT_DTYPE), distinct_count
 
 
 # ----------------------------------------------------------------------
@@ -477,8 +477,8 @@ def _finish(process: subprocess.Popen, name: str) -> None:
 
 
 @njit(nogil=True, cache=True)
-def _accumulate(keys, counts, table_key, table_slot, out_keys, out_counts):
-    """Sum counts per distinct key through an open-addressing table.
+def _accumulate(keys, table_key, table_slot, out_keys, out_counts):
+    """Count each distinct key's entries through an open-addressing table.
 
     Returns the number of distinct keys, written to the head of the out arrays
     in order of first appearance.
@@ -498,100 +498,27 @@ def _accumulate(keys, counts, table_key, table_slot, out_keys, out_counts):
                 table_slot[slot] = found
                 table_key[slot] = key
                 out_keys[found] = key
-                out_counts[found] = counts[i]
+                out_counts[found] = 1
                 found += 1
                 break
             if table_key[slot] == key:
-                out_counts[at] += counts[i]
+                out_counts[at] += 1
                 break
             slot = (slot + np.uint64(1)) & mask
     return found
 
 
-def _sum_by_key(keys: np.ndarray, counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Distinct keys and their summed counts, in order of first appearance.
+def _sum_by_key(keys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Distinct keys and how many entries each has, in order of first appearance. An
+    entry is one document holding the key, so that is the key's document frequency.
 
     Hashing rather than sorting: a bucket holds one entry per (document, key),
-    several times what it holds distinct keys, and nothing downstream needs them
-    ordered. Keys are hashes, so "ascending key" was never a meaningful order --
-    it only decided which of several equally frequent keys landed either side of
-    the banality filter's cut, and first-appearance order decides that just as
-    arbitrarily and just as reproducibly. Sorting them back cost 3.2s of a 8.2s
-    index build and moved 0.7% of the keys at a 10% cut.
+    several times what it holds distinct keys.
     """
     size = 1 << max(int(keys.size * 2 - 1).bit_length(), 4)
     table_key = np.zeros(size, dtype=KEY_DTYPE)
     table_slot = np.full(size, -1, dtype=np.int64)
     out_keys = np.empty(keys.size, dtype=KEY_DTYPE)
     out_counts = np.zeros(keys.size, dtype=np.int64)
-    found = _accumulate(keys, counts, table_key, table_slot, out_keys, out_counts)
+    found = _accumulate(keys, table_key, table_slot, out_keys, out_counts)
     return out_keys[:found], out_counts[:found]
-
-
-# ----------------------------------------------------------------------
-# Frequency ordering by counting sort
-# ----------------------------------------------------------------------
-
-
-def _bit_length(counts: np.ndarray) -> np.ndarray:
-    """int.bit_length(), elementwise."""
-    bits = np.floor(np.log2(np.maximum(counts, 1))).astype(np.int64) + 1
-    # log2 in double can land a hair either side of an exact power of two, so
-    # correct any off-by-one rather than trusting it.
-    one = np.int64(1)
-    bits[counts >= (one << bits)] += 1
-    low = (bits > 1) & (counts < (one << (bits - 1)))
-    bits[low] -= 1
-    return bits
-
-
-class _Buckets:
-    """Append-only key buckets on disk, one per count or count band."""
-
-    def __init__(self, directory: str):
-        self.directory = os.path.join(directory, "buckets")
-        os.makedirs(self.directory, exist_ok=True)
-        self.handles: dict[int, object] = {}
-
-    def add_banded(self, block) -> None:
-        """Append one key range's keys, each to the bucket for its count.
-
-        Takes what _band_sort produced: keys and counts already in bucket
-        order, and where each bucket's run begins.
-        """
-        keys, counts, bands, starts = block
-        stops = np.r_[starts[1:], bands.size]
-        for start, stop in zip(starts, stops):
-            band = int(bands[start])
-            handle = self._handle(band)
-            if band <= EXACT_MAX:
-                # The count is implied by the bucket, so only keys are stored.
-                handle.write(keys[start:stop].astype(KEY_DTYPE).tobytes())
-            else:
-                pairs = np.empty((stop - start, 2), dtype=np.int64)
-                pairs[:, 0] = counts[start:stop]
-                pairs[:, 1] = keys[start:stop]
-                handle.write(pairs.tobytes())
-
-    def _handle(self, band: int):
-        handle = self.handles.get(band)
-        if handle is None:
-            handle = self.handles[band] = open(os.path.join(self.directory, str(band)), "wb")
-        return handle
-
-    def write_descending(self, path: str) -> None:
-        """Concatenate buckets highest count first."""
-        for handle in self.handles.values():
-            handle.close()
-        with open(path, "wb") as output:
-            for band in sorted(self.handles, reverse=True):
-                bucket_path = os.path.join(self.directory, str(band))
-                if band <= EXACT_MAX:
-                    keys = np.fromfile(bucket_path, dtype=KEY_DTYPE)
-                else:
-                    block = np.fromfile(bucket_path, dtype=KEY_DTYPE).reshape(-1, 2)
-                    # Stable, so equal counts keep the order they were appended in.
-                    block = block[np.argsort(-block[:, 0], kind="stable")]
-                    keys = np.ascontiguousarray(block[:, 1])
-                output.write(keys.tobytes())
-                os.remove(bucket_path)
