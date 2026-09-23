@@ -10,9 +10,12 @@ one per source document and per target range.
 Writers are processes, not threads: regex, unescape and dumps all hold the GIL.
 """
 import codecs
+import errno
 import mmap
 import os
 import re
+import resource
+import sys
 import time
 import unicodedata
 from html.entities import html5 as _HTML5
@@ -32,6 +35,8 @@ CONFIG_KEYS = ("matchingWindowSize", "maxGap", "flexGap", "minimumMatchingNgrams
                "sortingField", "debug")
 
 _MMAP_CACHE_LIMIT = 4096
+# Descriptors left for everything else a writer holds: each cached mapping keeps one.
+_DESCRIPTOR_MARGIN = 64
 # Extracted passages held per write() call. A chunk's records reach at most twice this
 # many distinct passages, so the working set fits and the cap only bounds carry-over.
 _TEXT_CACHE_LIMIT = 8192
@@ -267,6 +272,24 @@ def duplicate_row(source_meta, target_meta, percent):
 
 # --------------------------------------------------------------- chunk writing
 
+def _mapping_budget():
+    """How many documents a writer may keep mapped. Each mapping holds a descriptor of
+    its own, so the soft limit is raised toward the hard one first: at the common
+    default of 1,024, a writer would otherwise run out a thousand documents in."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    wanted = _MMAP_CACHE_LIMIT + _DESCRIPTOR_MARGIN
+    if soft != resource.RLIM_INFINITY and soft < wanted:
+        raised = wanted if hard == resource.RLIM_INFINITY else min(wanted, hard)
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (raised, hard))
+            soft = raised
+        except (ValueError, OSError):
+            pass
+    if soft == resource.RLIM_INFINITY:
+        return _MMAP_CACHE_LIMIT
+    return max(16, min(_MMAP_CACHE_LIMIT, soft - _DESCRIPTOR_MARGIN))
+
+
 class ChunkWriter:
     """Per-worker state: metadata, prefixed-key dicts and mmap caches.
 
@@ -284,6 +307,8 @@ class ChunkWriter:
         self._src = {}
         self._tgt = {}
         self._buf = {}
+        self._unreadable = set()
+        self._budget = _mapping_budget()
         self.n_rec = 0
         self.n_chunk = 0
 
@@ -296,28 +321,49 @@ class ChunkWriter:
 
     def _text(self, slot, keep=None):
         buf = self._buf.get(slot)
-        if buf is None:
-            if len(self._buf) >= _MMAP_CACHE_LIMIT:
-                # `keep` is the source document of the job in progress: the caller holds
-                # its buffer across every target, so closing it here would fail the rest
-                # of the job with "mmap closed or invalid".
-                kept = self._buf.pop(keep, None)
-                for mapped in self._buf.values():
-                    if mapped:
-                        mapped.close()
-                self._buf.clear()
-                if kept is not None:
-                    self._buf[keep] = kept
-            try:
-                handle = open(self.metas[slot]["filename"], "rb")
-                buf = mmap.mmap(handle.fileno(), 0, prot=mmap.PROT_READ)
-                handle.close()
-            except (OSError, ValueError, KeyError):
-                # An unreadable document is not an error: every passage of it comes
-                # out as "", which is what the published output contains.
-                buf = b""
-            self._buf[slot] = buf
+        if buf is not None:
+            return buf
+        if slot in self._unreadable:
+            return b""
+        if len(self._buf) >= self._budget:
+            self._evict(keep)
+        try:
+            buf = self._map(slot)
+        except OSError as error:
+            if error.errno not in (errno.EMFILE, errno.ENFILE):
+                return self._give_up(slot, error)
+            # Out of descriptors is not the document's fault, and caching it as
+            # unreadable would empty every passage of it for the rest of the run.
+            self._evict(keep)
+            buf = self._map(slot)
+        except (ValueError, KeyError) as error:
+            return self._give_up(slot, error)
+        self._buf[slot] = buf
         return buf
+
+    def _map(self, slot):
+        with open(self.metas[slot]["filename"], "rb") as handle:
+            return mmap.mmap(handle.fileno(), 0, prot=mmap.PROT_READ)
+
+    def _evict(self, keep):
+        # `keep` is the source document of the job in progress: the caller holds its
+        # buffer across every target, so closing it here would fail the rest of the job
+        # with "mmap closed or invalid".
+        kept = self._buf.pop(keep, None)
+        for mapped in self._buf.values():
+            mapped.close()
+        self._buf.clear()
+        if kept is not None:
+            self._buf[keep] = kept
+
+    def _give_up(self, slot, error):
+        """An unreadable document is not an error: every passage of it comes out as "",
+        which is what the published output contains. But it is said, once."""
+        self._unreadable.add(slot)
+        name = self.metas[slot].get("filename", self.docs[slot])
+        print(f"WARNING: cannot read {name} ({error}); its passages will be empty",
+              file=sys.stderr, flush=True)
+        return b""
 
     def write(self, rows, jobs):
         """rows: int32[K, 11] of (source slot, target slot, source start byte,
