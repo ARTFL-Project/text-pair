@@ -2,11 +2,11 @@
 
 import contextlib
 import io
+import mmap
 import multiprocessing as mp
 import os
 import struct
 import subprocess
-from math import floor
 from shlex import quote
 from typing import Any, Optional, Union
 
@@ -19,35 +19,32 @@ import regex as re
 from numba import njit
 from tqdm import tqdm
 
-from . import ngram_binary
+from . import ngram_binary, ngram_index
 
 
 @njit(nogil=True, cache=True)
-def _fill_table(keys, table, used):
-    """Insert every key into an open-addressing table. Returns how many were new."""
+def _fill_table(keys, values, table, table_values, used):
+    """Insert every key, with its value, into an open-addressing table."""
     mask = np.uint64(table.size - 1)
-    inserted = 0
     for i in range(keys.size):
         key = keys[i]
-        # Fibonacci hashing, as in ngram_index: these keys are already hashes,
-        # but they are the head of a frequency ordering rather than a spread.
+        # Fibonacci hashing, as in ngram_index: the keys are already hashes, but
+        # sorted, so their low bits need spreading.
         scattered = np.uint64(key) * np.uint64(0x9E3779B97F4A7C15)
         scattered ^= scattered >> np.uint64(29)
         slot = scattered & mask
         while used[slot] == 1 and table[slot] != key:
             slot = (slot + np.uint64(1)) & mask
-        if used[slot] == 0:
-            inserted += 1
-            table[slot] = key
-            used[slot] = 1
-    return inserted
+        table[slot] = key
+        table_values[slot] = values[i]
+        used[slot] = 1
 
 
 @njit(nogil=True, cache=True)
-def _count_present(keys, table, used):
-    """How many of `keys` are in the table."""
+def _total(keys, table, table_values, used):
+    """The sum of the table's values over `keys`, 0 for a key it does not hold."""
     mask = np.uint64(table.size - 1)
-    found = 0
+    total = 0.0
     for i in range(keys.size):
         key = keys[i]
         scattered = np.uint64(key) * np.uint64(0x9E3779B97F4A7C15)
@@ -55,62 +52,53 @@ def _count_present(keys, table, used):
         slot = scattered & mask
         while used[slot] == 1:
             if table[slot] == key:
-                found += 1
+                total += table_values[slot]
                 break
             slot = (slot + np.uint64(1)) & mask
-    return found
+    return total
 
 
-class CommonNgrams:
-    """Membership in the most frequent keys of a corpus.
+class Commonness:
+    """How common each key of a corpus is, from 0 to 1.
 
-    An open-addressing table rather than a set. A real config asks for the top
-    10%, which on frantext is 7.7M keys: 0.15GB here against 1.5GB as a Python
-    set, counting the list of boxed ints it has to be built from. Counting a
-    passage's hits is then one call rather than a loop over them.
+    0 for a key in fewer than ngram_index.MIN_DOCUMENTS documents -- an alignment
+    already puts every key it matches in two -- then log(d/2) / log(N/2) for a key in
+    d of the corpus's N documents: logarithmic because document frequency is Zipfian,
+    and relative to N so that one threshold means much the same on any corpus.
     """
 
-    __slots__ = ("table", "used", "size")
+    __slots__ = ("table", "values", "used")
 
-    def __init__(self, keys: np.ndarray):
+    def __init__(self, documents: int, keys: np.ndarray, frequencies: np.ndarray):
         keys = np.ascontiguousarray(keys, dtype=np.int64)
+        values = np.zeros(keys.size, dtype=np.float32)
+        if documents > 2 and keys.size:
+            values = np.minimum(np.log(frequencies / 2) / np.log(documents / 2), 1.0)
+            values = values.astype(np.float32)
         # Under half full, so a miss ends at the first empty slot it reaches.
         slots = 1 << max(int(keys.size * 2).bit_length(), 4)
         self.table = np.zeros(slots, dtype=np.int64)
+        self.values = np.zeros(slots, dtype=np.float32)
         self.used = np.zeros(slots, dtype=np.uint8)
-        self.size = int(_fill_table(keys, self.table, self.used)) if keys.size else 0
+        if keys.size:
+            _fill_table(keys, values, self.table, self.values, self.used)
 
-    def count_in(self, keys: np.ndarray) -> int:
-        """How many of `keys`, an int64 array, are common."""
-        return int(_count_present(keys, self.table, self.used))
+    def total(self, keys: np.ndarray) -> float:
+        """The summed commonness of `keys`, an int64 array."""
+        return float(_total(keys, self.table, self.values, self.used))
 
 
-def load_common_ngrams(path: str, proportion: float) -> CommonNgrams:
-    """The most frequent `proportion` percent of keys.
+def load_commonness(path: str) -> Commonness:
+    """The commonness of a corpus's keys, from its index/document_frequencies.bin.
 
-    ngram_index writes an int64 array ordered by descending corpus frequency.
-    Older index directories have a text file of one decimal per line instead;
-    both are read here so an index built before the change still works.
+    An index built before the file existed gets it now, computed from ngrams/.
     """
-    if path.endswith(".bin") and os.path.exists(path):
-        # Only the head of the file is wanted, and on a corpus this size the
-        # rest of it is half a gigabyte to read and throw away.
-        wanted = floor(os.path.getsize(path) // 8 * proportion / 100)
-        keys = np.fromfile(path, dtype=np.int64, count=wanted) if wanted else np.empty(0, np.int64)
-        return CommonNgrams(keys)
-
-    legacy = path[: -len(".bin")] + ".txt" if path.endswith(".bin") else path
-    with open(legacy, "rb") as handle:
-        total = sum(1 for _ in handle)
-    wanted = floor(total * proportion / 100)
-    decoded: list[int] = []
-    with open(legacy, encoding="utf8") as handle:
-        for _ in range(wanted):
-            try:
-                decoded.append(int(next(handle)))
-            except ValueError:
-                pass
-    return CommonNgrams(np.array(decoded, dtype=np.int64))
+    if not os.path.exists(path):
+        root = os.path.dirname(os.path.dirname(path))
+        print("  counting documents per n-gram for an index built without them",
+              flush=True)
+        ngram_index.build(root, write_index_tab=None)
+    return Commonness(*ngram_index.read_document_frequencies(path))
 
 
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
@@ -128,38 +116,76 @@ def clean_text(text: str) -> str:
 class NgramDoc:
     """One document's n-grams in order, as the two columns of its ngrams_in_order file.
 
-    The file is binary and mmap-shaped, so this is a read and two `np.frombuffer` views
-    rather than a parse: 4.7ms of orjson per document became nothing measurable, and the
-    filter opens one document per source in the results.
-
-    `start_bytes` is widened to int64 on the way in: searching the int32 column
-    the file stores for a Python int promotes the pair, which casts the whole
-    column on every call and cost eight times the search itself.
+    Mapped rather than read: the filter scores both sides of every alignment, so it
+    visits a document per target as well as per source, and needs only a span of each.
+    Spans are searched with int32 bounds, the column's own type, since a wider query
+    would cast the whole column on every call.
     """
 
-    __slots__ = ["name", "keys", "start_bytes"]
+    __slots__ = ["name", "keys", "start_bytes", "_map"]
 
     def __init__(self, filepath):
         self.name = os.path.basename(filepath)
         with open(filepath, "rb") as input_file:
-            keys, start_bytes = ngram_binary.order_columns(input_file.read(), filepath)
-        self.keys = keys
-        self.start_bytes = start_bytes.astype(np.int64)
+            self._map = mmap.mmap(input_file.fileno(), 0, access=mmap.ACCESS_READ)
+        self.keys, self.start_bytes = ngram_binary.order_columns(self._map, filepath)
 
     def span(self, start_byte: int, end_byte: int) -> tuple[int, int]:
-        """Index range of the n-grams starting in [start_byte, end_byte).
-
-        Both bounds in one search: at these sizes the call costs more than the
-        binary search inside it.
-        """
+        """Index range of the n-grams starting in [start_byte, end_byte)."""
         bounds = self.start_bytes.searchsorted(
-            np.array((start_byte, end_byte), dtype=np.int64), "left")
+            np.array((start_byte, end_byte), dtype=np.int32), "left")
         return int(bounds[0]), int(bounds[1])
 
     def get_ngrams(self, start_byte, end_byte) -> list[int]:
         """The keys of every n-gram starting in [start_byte, end_byte)."""
         low, high = self.span(start_byte, end_byte)
         return self.keys[low:high].tolist()
+
+
+class BanalityScore:
+    """The automatic verdict: a passage is banal when the mean commonness of the
+    n-grams on both sides of it reaches `threshold`. Scoring both sides keeps the
+    verdict from depending on which document is the source."""
+
+    def __init__(self, source: Commonness, source_orders: str, target: Commonness,
+                 target_orders: str, threshold: float):
+        self.sides = ((source, source_orders), (target, target_orders))
+        self.threshold = threshold
+        self.documents: dict[str, NgramDoc] = {}
+
+    def _document(self, directory: str, name: str) -> NgramDoc:
+        path = os.path.join(directory, name)
+        document = self.documents.get(path)
+        if document is None:
+            if len(self.documents) >= _DOCUMENTS_HELD:
+                del self.documents[next(iter(self.documents))]
+            document = self.documents[path] = NgramDoc(path)
+        return document
+
+    def is_banal(self, passage) -> bool:
+        total = 0.0
+        count = 0
+        spans = ((passage.source_ngrams, passage.source_start_byte, passage.source_end_byte),
+                 (passage.target_ngrams, passage.target_start_byte, passage.target_end_byte))
+        for (commonness, directory), (name, start_byte, end_byte) in zip(self.sides, spans):
+            document = self._document(directory, name)
+            low, high = document.span(int(start_byte), int(end_byte))
+            total += commonness.total(document.keys[low:high])
+            count += high - low
+        return count > 0 and total / count >= self.threshold
+
+
+def banality_score(frequencies: Union[str, tuple[str, str]],
+                   orders: Union[str, tuple[str, str]], threshold: float) -> BanalityScore:
+    """The verdict for a run, from each side's document_frequencies.bin and
+    ngrams_in_order directory; one path serves both sides of a self-comparison."""
+    source_frequencies, target_frequencies = (
+        (frequencies, frequencies) if isinstance(frequencies, str) else frequencies)
+    source_orders, target_orders = (orders, orders) if isinstance(orders, str) else orders
+    source = load_commonness(source_frequencies)
+    target = (source if os.path.abspath(target_frequencies) == os.path.abspath(source_frequencies)
+              else load_commonness(target_frequencies))
+    return BanalityScore(source, source_orders, target, target_orders, threshold)
 
 
 class _Passage(msgspec.Struct):
@@ -173,6 +199,9 @@ class _Passage(msgspec.Struct):
     source_ngrams: str
     source_start_byte: Union[int, str]
     source_end_byte: Union[int, str]
+    target_ngrams: str
+    target_start_byte: Union[int, str]
+    target_end_byte: Union[int, str]
     # UNSET only when the record has no banality field at all, which is what
     # lets the verdict be spliced in rather than the record rewritten.
     banality: Union[bool, None, msgspec.UnsetType] = msgspec.UNSET
@@ -185,6 +214,9 @@ class _Filtered(msgspec.Struct):
     source_ngrams: str
     source_start_byte: Union[int, str]
     source_end_byte: Union[int, str]
+    target_ngrams: str
+    target_start_byte: Union[int, str]
+    target_end_byte: Union[int, str]
     banality: Union[bool, None, msgspec.UnsetType] = msgspec.UNSET
 
 
@@ -205,9 +237,9 @@ _DECODE_VERDICT = msgspec.json.Decoder(_Verdict).decode
 _DECODE_FILTERED = msgspec.json.Decoder(_Filtered).decode
 _DECODE_SOURCE = msgspec.json.Decoder(_SourcePassage).decode
 _BANALITY_FIELD = {True: b',"banality":true', False: b',"banality":false'}
-# Documents kept open while scanning results. Oldest out first, and the
-# largest frantext document is 16MB of columns, so the ceiling is small.
-_DOCUMENTS_HELD = 8
+# Documents kept mapped while scanning results, oldest out first. Results come
+# grouped by source, but targets change on nearly every record.
+_DOCUMENTS_HELD = 256
 
 
 _LZ4_MAGIC = 0x184D2204
@@ -448,11 +480,11 @@ def _with_banality(line: bytes, banal: bool, present: Any) -> bytes:
     return orjson.dumps(alignment) + b"\n"
 
 
-def _detect_records(lines, matcher, common_ngrams, ngram_doc_path, threshold,
-                    output_file, filtered_passages, progress=None) -> tuple[int, int]:
+def _detect_records(lines, matcher, score, output_file, filtered_passages,
+                    progress=None) -> tuple[int, int]:
     """One pass over `lines` applying whichever verdicts were asked for.
 
-    `matcher` None leaves the phrase list out; `common_ngrams` None leaves the n-gram
+    `matcher` None leaves the phrase list out; `score` None leaves the n-gram
     verdict out and keeps records as they came; both together is the pass that exists so
     two verdicts do not read the file twice. A phrase hit is filtered out and never
     reaches the n-gram test, which is the order the two had when they ran separately.
@@ -462,19 +494,15 @@ def _detect_records(lines, matcher, common_ngrams, ngram_doc_path, threshold,
     # Only the fields the configured verdicts need: a record carries around a hundred.
     if matcher is None:
         decode = _DECODE_PASSAGE
-    elif common_ngrams is None:
+    elif score is None:
         decode = _DECODE_SOURCE
     else:
         decode = _DECODE_FILTERED
     filtering = matcher is not None
-    flagging = common_ngrams is not None
+    flagging = score is not None
     passages_filtered = 0
     banalities_found = 0
     since = 0
-    # Results come grouped by source document, but not strictly: a frantext
-    # run opens 2,325 distinct documents 3,642 times. A few documents of
-    # history turns most of that back into a hit.
-    loaded: dict[str, NgramDoc] = {}
     for line in lines:
         since += 1
         since = _bump(progress, since)
@@ -486,19 +514,7 @@ def _detect_records(lines, matcher, common_ngrams, ngram_doc_path, threshold,
         if not flagging:
             output_file.write(line)
             continue
-        document = loaded.get(passage.source_ngrams)
-        if document is None:
-            document = NgramDoc(os.path.join(ngram_doc_path, passage.source_ngrams))
-            if len(loaded) >= _DOCUMENTS_HELD:
-                del loaded[next(iter(loaded))]
-            loaded[passage.source_ngrams] = document
-        low, high = document.span(
-            int(passage.source_start_byte), int(passage.source_end_byte)
-        )
-        # if n % (or more) of ngrams are common ngrams
-        banality = high > low and (
-            common_ngrams.count_in(document.keys[low:high]) / (high - low) * 100 >= threshold
-        )
+        banality = score.is_banal(passage)
         banalities_found += banality
         output_file.write(_with_banality(line, banality, passage.banality))
     if progress is not None and since:
@@ -510,7 +526,7 @@ def _detect_records(lines, matcher, common_ngrams, ngram_doc_path, threshold,
 def _detect_segment(job: tuple[str, int, int, str]) -> tuple[int, int, str, Optional[str]]:
     """One frame range through the configured verdicts.
 
-    The phrase tree and the frequent-key table are inherited through the fork rather than
+    The phrase tree and the commonness tables are inherited through the fork rather than
     passed: both are large and neither is written to.
     """
     path, offset, size, base = job
@@ -526,15 +542,13 @@ def _detect_segment(job: tuple[str, int, int, str]) -> tuple[int, int, str, Opti
             filtered_passages = stack.enter_context(
                 _Framer(stack.enter_context(open(filtered_path, "wb"))))
         filtered, banal = _detect_records(
-            input_file, matcher, _SHARED.get("common_ngrams"),
-            _SHARED.get("ngram_doc_path", ""), _SHARED.get("threshold", 0.0),
-            output_file, filtered_passages, _SHARED["progress"])
+            input_file, matcher, _SHARED.get("score"), output_file, filtered_passages,
+            _SHARED["progress"])
     return filtered, banal, keep_path, filtered_path
 
 
 def _detect_pass(filepath: str, count: Optional[int], workers: int, description: str,
-                 matcher=None, common_ngrams=None, ngram_doc_path: str = "",
-                 threshold: float = 0.0) -> tuple[int, int]:
+                 matcher=None, score=None) -> tuple[int, int]:
     """Rewrite the results file with whatever verdicts were given.
 
     A filtered file is written only when there is a phrase list to filter on, so a run
@@ -556,13 +570,11 @@ def _detect_pass(filepath: str, count: Optional[int], workers: int, description:
                     _Framer(stack.enter_context(open(filtered_name, "wb"))))
             filtered, banal = _detect_records(
                 tqdm(input_file, total=count, desc=description, leave=False),
-                matcher, common_ngrams, ngram_doc_path, threshold,
-                output_file, filtered_passages)
+                matcher, score, output_file, filtered_passages)
         os.replace(keep, filepath)
         return filtered, banal
 
-    _SHARED.update(matcher=matcher, common_ngrams=common_ngrams,
-                   ngram_doc_path=ngram_doc_path, threshold=threshold)
+    _SHARED.update(matcher=matcher, score=score)
     results = _run_segments(_detect_segment, filepath, segments, count, description)
     filtered = sum(result[0] for result in results)
     banal = sum(result[1] for result in results)
@@ -575,18 +587,18 @@ def _detect_pass(filepath: str, count: Optional[int], workers: int, description:
 
 def banality_auto_detect(
     filepath: str,
-    common_ngrams_file: str,
-    ngram_doc_path: str,
+    frequencies: Union[str, tuple[str, str]],
+    orders: Union[str, tuple[str, str]],
     count: Optional[int],
-    proportion: float,
     threshold: float,
     workers: int = 1,
 ):
-    """Detect banalities automatically based on frequent ngram over-representation"""
-    common_ngrams = load_common_ngrams(common_ngrams_file, proportion)
+    """Flag passages made of n-grams common across the corpus. `frequencies` and
+    `orders` are each side's document_frequencies.bin and ngrams_in_order directory,
+    or one path for both."""
     _, banalities_found = _detect_pass(
         filepath, count, workers, "Running banality auto-detection...",
-        common_ngrams=common_ngrams, ngram_doc_path=ngram_doc_path, threshold=threshold)
+        score=banality_score(frequencies, orders, threshold))
     return banalities_found
 
 
@@ -619,10 +631,9 @@ def phrase_matcher(filepath: str, banality_phrases_path: str, count: Optional[in
 def filter_and_flag(
     filepath: str,
     banality_phrases_path: str,
-    common_ngrams_file: str,
-    ngram_doc_path: str,
+    frequencies: Union[str, tuple[str, str]],
+    orders: Union[str, tuple[str, str]],
     count: Optional[int],
-    proportion: float,
     threshold: float,
     workers: int = 1,
 ) -> tuple[int, int]:
@@ -636,8 +647,7 @@ def filter_and_flag(
     return _detect_pass(
         filepath, count, workers, "Filtering passages and detecting banalities...",
         matcher=_phrase_tree(banality_phrases_path),
-        common_ngrams=load_common_ngrams(common_ngrams_file, proportion),
-        ngram_doc_path=ngram_doc_path, threshold=threshold)
+        score=banality_score(frequencies, orders, threshold))
 
 
 def _separate_records(lines, output_file, banal_output_file, progress=None) -> int:

@@ -313,7 +313,13 @@ async def run_alignment(params):
         # file twice. With both on they share a pass.
         phrase_filter = params.matching_params["phrase_filter"]
         auto_detect = params.matching_params["banality_auto_detection"] is True
-        ngrams_in_order = f"{params.paths['source']['ngram_output_path']}/ngrams_in_order"
+        # Each side is scored against its own corpus; in a self-comparison they are one.
+        frequencies = (params.paths["source"]["document_frequencies"],
+                       params.paths["target"]["document_frequencies"]
+                       or params.paths["source"]["document_frequencies"])
+        orders = (f"{params.paths['source']['ngram_output_path']}/ngrams_in_order",
+                  f"{params.paths['target']['ngram_output_path']}/ngrams_in_order")
+        threshold = params.matching_params["banality_threshold"]
         filtered_passages = 0
         banalities_found = 0
         if phrase_filter and auto_detect:
@@ -321,11 +327,10 @@ async def run_alignment(params):
             filtered_passages, banalities_found = filter_and_flag(
                 results_file,
                 phrase_filter,
-                params.paths["source"]["common_ngrams"],
-                ngrams_in_order,
+                frequencies,
+                orders,
                 count,
-                params.matching_params["most_common_ngram_proportion"],
-                params.matching_params["common_ngram_threshold"],
+                threshold,
                 params.workers,
             )
         elif phrase_filter:
@@ -336,11 +341,10 @@ async def run_alignment(params):
             print("Detecting formulaic passages...")
             banalities_found = banality_auto_detect(
                 results_file,
-                params.paths["source"]["common_ngrams"],
-                ngrams_in_order,
+                frequencies,
+                orders,
                 count,
-                params.matching_params["most_common_ngram_proportion"],
-                params.matching_params["common_ngram_threshold"],
+                threshold,
                 params.workers,
             )
         if phrase_filter:

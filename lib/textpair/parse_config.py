@@ -5,6 +5,9 @@ import argparse
 import configparser
 import os
 from collections import defaultdict, namedtuple
+
+# The mean commonness at which a passage counts as formulaic; see banality_finder.
+BANALITY_THRESHOLD = 0.4
 from typing import Any
 
 # Checked in order; later paths override earlier ones on a per-key basis.
@@ -196,6 +199,7 @@ class TextPairConfig:
                 case _:
                     self.preprocessing_params["source"][key] = value
                     self.preprocessing_params["target"][key] = value
+        self.matching_params["banality_threshold"] = BANALITY_THRESHOLD
         for key, value in dict(config["MATCHING"]).items():
             if value or key not in self.matching_params:
                 match key:
@@ -211,8 +215,12 @@ class TextPairConfig:
                             value = True
                         else:
                             value = False
-                    case "min_similarity" | "most_common_ngram_proportion" | "common_ngram_threshold":
+                    case "min_similarity" | "banality_threshold":
                         value = float(value)
+                    case "most_common_ngram_proportion" | "common_ngram_threshold":
+                        print(f"WARNING: {key} is no longer used; banality_threshold "
+                              "replaces it.")
+                        continue
                     case "llm_similarity_threshold":
                         value = int(value)
                     case "min_matching_words" | "source_batch" | "target_batch":
@@ -287,8 +295,8 @@ class TextPairConfig:
                     self.paths["source"]["input_files_for_ngrams"] = self.__file_paths["source_files"]
                 self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source/")
                 self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
-            self.paths["source"]["common_ngrams"] = os.path.join(
-                self.output_path, "source/index/most_common_ngrams.bin"
+            self.paths["source"]["document_frequencies"] = os.path.join(
+                self.output_path, "source/index/document_frequencies.bin"
             )
             self.matching_params["ngram_index"] = os.path.join(self.output_path, "source/index/index.tab")
             if self.__file_paths["target_files"]:
@@ -315,8 +323,8 @@ class TextPairConfig:
                     self.paths["target"]["metadata_path"] = os.path.join(
                         self.output_path, "target/metadata/metadata.json"
                     )
-                self.paths["target"]["common_ngrams"] = os.path.join(
-                    self.output_path, "target/index/most_common_ngrams.bin"
+                self.paths["target"]["document_frequencies"] = os.path.join(
+                    self.output_path, "target/index/document_frequencies.bin"
                 )
         elif self.__cli_args["update_db"] is True:
             self.paths["source"]["metadata_path"] = self.__cli_args["source_metadata"]
@@ -324,15 +332,15 @@ class TextPairConfig:
         else:  # only_align is True
             self.paths["source"]["ngram_output_path"] = os.path.join(self.output_path, "source")
             self.paths["source"]["metadata_path"] = os.path.join(self.output_path, "source/metadata/metadata.json")
-            self.paths["source"]["common_ngrams"] = os.path.join(
-                self.output_path, "source/index/most_common_ngrams.bin"
+            self.paths["source"]["document_frequencies"] = os.path.join(
+                self.output_path, "source/index/document_frequencies.bin"
             )
             self.matching_params["ngram_index"] = os.path.join(self.output_path, "source/index/index.tab")
             if self.__file_paths["target_files"]:
                 self.paths["target"]["ngram_output_path"] = os.path.join(self.output_path, "target")
                 self.paths["target"]["metadata_path"] = os.path.join(self.output_path, "target/metadata/metadata.json")
-                self.paths["target"]["common_ngrams"] = os.path.join(
-                    self.output_path, "target/index/most_common_ngrams.bin"
+                self.paths["target"]["document_frequencies"] = os.path.join(
+                    self.output_path, "target/index/document_frequencies.bin"
                 )
             else:
                 self.paths["target"] = self.paths["source"]
