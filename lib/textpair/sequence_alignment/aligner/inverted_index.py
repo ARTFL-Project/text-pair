@@ -302,7 +302,7 @@ def target_work(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, target
         if count == 0 or count < min_in_docs:
             continue
         nt = key_offsets[t + 1] - key_offsets[t]
-        if count / (ns if ns > nt else nt) * 100 > dup_threshold:
+        if count / (ns if ns < nt else nt) * 100 > dup_threshold:
             continue
         work = 0
         for k in range(q, r):
@@ -382,12 +382,11 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
             stats[1] += 1
             continue
         stats[5] += 1
-        # The share of the larger document's ngrams the two have in common, so a pair is
-        # a duplicate only when each is mostly the other, whichever way round it is
-        # compared. The smaller document's share would also skip a short text quoted
-        # whole inside a long one, which is reuse to report, not a reprint.
+        # The share of the smaller document's ngrams the two have in common, whichever
+        # way round the pair is compared: a text contained whole in another, as a second
+        # edition or inside a collected volume, is a duplicate too.
         nt = key_offsets[t + 1] - key_offsets[t]
-        pct = count / (ns if ns > nt else nt) * 100
+        pct = count / (ns if ns < nt else nt) * 100
         if pct > dup_threshold:
             stats[2] += 1
             if n_duplicates == duplicate_slots.shape[0]:

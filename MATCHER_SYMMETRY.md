@@ -422,9 +422,12 @@ of their runs are covered, and the rest is Go's merger bridging unmatched text, 
 On `ecco_clean` every one of the chains' 6,340,308 records is identical (6,311,153) or
 fully contained, with 6,424,597 records in all.
 
-The duplicate rule now divides by the **larger** document's count, so a pair is skipped
-only when each is mostly the other. That flags a subset of what Go flagged either way
-round (the intersection, where `min` flagged the union), so it loses nothing.
+The duplicate rule divides by the **smaller** document's count, as before. Dividing by the
+larger was tried, to flag only what Go flagged either way round, and reverted: on frantext
+the 17 pairs it newly aligned were all one text twice -- two editions of a work, or a work
+contained whole in a collected volume -- each giving one record over 97-100% of the
+smaller document. That is what the duplicate rule is for, and Go aligned those pairs only
+when the larger document happened to be the source.
 
 **Cost**, matching phase only, 32 threads, warm cache:
 
@@ -445,8 +448,8 @@ which the mirrored arrays would have to map back to.
 
 ## Open items
 
-- ~~The duplicate rule divides by the smaller document's ngram count.~~ It divides by
-  the larger now; see "Losses against the Go aligner".
+- The duplicate rule divides by the smaller document's ngram count, which skips a text
+  contained in another; see "Losses against the Go aligner" for why that stays.
 - **ecco_clean is not exactly symmetric**, `flex_gap` on: the chains alone report
   6,340,308 records one way and 6,340,303 the other, 9 and 3 of them without a
   counterpart, and with the anchored scan 6,424,597 against 6,424,594, 6 and 1. Within
