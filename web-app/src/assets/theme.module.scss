@@ -21,7 +21,8 @@ $graph-btn-panel-color: rgb(200, 100, 100);
 nav.navbar {
     background-color: $header-color !important;
 }
-.navbar-brand {
+.navbar-brand,
+nav.navbar .nav-link {
     color: #fff !important;
 }
 
@@ -99,7 +100,7 @@ input[type="text"]:focus {
 
 .corner-btn {
     background-color: $header-color !important;
-    color: $link-color !important;
+    color: #fff !important;
 }
 .popover-body ul {
     border-width: 0 !important;
