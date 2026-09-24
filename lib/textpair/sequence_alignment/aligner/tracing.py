@@ -518,8 +518,8 @@ def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_i
         shared = np.intersect1d(source_keys, corpus.keys(target), assume_unique=True)
         if shared.shape[0] < min_in_docs:
             continue
-        larger = max(source_keys.shape[0], corpus.keys(target).shape[0])
-        if shared.shape[0] / larger * 100 > dup_threshold:
+        smaller = min(source_keys.shape[0], corpus.keys(target).shape[0])
+        if shared.shape[0] / smaller * 100 > dup_threshold:
             continue                                   # a duplicate, never matched
         match, n, _stopped = corpus.matches(source, target)
         if not n:
