@@ -357,6 +357,13 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
         target_slot = {doc: target_base + i for i, (doc, _) in enumerate(target_docs)}
         same_doc = np.array([target_slot.get(doc, -1) for doc, _ in source_docs], np.int32)
     n_sources = len(source_docs)
+    # Documents ranked by identity -- their file, not their slot, which follows sort_by
+    # and swaps when the corpus is compared the other way round -- for the kernels to
+    # settle ties between mirror images the same way in either direction.
+    identity = sorted(range(len(docs)), key=lambda slot: (metas[slot].get("filename", ""),
+                                                          docs[slot]))
+    document_rank = np.empty(len(docs), np.int32)
+    document_rank[identity] = np.arange(len(docs), dtype=np.int32)
 
     # Fork the writers before the ngram arrays exist: they inherit the cleaned metadata
     # and only a few tens of MB of page tables get copied. One process per worker in the
@@ -406,7 +413,8 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                posting_slots, posting_docs,
                                per_source, same_doc, position_offsets, ngram_indices,
                                start_bytes, end_bytes,
-                               params["match_threads"], params, on_result, progress)
+                               params["match_threads"], params, on_result, progress,
+                               document_rank)
         # Matching is done, so the threads it held are idle: give the writers the whole
         # budget for whatever they still have queued.
         pool.expand()
@@ -421,7 +429,8 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                 trace["output_path"], docs,
                 tracing.Corpus(key_offsets, ngram_keys, position_offsets,
                                     ngram_indices, start_bytes, end_bytes),
-                params, same_doc, n_sources, trace["ngram_index"], trace["pairs"])
+                params, same_doc, n_sources, trace["ngram_index"], trace["pairs"],
+                document_rank)
             print(f"{written} pair(s) written.", flush=True)
     finally:
         pool.close()

@@ -450,22 +450,19 @@ which the mirrored arrays would have to map back to.
 
 - The duplicate rule divides by the smaller document's ngram count, which skips a text
   contained in another; see "Losses against the Go aligner" for why that stays.
-- **ecco_clean is not exactly symmetric**, `flex_gap` on: the chains alone report
-  6,340,308 records one way and 6,340,303 the other, 9 and 3 of them without a
-  counterpart, and with the anchored scan 6,424,597 against 6,424,594, 6 and 1. Within
-  the test's tolerance, and consistent with the mirror ties below reaching the output
-  on a dense enough corpus.
-- The mirror tie could be closed outright by emitting both alternatives, which is
-  symmetric and adds records. Not done: nothing currently produces one in the output.
+- ~~Mirror ties reach the output on a dense corpus.~~ Settled: ecco_clean differed by
+  48 passages one way and 45 the other, each an exact mirror tie inside the chain --
+  predecessors at (4, 2) and (2, 4), say. Ties between mirror images now go to the
+  smaller step, or the smaller coordinate for chain ends, in whichever document comes
+  first by identity (its file, else its id), which is the same document either way
+  round. ecco_clean, frantext and the fixtures are exactly symmetric, and
+  `test_matcher_symmetry.py` now asserts identical passages rather than a tolerance.
 - Nothing downstream was re-tuned. 38% more records changes what `banality_finder.py`,
   `alignment_merger.py` and the graph pipeline see, and any existing alignment database
   will differ from a fresh run.
 - **eccotcp costs 1.90x the matching phase with the shipped `flex_gap = true`**, against
   0.93x on frantext. Deriving each link's allowance from `best[a]` should recover most of
   it; see the Cost section.
-- The chaining DP still has **7 reachable mirror ties** on the densest classical_chinese
-  pair, down from 19. None of them reach the output on the corpora measured, but a corpus
-  could surface one.
 
 ### A caution about the numba cache
 

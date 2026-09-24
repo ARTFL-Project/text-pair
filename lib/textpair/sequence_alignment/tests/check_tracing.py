@@ -58,10 +58,12 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
             continue
         pairs += 1
         truncated += stopped_early
+        # Both ways of settling a mirror tie, alternating by pair.
+        source_first = (source + target) % 2 == 0
         chains, _blocks, _hidden, _longest = tracing._walk(
-            match, n, params, params["debug_minimum_ngrams"])
+            match, n, params, params["debug_minimum_ngrams"], source_first)
         rows, _blocks, _hidden, _merged, _coalesced = tracing.pair_rows(
-            match, n, params, params["debug_minimum_ngrams"])
+            match, n, params, params["debug_minimum_ngrams"], source_first)
         # The kernel takes the packed layout: indices together in one int64 and byte
         # offsets reached through positions. Lay the pair's offsets out so position k is
         # its source and position n + k its target.
@@ -83,12 +85,13 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
                   params["minimum_matching_ngrams"],
                   params["minimum_matching_ngrams_in_window"])
         out, cnt, _spans, _longest = matching.match_passage(
-            pair, pos, n, n_blocks, start_bytes, end_bytes, *common, *buffers())
+            pair, pos, n, n_blocks, start_bytes, end_bytes, *common, source_first,
+            *buffers())
         final, final_cnt, _spans, _out = matching.align_pair(
             pair, pos, n, n_blocks, start_bytes, end_bytes, *common,
             params["merge_passages_on_byte_distance"],
             params["merge_passages_on_ngram_distance"],
-            params["passage_distance_multiplier"], *buffers())
+            params["passage_distance_multiplier"], source_first, *buffers())
         def as_tuples(array, count):
             return [tuple(int(v) for v in row) for row in array[:count]]
         if as_tuples(out, cnt) != [tuple(r) for r in chains] or \

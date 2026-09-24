@@ -143,7 +143,7 @@ class Corpus:
         return list(zip(*cols)), len(cols), stopped_early
 
 
-def _walk(match, n, params, floor):
+def _walk(match, n, params, floor, source_first=True):
     """Mirror of matching.match_passage, recording a block per kept or rejected passage.
 
     Returns (rows, blocks, hidden, longest): the alignments as that kernel would emit
@@ -170,7 +170,7 @@ def _walk(match, n, params, floor):
         target_b = int(target_indices[b])
         while int(source_indices[window_start]) < source_b - max_link:
             window_start += 1
-        best_b, parent_b, best_step, best_near = 1, -1, 0, 0
+        best_b, parent_b, best_step, best_near, best_first = 1, -1, 0, 0, 0
         for a in range(window_start, b):
             source_a = int(source_indices[a])
             if source_a == source_b:
@@ -182,9 +182,11 @@ def _walk(match, n, params, floor):
             source_step = source_b - source_a
             step = source_step + target_step
             near = min(source_step, target_step)
-            if candidate > best_b or (candidate == best_b
-                                      and (step, near) < (best_step, best_near)):
-                best_b, parent_b, best_step, best_near = candidate, a, step, near
+            first_step = source_step if source_first else target_step
+            if candidate > best_b or (candidate == best_b and (step, near, first_step)
+                                      < (best_step, best_near, best_first)):
+                best_b, parent_b, best_step, best_near, best_first = (
+                    candidate, a, step, near, first_step)
         best[b], parent[b] = best_b, parent_b
         longest = max(longest, best_b)
     if longest < min_matching:
@@ -193,7 +195,7 @@ def _walk(match, n, params, floor):
     def pair_key(i):
         source, target = int(source_indices[i]), int(target_indices[i])
         low, high = min(source, target), max(source, target)
-        return (low << 31) | high
+        return (low << 31) | high, source if source_first else target
 
     # Ends longest first, then by coordinate pair: the kernel's counting sort followed by
     # its per-length insertion sort, both stable, come to the same order.
@@ -318,7 +320,7 @@ def _walk(match, n, params, floor):
     return rows, blocks, hidden, longest
 
 
-def pair_rows(match, n, params, floor):
+def pair_rows(match, n, params, floor, source_first=True):
     """Mirror of matching.align_pair: the chains and both anchored scans, each merged,
     then coalesced.
 
@@ -327,7 +329,7 @@ def pair_rows(match, n, params, floor):
     """
     (source_indices, source_start_bytes, source_end_bytes,
      target_indices, target_start_bytes, target_end_bytes, match_keys) = match
-    rows, blocks, hidden, longest = _walk(match, n, params, floor)
+    rows, blocks, hidden, longest = _walk(match, n, params, floor, source_first)
     if (longest < params["minimum_matching_ngrams"]
             and longest < params["minimum_matching_ngrams_in_window"]):
         return [], blocks, hidden, 0, 0
@@ -505,8 +507,9 @@ def _pairs(docs, n_sources, same_doc, pair_filter):
 
 
 def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_index,
-                 pair_filter):
-    """Trace every compared pair, or only those `pair_filter` names. Returns the count."""
+                 pair_filter, document_rank=None):
+    """Trace every compared pair, or only those `pair_filter` names. Returns the count.
+    `document_rank` is run_match's."""
     directory = os.path.join(output_path, "debug_output")
     os.makedirs(directory, exist_ok=True)
     floor = params["debug_minimum_ngrams"]
@@ -524,7 +527,10 @@ def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_i
         match, n, _stopped = corpus.matches(source, target)
         if not n:
             continue
-        _rows, blocks, hidden, merged_away, coalesced = pair_rows(match, n, params, floor)
+        source_first = (document_rank is None
+                        or document_rank[source] < document_rank[target])
+        _rows, blocks, hidden, merged_away, coalesced = pair_rows(match, n, params, floor,
+                                                                  source_first)
         parts = [_render(block, ngram_index) for block in blocks]
         if merged_away:
             parts.append(f"\n\n{merged_away} passage(s) merged with previous passage")

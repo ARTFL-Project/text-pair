@@ -14,8 +14,7 @@ Three things are asserted:
 
   1. the two runs report the same number of records, over the same document pairs, with
      the same duplicate set;
-  2. all but a documented residue of passages have a counterpart in the other
-     direction that overlaps them in both documents;
+  2. they report exactly the same passages;
   3. a phrase occurring once in one document and n times in another is reported n times
      whichever way round the pair is compared.
 
@@ -24,23 +23,11 @@ source range of every passage it emitted and reserved nothing in the target, so 
 answered n one way and 1 the other; on frantext that left the two directions agreeing on
 52% of passages. `MATCHER_SYMMETRY.md` has the measurements.
 
-Assertion 2 is overlap, and allows a small residue, because one ambiguity is
-irreducible: when two candidate predecessors sit at (di, dj) and (dj, di) with equal
-chain length, "extend back in A" and "extend back in B" are mirror images, and no rule
-that is symmetric in the two documents can separate them. Chaining prefers the nearest
-predecessor by (di + dj, min(di, dj)), which is symmetric and leaves only those exact
-mirrors -- 7 of them in the densest classical_chinese pair, down from 19 without the
-second term.
-
-A mirror tie moves a passage's start by a few ngrams, and in a pair dense enough that
-chains compete for matches it can cascade: the passage extracted first consumes matches
-the other would have used. In practice none of it reaches the output. frantext (3,596
-documents) and classical_chinese (62 documents, with pairs holding over a million matches
-between two documents) both come out exactly symmetric, on either flex_gap setting and
-with no record left without a counterpart. The tolerance below is slack against those
-ties, not against a residue anything currently produces; it is far tighter than a real
-regression, since the matcher this replaced disagreed with itself on 31% of frantext
-passages.
+The second needs one rule that is not symmetric in the two documents' roles. When two
+candidate predecessors sit at (di, dj) and (dj, di), or two chain ends at (i, j) and
+(j, i), they are exact mirror images, and the choice between them would otherwise follow
+which document is the source. The kernels settle those by document identity instead, so
+the same choice is made either way round. Without it ecco_clean differed by 48 passages.
 
 With no arguments it uses the synthetic corpora in fixtures/ plus a repeated-phrase
 corpus built here.
@@ -63,7 +50,6 @@ from textpair.sequence_alignment.aligner.runner import align
 
 FIXTURES = ("no_byte_range", "non_string_meta", "missing_text", "no_metadata")
 REPEATS = 7          # occurrences of the shared phrase in the repeating document
-TOLERANCE = 0.0001   # share of records allowed no counterpart; see the note above
 
 
 def reversed_metadata(source_files, source_metadata, into):
@@ -104,20 +90,6 @@ def undirected(tree):
                 low, high = (one, two) if one[0] < two[0] else (two, one)
                 keys[(low[0], high[0], low[1], low[2], high[1], high[2])] += 1
     return keys
-
-
-def unmatched(one, two):
-    """Keys of `one` with no key of `two` overlapping them in both documents."""
-    by_pair = {}
-    for key in two:
-        by_pair.setdefault((key[0], key[1]), []).append(key)
-    missing = []
-    for key in one:
-        if not any(key[2] < other[3] and other[2] < key[3]
-                   and key[4] < other[5] and other[4] < key[5]
-                   for other in by_pair.get((key[0], key[1]), ())):
-            missing.append(key)
-    return missing
 
 
 def duplicates(tree):
@@ -167,18 +139,15 @@ def check_corpus(name, source_files, source_metadata, threads, failures, params=
               sorted({(k[0], k[1]) for k in behind}),
               sorted({(k[0], k[1]) for k in ahead}))
         check("with the same duplicate set", duplicates(reverse), duplicates(forward))
-        only_ahead = unmatched(ahead - behind, behind)
-        only_behind = unmatched(behind - ahead, ahead)
-        total = max(sum(ahead.values()), 1)
-        allowed = max(2, int(total * TOLERANCE))
-        for label, missing in (("forward", only_ahead), ("reverse", only_behind)):
-            ok = len(missing) <= allowed
-            print(f"{'PASS' if ok else 'FAIL'} {name}: {len(missing)} of {total} "
-                  f"{label}-run passages have no counterpart, at most {allowed} allowed",
-                  flush=True)
+        total = sum(ahead.values())
+        for label, missing in (("forward", ahead - behind), ("reverse", behind - ahead)):
+            ok = not missing
+            print(f"{'PASS' if ok else 'FAIL'} {name}: {sum(missing.values())} of {total} "
+                  f"{label}-run passages are missing from the other direction", flush=True)
             if not ok:
-                failures.append(f"{name}: {len(missing)} {label}-run passages uncovered")
-                print(f"     examples {missing[:3]}")
+                failures.append(f"{name}: {sum(missing.values())} {label}-run passages "
+                                "not found the other way")
+                print(f"     examples {sorted(missing)[:3]}")
         return ahead
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
