@@ -14,7 +14,6 @@
         "@sigma/node-border": "^3.0.0",
         "axios": "^0.21.1",
         "bootstrap": "^5.2.1",
-        "chart.js": "^2.9.3",
         "diff-match-patch": "^1.0.5",
         "graphology": "^0.26.0",
         "graphology-communities-louvain": "^2.0.2",
