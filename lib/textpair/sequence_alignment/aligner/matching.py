@@ -36,8 +36,9 @@ def _grow(out):
 
 
 @njit(nogil=True, cache=True)
-def _pair_key(packed):
-    """The two ngram indices as an unordered pair, so it is the same either way round.
+def _pair_key(packed, source_first):
+    """The two ngram indices as an unordered pair, so it is the same either way round,
+    then the index in the first document, which separates (i, j) from (j, i).
 
     31 bits a side: an ngram index is a non-negative int32, so no document is long
     enough to make two different matches share a key by overflow.
@@ -46,12 +47,12 @@ def _pair_key(packed):
     target = packed & TARGET_HALF
     low = source if source < target else target
     high = source if source > target else target
-    return (low << 31) | high
+    return (low << 31) | high, source if source_first else target
 
 
 
 @njit(nogil=True, cache=True)
-def _merge_pass(src, src_off, dst, dst_off, m, width, packed_indices):
+def _merge_pass(src, src_off, dst, dst_off, m, width, packed_indices, source_first):
     """One bottom-up merge pass. Ties take the left run, so the pass is stable."""
     i = 0
     while i < m:
@@ -65,8 +66,8 @@ def _merge_pass(src, src_off, dst, dst_off, m, width, packed_indices):
         b = mid
         o = i
         if b < end:
-            ka = _pair_key(packed_indices[src[src_off + a]])
-            kb = _pair_key(packed_indices[src[src_off + b]])
+            ka = _pair_key(packed_indices[src[src_off + a]], source_first)
+            kb = _pair_key(packed_indices[src[src_off + b]], source_first)
             while True:
                 if kb < ka:
                     dst[dst_off + o] = src[src_off + b]
@@ -74,14 +75,14 @@ def _merge_pass(src, src_off, dst, dst_off, m, width, packed_indices):
                     b += 1
                     if b >= end:
                         break
-                    kb = _pair_key(packed_indices[src[src_off + b]])
+                    kb = _pair_key(packed_indices[src[src_off + b]], source_first)
                 else:
                     dst[dst_off + o] = src[src_off + a]
                     o += 1
                     a += 1
                     if a >= mid:
                         break
-                    ka = _pair_key(packed_indices[src[src_off + a]])
+                    ka = _pair_key(packed_indices[src[src_off + a]], source_first)
         while a < mid:
             dst[dst_off + o] = src[src_off + a]
             a += 1
@@ -94,7 +95,7 @@ def _merge_pass(src, src_off, dst, dst_off, m, width, packed_indices):
 
 
 @njit(nogil=True, cache=True)
-def _sort_block(order, lo, hi, packed_indices, buf):
+def _sort_block(order, lo, hi, packed_indices, buf, source_first):
     """Stable ascending sort of order[lo:hi] by _pair_key. buf needs hi - lo slots."""
     m = hi - lo
     if m < 2:
@@ -107,9 +108,10 @@ def _sort_block(order, lo, hi, packed_indices, buf):
             stop = hi
         for i in range(start + 1, stop):
             entry = order[i]
-            entry_key = _pair_key(packed_indices[entry])
+            entry_key = _pair_key(packed_indices[entry], source_first)
             j = i - 1
-            while j >= start and _pair_key(packed_indices[order[j]]) > entry_key:
+            while (j >= start
+                   and _pair_key(packed_indices[order[j]], source_first) > entry_key):
                 order[j + 1] = order[j]
                 j -= 1
             order[j + 1] = entry
@@ -118,9 +120,9 @@ def _sort_block(order, lo, hi, packed_indices, buf):
     in_order = True
     while width < m:
         if in_order:
-            _merge_pass(order, lo, buf, 0, m, width, packed_indices)
+            _merge_pass(order, lo, buf, 0, m, width, packed_indices, source_first)
         else:
-            _merge_pass(buf, 0, order, lo, m, width, packed_indices)
+            _merge_pass(buf, 0, order, lo, m, width, packed_indices, source_first)
         in_order = not in_order
         width *= 2
     if not in_order:
@@ -214,7 +216,7 @@ def link_bound(window_size, max_gap, flex_gap, min_matching):
 
 
 @njit(nogil=True, cache=True)
-def _chain_flat(packed_indices, n, max_link, near_gap, best, parent, used):
+def _chain_flat(packed_indices, n, max_link, near_gap, source_first, best, parent, used):
     """Longest chain ending at each match, scanning every match in the source window.
 
     Also sets bit 2 of used[a] when a match follows a within near_gap in both documents:
@@ -230,6 +232,7 @@ def _chain_flat(packed_indices, n, max_link, near_gap, best, parent, used):
         parent_b = np.int32(-1)
         best_step = np.int64(0)
         best_near = np.int64(0)
+        best_first = np.int64(0)
         for a in range(window_start, b):
             source_a = packed_indices[a] >> 32
             if source_a == source_b:
@@ -247,17 +250,23 @@ def _chain_flat(packed_indices, n, max_link, near_gap, best, parent, used):
             # steps as an unordered pair: their total first, then the smaller of them,
             # which together fix both. Both are symmetric in the two documents, so the
             # choice does not depend on which one is the source. What that leaves tied
-            # is a predecessor at (di, dj) against one at (dj, di) -- exact mirror
-            # images, which nothing symmetric can separate.
+            # is a predecessor at (di, dj) against one at (dj, di), exact mirror images:
+            # those go to the smaller step in whichever document comes first by
+            # identity, the same one either way round.
             near = source_step if source_step < target_step else target_step
+            first_step = source_step if source_first else target_step
             if candidate > best_b or (candidate == best_b
                                       and (step < best_step
                                            or (step == best_step
-                                               and near < best_near))):
+                                               and (near < best_near
+                                                    or (near == best_near
+                                                        and first_step
+                                                        < best_first))))):
                 best_b = candidate
                 parent_b = a
                 best_step = step
                 best_near = near
+                best_first = first_step
         best[b] = best_b
         parent[b] = parent_b
         used[b] = 0
@@ -267,7 +276,8 @@ def _chain_flat(packed_indices, n, max_link, near_gap, best, parent, used):
 
 
 @njit(nogil=True, cache=True)
-def _chain_blocked(packed_indices, n, max_link, near_gap, best, parent, used):
+def _chain_blocked(packed_indices, n, max_link, near_gap, source_first, best, parent,
+                   used):
     """The same scan, reaching each source block's candidates by binary search.
 
     Matches sharing a source index are contiguous and their target indices ascend, so
@@ -298,6 +308,7 @@ def _chain_blocked(packed_indices, n, max_link, near_gap, best, parent, used):
         parent_b = np.int32(-1)
         best_step = np.int64(0)
         best_near = np.int64(0)
+        best_first = np.int64(0)
         target_floor = target_b - max_link
         first = n_seen - 1 - max_link
         if first < 0:
@@ -327,14 +338,19 @@ def _chain_blocked(packed_indices, n, max_link, near_gap, best, parent, used):
                 candidate = best[a] + np.int32(1)
                 step = source_step + target_step
                 near = source_step if source_step < target_step else target_step
+                first_step = source_step if source_first else target_step
                 if candidate > best_b or (candidate == best_b
                                           and (step < best_step
                                                or (step == best_step
-                                                   and near < best_near))):
+                                                   and (near < best_near
+                                                        or (near == best_near
+                                                            and first_step
+                                                            < best_first))))):
                     best_b = candidate
                     parent_b = a
                     best_step = step
                     best_near = near
+                    best_first = first_step
         best[b] = best_b
         parent[b] = parent_b
         used[b] = 0
@@ -589,9 +605,11 @@ def _coalesce(out, n):
 @njit(nogil=True, cache=True)
 def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
                   window_size, max_gap, flex_gap, min_matching, min_in_window,
-                  best, parent, used, chain, key, order, spans, out):
+                  source_first, best, parent, used, chain, key, order, spans, out):
     """Matches must be sorted by (source index, target index). `n_blocks` is how many
-    distinct source indices they hold, which picks the predecessor scan.
+    distinct source indices they hold, which picks the predecessor scan. `source_first`
+    says whether the source is the first of the pair by document identity, which is what
+    settles ties between mirror images.
 
     A passage is a chain of matches strictly increasing in both ngram indices, with
     consecutive steps inside the run's gap allowance in either document, dense enough
@@ -620,10 +638,11 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
     near_gap = max_gap if max_gap <= window_size else -1
 
     if n_blocks > 0 and n >= BLOCK_MIN_MATCHES and n >= BLOCK_FANOUT * n_blocks:
-        longest = _chain_blocked(packed_indices, n, max_link, near_gap, best, parent,
-                                 used)
+        longest = _chain_blocked(packed_indices, n, max_link, near_gap, source_first,
+                                 best, parent, used)
     else:
-        longest = _chain_flat(packed_indices, n, max_link, near_gap, best, parent, used)
+        longest = _chain_flat(packed_indices, n, max_link, near_gap, source_first, best,
+                              parent, used)
     if longest < min_matching:
         return out, 0, spans, longest       # no chain here can reach the threshold
 
@@ -651,7 +670,7 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
     block_start = 0
     for bucket in range(n_buckets):
         block_end = key[bucket]
-        _sort_block(order, block_start, block_end, packed_indices, chain)
+        _sort_block(order, block_start, block_end, packed_indices, chain, source_first)
         block_start = block_end
 
     for rank in range(n_ends):
@@ -823,7 +842,7 @@ def _merged(rows, n, merging, merge_byte, merge_ngram, window_size, multiplier):
 @njit(nogil=True, cache=True)
 def align_pair(packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
                window_size, max_gap, flex_gap, min_matching, min_in_window,
-               merge_byte, merge_ngram, multiplier,
+               merge_byte, merge_ngram, multiplier, source_first,
                best, parent, used, chain, key, order, spans, out):
     """One pair's passages: the chains, and the anchored scan walking each document,
     each set merged on its own and then coalesced.
@@ -838,7 +857,7 @@ def align_pair(packed_indices, packed_positions, n, n_blocks, start_bytes, end_b
     """
     out, n_chains, spans, longest = match_passage(
         packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
-        window_size, max_gap, flex_gap, min_matching, min_in_window,
+        window_size, max_gap, flex_gap, min_matching, min_in_window, source_first,
         best, parent, used, chain, key, order, spans, out)
     # A scan's run either is a chain or reaches its first step past the gap with
     # min_in_window matches linked normally, so below both nothing here can pass.
