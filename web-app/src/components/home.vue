@@ -1,36 +1,43 @@
 <template>
-    <div class="card mt-4 shadow-1" style="font-size: 1rem;">
+    <div class="card mt-4 shadow-1" style="font-size: 1rem;" v-if="stats !== false">
 
         <div class="card-body">
             <h5 class="card-title">Some basic statistics on current alignment:</h5>
-            <p class="card-text">
-            <ul>
+            <p class="card-text text-muted" v-if="stats === null">Counting...</p>
+            <ul class="card-text" v-else-if="stats">
                 <li>This database contains {{ stats.pairs_count.toLocaleString() }} passage pairs.</li>
-                <li v-if="globalConfig.matchingAlgorithm == 'sa'">These pairs were generated from {{
-                    stats.group_count.toLocaleString() }} source passages
-                    borrowed from
-                    {{
-                        stats.author_group_count.toLocaleString() }}
-                    authors in {{
-                        stats.title_group_count.toLocaleString() }} titles.
+                <li v-if="stats.group_count != null">These pairs were generated from {{
+                    stats.group_count.toLocaleString() }} source passages<span v-if="stats.author_group_count != null">
+                        borrowed from {{ stats.author_group_count.toLocaleString() }} authors</span><span
+                        v-if="stats.title_group_count != null"> in {{ stats.title_group_count.toLocaleString() }}
+                        titles</span>.
                 </li>
-
             </ul>
-            </p>
         </div>
 
     </div>
 </template>
 <script>
-import stats from '../../stats.json'
-
 export default {
     name: 'home',
+    inject: ["$http"],
     data() {
         return {
-            stats: stats,
-            globalConfig: this.$globalConfig,
+            stats: null,
         }
+    },
+    created() {
+        this.$http
+            .get(`${this.$globalConfig.apiServer}/database_stats/`, {
+                params: { db_table: this.$globalConfig.databaseName },
+            })
+            .then((response) => {
+                this.stats = response.data.error ? false : response.data;
+            })
+            .catch((error) => {
+                this.stats = false;
+                console.log(error);
+            });
     }
 }
 </script>

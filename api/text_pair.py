@@ -671,6 +671,43 @@ def count_results(request: Request):
     return result_object
 
 
+# Landing page counts, by table and oid: loading a database again recreates its tables
+DATABASE_STATS = {}
+
+
+@app.get("/database_stats/")
+@app.get("/text-pair-api/database_stats/")
+def database_stats(request: Request):
+    """Counts of passage pairs, and of the passage families they form, for the landing page"""
+    _, _, other_args, _ = parse_args(request)
+    table = str(other_args.db_table)
+    conn = psycopg2.connect(
+        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
+        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
+        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
+    )
+    cursor = conn.cursor()
+    cursor.execute("SELECT to_regclass(%s)::oid, to_regclass(%s)::oid", (table, f"{table}_groups"))
+    key = (table, *cursor.fetchone())
+    if key[1] is None:
+        conn.close()
+        return {"error": f"No table {table}"}
+    if key not in DATABASE_STATS:
+        cursor.execute(f"SELECT count(*) FROM {table}")
+        stats = {"pairs_count": cursor.fetchone()[0]}
+        if key[2] is not None:
+            fields = [field for field in ("author", "title") if f"source_{field}" in get_pg_type(f"{table}_groups")]
+            counts = ", ".join(["count(*)", *(f"count(DISTINCT source_{field})" for field in fields)])
+            cursor.execute(f"SELECT {counts} FROM {table}_groups")
+            group_count, *field_counts = cursor.fetchone()
+            stats["group_count"] = group_count
+            stats.update({f"{field}_group_count": count for field, count in zip(fields, field_counts)})
+        DATABASE_STATS[key] = stats
+    conn.rollback()
+    conn.close()
+    return DATABASE_STATS[key]
+
+
 @app.post("/generate_time_series/")
 @app.post("/text-pair-api/generate_time_series/")
 def generate_time_series(request: Request):

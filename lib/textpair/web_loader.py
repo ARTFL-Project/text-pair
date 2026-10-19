@@ -843,47 +843,10 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
     database.close()
 
 
-def generate_database_stats(table_name, algorithm):
-    """Generate statistics for the database"""
-    print("Generating database statistics (this could take a while)...")
-    config = read_global_config()
-    database = psycopg2.connect(
-        user=config["DATABASE"]["database_user"],
-        password=config["DATABASE"]["database_password"],
-        database=config["DATABASE"]["database_name"],
-    )
-    cursor = database.cursor()
-    stats = {}
-    if algorithm == "sa":
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}_groups")
-        stats["group_count"] = cursor.fetchone()[0]
-        try:
-            cursor.execute(f"SELECT COUNT(DISTINCT source_author) FROM {table_name}_groups")
-            stats["author_group_count"] = cursor.fetchone()[0]
-        except psycopg2.errors.UndefinedColumn:
-            stats["author_group_count"] = 0
-            database.rollback()
-        try:
-            cursor.execute(f"SELECT COUNT(DISTINCT source_title) FROM {table_name}_groups")
-            stats["title_group_count"] = cursor.fetchone()[0]
-        except psycopg2.errors.UndefinedColumn:
-            stats["title_group_count"] = 0
-            database.rollback()
-    else:
-        # TODO: Add stats for other algorithms
-        pass
-    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-    stats["pairs_count"] = cursor.fetchone()[0]
-    return stats
-
-
-def set_up_app(web_config, db_path, table, algorithm):
+def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
     os.system(f"rm -rf {db_path}")
     os.mkdir(db_path)
-    stats = generate_database_stats(table, algorithm)
-    with open(os.path.join(db_path, "stats.json"), "w", encoding="utf8") as stats_file:
-        json.dump(stats, stats_file)
     print("Building web application...", flush=True)
     os.system(f"cp -R /var/lib/text-pair/web-app/. {db_path}")
     with open(os.path.join(db_path, "appConfig.json"), "w", encoding="utf8") as config_file:
@@ -967,7 +930,7 @@ def create_web_app(
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)
         web_config.update(fields_in_table)
-        set_up_app(web_config, db_dir, table, algorithm)
+        set_up_app(web_config, db_dir)
 
     # Copy the config file used for this run into the web app directory
     config_file = textpair_params.config
