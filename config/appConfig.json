@@ -141,7 +141,7 @@
             },
             {
                 "label": "Passage Length",
-                "value": "source_passage_length"
+                "value": "target_passage_length"
             }
         ]
     },
