@@ -4,5 +4,7 @@ import builtConfig from "../appConfig.json";
 export default {
     showNetworkGraph: true,
     showSemanticGraph: true,
+    sourceTextAvailable: true,
+    targetTextAvailable: true,
     ...(window.textpairConfig || builtConfig),
 };

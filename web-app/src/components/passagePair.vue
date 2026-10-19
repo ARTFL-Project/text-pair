@@ -34,7 +34,7 @@
                     {{ alignment.source_context_after }}
                 </p>
                 <button type="button" class="btn btn-outline-secondary position-absolute rounded-0"
-                    style="bottom: 0; left: 0" v-if="globalConfig.sourcePhiloDBLink"
+                    style="bottom: 0; left: 0" v-if="globalConfig.sourceTextAvailable"
                     @click="goToContext(alignment, 'source')">
                     View passage in context
                 </button>
@@ -46,7 +46,7 @@
                     {{ alignment.target_context_after }}
                 </p>
                 <button type="button" class="btn btn-outline-secondary position-absolute rounded-0"
-                    style="bottom: 0; right: 0" v-if="globalConfig.targetPhiloDBLink"
+                    style="bottom: 0; right: 0" v-if="globalConfig.targetTextAvailable"
                     @click="goToContext(alignment, 'target')">
                     View passage in context
                 </button>
@@ -230,23 +230,16 @@ export default {
             }
         },
         goToContext(alignment, direction) {
-            let rootURL = "";
-            let params = {};
-            if (direction == "source") {
-                rootURL = this.globalConfig.sourcePhiloDBLink.replace(/\/$/, "");
-                params = {
-                    db_table: this.$globalConfig.databaseName, philo_url: rootURL, philo_path: this.globalConfig.sourcePhiloDBPath, philo_id: alignment.source_philo_id, start_byte: alignment.source_start_byte, end_byte: alignment.source_end_byte, directionSelected: "source"
-                };
-            } else {
-                rootURL = this.globalConfig.targetPhiloDBLink.replace(/\/$/, "");
-                params = {
-                    db_table: this.$globalConfig.databaseName, philo_url: rootURL, philo_path: this.globalConfig.targetPhiloDBPath, philo_id: alignment.target_philo_id, start_byte: alignment.target_start_byte, end_byte: alignment.target_end_byte, directionSelected: "target"
-                };
-            }
             this.$router.push({
                 path: "/text-view/",
-                query: params,
-            })
+                query: {
+                    db_table: this.$globalConfig.databaseName,
+                    philo_id: alignment[`${direction}_philo_id`],
+                    start_byte: alignment[`${direction}_start_byte`],
+                    end_byte: alignment[`${direction}_end_byte`],
+                    directionSelected: direction,
+                },
+            });
         },
     },
 };

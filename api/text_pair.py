@@ -131,6 +131,14 @@ def has_passage_families(table) -> bool:
     return get_pg_type(table).get("group_id") == "ARRAY" and bool(get_pg_type(f"{table}_groups"))
 
 
+def text_data_path(db_dir: str, config: dict, direction: str) -> str | None:
+    """The PhiloLogic database the full source or target texts are read from, if still on disk."""
+    for path in (config.get(f"{direction}PhiloDBPath", ""), os.path.join(db_dir, f"{direction}_data")):
+        if path and os.path.isfile(os.path.join(path, "data", "toms.db")):
+            return path
+    return None
+
+
 def parse_args(request):
     """Parse URL args"""
     query_args = FormArguments()
@@ -882,11 +890,12 @@ def text_view(request: Request):
             else:
                 merged_passage_pairs.append(passage_pair)
 
-    if other_args.philo_path:
-        philo_config = PHILO_CONFIG(other_args.philo_path, "", "", "")
-    else:
-        philo_path = os.path.join(APP_PATH, other_args.db_table)
-        philo_config = PHILO_CONFIG(philo_path, "", "", "")
+    db_dir = os.path.join(APP_PATH, str(other_args.db_table))
+    philo_path = text_data_path(db_dir, load_app_config(db_dir), other_args.directionSelected)
+    if philo_path is None:
+        conn.close()
+        return {"error": "The full text of this document is no longer available."}
+    philo_config = PHILO_CONFIG(philo_path, "", "", "")
     philo_db = DB(f"{philo_config.db_path}/data", width=7)
     philo_object = philo_db[other_args.philo_id]
     philo_request = PHILO_REQUEST("", "", "", merged_passage_pairs)
@@ -1536,6 +1545,8 @@ def index(db_path: str):
     except SettingsError as error:
         return HTMLResponse(f"<p>The settings of this database have a mistake: {html.escape(str(error))}</p>", 500)
     config["showNetworkGraph"] = config["showNetworkGraph"] and has_passage_families(config["databaseName"])
+    for direction in ("source", "target"):
+        config[f"{direction}TextAvailable"] = text_data_path(db_dir, config, direction) is not None
     config_script = orjson.dumps(config).decode().replace("</", "<\\/")
     with open(os.path.join(db_dir, "dist/index.html"), encoding="utf8") as index_file:
         index_html = index_file.read()

@@ -11,8 +11,9 @@
                 role="status">
             </div>
         </div>
+        <div class="m-4" style="font-size: 120%" v-if="error">{{ error }}</div>
         <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content" style="text-align: center"
-            v-if="textObject">
+            v-if="textObject && !error">
             <div class="card mt-2 mb-4 pb-4 shadow d-inline-block">
                 <div class="btn-group" style="width: 100%" role="group" aria-label="alt-results">
                     <button type="button" class="btn btn-secondary" :class="{ active: direction == 'target' }"
@@ -72,6 +73,7 @@ export default {
             passagePairs: [],
             modal: null,
             loading: false,
+            error: null,
             color: color
         }
     },
@@ -105,6 +107,7 @@ export default {
         fetchText() {
             this.textObject = {};
             this.loading = true;
+            this.error = null;
             if (this.modal != null) { // TODO: broken
                 this.modal.hide();
             }
@@ -114,8 +117,12 @@ export default {
                     params: this.$route.query,
                 })
                 .then((response) => {
-                    this.textObject = response.data;
                     this.loading = false;
+                    if (response.data.error) {
+                        this.error = response.data.error;
+                        return;
+                    }
+                    this.textObject = response.data;
                     if (this.$route.query.start_byte && this.$route.query.end_byte) {
                         this.$nextTick(() => {
                             let el = document.querySelector(`.passage-marker[n="${response.data.passage_number}"]`)
@@ -187,7 +194,7 @@ export default {
         },
         changeDirection(direction) {
             this.direction = direction;
-            this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&philo_path=${this.$route.query.philo_path}&philo_id=${this.$route.query.philo_id}&directionSelected=${direction}`)
+            this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&philo_id=${this.$route.query.philo_id}&directionSelected=${direction}`)
         },
         buildCitation(metadataFields, direction) {
             let citation = '<ul class="list-group" style="list-style-type: none; margin: 0; padding: 0;">'
