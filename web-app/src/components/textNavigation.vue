@@ -1,9 +1,9 @@
 <template>
     <div class="row mt-1" id="all-content">
-        <div class="position-relative" v-scroll="handleScroll">
-            <button type="button" class="btn btn-secondary btn-sm" id="back-to-top" @click="backToTop()"
-                v-scroll="handleScroll">
-                <span class="d-sm-inline-block">Back to top</span>
+        <div v-scroll="handleScroll">
+            <button type="button" class="btn btn-secondary btn-sm" id="back-to-top" :class="{ visible: topButtonVisible }"
+                aria-label="Back to top" @click="backToTop()">
+                <span aria-hidden="true">&uarr;</span><span class="d-none d-sm-inline ms-1">Back to top</span>
             </button>
         </div>
         <div class="d-flex justify-content-center position-relative" v-if="loading">
@@ -247,21 +247,7 @@ export default {
             });
         },
         handleScroll() {
-            if (!this.topButtonVisible) {
-                if (window.scrollY > this.bookPagePosition) {
-                    this.topButtonVisible = true;
-                    let backToTop = document.getElementById("back-to-top");
-                    backToTop.classList.add("visible");
-                    backToTop.style.top = 0;
-                    backToTop.style.position = "fixed";
-                }
-            } else if (window.scrollY < this.bookPagePosition) {
-                this.topButtonVisible = false;
-                let backToTop = document.getElementById("back-to-top");
-                backToTop.classList.remove("visible");
-                backToTop.style.position = "";
-                backToTop.style.top = "";
-            }
+            this.topButtonVisible = window.scrollY > this.bookPagePosition;
         },
         changeDirection(direction) {
             this.direction = direction;
@@ -378,9 +364,16 @@ export default {
 }
 
 
+/* Floats over the corner of the page, where it stays clear of the text on wide screens */
 #back-to-top {
-    position: absolute;
-    left: 0;
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 1030;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    border-radius: 1.25rem;
+    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.25);
     opacity: 0;
     transition: opacity 0.25s;
     pointer-events: none;
