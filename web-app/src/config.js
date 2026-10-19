@@ -6,5 +6,6 @@ export default {
     showSemanticGraph: true,
     sourceTextAvailable: true,
     targetTextAvailable: true,
+    passageClassification: [],
     ...(window.textpairConfig || builtConfig),
 };
