@@ -106,8 +106,6 @@ class TextPairConfig:
         self.web_app_config["api_server"] = web_app_section.get("api_server", "")
         config = configparser.ConfigParser()
         config.read(self.__cli_args["config"])
-        self.web_app_config["source_url"] = config["TEXT_SOURCES"]["source_url"]
-        self.web_app_config["target_url"] = config["TEXT_SOURCES"]["target_url"]
         source_file_path = config["TEXT_SOURCES"]["source_file_path"] or ""
         target_file_path = config["TEXT_SOURCES"]["target_file_path"] or ""
         self.is_philo_db: bool = _is_philo_db(source_file_path)

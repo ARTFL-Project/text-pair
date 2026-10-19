@@ -98,8 +98,6 @@ class WebAppConfig:
         self,
         db_name: str,
         api_server: str,
-        source_database_link: str,
-        target_database_link: str,
         source_philo_db_path: str,
         target_philo_db_path: str,
         algorithm: str,
@@ -113,13 +111,10 @@ class WebAppConfig:
         self.options["appPath"] = os.path.join("/text-pair", db_name)
         self.options["databaseName"] = db_name.lower()
         self.options["matchingAlgorithm"] = algorithm
-        self.options["sourcePhiloDBLink"] = source_database_link
         self.options["sourcePhiloDBPath"] = source_philo_db_path
         if source_against_source is True:
-            self.options["targetPhiloDBLink"] = source_database_link
             self.options["targetPhiloDBPath"] = source_philo_db_path
         else:
-            self.options["targetPhiloDBLink"] = target_database_link
             self.options["targetPhiloDBPath"] = target_philo_db_path
         self.options["sourceLinkToDocMetadata"] = "source_title"
         self.options["targetLinkToDocMetadata"] = "target_title"
@@ -927,8 +922,6 @@ def create_web_app(
     table,
     web_app_dir,
     api_server,
-    source_database_link,
-    target_database_link,
     source_philo_db_path,
     target_philo_db_path,
     algorithm,
@@ -941,8 +934,6 @@ def create_web_app(
     web_config = WebAppConfig(
         table,
         api_server,
-        source_database_link,
-        target_database_link,
         source_philo_db_path,
         target_philo_db_path,
         algorithm,

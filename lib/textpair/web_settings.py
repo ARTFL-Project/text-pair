@@ -43,14 +43,6 @@ BLOCKS = [
         [Option("semantic_graph", ("showSemanticGraph",), False)],
     ),
     (
-        "Addresses of the PhiloLogic databases holding the source and target texts, to link\n"
-        "passages to their full text. Leave empty for no links.",
-        [
-            Option("source_philologic_link", ("sourcePhiloDBLink",), ""),
-            Option("target_philologic_link", ("targetPhiloDBLink",), ""),
-        ],
-    ),
-    (
         "Links at the top left of the page header.",
         [Option("branding", ("branding",), [], {"label": "label", "link": "link"})],
     ),
