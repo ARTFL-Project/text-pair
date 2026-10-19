@@ -28,7 +28,7 @@ export default {
         },
         href() {
             if (this.linkToDoc.length == 0) return;
-            return `/text-view/?db_table=${this.globalConfig.databaseName}&philo_id=${this.alignment[`${this.direction}_philo_id`]}&directionSelected=${this.direction}`
+            return `/text-view/?db_table=${this.globalConfig.databaseName}&doc_id=${this.alignment[`${this.direction}_doc_id`]}&directionSelected=${this.direction}`
         }
     }
 };

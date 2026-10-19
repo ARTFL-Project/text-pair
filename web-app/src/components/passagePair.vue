@@ -234,7 +234,7 @@ export default {
                 path: "/text-view/",
                 query: {
                     db_table: this.$globalConfig.databaseName,
-                    philo_id: alignment[`${direction}_philo_id`],
+                    doc_id: alignment[`${direction}_doc_id`],
                     start_byte: alignment[`${direction}_start_byte`],
                     end_byte: alignment[`${direction}_end_byte`],
                     directionSelected: direction,

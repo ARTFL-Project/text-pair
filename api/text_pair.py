@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Routing and search code for sequence alignment"""
 
+import bisect
 import configparser
 import html
 import itertools
@@ -161,6 +162,7 @@ def parse_args(request):
         "philo_db",
         "philo_url",
         "philo_id",
+        "doc_id",
         "philo_path",
         "classification_filter_1",
         "classification_filter_2",
@@ -849,100 +851,104 @@ def get_sorted_results(request: Request):
     return results
 
 
+def merge_passages(rows: list, direction: str) -> list[dict]:
+    """The passages of a document on one side of its alignments, overlapping ones merged."""
+    merged = []
+    for row in sorted(rows, key=lambda row: row[f"{direction}_start_byte"]):
+        start, end = row[f"{direction}_start_byte"], row[f"{direction}_end_byte"]
+        if merged and start <= merged[-1]["end_byte"]:
+            merged[-1]["end_byte"] = max(merged[-1]["end_byte"], end)
+        else:
+            merged.append({"start_byte": start, "end_byte": end})
+    return merged
+
+
 @app.get("/text_view/")
 @app.get("/text-pair-api/text_view/")
 def text_view(request: Request):
-    """Retrieve a text object from PhiloLogic4"""
+    """A document's full text, marking the passages it shares with other texts on one side of the alignments"""
     _, _, other_args, _ = parse_args(request)
     access_control = check_access_control(request)
     if access_control is False:  # TODO check if user has access to this database
         return {"error": "You do not have access to this database"}
+    table, direction = str(other_args.db_table), str(other_args.directionSelected)
+    other = "target" if direction == "source" else "source"
+    db_dir = os.path.join(APP_PATH, table)
+    config = load_app_config(db_dir)
+    philo_path = text_data_path(db_dir, config, direction)
+    if philo_path is None:
+        return {"error": "The full text of this document is no longer available."}
+    other_path = text_data_path(db_dir, config, other)
+    # When both sides are the same texts, a document has passages on each, under the same doc_id
+    same_texts = other_path is not None and os.path.realpath(other_path) == os.path.realpath(philo_path)
 
-    # Get passage pairs offsets
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cursor.execute(
-        f"SELECT {other_args.directionSelected}_start_byte, {other_args.directionSelected}_end_byte FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s",
-        (other_args.philo_id,),
-    )
-    passage_pairs = [
-        {
-            "start_byte": row[f"{other_args.directionSelected}_start_byte"],
-            "end_byte": row[f"{other_args.directionSelected}_end_byte"],
-        }
-        for row in cursor
-    ]
-
-    # Merge passage pairs based on overlapping offsets
-    passage_pairs.sort(key=lambda x: x["start_byte"])
-    merged_passage_pairs = []
-    for passage_pair in passage_pairs:
-        if not merged_passage_pairs:
-            merged_passage_pairs.append(passage_pair)
-        else:
-            last_merged_passage_pair = merged_passage_pairs[-1]
-            if passage_pair["start_byte"] <= last_merged_passage_pair["end_byte"]:
-                last_merged_passage_pair["end_byte"] = passage_pair["end_byte"]
-            else:
-                merged_passage_pairs.append(passage_pair)
-
-    db_dir = os.path.join(APP_PATH, str(other_args.db_table))
-    philo_path = text_data_path(db_dir, load_app_config(db_dir), other_args.directionSelected)
-    if philo_path is None:
-        conn.close()
-        return {"error": "The full text of this document is no longer available."}
-    philo_config = PHILO_CONFIG(philo_path, "", "", "")
-    philo_db = DB(f"{philo_config.db_path}/data", width=7)
-    philo_object = philo_db[other_args.philo_id]
-    philo_request = PHILO_REQUEST("", "", "", merged_passage_pairs)
-    philo_text_object, _ = get_text_obj(philo_object, philo_config, philo_request, philo_db.locals["token_regex"])
-
-    # Get metadata
-    cursor.execute(
-        f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_philo_id=%s",
-        (other_args.philo_id,),
-    )
-    metadata_fields: psycopg2.extras.RealDictCursor = cursor.fetchone()  # type: ignore
-
-    # Get metadata for other direction
-    other_metadata_fields = []
-    for passage_pair in merged_passage_pairs:
-        cursor.execute(
-            f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s",
-            (
-                metadata_fields[f"{other_args.directionSelected}_filename"],
-                passage_pair["start_byte"],
-                passage_pair["end_byte"],
-            ),
-        )  # type: ignore
-        other_metadata_fields.append([])
-        for row in cursor:
-            other_metadata_fields[-1].append(
-                {field: value for field, value in row.items() if not field.startswith(other_args.directionSelected)}
-            )
+    # The text object aligned, which a VSA passage's philo_id, that of its first sentence, is within
+    doc_id = str(other_args.doc_id)
+    if not doc_id:
+        cursor.execute(f"SELECT {direction}_doc_id FROM {table} WHERE {direction}_philo_id = %s LIMIT 1", (other_args.philo_id,))
+        doc_id = (cursor.fetchone() or {}).get(f"{direction}_doc_id", "")
+    if same_texts:
+        cursor.execute(f"SELECT * FROM {table} WHERE source_doc_id = %s OR target_doc_id = %s", (doc_id, doc_id))
+    else:
+        cursor.execute(f"SELECT * FROM {table} WHERE {direction}_doc_id = %s", (doc_id,))
+    rows = cursor.fetchall()
     conn.rollback()
     conn.close()
+    if not rows:
+        return {"error": "This text shares no passages with others."}
+    sides = {side: [row for row in rows if row[f"{side}_doc_id"] == doc_id] for side in (direction, other)}
+    passages = merge_passages(sides[direction], direction)
+    passage_counts = {direction: len(passages)}
+    if same_texts:
+        passage_counts[other] = len(merge_passages(sides[other], other))
+
+    # The other texts sharing each passage, once each, with the fields of their citation
+    starts = [passage["start_byte"] for passage in passages]
+    fields = [f"{other}_doc_id", f"{other}_philo_id", *(cite["field"] for cite in config.get(f"{other}Citation", []))]
+    other_texts = [{} for _ in passages]
+    for row in sides[direction]:
+        passage = bisect.bisect_right(starts, row[f"{direction}_start_byte"]) - 1
+        other_texts[passage].setdefault(row[f"{other}_doc_id"], {field: row.get(field) for field in fields})
+
+    if sides[direction]:
+        metadata = sides[direction][0]
+    else:  # no passages on this side: the document's own fields, from the other
+        own_fields = sides[other][0].items()
+        metadata = {direction + key[len(other) :]: value for key, value in own_fields if key.startswith(f"{other}_")}
+
+    philo_db = DB(f"{philo_path}/data", width=7)
+    philo_request = PHILO_REQUEST("", "", "", passages)
+    philo_text_object, _ = get_text_obj(
+        philo_db[" ".join((doc_id.split("_") + ["0"] * 7)[:7])],
+        PHILO_CONFIG(philo_path, "", "", ""),
+        philo_request,
+        philo_db.locals["token_regex"],
+    )
 
     # Find passage number in passage pairs for autoscroll
     passage_number = 0
     try:
         start_byte = int(request.query_params["start_byte"])
-        for i, passage_pair in enumerate(merged_passage_pairs):
-            if passage_pair["start_byte"] <= start_byte <= passage_pair["end_byte"]:
+        for i, passage in enumerate(passages):
+            if passage["start_byte"] <= start_byte <= passage["end_byte"]:
                 passage_number = i
                 break
     except KeyError:
         pass
     return {
         "text": philo_text_object,
-        "metadata": metadata_fields,
-        "direction": other_args.directionSelected,
+        "metadata": metadata,
+        "direction": direction,
+        "doc_id": doc_id,
         "passage_number": passage_number,
-        "other_metadata": other_metadata_fields,
+        "other_metadata": [list(texts.values()) for texts in other_texts],
+        "passage_counts": passage_counts,
     }
 
 
