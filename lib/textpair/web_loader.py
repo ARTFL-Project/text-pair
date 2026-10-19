@@ -1002,7 +1002,7 @@ def create_web_app(
     if textpair_params.source_against_source is True:
         copy_data(textpair_params, "source")
         os.system(
-            f"cd {textpair_params.web_app_config['web_application_directory']}/; rm target_data; ln -s source_data target_data"
+            f"cd {textpair_params.web_app_config['web_application_directory']}/{textpair_params.dbname}/; rm -rf target_data; ln -s source_data target_data"
         )
     else:
         copy_data(textpair_params, "source")
