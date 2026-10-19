@@ -259,7 +259,8 @@ export default {
                 this.topButtonVisible = false;
                 let backToTop = document.getElementById("back-to-top");
                 backToTop.classList.remove("visible");
-                backToTop.style.position = "initial"
+                backToTop.style.position = "";
+                backToTop.style.top = "";
             }
         },
         changeDirection(direction) {
