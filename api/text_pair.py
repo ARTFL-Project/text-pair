@@ -2,6 +2,7 @@
 """Routing and search code for sequence alignment"""
 
 import configparser
+import html
 import itertools
 import os
 import re
@@ -22,6 +23,7 @@ from philologic.runtime.get_text import get_text_obj
 from psycopg2 import sql
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
+from textpair.web_settings import SettingsError, load_app_config
 
 app = FastAPI()
 app.add_middleware(
@@ -1525,7 +1527,13 @@ def get_semantic_graph_data(request: Request):
 @app.get("/text-pair/{db_path}/semantic")
 @app.get("/{db_path}/semantic")
 def index(db_path: str):
-    """Return index.html which lists available POOLs"""
-    with open(os.path.join(APP_PATH, db_path, "dist/index.html"), encoding="utf8") as html:
-        index_html = html.read()
-    return HTMLResponse(index_html)
+    """Return index.html, carrying the database's current app config"""
+    db_dir = os.path.join(APP_PATH, db_path)
+    try:
+        config = load_app_config(db_dir)
+    except SettingsError as error:
+        return HTMLResponse(f"<p>The settings of this database have a mistake: {html.escape(str(error))}</p>", 500)
+    config_script = orjson.dumps(config).decode().replace("</", "<\\/")
+    with open(os.path.join(db_dir, "dist/index.html"), encoding="utf8") as index_file:
+        index_html = index_file.read()
+    return HTMLResponse(index_html.replace("</head>", f"<script>window.textpairConfig = {config_script}</script></head>", 1))

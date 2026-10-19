@@ -151,28 +151,22 @@ textpair --config=config.ini--only_align --workers=10 my_database_name
 
 ## Configuring the Web Application
 
-The `textpair` script automatically generates a Web Application, and does so by relying on the defaults configured in the `appConfig.json` file which is copied to the directory where the Web Application lives, typically `/var/www/html/text-pair/database_name`.
+The `textpair` script automatically generates a Web Application in the directory where it lives, typically `/var/www/html/text-pair/database_name`, from the defaults in `/var/lib/text-pair/config/appConfig.json`. Its settings are in two files in that directory:
+
+-   `app_settings.toml` holds the settings you can edit, each with a comment on what it does. Changes apply when the page is reloaded, without rebuilding the Web Application. If the file has a mistake, the page says which and where.
+-   `appConfig.json` holds the settings `textpair` sets when it loads the database, such as the database name, the matching algorithm, and the application path. These should not be edited.
 
 #### Note on metadata naming: metadata fields extracted for the text files are prepended by `source_` for source texts and `target_` for target texts.
 
-In this file, there are a number of fields that can be configured:
+The settings of `app_settings.toml` are:
 
--   `webServer`: should not be changed as only Apache is supported for the foreseeable future.
--   `appPath`: this should match the WSGI configuration in `/etc/text-pair/apache_wsgi.conf`. Should not be changed without knowing how to work with `mod_wsgi`.
--   `databaseName`: Defines the name of the PostgreSQL database where the data lives.
--   `matchingAlgorithm`: DO NOT EDIT: tells the web app which matching method you used, and therefore impacts functionality within the Web UI.
--   `databaseLabel`: Title of the database used in the Web Application
--   `branding`: Defines links in the header
--   `sourcePhiloDBLink` and `targetPhiloDBLink`: Provide URL to PhiloLogic database to contextualize shared passages.
--   `sourceLabel` and `targetLabel` are the names of source DB and target DB. This field supports HTML tags.
--   `sourceCitation` and `targetCitation` define the bibliography citation in results. `field` defines the metadata field to use, and `style` is for CSS styling (using key/value for CSS rules)
--   `metadataFields` defines the fields available for searching in the search form for `source` and `target`.
-    `label` is the name used in the form and `value` is the actual name of the metadata field as stored in the SQL database.
--   `facetFields` works the same way as `metadataFields` but for defining which fields are available in the faceted browser section.
--   `timeSeriesIntervals` defines the time intervals available for the time series functionnality.
--   `banalitiesStored` DO NOT EDIT: defines whether banalities (formulaic passages) have been stored.
-
-Once you've edited these fields to your liking, you can regenerate your database by running the `npm run build` command from the directory where the `appConfig.json` file is located.
+-   `database_label`, `source_label` and `target_label`: the title of the database, and the names of the source and target texts. Labels support HTML tags.
+-   `source_philologic_link` and `target_philologic_link`: URLs of the source and target PhiloLogic databases, to read shared passages in context.
+-   `branding`: links in the header, each as `{ label = "...", link = "..." }`.
+-   `source_search_fields` and `target_search_fields`: the fields of the search form, in order, each as `{ field = "source_author", label = "Author" }`, where `field` is the name of the metadata field in the SQL database.
+-   `source_facets` and `target_facets`: the fields of the faceted browser, in the same format.
+-   `source_citation` and `target_citation`: the fields of the citation shown with each passage, in order, each as `{ field = "source_title", style = { font-style = "italic" } }`. The style may be left out.
+-   `time_series_intervals`: the intervals available in the timeline, each as `{ label = "Decade", years = 10 }`.
 
 Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
 

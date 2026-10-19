@@ -18,6 +18,7 @@ from pgvector.psycopg2 import register_vector
 from tqdm import tqdm
 
 from .parse_config import read_global_config
+from .web_settings import SETTINGS_FILE, SETTINGS_KEYS, write_app_settings
 
 DEFAULT_FIELDS = {
     "rowid",
@@ -890,7 +891,8 @@ def set_up_app(web_config, db_path, table, algorithm):
     print("Building web application...", flush=True)
     os.system(f"cp -R /var/lib/text-pair/web-app/. {db_path}")
     with open(os.path.join(db_path, "appConfig.json"), "w", encoding="utf8") as config_file:
-        json.dump(web_config(), config_file, indent=4)
+        json.dump({key: value for key, value in web_config().items() if key not in SETTINGS_KEYS}, config_file, indent=4)
+    write_app_settings(web_config(), os.path.join(db_path, SETTINGS_FILE))
     os.system(f"""cd {db_path}; npm install --silent; npm run build > "/dev/null" 2>&1;""")
 
 
@@ -1013,9 +1015,7 @@ def create_web_app(
     db_url = os.path.join(web_config.apiServer.replace("-api", ""), table)
     print("\n### Finished ###", flush=True)
     print(f"The database is viewable at this URL: {db_url}")
-    print(
-        f"To configure the web application, edit {db_dir}/appConfig.json and run 'npm run build' from the {db_dir} directory"
-    )
+    print(f"To configure the web application, edit {db_dir}/{SETTINGS_FILE}: changes apply when the page is reloaded")
 
 
 if __name__ == "__main__":

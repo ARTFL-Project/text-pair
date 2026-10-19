@@ -1,8 +1,8 @@
 import axios from "axios";
 import emitter from "tiny-emitter/instance";
 import { createApp } from "vue";
-import globalConfig from "../appConfig.json";
 import App from "./App.vue";
+import globalConfig from "./config.js";
 import router from "./router";
 
 const app = createApp(App);

@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
-import globalConfig from "../../appConfig.json";
+import globalConfig from "../config.js";
 import home from "../components/home";
 
 const searchResults = () => import("../components/searchResults");
