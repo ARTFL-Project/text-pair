@@ -1,7 +1,7 @@
 <template>
     <div class="btn-group mt-2" role="group" aria-label="alt-results">
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'searchResults' }"
-            style="border-bottom-left-radius: 0;" @click="viewAllResults">View all
+            @click="viewAllResults">View all
             passage pairs</button>
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'sortedResults' }"
             @click="sortResults">View passages by frequency of
@@ -10,10 +10,10 @@
             @click="viewPassageInTimeline">View passages in
             timeline</button>
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'networkGraph' }"
-            @click="viewNetworkGraph">View network
+            v-if="$globalConfig.showNetworkGraph" @click="viewNetworkGraph">View network
             graph</button>
         <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'semanticGraph' }"
-            style="border-bottom-right-radius: 0;" @click="viewSemanticGraph">View semantic
+            v-if="$globalConfig.showSemanticGraph" @click="viewSemanticGraph">View semantic
             graph</button>
     </div>
 </template>
@@ -67,5 +67,13 @@ export default {
 <style scoped>
 .btn-group .btn {
     border-bottom-width: 0;
+}
+
+.btn-group .btn:first-child {
+    border-bottom-left-radius: 0;
+}
+
+.btn-group .btn:last-child {
+    border-bottom-right-radius: 0;
 }
 </style>

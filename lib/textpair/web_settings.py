@@ -16,7 +16,7 @@ SETTINGS_FILE = "app_settings.toml"
 class Option:
     name: str  # in app_settings.toml
     path: tuple[str, ...]  # in appConfig.json
-    default: str | list
+    default: bool | str | list
     record: dict[str, str] | None = None  # for a list of records: its keys -> those of appConfig.json
     optional: dict = field(default_factory=dict)  # record keys that may be left out, with their defaults
 
@@ -31,6 +31,16 @@ BLOCKS = [
     (
         "Names of the source and target texts throughout the interface. May contain HTML.",
         [Option("source_label", ("sourceLabel",), ""), Option("target_label", ("targetLabel",), "")],
+    ),
+    (
+        "Show the network graph view: true or false. It stays hidden anyway if passages\n"
+        "were not grouped into families when the database was loaded.",
+        [Option("network_graph", ("showNetworkGraph",), True)],
+    ),
+    (
+        "Show the semantic graph view: true or false. Turned on when a semantic graph is built;\n"
+        "if it is on without one, the view says so.",
+        [Option("semantic_graph", ("showSemanticGraph",), False)],
     ),
     (
         "Addresses of the PhiloLogic databases holding the source and target texts, to link\n"
@@ -75,7 +85,7 @@ BLOCKS = [
 OPTIONS = {option.name: option for _, options in BLOCKS for option in options}
 # appConfig.json keys that app_settings.toml holds instead
 SETTINGS_KEYS = {option.path[0] for option in OPTIONS.values()}
-KINDS = {str: "text in quotes", list: "a list in [ brackets ]"}
+KINDS = {bool: "true or false", str: "text in quotes", list: "a list in [ brackets ]"}
 
 
 class SettingsError(ValueError):
@@ -84,6 +94,8 @@ class SettingsError(ValueError):
 
 def toml_value(value) -> str:
     """A value in TOML syntax."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
     if isinstance(value, str):
@@ -164,6 +176,16 @@ def record_entry(option: Option, entry) -> dict:
     return {config_key: entry.get(key, option.optional.get(key)) for key, config_key in option.record.items()}
 
 
+def show_view(db_dir: str, name: str):
+    """Turn a view on in a database's settings file, if it has one."""
+    settings_path = os.path.join(db_dir, SETTINGS_FILE)
+    if os.path.exists(settings_path):
+        with open(settings_path, encoding="utf8") as settings_file:
+            settings = settings_file.read()
+        with open(settings_path, "w", encoding="utf8") as settings_file:
+            settings_file.write(re.sub(rf"^{name}\s*=.*$", f"{name} = true", settings, flags=re.MULTILINE))
+
+
 def load_app_config(db_dir: str) -> dict:
     """A database's app config: appConfig.json, with app_settings.toml over it when there is one."""
     with open(os.path.join(db_dir, "appConfig.json"), encoding="utf8") as config_file:
@@ -171,4 +193,6 @@ def load_app_config(db_dir: str) -> dict:
     settings_path = os.path.join(db_dir, SETTINGS_FILE)
     if os.path.exists(settings_path):
         config.update(read_app_settings(settings_path))
+    for option in (OPTIONS["network_graph"], OPTIONS["semantic_graph"]):
+        config.setdefault(option.path[0], option.default)
     return config

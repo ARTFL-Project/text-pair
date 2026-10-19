@@ -126,6 +126,11 @@ def get_pg_type(table_name):
     return field_types
 
 
+def has_passage_families(table) -> bool:
+    """Whether alignments were grouped into passage families, as the network view needs."""
+    return get_pg_type(table).get("group_id") == "ARRAY" and bool(get_pg_type(f"{table}_groups"))
+
+
 def parse_args(request):
     """Parse URL args"""
     query_args = FormArguments()
@@ -1262,10 +1267,7 @@ def get_semantic_scatter_data(request: Request):
     db_name = str(other_args.db_table)
     scatter_path = os.path.join(APP_PATH, db_name, "graph_data", "scatter_data.json")
     if not os.path.exists(scatter_path):
-        return {
-            "error": f"Scatter data not found at {scatter_path}. "
-            "Re-run the graph build to generate it."
-        }
+        return {"error": "No semantic graph has been generated for this database. Build it with textpair --graph_only."}
     with open(scatter_path, "rb") as f:
         return Response(content=f.read(), media_type="application/json")
 
@@ -1533,6 +1535,7 @@ def index(db_path: str):
         config = load_app_config(db_dir)
     except SettingsError as error:
         return HTMLResponse(f"<p>The settings of this database have a mistake: {html.escape(str(error))}</p>", 500)
+    config["showNetworkGraph"] = config["showNetworkGraph"] and has_passage_families(config["databaseName"])
     config_script = orjson.dumps(config).decode().replace("</", "<\\/")
     with open(os.path.join(db_dir, "dist/index.html"), encoding="utf8") as index_file:
         index_html = index_file.read()

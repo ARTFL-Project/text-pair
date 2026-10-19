@@ -61,4 +61,12 @@ const router = createRouter({
         }
     },
 });
+router.beforeEach((to) => {
+    const hidden =
+        (to.name === "networkGraph" && !globalConfig.showNetworkGraph) ||
+        (to.name === "semanticGraph" && !globalConfig.showSemanticGraph);
+    if (hidden) {
+        return { name: "searchResults", query: to.query };
+    }
+});
 export default router;

@@ -18,7 +18,7 @@ from pgvector.psycopg2 import register_vector
 from tqdm import tqdm
 
 from .parse_config import read_global_config
-from .web_settings import SETTINGS_FILE, SETTINGS_KEYS, write_app_settings
+from .web_settings import SETTINGS_FILE, SETTINGS_KEYS, show_view, write_app_settings
 
 DEFAULT_FIELDS = {
     "rowid",
@@ -124,6 +124,7 @@ class WebAppConfig:
         self.options["sourceLinkToDocMetadata"] = "source_title"
         self.options["targetLinkToDocMetadata"] = "target_title"
         self.options["banalitiesStored"] = store_banalities
+        self.options["showSemanticGraph"] = False  # until a graph is published
 
         # Populate passage classification if available
         if textpair_params and hasattr(textpair_params, "passage_classification"):
@@ -914,6 +915,7 @@ def publish_graph_data(source_graph_data: str, db_dir: str) -> bool:
     if os.path.exists(dest_graph_data):
         shutil.rmtree(dest_graph_data)
     shutil.copytree(source_graph_data, dest_graph_data)
+    show_view(db_dir, "semantic_graph")
     return True
 
 
