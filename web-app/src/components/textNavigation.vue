@@ -12,21 +12,54 @@
             </div>
         </div>
         <div class="m-4" style="font-size: 120%" v-if="error">{{ error }}</div>
-        <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content" style="text-align: center"
-            v-if="textObject && !error">
-            <div class="card mt-2 mb-4 pb-4 shadow d-inline-block">
-                <div class="btn-group" style="width: 100%" role="group" aria-label="alt-results">
-                    <button type="button" class="btn btn-secondary" :class="{ active: direction == 'target' }"
-                        @click="changeDirection('target')">Show reuses of
-                        ealier texts</button>
-                    <button type="button" class="btn btn-secondary" :class="{ active: direction == 'source' }"
-                        @click="changeDirection('source')">Show reuses in
-                        later texts</button>
+        <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content" v-if="textObject && !error">
+            <div class="h4 text-title text-center mt-3 mb-2" v-if="textObject.metadata">
+                <citations :citation="globalConfig[`${direction}Citation`]" :alignment="textObject.metadata"></citations>
+            </div>
+            <div class="d-flex justify-content-center mb-3" v-if="bothDirections">
+                <div class="btn-group" role="group" aria-label="Direction of reuse">
+                    <button type="button" class="btn btn-outline-secondary" :class="{ active: direction == 'target' }"
+                        :disabled="!passageCounts.target" @click="changeDirection('target')">
+                        Reuses of earlier texts ({{ passageCounts.target }})
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" :class="{ active: direction == 'source' }"
+                        :disabled="!passageCounts.source" @click="changeDirection('source')">
+                        Reused in later texts ({{ passageCounts.source }})
+                    </button>
                 </div>
-                <h5 class="pt-2 mb-1 px-4">
-                    <citations :citation="globalConfig[`${textObject.direction}Citation`]" :alignment="textObject.metadata">
-                    </citations>
-                </h5>
+            </div>
+            <div class="card shadow-sm mb-3" id="reuse-summary" v-if="textObject.text">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>{{ summaryHeading }}</span>
+                    <button type="button" class="btn btn-sm btn-outline-light py-0" v-if="otherTexts.length"
+                        :aria-expanded="String(!summaryHidden)" aria-controls="reuse-summary-list" @click="toggleSummary()">
+                        {{ summaryHidden ? "Show" : "Hide" }}
+                    </button>
+                </div>
+                <template v-if="!summaryHidden && otherTexts.length">
+                    <ul class="list-group list-group-flush" id="reuse-summary-list">
+                        <li class="list-group-item" v-for="other in otherTexts" :key="other.id">
+                            <div class="summary-citation" :title="citationText(other.metadata)">
+                                <citations :citation="globalConfig[`${otherDirection}Citation`]" :alignment="other.metadata"
+                                    :link-to-doc="`${otherDirection}_title`"></citations>
+                            </div>
+                            <div class="passage-links px-3 pb-1">
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                    v-for="passage in shownPassages(other)" :key="passage" :title="passageSnippets[passage]"
+                                    @click="goToPassage(passage)">{{ passage + 1 }}</button>
+                                <button type="button" class="btn btn-sm btn-link" v-if="other.passages.length > passageLimit"
+                                    @click="toggleExpanded(other.id)">
+                                    {{ expanded[other.id] ? "fewer" : `${other.passages.length - passageLimit} more` }}
+                                </button>
+                            </div>
+                        </li>
+                    </ul>
+                    <div class="card-footer text-muted small">
+                        Numbers are passages in the order of the text: click one to go to it.
+                    </div>
+                </template>
+            </div>
+            <div class="card mb-4 pb-4 shadow">
                 <div id="book-page" class="text-view px-4">
                     <div id="text-obj-content" class="text-content-area" v-html="textObject.text" tabindex="0"></div>
                 </div>
@@ -56,7 +89,6 @@ import citations from "./citations.vue";
 import passagePair from "./passagePair.vue";
 import { Popover, Modal } from "bootstrap";
 import vueScrollTo from 'vue-scrollto'
-import { color } from "../assets/theme.module.scss"
 
 export default {
     name: "textNavigation",
@@ -74,8 +106,48 @@ export default {
             modal: null,
             loading: false,
             error: null,
-            color: color
+            passageLimit: 24,
+            summaryHidden: localStorage.getItem("textpair.hideReuseSummary") == "true",
+            expanded: {},
+            passageSnippets: [],
         }
+    },
+    computed: {
+        otherDirection() {
+            return this.direction == "source" ? "target" : "source";
+        },
+        passageCounts() {
+            return this.textObject.passage_counts || {};
+        },
+        // Both sides are the same texts, so this one has passages in either direction
+        bothDirections() {
+            return "source" in this.passageCounts && "target" in this.passageCounts;
+        },
+        // The texts sharing passages with this one, most shared first
+        otherTexts() {
+            const texts = new Map();
+            (this.textObject.other_metadata || []).forEach((group, passage) => {
+                for (const metadata of group) {
+                    const id = metadata[`${this.otherDirection}_doc_id`];
+                    if (!texts.has(id)) {
+                        texts.set(id, { id, metadata, passages: [] });
+                    }
+                    texts.get(id).passages.push(passage);
+                }
+            });
+            return [...texts.values()].sort((a, b) => b.passages.length - a.passages.length);
+        },
+        summaryHeading() {
+            const passages = this.plural(this.passageCounts[this.direction] || 0, "passage");
+            const texts = this.otherTexts.length;
+            if (!this.bothDirections) {
+                return `${passages} shared with ${this.plural(texts, "other text")}`;
+            }
+            if (this.direction == "target") {
+                return `${passages} reusing ${this.plural(texts, "earlier text")}`;
+            }
+            return `${passages} reused in ${this.plural(texts, "later text")}`;
+        },
     },
     created() {
         this.fetchText();
@@ -97,7 +169,9 @@ export default {
     },
     mounted() {
         let bookPage = document.querySelector("#book-page");
-        this.bookPagePosition = bookPage.getBoundingClientRect().top;
+        if (bookPage) {
+            this.bookPagePosition = bookPage.getBoundingClientRect().top;
+        }
     },
     watch: {
         // call again the method if the route changes
@@ -108,6 +182,8 @@ export default {
             this.textObject = {};
             this.loading = true;
             this.error = null;
+            this.expanded = {};
+            this.passageSnippets = [];
             if (this.modal != null) { // TODO: broken
                 this.modal.hide();
             }
@@ -123,23 +199,17 @@ export default {
                         return;
                     }
                     this.textObject = response.data;
-                    if (this.$route.query.start_byte && this.$route.query.end_byte) {
-                        this.$nextTick(() => {
-                            let el = document.querySelector(`.passage-marker[n="${response.data.passage_number}"]`)
-                            vueScrollTo.scrollTo(el, 250, {
-                                easing: "ease-out",
-                                offset: -150,
-                                onDone: () => {
-                                    for (let newEl of document.getElementsByClassName(`passage-${response.data.passage_number}`)) {
-                                        let backgroundColor = newEl.style.backgroundColor || "white";
-                                        newEl.style.backgroundColor = this.color;
-                                        newEl.style.color = backgroundColor;
-                                    }
-                                }
-                            })
-                        }, 300)
-                    }
                     this.direction = this.textObject.direction;
+                    this.$nextTick(() => {
+                        this.bookPagePosition = document.querySelector("#book-page").getBoundingClientRect().top + window.scrollY;
+                        this.passageSnippets = this.textObject.other_metadata.map((_, passage) => {
+                            const words = [...document.getElementsByClassName(`passage-${passage}`)].map((el) => el.textContent).join(" ");
+                            return words.replace(/\s+/g, " ").trim().slice(0, 100);
+                        });
+                        if (this.$route.query.start_byte && this.$route.query.end_byte) {
+                            this.goToPassage(response.data.passage_number);
+                        }
+                    });
                     let otherDirection = ""
                     if (this.direction == "source") {
                         otherDirection = "target"
@@ -194,7 +264,42 @@ export default {
         },
         changeDirection(direction) {
             this.direction = direction;
-            this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&philo_id=${this.$route.query.philo_id}&directionSelected=${direction}`)
+            this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&doc_id=${this.textObject.doc_id}&directionSelected=${direction}`)
+        },
+        plural(count, noun) {
+            return `${count} ${noun}${count == 1 ? "" : "s"}`;
+        },
+        shownPassages(other) {
+            return this.expanded[other.id] ? other.passages : other.passages.slice(0, this.passageLimit);
+        },
+        toggleSummary() {
+            this.summaryHidden = !this.summaryHidden;
+            localStorage.setItem("textpair.hideReuseSummary", this.summaryHidden);
+        },
+        citationText(metadata) {
+            return this.globalConfig[`${this.otherDirection}Citation`]
+                .map((cite) => metadata[cite.field])
+                .filter((value) => value)
+                .join(" • ");
+        },
+        toggleExpanded(id) {
+            this.expanded = { ...this.expanded, [id]: !this.expanded[id] };
+        },
+        goToPassage(passage) {
+            let marker = document.querySelector(`.passage-marker[n="${passage}"]`);
+            vueScrollTo.scrollTo(marker, 250, {
+                easing: "ease-out",
+                offset: -150,
+                onDone: () => this.focusPassage(passage),
+            });
+        },
+        focusPassage(passage) {
+            for (let el of document.querySelectorAll("#book-page .focus")) {
+                el.classList.remove("focus");
+            }
+            for (let el of document.getElementsByClassName(`passage-${passage}`)) {
+                el.classList.add("focus");
+            }
         },
         buildCitation(metadataFields, direction) {
             let citation = '<ul class="list-group" style="list-style-type: none; margin: 0; padding: 0;">'
@@ -241,6 +346,28 @@ export default {
 </script>
 <style lang="scss" scoped>
 @import "../assets/theme.module.scss";
+
+#reuse-summary .list-group-item {
+    padding: 0;
+}
+
+/* Long lists scroll within the card, rather than push the text down */
+#reuse-summary-list {
+    max-height: 16rem;
+    overflow-y: auto;
+}
+
+.summary-citation :deep(p) {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.passage-links .btn-outline-secondary {
+    min-width: 2.25rem;
+    margin: 0 0.25rem 0.375rem 0;
+    padding: 0 0.375rem;
+}
 
 .separator {
     padding: 5px;
