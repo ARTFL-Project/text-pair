@@ -31,7 +31,7 @@ class PreprocessConfig:
     # Normalization, applied in the order listed in normalize.py
     modernize: bool = False
     convert_entities: bool = False
-    lemmatizer: str = ""  # path to a tab-separated file, or "spacy"
+    lemmatizer: str = ""  # path to a tab-separated file, "spacy", or "philologic"
     lowercase: bool = True
     stopwords: str = ""  # path to a newline-separated file
     strip_punctuation: bool = True
@@ -77,10 +77,13 @@ class PreprocessConfig:
         self.min_word_length = int(self.min_word_length or 0)
         if self.stopwords and not os.path.isfile(self.stopwords):
             raise FileNotFoundError(f"stopwords file not found: {self.stopwords}")
-        if self.lemmatizer not in ("", "spacy") and not os.path.isfile(self.lemmatizer):
+        if self.lemmatizer not in ("", "spacy", "philologic") and not os.path.isfile(self.lemmatizer):
             raise FileNotFoundError(f"lemmatizer file not found: {self.lemmatizer}")
         if self.lemmatizer == "spacy" and not self.language_model:
             raise ValueError("lemmatizer = spacy requires spacy_model to be set")
+        if self.lemmatizer == "philologic" and (self.pos_to_keep or self.ents_to_keep):
+            # The spaCy stage would substitute its own lemmas for the stored ones.
+            raise ValueError("lemmatizer = philologic cannot be combined with pos_to_keep or ents_to_keep")
         if self.pos_to_keep and not self.language_model:
             raise ValueError("pos_to_keep requires spacy_model to be set")
         if self.ents_to_keep and not self.language_model:
@@ -101,10 +104,11 @@ class PreprocessConfig:
     def memoizable(self) -> bool:
         """Whether normalization is a pure function of the surface form.
 
-        False once spaCy supplies a per-occurrence lemma, since the same form can
-        then normalize differently depending on context.
+        False once each occurrence brings its own lemma, from spaCy or from the
+        PhiloLogic words files, since the same form can then normalize
+        differently depending on context.
         """
-        return self.lemmatizer != "spacy"
+        return self.lemmatizer not in ("spacy", "philologic")
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "PreprocessConfig":

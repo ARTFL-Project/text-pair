@@ -179,6 +179,22 @@ def test_metadata_does_not_depend_on_sibling_order():
                 FAILURES.append(f"div1 {index} lost the `next` field")
 
 
+def test_stored_lemmas_are_per_occurrence():
+    """lemmatizer = philologic reads each word's lemma, so one form can take two."""
+    words = [dict(word("fait", "1 1 0 0 1 1 1", 0), lemma="faire"),
+             dict(word("fait", "1 1 0 0 1 1 2", 10), lemma="fait"),
+             dict(word("yeux", "1 1 0 0 1 1 3", 20), lemma="oeil")]
+    with tempfile.TemporaryDirectory() as root:
+        path = build_db(root, words, ROWS)
+        for lemmatizer, want in (("philologic", ["faire", "fait", "oeil"]),
+                                 ("", ["fait", "fait", "yeux"])):
+            preproc = PreProcessor(workers=1, language="french", stemmer=False,
+                                   modernize=False, text_object_type="doc",
+                                   lemmatizer=lemmatizer)
+            objects = list(preproc.process_texts([path]))
+            check(f"forms with lemmatizer={lemmatizer!r}", objects[0].forms, want)
+
+
 def main():
     for name, function in sorted(globals().items()):
         if name.startswith("test_") and callable(function):

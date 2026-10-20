@@ -62,7 +62,7 @@ def load_stopwords(path: str) -> frozenset[str]:
 
 
 def load_lemmatizer(path: str) -> dict[str, str]:
-    if not path or path == "spacy":
+    if not path or path in ("spacy", "philologic"):
         return {}
     key = (path, os.path.getmtime(path))
     cached = _LEMMAS.get(key)
@@ -87,7 +87,7 @@ class Normalizer:
     __slots__ = (
         "config", "modernizer", "stopwords", "lemmas", "stem", "punct_map",
         "lowercase", "strip_punctuation", "strip_numbers", "min_word_length",
-        "ascii", "convert_entities", "spacy_lemmatizer", "pos_to_keep",
+        "ascii", "convert_entities", "token_lemmas", "pos_to_keep",
         "ents_to_keep", "_memo", "_raw_memo", "vocabulary",
     )
 
@@ -109,7 +109,7 @@ class Normalizer:
         self.min_word_length = config.min_word_length
         self.ascii = config.ascii
         self.convert_entities = config.convert_entities
-        self.spacy_lemmatizer = config.lemmatizer == "spacy"
+        self.token_lemmas = config.lemmatizer in ("spacy", "philologic")
         self.pos_to_keep = frozenset(config.pos_to_keep)
         self.ents_to_keep = frozenset(config.ents_to_keep)
         self._memo: dict[str, str] = {}
@@ -126,7 +126,7 @@ class Normalizer:
         return self.modernizer.get(token, token)
 
     def __call__(self, token: str) -> str:
-        """Normalize a surface form, memoized. Not valid when spaCy supplies lemmas."""
+        """Normalize a surface form, memoized. Not valid when each token brings its lemma."""
         try:
             return self._memo[token]
         except KeyError:
@@ -161,7 +161,7 @@ class Normalizer:
         text = token.strip()
         if self.convert_entities:
             text = unescape_xml(unescape_html(text))
-        if self.spacy_lemmatizer:
+        if self.token_lemmas:
             if lemma:
                 text = lemma
         elif self.lemmas:
