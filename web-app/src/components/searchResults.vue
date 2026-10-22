@@ -1,67 +1,73 @@
 <template>
     <div class="mt-3">
+        <h2 class="visually-hidden">Passage pairs</h2>
         <div class="row" style="padding: 0 0.75rem">
             <div class="m-4" style="font-size: 120%" v-if="error">No results for your query</div>
             <search-arguments></search-arguments>
         </div>
         <report-switcher />
         <div class="row">
-            <div class="col-9 position-relative">
+            <div class="col-12 col-lg-9 position-relative">
                 <div class="d-flex justify-content-center position-relative" v-if="loading">
                     <div class="spinner-border"
                         style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
                 </div>
-                <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter"
-                    v-on:enter="enter">
-                    <div class="card mb-3 rounded-0 shadow-1" style="position: relative;"
+                <transition-group name="staggered-fade" tag="ol" class="list-unstyled" v-bind:css="false"
+                    v-on:before-enter="beforeEnter" v-on:enter="enter">
+                    <li class="card mb-3 rounded-0 shadow-1" style="position: relative;"
                         v-for="(alignment, index) in results.alignments" :key="results.start_position + index + 1"
                         v-bind:data-index="index">
-                        <div class="corner-btn left">{{ results.start_position + index + 1 }}</div>
+                        <h3 class="visually-hidden">Passage pair {{ results.start_position + index + 1 }}</h3>
+                        <div class="corner-btn left" aria-hidden="true">{{ results.start_position + index + 1 }}</div>
                         <passage-pair :alignment="alignment" :index="index" :diffed="false"></passage-pair>
-                    </div>
+                    </li>
                 </transition-group>
-                <nav aria-label="Page navigation" v-if="done">
+                <nav aria-label="Pages of results" v-if="done">
                     <ul class="pagination justify-content-center mb-4">
                         <li class="page-item" v-if="results.page > 1">
-                            <a class="page-link" v-on:click="previousPage()" aria-label="Previous">
+                            <button type="button" class="page-link" @click="previousPage()" aria-label="Previous page">
                                 <span aria-hidden="true">&laquo;</span>
-                            </a>
+                            </button>
                         </li>
-                        <li class="page-item">
-                            <a class="page-link">Page {{ results.page }}</a>
+                        <li class="page-item active">
+                            <span class="page-link" aria-current="page">Page {{ results.page }}</span>
                         </li>
-                        <li class="page-item" v-if="this.resultsLeft > 0">
-                            <a class="page-link" v-on:click="nextPage()" aria-label="Next">
+                        <li class="page-item" v-if="resultsLeft > 0">
+                            <button type="button" class="page-link" @click="nextPage()" aria-label="Next page">
                                 <span aria-hidden="true">&raquo;</span>
-                            </a>
+                            </button>
                         </li>
                     </ul>
                 </nav>
             </div>
-            <div id="facets" class="col-3 pl-0 position-relative">
+            <aside id="facets" class="col-12 col-lg-3 pl-0 position-relative" aria-labelledby="facets-title">
                 <div class="card shadow-1">
-                    <h6 class="card-header text-center">Browse by Counts</h6>
-                    <div id="metadata-list" class="mx-auto p-2" @click="toggleFacetList()">Show options</div>
-                    <div class="mt-2 mb-3 pr-3 pl-3 facet-list">
-                        <span class="dropdown-header text-center" v-html="globalConfig.sourceLabel"></span>
-                        <div class="list-group">
-                            <button type="button" class="list-group-item list-group-item-action"
-                                v-for="(field, index) in globalConfig.facetsFields.source" :key="index"
-                                v-on:click="facetSearch(field.value)">
-                                {{ field.label }}
-                            </button>
+                    <h3 id="facets-title" class="h6 card-header text-center">Browse by Counts</h3>
+                    <button type="button" id="metadata-list" class="mx-auto p-2" :class="{ show: facetsCollapsed }"
+                        aria-expanded="false" aria-controls="facet-fields" @click="toggleFacetList()">Show
+                        options</button>
+                    <div id="facet-fields" ref="facetFields">
+                        <div class="mt-2 mb-3 pr-3 pl-3 facet-list" :class="{ hide: facetsCollapsed }">
+                            <h4 class="dropdown-header text-center" v-html="globalConfig.sourceLabel"></h4>
+                            <div class="list-group">
+                                <button type="button" class="list-group-item list-group-item-action"
+                                    v-for="(field, index) in globalConfig.facetsFields.source" :key="index"
+                                    @click="facetSearch(field.value)">
+                                    {{ field.label }}
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                    <div class="mb-3 pr-3 pl-3 facet-list">
-                        <h6 class="dropdown-header text-center" v-html="globalConfig.targetLabel"></h6>
-                        <div class="list-group">
-                            <button type="button" class="list-group-item list-group-item-action"
-                                v-for="(field, index) in globalConfig.facetsFields.target" :key="index"
-                                v-on:click="facetSearch(field.value)">
-                                {{ field.label }}
-                            </button>
+                        <div class="mb-3 pr-3 pl-3 facet-list" :class="{ hide: facetsCollapsed }">
+                            <h4 class="dropdown-header text-center" v-html="globalConfig.targetLabel"></h4>
+                            <div class="list-group">
+                                <button type="button" class="list-group-item list-group-item-action"
+                                    v-for="(field, index) in globalConfig.facetsFields.target" :key="index"
+                                    @click="facetSearch(field.value)">
+                                    {{ field.label }}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -74,183 +80,186 @@
                         </div>
                     </div>
                 </div>
-                <div class="card rounded-0 shadow-1 mt-3" v-if="facetResults">
-                    <div class="corner-btn destroy right" @click="closeFacetResults()">X</div>
-                    <h6 class="card-header text-center">
+                <section class="card rounded-0 shadow-1 mt-3" v-if="facetResults" aria-labelledby="facet-results-title">
+                    <button type="button" class="corner-btn destroy right" aria-label="Close frequency results"
+                        @click="closeFacetResults()">&times;</button>
+                    <h4 id="facet-results-title" ref="facetResultsTitle" class="h6 card-header text-center"
+                        tabindex="-1">
                         Frequency by
                         <span v-html="facetDirectionLabel"></span>&nbsp;
                         <span class="text-capitalize">{{ facetResults.facet.split("_")[1] }}</span>
-                    </h6>
+                    </h4>
                     <div class="mt-1 p-2">
-                        <div class="pb-2 text-center" style="opacity: 0.5">Showing top 100 results</div>
+                        <div class="pb-2 text-center text-muted">Showing top 100 results</div>
                         <div class="list-group">
-                            <div class="list-group-item list-group-item-action facet-result"
+                            <button type="button" class="list-group-item list-group-item-action facet-result"
                                 v-for="(field, index) in facetResults.results.slice(0, 100)" :key="index"
-                                v-on:click="filteredSearch(facetResults.facet, field.field)">
-                                <div class="row">
-                                    <div class="col pr-1 pl-1">{{ field.field || "N/A" }}</div>
-                                    <div class="col-4 pr-1 pl-1 facet-count">{{ field.count.toLocaleString() }}</div>
-                                </div>
-                            </div>
+                                @click="filteredSearch(facetResults.facet, field.field)">
+                                <span class="row">
+                                    <span class="col pr-1 pl-1">{{ field.field || "N/A" }}</span>
+                                    <span class="col-4 pr-1 pl-1 facet-count">{{ field.count.toLocaleString() }}</span>
+                                </span>
+                            </button>
                         </div>
                     </div>
-                </div>
-            </div>
+                </section>
+            </aside>
         </div>
     </div>
 </template>
 
-<script>
+<script setup>
+import axios from "axios";
+import emitter from "tiny-emitter/instance";
 import Velocity from "velocity-animate";
+import { nextTick, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import globalConfig from "../config.js";
+import { paramsToUrl, prefersReducedMotion } from "../utils.js";
 import passagePair from "./passagePair";
 import reportSwitcher from "./reportSwitcher";
 import searchArguments from "./searchArguments";
 
-export default {
-    name: "searchResults",
-    components: {
-        searchArguments, passagePair, reportSwitcher
-    },
-    inject: ["$http"],
-    data() {
-        return {
-            loading: false,
-            done: false,
-            results: { alignments: [] },
-            counts: null,
-            resultsLeft: 0,
-            lastRowID: null,
-            page: 0,
-            error: null,
-            globalConfig: this.$globalConfig,
-            facetResults: null,
-            facetLoading: null,
-        };
-    },
-    created() {
-        // fetch the data when the view is created and the data is
-        // already being observed
-        this.fetchData();
-    },
-    watch: {
-        // call again the method if the route changes
-        $route: "fetchData",
-    },
-    methods: {
-        fetchData() {
-            this.results = { alignments: [] }; // clear alignments with new search
-            this.facetResults = null; // clear facet results with new search
-            this.error = null;
-            this.loading = true;
-            let params = { ...this.$route.query };
-            params.db_table = this.$globalConfig.databaseName;
-            this.emitter.emit("searchArgsUpdate", {
-                counts: "",
-                searchParams: params,
-            });
-            this.$http
-                .get(`${this.$globalConfig.apiServer}/search_alignments/?${this.paramsToUrl(params)}`)
+const route = useRoute();
+const router = useRouter();
+const loading = ref(false);
+const done = ref(false);
+const results = ref({ alignments: [] });
+const resultsLeft = ref(0);
+const error = ref(null);
+const facetResults = ref(null);
+const facetLoading = ref(null);
+const facetDirectionLabel = ref("");
+const facetsCollapsed = ref(false);
+const facetFields = ref(null);
+const facetResultsTitle = ref(null);
+
+function fetchData() {
+    results.value = { alignments: [] }; // clear alignments with new search
+    facetResults.value = null; // clear facet results with new search
+    error.value = null;
+    loading.value = true;
+    const params = { ...route.query };
+    params.db_table = globalConfig.databaseName;
+    emitter.emit("searchArgsUpdate", {
+        counts: "",
+        searchParams: params,
+    });
+    axios
+        .get(`${globalConfig.apiServer}/search_alignments/?${paramsToUrl(params)}`)
+        .then((response) => {
+            loading.value = false;
+            if (!response.data.alignments || !response.data.alignments.length) {
+                error.value = "No results";
+                emitter.emit("announce", "No results for your query");
+                return;
+            }
+            results.value = response.data;
+            done.value = true;
+            axios
+                .get(`${globalConfig.apiServer}/count_results/?${paramsToUrl(params)}`)
                 .then((response) => {
-                    this.results = response.data;
-                    this.lastRowID = this.results.alignments[this.results.alignments.length - 1].page_cursor;
-                    this.page++;
-                    this.loading = false;
-                    this.done = true;
-                    this.$http
-                        .get(`${this.$globalConfig.apiServer}/count_results/?${this.paramsToUrl(params)}`)
-                        .then((response) => {
-                            let counts = response.data.counts;
-                            this.emitter.emit("searchArgsUpdate", {
-                                counts: counts,
-                                searchParams: params,
-                            });
-                            this.resultsLeft = counts - (this.results.start_position + this.results.alignments.length);
-                        })
-                        .catch((error) => {
-                            console.log(error);
-                        });
-                    Array.from(document.getElementsByClassName("facet-list")).forEach(function (element) {
-                        element.classList.remove("hide");
+                    const counts = response.data.counts;
+                    emitter.emit("searchArgsUpdate", {
+                        counts: counts,
+                        searchParams: params,
                     });
-                    document.querySelector("#metadata-list").classList.remove("show");
+                    resultsLeft.value = counts - (results.value.start_position + results.value.alignments.length);
                 })
                 .catch((error) => {
-                    this.loading = false;
-                    this.error = error.toString();
                     console.log(error);
                 });
-        },
-        previousPage() {
-            let queryParams = { ...this.$route.query };
-            queryParams.page = parseInt(this.results.page) - 1;
-            queryParams.direction = "previous";
-            queryParams.id_anchor = this.results.alignments[0].page_cursor;
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-        },
-        nextPage() {
-            let queryParams = { ...this.$route.query };
-            queryParams.page = parseInt(this.results.page) + 1;
-            queryParams.direction = "next";
-            queryParams.id_anchor = this.results.alignments[this.results.alignments.length - 1].page_cursor;
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-        },
-        facetSearch(field) {
-            let queryParams = { ...this.$route.query };
-            queryParams.db_table = this.$globalConfig.databaseName;
-            queryParams.facet = field;
-            this.facetLoading = true;
-            this.$http
-                .post(`${this.$globalConfig.apiServer}/facets/?${this.paramsToUrl(queryParams)}`, {
-                    metadata: this.$globalConfig.metadataTypes,
-                })
-                .then((response) => {
-                    this.facetDirectionLabel = this.$globalConfig[`${response.data.facet.split("_")[0]}Label`];
-                    this.facetResults = response.data;
-                    this.toggleFacetList();
-                    this.facetLoading = false;
-                })
-                .catch((error) => {
-                    this.facetLoading = false;
-                    this.error = error.toString();
-                    console.log("ERROR", error);
-                });
-        },
-        toggleFacetList() {
-            Array.from(document.getElementsByClassName("facet-list")).forEach(function (element) {
-                element.classList.toggle("hide");
-            });
-            document.querySelector("#metadata-list").classList.toggle("show");
-        },
-        closeFacetResults() {
-            this.facetResults = null;
-            this.toggleFacetList();
-        },
-        filteredSearch(fieldName, value) {
-            let queryParams = { ...this.$route.query };
-            delete queryParams.page;
-            delete queryParams.id_anchor;
-            queryParams.db_table = this.$globalConfig.databaseName;
-            queryParams[fieldName] = `"${value}"`;
-            this.emitter.emit("urlUpdate", queryParams);
-            this.facetResults = null;
-            this.results = { alignments: [] };
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-        },
-        beforeEnter: function (el) {
-            el.style.opacity = 0;
-            el.style.height = 0;
-        },
-        enter: function (el, done) {
-            var delay = el.dataset.index * 100;
-            setTimeout(function () {
-                Velocity(el, { opacity: 1, height: "100%" }, { complete: done });
-            }, delay);
-        },
-        toggleSearchForm() {
-            this.emitter.emit("toggleSearchForm");
-        },
-    },
-};
+            facetsCollapsed.value = false;
+        })
+        .catch((err) => {
+            loading.value = false;
+            error.value = err.toString();
+            emitter.emit("announce", "No results for your query");
+            console.log(err);
+        });
+}
+fetchData();
+watch(() => route.fullPath, fetchData);
+
+function goToPage(page, direction, anchor) {
+    const queryParams = { ...route.query };
+    queryParams.page = page;
+    queryParams.direction = direction;
+    queryParams.id_anchor = anchor;
+    router.push(`/search?${paramsToUrl(queryParams)}`).then(() => emitter.emit("focusMain"));
+}
+
+function previousPage() {
+    goToPage(parseInt(results.value.page) - 1, "previous", results.value.alignments[0].page_cursor);
+}
+
+function nextPage() {
+    const alignments = results.value.alignments;
+    goToPage(parseInt(results.value.page) + 1, "next", alignments[alignments.length - 1].page_cursor);
+}
+
+function facetSearch(field) {
+    const queryParams = { ...route.query };
+    queryParams.db_table = globalConfig.databaseName;
+    queryParams.facet = field;
+    facetLoading.value = true;
+    axios
+        .post(`${globalConfig.apiServer}/facets/?${paramsToUrl(queryParams)}`, {
+            metadata: globalConfig.metadataTypes,
+        })
+        .then((response) => {
+            facetDirectionLabel.value = globalConfig[`${response.data.facet.split("_")[0]}Label`];
+            facetResults.value = response.data;
+            toggleFacetList();
+            facetLoading.value = false;
+            nextTick(() => facetResultsTitle.value.focus());
+        })
+        .catch((err) => {
+            facetLoading.value = false;
+            error.value = err.toString();
+            emitter.emit("announce", "The counts could not be loaded");
+            console.log("ERROR", err);
+        });
+}
+
+function toggleFacetList() {
+    facetsCollapsed.value = !facetsCollapsed.value;
+}
+
+function closeFacetResults() {
+    facetResults.value = null;
+    toggleFacetList();
+    nextTick(() => facetFields.value.querySelector("button").focus());
+}
+
+function filteredSearch(fieldName, value) {
+    const queryParams = { ...route.query };
+    delete queryParams.page;
+    delete queryParams.id_anchor;
+    queryParams.db_table = globalConfig.databaseName;
+    queryParams[fieldName] = `"${value}"`;
+    emitter.emit("urlUpdate", queryParams);
+    facetResults.value = null;
+    results.value = { alignments: [] };
+    router.push(`/search?${paramsToUrl(queryParams)}`).then(() => emitter.emit("focusMain"));
+}
+
+function beforeEnter(el) {
+    if (prefersReducedMotion()) return;
+    el.style.opacity = 0;
+    el.style.height = 0;
+}
+
+function enter(el, complete) {
+    if (prefersReducedMotion()) {
+        complete();
+        return;
+    }
+    const delay = el.dataset.index * 100;
+    setTimeout(function () {
+        Velocity(el, { opacity: 1, height: "100%" }, { complete });
+    }, delay);
+}
 </script>
 
 <style scoped>
@@ -285,13 +294,12 @@ export default {
     float: right;
 }
 
-.list-group-item:focus,
-.list-group-item:active {
-    outline: none !important;
+.corner-btn.destroy {
+    z-index: 1;
 }
 
 .facet-list {
-    transition: all 0.2s ease-out;
+    transition: all 0.2s ease-out, visibility 0s;
 }
 
 .facet-list button:hover {
@@ -302,11 +310,16 @@ export default {
     max-height: 0px;
     opacity: 0;
     margin: 0 !important;
+    visibility: hidden;
+    transition: all 0.2s ease-out, visibility 0s 0.2s;
 }
 
 #metadata-list {
     display: none;
     opacity: 0;
+    border-width: 0;
+    background-color: transparent;
+    color: inherit;
     cursor: pointer;
     transition: all 0.2s ease-out;
 }

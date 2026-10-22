@@ -13,16 +13,20 @@ $button-color-active: rgba(160, 55, 55, 0.9);
 $link-color: rgb(142, 50, 50);
 $passage-color: rgb(155, 65, 55);
 $card-header-color: rgb(173, 66, 66);
-$removed-color: rgb(120, 157, 74);
+$removed-color: rgb(85, 122, 42);
 $added-color: rgb(0, 115, 150);
-$graph-btn-panel-color: rgb(200, 100, 100);
+$graph-btn-panel-color: rgb(176, 82, 82);
+$focus-color: $link-color;
+// Borders of form controls at 3:1 against white
+$input-border-color: rgb(133, 133, 133);
+$form-range-track-bg: rgb(133, 133, 133);
 // Themed elements
 
-nav.navbar {
+.site-header {
     background-color: $header-color !important;
 }
 .navbar-brand,
-nav.navbar .nav-link {
+.site-header .nav-link {
     color: #fff !important;
 }
 
@@ -31,7 +35,8 @@ $secondary: $button-color;
     background-color: $button-color-active !important;
 }
 
-.btn-outline-secondary.active {
+.btn-outline-secondary.active,
+a.btn-outline-secondary:hover {
     color: #fff !important;
 }
 
@@ -95,7 +100,6 @@ a.btn-secondary {
 input[type="text"]:focus {
     box-shadow: 0 0 0 0.05rem $button-color !important;
     border-color: $button-color !important;
-    opacity: .5
 }
 
 .corner-btn {

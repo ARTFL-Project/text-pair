@@ -1,29 +1,85 @@
 <template>
     <div id="app">
+        <a class="skip-link" href="#main-content" @click.prevent="focusMain">Skip to main content</a>
         <main-header></main-header>
         <div class="container-fluid">
             <search-form></search-form>
-            <router-view></router-view>
+            <main id="main-content" tabindex="-1">
+                <router-view></router-view>
+            </main>
         </div>
+        <div class="visually-hidden" role="status" aria-live="polite" aria-atomic="true">{{ announcement }}</div>
     </div>
 </template>
 
-<script>
+<script setup>
+import emitter from "tiny-emitter/instance";
+import { nextTick, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import mainHeader from "./components/header";
 import searchForm from "./components/searchForm";
+import globalConfig from "./config.js";
+import { plainText } from "./utils.js";
 
-export default {
-    name: "app",
-    components: {
-        mainHeader,
-        searchForm,
+const route = useRoute();
+const announcement = ref("");
+
+// Messages wait their turn, so that one sent right after another is still read
+const queue = [];
+let speaking = false;
+
+function announce(message) {
+    queue.push(message);
+    if (!speaking) announceNext();
+}
+
+function announceNext() {
+    if (!queue.length) {
+        speaking = false;
+        return;
+    }
+    speaking = true;
+    // Cleared first so that the same message is read again
+    announcement.value = "";
+    setTimeout(() => {
+        announcement.value = queue.shift();
+        setTimeout(announceNext, 1000);
+    }, 100);
+}
+
+function focusMain() {
+    const main = document.getElementById("main-content");
+    const heading = main.querySelector("h2");
+    if (heading) {
+        heading.setAttribute("tabindex", "-1");
+        heading.focus({ preventScroll: true });
+    } else {
+        main.focus({ preventScroll: true });
+    }
+}
+
+function focusMainLater() {
+    nextTick(focusMain);
+}
+
+emitter.on("announce", announce);
+emitter.on("focusMain", focusMainLater);
+onUnmounted(() => {
+    emitter.off("announce", announce);
+    emitter.off("focusMain", focusMainLater);
+});
+
+watch(
+    () => route.fullPath,
+    (fullPath, previousPath) => {
+        const label = plainText(globalConfig.databaseLabel);
+        document.title = route.meta.title ? `${route.meta.title} | ${label}` : label;
+        if (previousPath !== undefined && route.path != previousPath.split("?")[0]) {
+            focusMainLater();
+        }
     },
-    data: function () {
-        return {
-            globalConfig: this.$globalConfig,
-        };
-    },
-};
+    { immediate: true }
+);
 </script>
 
 <style lang="scss">
@@ -39,8 +95,67 @@ body,
     font-size: 1rem;
 }
 
+// Links as in PhiloLogic5: no underline, a tint on hover and focus
 a {
     text-decoration: none;
+    transition: all 0.2s ease;
+    border-radius: 2px;
+}
+
+a:hover,
+a:focus {
+    background-color: rgba($link-color, 0.08);
+    box-shadow: 0 0 0 3px rgba($link-color, 0.1);
+}
+
+// Focus indicator for every control, over Bootstrap's faint focus shadows
+:focus-visible {
+    outline: 2px solid $focus-color !important;
+    outline-offset: 2px;
+}
+
+.site-header :focus-visible {
+    outline-color: #fff !important;
+}
+
+// Toggle buttons: the checkbox or radio is hidden, so its label shows the focus
+.btn-check:focus-visible + .btn {
+    outline: 2px solid $focus-color !important;
+    outline-offset: 2px;
+}
+
+.btn-link {
+    text-decoration: none;
+}
+
+#main-content:focus,
+#main-content h2:focus {
+    outline: none !important;
+}
+
+.skip-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2000;
+    padding: 0.5rem 1rem;
+    background-color: #fff;
+    transform: translateY(-120%);
+}
+
+.skip-link:focus {
+    transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 #app {
@@ -88,6 +203,8 @@ a {
     padding: 0.2rem;
     margin-bottom: 2px;
     border: solid 1px #ddd;
+    background-color: #fff;
+    color: $link-color;
     cursor: pointer;
     font-family: "Open-Sans", sans-serif;
 }
@@ -100,11 +217,6 @@ a {
 
 .my-dropdown {
     position: relative;
-}
-
-.my-dropdown .btn:focus,
-my-dropdown .btn:active {
-    outline: none !important;
 }
 
 .my-dropdown-menu {

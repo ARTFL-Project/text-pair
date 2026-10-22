@@ -13,40 +13,47 @@ const semanticGraph = () => import("../components/semanticGraph");
 const router = createRouter({
     history: createWebHistory(globalConfig.appPath),
     routes: [
-        { path: "/", name: "home", component: home },
+        { path: "/", name: "home", meta: { title: "Search" }, component: home },
         {
             path: "/search",
             name: "searchResults",
+            meta: { title: "Passage pairs" },
             component: searchResults,
         },
         {
             path: "/time",
             name: "timeSeries",
+            meta: { title: "Passages in timeline" },
             component: timeSeries,
         },
         {
             path: "/sorted-results",
             name: "sortedResults",
+            meta: { title: "Passages by frequency of reuse" },
             component: sortedResults,
         },
         {
             path: "/network",
             name: "networkGraph",
+            meta: { title: "Network graph" },
             component: networkGraph,
         },
         {
             path: "/semantic",
             name: "semanticGraph",
+            meta: { title: "Semantic graph" },
             component: semanticGraph,
         },
         {
             path: "/group/:groupId",
             name: "alignmentGroup",
+            meta: { title: "Reuses of a passage" },
             component: alignmentGroup,
         },
         {
             path: "/text-view/",
             name: "textNavigation",
+            meta: { title: "Full text" },
             component: textNavigation,
         },
     ],

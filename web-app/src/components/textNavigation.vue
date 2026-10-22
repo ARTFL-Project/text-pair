@@ -1,82 +1,98 @@
 <template>
     <div class="row mt-1" id="all-content">
-        <div v-scroll="handleScroll">
+        <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content">
+            <h2 class="h4 text-title text-center mt-3 mb-2" :class="{ 'visually-hidden': !textObject.metadata }">
+                <span class="visually-hidden">Full text<template v-if="textObject.metadata">: </template></span>
+                <citations :citation="globalConfig[`${direction}Citation`]" :alignment="textObject.metadata" tag="span"
+                    v-if="textObject.metadata"></citations>
+            </h2>
+            <div class="d-flex justify-content-center position-relative" v-if="loading">
+                <div class="spinner-border" style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px"
+                    role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+            </div>
+            <div class="m-4" style="font-size: 120%" v-if="error">{{ error }}</div>
+            <template v-else>
+                <div class="d-flex justify-content-center mb-3" v-if="bothDirections">
+                    <div class="btn-group" role="group" aria-label="Direction of reuse">
+                        <button type="button" class="btn btn-outline-secondary" id="direction-target"
+                            :class="{ active: direction == 'target' }" :aria-pressed="String(direction == 'target')"
+                            :disabled="!passageCounts.target" @click="changeDirection('target')">
+                            Reuses of earlier texts ({{ passageCounts.target }})
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" id="direction-source"
+                            :class="{ active: direction == 'source' }" :aria-pressed="String(direction == 'source')"
+                            :disabled="!passageCounts.source" @click="changeDirection('source')">
+                            Reused in later texts ({{ passageCounts.source }})
+                        </button>
+                    </div>
+                </div>
+                <div class="card shadow-sm mb-3" id="reuse-summary" v-if="textObject.text">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h3 class="fs-6 fw-normal lh-base mb-0">{{ summaryHeading }}</h3>
+                        <button type="button" class="btn btn-sm btn-outline-light py-0" v-if="otherTexts.length"
+                            :aria-expanded="String(!summaryHidden)" aria-controls="reuse-summary-list"
+                            @click="toggleSummary()">
+                            {{ summaryHidden ? "Show" : "Hide" }}<span class="visually-hidden"> texts sharing
+                                passages</span>
+                        </button>
+                    </div>
+                    <template v-if="!summaryHidden && otherTexts.length">
+                        <ul class="list-group list-group-flush" id="reuse-summary-list">
+                            <li class="list-group-item" v-for="other in otherTexts" :key="other.id">
+                                <div class="summary-citation" :title="citationText(other.metadata)">
+                                    <citations :citation="globalConfig[`${otherDirection}Citation`]"
+                                        :alignment="other.metadata" :link-to-doc="`${otherDirection}_title`"></citations>
+                                </div>
+                                <div class="passage-links px-3 pb-1">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                                        v-for="passage in shownPassages(other)" :key="passage"
+                                        :title="passageSnippets[passage]" @click="goToPassage(passage)">
+                                        <span class="visually-hidden">Passage </span>{{ passage + 1 }}
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-link"
+                                        v-if="other.passages.length > passageLimit"
+                                        :aria-expanded="String(!!expanded[other.id])" @click="toggleExpanded(other.id)">
+                                        {{ expanded[other.id] ? "fewer" : `${other.passages.length - passageLimit} more`
+                                        }}<span class="visually-hidden"> passages</span>
+                                    </button>
+                                </div>
+                            </li>
+                        </ul>
+                        <div class="card-footer text-muted small">
+                            Numbers are passages in the order of the text: click one to go to it.
+                        </div>
+                    </template>
+                </div>
+                <div class="card mb-4 pb-4 shadow">
+                    <div id="book-page" class="text-view px-4" ref="bookPage" role="region" aria-label="Document text">
+                        <div id="text-obj-content" class="text-content-area" ref="textContent" v-html="textObject.text"
+                            :lang="globalConfig[`${direction}Language`] || undefined" @click="textClick"
+                            @keydown="textKeydown" @mouseover="textMouseover" @mouseout="textMouseout"
+                            @focusin="textFocusin" @focusout="textFocusout"></div>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <div>
             <button type="button" class="btn btn-secondary btn-sm" id="back-to-top" :class="{ visible: topButtonVisible }"
                 aria-label="Back to top" @click="backToTop()">
                 <span aria-hidden="true">&uarr;</span><span class="d-none d-sm-inline ms-1">Back to top</span>
             </button>
         </div>
-        <div class="d-flex justify-content-center position-relative" v-if="loading">
-            <div class="spinner-border" style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px"
-                role="status">
-            </div>
-        </div>
-        <div class="m-4" style="font-size: 120%" v-if="error">{{ error }}</div>
-        <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content" v-if="textObject && !error">
-            <div class="h4 text-title text-center mt-3 mb-2" v-if="textObject.metadata">
-                <citations :citation="globalConfig[`${direction}Citation`]" :alignment="textObject.metadata"></citations>
-            </div>
-            <div class="d-flex justify-content-center mb-3" v-if="bothDirections">
-                <div class="btn-group" role="group" aria-label="Direction of reuse">
-                    <button type="button" class="btn btn-outline-secondary" :class="{ active: direction == 'target' }"
-                        :disabled="!passageCounts.target" @click="changeDirection('target')">
-                        Reuses of earlier texts ({{ passageCounts.target }})
-                    </button>
-                    <button type="button" class="btn btn-outline-secondary" :class="{ active: direction == 'source' }"
-                        :disabled="!passageCounts.source" @click="changeDirection('source')">
-                        Reused in later texts ({{ passageCounts.source }})
-                    </button>
-                </div>
-            </div>
-            <div class="card shadow-sm mb-3" id="reuse-summary" v-if="textObject.text">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span>{{ summaryHeading }}</span>
-                    <button type="button" class="btn btn-sm btn-outline-light py-0" v-if="otherTexts.length"
-                        :aria-expanded="String(!summaryHidden)" aria-controls="reuse-summary-list" @click="toggleSummary()">
-                        {{ summaryHidden ? "Show" : "Hide" }}
-                    </button>
-                </div>
-                <template v-if="!summaryHidden && otherTexts.length">
-                    <ul class="list-group list-group-flush" id="reuse-summary-list">
-                        <li class="list-group-item" v-for="other in otherTexts" :key="other.id">
-                            <div class="summary-citation" :title="citationText(other.metadata)">
-                                <citations :citation="globalConfig[`${otherDirection}Citation`]" :alignment="other.metadata"
-                                    :link-to-doc="`${otherDirection}_title`"></citations>
-                            </div>
-                            <div class="passage-links px-3 pb-1">
-                                <button type="button" class="btn btn-sm btn-outline-secondary"
-                                    v-for="passage in shownPassages(other)" :key="passage" :title="passageSnippets[passage]"
-                                    @click="goToPassage(passage)">{{ passage + 1 }}</button>
-                                <button type="button" class="btn btn-sm btn-link" v-if="other.passages.length > passageLimit"
-                                    @click="toggleExpanded(other.id)">
-                                    {{ expanded[other.id] ? "fewer" : `${other.passages.length - passageLimit} more` }}
-                                </button>
-                            </div>
-                        </li>
-                    </ul>
-                    <div class="card-footer text-muted small">
-                        Numbers are passages in the order of the text: click one to go to it.
-                    </div>
-                </template>
-            </div>
-            <div class="card mb-4 pb-4 shadow">
-                <div id="book-page" class="text-view px-4">
-                    <div id="text-obj-content" class="text-content-area" v-html="textObject.text" tabindex="0"></div>
-                </div>
-            </div>
-        </div>
-        <div class="modal modal-xl modal-dialog-scrollable fade" id="passage-pairs" tabindex="-1" v-if="passagePairs"
-            aria-labelledby="passage-pairs" aria-hidden="true">
+        <div class="modal modal-xl modal-dialog-scrollable fade" id="passage-pairs" tabindex="-1" ref="modalElement"
+            aria-labelledby="passage-pairs-title" aria-hidden="true">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h1 class="modal-title fs-5">Shared passages
-                        </h1>
+                        <h2 class="modal-title fs-5" id="passage-pairs-title">Shared passages</h2>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <ul class="list-group">
-                        <li class="list-group-item" v-for="(passage, passageIndex) in passagePairs" :index="passageIndex">
-                            <passage-pair :alignment="passage" :index="passageIndex" :diffed="false"></passage-pair>
+                        <li class="list-group-item" v-for="(passage, passageIndex) in passagePairs" :key="passageIndex">
+                            <passage-pair :alignment="passage" :index="passageIndex" :diffed="false"
+                                :heading-level="3"></passage-pair>
                         </li>
                     </ul>
                 </div>
@@ -84,252 +100,457 @@
         </div>
     </div>
 </template>
-<script>
+<script setup>
+import axios from "axios";
+import { Modal, Popover } from "bootstrap";
+import emitter from "tiny-emitter/instance";
+import vueScrollTo from "vue-scrollto";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import globalConfig from "../config.js";
+import { prefersReducedMotion } from "../utils.js";
 import citations from "./citations.vue";
 import passagePair from "./passagePair.vue";
-import { Popover, Modal } from "bootstrap";
-import vueScrollTo from 'vue-scrollto'
 
-export default {
-    name: "textNavigation",
-    components: { citations, passagePair },
-    inject: ["$http"],
-    data() {
-        return {
-            globalConfig: this.$globalConfig,
-            textObject: {},
-            bookPagePosition: 0,
-            topButtonVisible: false,
-            direction: "target",
-            popoverList: [],
-            passagePairs: [],
-            modal: null,
-            loading: false,
-            error: null,
-            passageLimit: 24,
-            summaryHidden: localStorage.getItem("textpair.hideReuseSummary") == "true",
-            expanded: {},
-            passageSnippets: [],
-        }
-    },
-    computed: {
-        otherDirection() {
-            return this.direction == "source" ? "target" : "source";
-        },
-        passageCounts() {
-            return this.textObject.passage_counts || {};
-        },
-        // Both sides are the same texts, so this one has passages in either direction
-        bothDirections() {
-            return "source" in this.passageCounts && "target" in this.passageCounts;
-        },
-        // The texts sharing passages with this one, most shared first
-        otherTexts() {
-            const texts = new Map();
-            (this.textObject.other_metadata || []).forEach((group, passage) => {
-                for (const metadata of group) {
-                    const id = metadata[`${this.otherDirection}_doc_id`];
-                    if (!texts.has(id)) {
-                        texts.set(id, { id, metadata, passages: [] });
-                    }
-                    texts.get(id).passages.push(passage);
-                }
-            });
-            return [...texts.values()].sort((a, b) => b.passages.length - a.passages.length);
-        },
-        summaryHeading() {
-            const passages = this.plural(this.passageCounts[this.direction] || 0, "passage");
-            const texts = this.otherTexts.length;
-            if (!this.bothDirections) {
-                return `${passages} shared with ${this.plural(texts, "other text")}`;
-            }
-            if (this.direction == "target") {
-                return `${passages} reusing ${this.plural(texts, "earlier text")}`;
-            }
-            return `${passages} reused in ${this.plural(texts, "later text")}`;
-        },
-    },
-    created() {
-        this.fetchText();
-    },
-    destroyed() {
-        this.$off("scroll", this.handleScroll);
+const route = useRoute();
+const router = useRouter();
 
-        // Remove all event listeners
-        for (let popover of this.popoverList) {
-            popover.dispose();
-        }
-        let passages = document.querySelectorAll('[class^="passage-"]')
-        for (let passage of passages) {
-            passage.removeEventListener("click", this.getAlignments);
-        }
-        if (this.modal != null) {
-            this.modal.hide();
-        }
-    },
-    mounted() {
-        let bookPage = document.querySelector("#book-page");
-        if (bookPage) {
-            this.bookPagePosition = bookPage.getBoundingClientRect().top;
-        }
-    },
-    watch: {
-        // call again the method if the route changes
-        $route: "fetchText",
-    },
-    methods: {
-        fetchText() {
-            this.textObject = {};
-            this.loading = true;
-            this.error = null;
-            this.expanded = {};
-            this.passageSnippets = [];
-            if (this.modal != null) { // TODO: broken
-                this.modal.hide();
+// A reused passage in the text: its number button, or any of its fragments
+const PASSAGE = '.reuse-number, [class^="passage-"]:not(.passage-marker)';
+const pageLanguage = document.documentElement.lang || "en";
+const passageLimit = 24;
+
+const textObject = ref({});
+const topButtonVisible = ref(false);
+const direction = ref("target");
+const passagePairs = ref([]);
+const loading = ref(false);
+const error = ref(null);
+const summaryHidden = ref(localStorage.getItem("textpair.hideReuseSummary") == "true");
+const expanded = ref({});
+const passageSnippets = ref([]);
+const bookPage = ref(null);
+const textContent = ref(null);
+const modalElement = ref(null);
+
+let bookPagePosition = 0;
+let modal = null;
+let modalOpener = null;
+let popover = null;
+let popoverTrigger = null;
+let hideTimer = null;
+let quietFocus = false;
+let focusAfterLoad = null;
+// Responses to earlier requests, or after leaving the view, are dropped
+let textRequest = 0;
+
+const otherDirection = computed(() => (direction.value == "source" ? "target" : "source"));
+const passageCounts = computed(() => textObject.value.passage_counts || {});
+// Both sides are the same texts, so this one has passages in either direction
+const bothDirections = computed(() => "source" in passageCounts.value && "target" in passageCounts.value);
+// The texts sharing passages with this one, most shared first
+const otherTexts = computed(() => {
+    const texts = new Map();
+    (textObject.value.other_metadata || []).forEach((group, passage) => {
+        for (const metadata of group) {
+            const id = metadata[`${otherDirection.value}_doc_id`];
+            if (!texts.has(id)) {
+                texts.set(id, { id, metadata, passages: [] });
             }
-            this.passagePairs = [];
-            this.$http
-                .get(`${this.$globalConfig.apiServer}/text_view/`, {
-                    params: this.$route.query,
-                })
-                .then((response) => {
-                    this.loading = false;
-                    if (response.data.error) {
-                        this.error = response.data.error;
-                        return;
-                    }
-                    this.textObject = response.data;
-                    this.direction = this.textObject.direction;
-                    this.$nextTick(() => {
-                        this.bookPagePosition = document.querySelector("#book-page").getBoundingClientRect().top + window.scrollY;
-                        this.passageSnippets = this.textObject.other_metadata.map((_, passage) => {
-                            const words = [...document.getElementsByClassName(`passage-${passage}`)].map((el) => el.textContent).join(" ");
-                            return words.replace(/\s+/g, " ").trim().slice(0, 100);
-                        });
-                        if (this.$route.query.start_byte && this.$route.query.end_byte) {
-                            this.goToPassage(response.data.passage_number);
-                        }
-                    });
-                    let otherDirection = ""
-                    if (this.direction == "source") {
-                        otherDirection = "target"
-                    } else {
-                        otherDirection = "source"
-                    }
-                    this.$nextTick(() => {
-                        let passageMarkers = document.getElementsByClassName("passage-marker");
-                        for (let index = 0; passageMarkers.length > index; index += 1) {
-                            let metadataGroup = this.textObject.other_metadata[index];
-                            let citation = this.buildCitation(metadataGroup, otherDirection)
-                            let passages = document.getElementsByClassName(`passage-${index}`);
-                            for (let el of passages) {
-                                let popover = new Popover(el, {
-                                    content: citation,
-                                    sanitize: false,
-                                    html: true,
-                                    trigger: "hover focus",
-                                    placement: "top",
-                                })
-                                this.popoverList.push(popover)
-                                el.addEventListener("click", this.getAlignments, false);
-                            }
-                        }
-                    })
-                })
-                .catch((error) => {
-                    alert(error);
+            texts.get(id).passages.push(passage);
+        }
+    });
+    return [...texts.values()].sort((a, b) => b.passages.length - a.passages.length);
+});
+const summaryHeading = computed(() => {
+    const passages = plural(passageCounts.value[direction.value] || 0, "passage");
+    const texts = otherTexts.value.length;
+    if (!bothDirections.value) {
+        return `${passages} shared with ${plural(texts, "other text")}`;
+    }
+    if (direction.value == "target") {
+        return `${passages} reusing ${plural(texts, "earlier text")}`;
+    }
+    return `${passages} reused in ${plural(texts, "later text")}`;
+});
+
+fetchText();
+
+watch(
+    () => route.fullPath,
+    () => {
+        if (route.name == "textNavigation") {
+            fetchText(true);
+        }
+    }
+);
+
+onMounted(() => {
+    if (bookPage.value) {
+        bookPagePosition = bookPage.value.getBoundingClientRect().top;
+    }
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    document.addEventListener("keydown", documentKeydown);
+    modalElement.value.addEventListener("hidden.bs.modal", restoreFocus);
+});
+
+onBeforeUnmount(() => {
+    textRequest += 1;
+    window.removeEventListener("scroll", handleScroll);
+    document.removeEventListener("keydown", documentKeydown);
+    hidePopover();
+    if (modal != null) {
+        modal.hide();
+    }
+});
+
+function fetchText(sameView = false) {
+    textObject.value = {};
+    loading.value = true;
+    error.value = null;
+    expanded.value = {};
+    passageSnippets.value = [];
+    hidePopover();
+    if (modal != null) {
+        modal.hide();
+    }
+    passagePairs.value = [];
+    const request = ++textRequest;
+    axios
+        .get(`${globalConfig.apiServer}/text_view/`, {
+            params: route.query,
+        })
+        .then((response) => {
+            if (request != textRequest) return;
+            loading.value = false;
+            if (response.data.error) {
+                showError(response.data.error, sameView);
+                return;
+            }
+            textObject.value = response.data;
+            direction.value = textObject.value.direction;
+            nextTick(() => {
+                bookPagePosition = bookPage.value.getBoundingClientRect().top + window.scrollY;
+                prepareText();
+                passageSnippets.value = textObject.value.other_metadata.map((_, passage) => {
+                    const words = [...textContent.value.getElementsByClassName(`passage-${passage}`)]
+                        .map((el) => el.textContent)
+                        .join(" ");
+                    return words.replace(/\s+/g, " ").trim().slice(0, 100);
                 });
-        },
-        backToTop() {
-            window.scrollTo({
-                top: 0,
-                behavior: "smooth",
-            });
-        },
-        handleScroll() {
-            this.topButtonVisible = window.scrollY > this.bookPagePosition;
-        },
-        changeDirection(direction) {
-            this.direction = direction;
-            this.$router.push(`/text-view/?db_table=${this.$route.query.db_table}&doc_id=${this.textObject.doc_id}&directionSelected=${direction}`)
-        },
-        plural(count, noun) {
-            return `${count} ${noun}${count == 1 ? "" : "s"}`;
-        },
-        shownPassages(other) {
-            return this.expanded[other.id] ? other.passages : other.passages.slice(0, this.passageLimit);
-        },
-        toggleSummary() {
-            this.summaryHidden = !this.summaryHidden;
-            localStorage.setItem("textpair.hideReuseSummary", this.summaryHidden);
-        },
-        citationText(metadata) {
-            return this.globalConfig[`${this.otherDirection}Citation`]
-                .map((cite) => metadata[cite.field])
-                .filter((value) => value)
-                .join(" • ");
-        },
-        toggleExpanded(id) {
-            this.expanded = { ...this.expanded, [id]: !this.expanded[id] };
-        },
-        goToPassage(passage) {
-            let marker = document.querySelector(`.passage-marker[n="${passage}"]`);
-            vueScrollTo.scrollTo(marker, 250, {
-                easing: "ease-out",
-                offset: -150,
-                onDone: () => this.focusPassage(passage),
-            });
-        },
-        focusPassage(passage) {
-            for (let el of document.querySelectorAll("#book-page .focus")) {
-                el.classList.remove("focus");
-            }
-            for (let el of document.getElementsByClassName(`passage-${passage}`)) {
-                el.classList.add("focus");
-            }
-        },
-        buildCitation(metadataFields, direction) {
-            let citation = '<ul class="list-group" style="list-style-type: none; margin: 0; padding: 0;">'
-            for (let metadata of metadataFields) {
-                citation += '<li class="list-group-item">';
-                let labels = []
-                for (let cite of this.globalConfig[`${direction}Citation`]) {
-                    let style = Object.entries(cite.style).map(([k, v]) => `${k}:${v}`).join(';')
-                    if (metadata[cite.field] != "" && metadata[cite.field] != null) {
-                        labels.push(`<span style="${style}">${metadata[cite.field]}</span>`)
-                    }
+                emitter.emit("announce", `Text loaded: ${summaryHeading.value}`);
+                if (route.query.start_byte && route.query.end_byte) {
+                    goToPassage(response.data.passage_number);
+                } else if (focusAfterLoad) {
+                    focusElement(document.getElementById(focusAfterLoad));
+                } else if (sameView && focusLost()) {
+                    emitter.emit("focusMain");
                 }
-                citation += labels.join('<span class="separator">&nbsp;&#9679;&nbsp;</span>') + "</li>";
-            }
-            citation += '</ul><div class="p-2"><b>Click on passage to see reuse.</b></div>'
-            return citation;
-        },
-        getAlignments(event) {
-            let passageNumber = event.target.getAttribute("n")
-            let passageMarker = document.querySelector(`.passage-marker[n="${passageNumber}"]`)
-            let offsets = passageMarker.getAttribute("data-offsets").split("-")
-            let startByte = offsets[0]
-            let endByte = offsets[1]
-            this.$http.get(`${this.$globalConfig.apiServer}/get_passages/`, {
-                params: {
-                    start_byte: startByte,
-                    end_byte: endByte,
-                    db_table: this.$route.query.db_table,
-                    directionSelected: this.$route.query.directionSelected,
-                    filename: this.textObject.metadata[`${this.$route.query.directionSelected}_filename`]
-                }
-            }).then((response) => {
-                this.passagePairs = response.data.passages
-                this.modal = new Modal(document.getElementById('passage-pairs'))
-                this.modal.show()
-
-            }).catch((error) => {
-                alert(error);
+                focusAfterLoad = null;
             });
-        }
-    },
+        })
+        .catch((err) => {
+            if (request != textRequest) return;
+            loading.value = false;
+            showError(`The text could not be loaded (${err.message}).`, sameView);
+        });
 }
 
+function showError(message, sameView) {
+    error.value = message;
+    emitter.emit("announce", message);
+    if (sameView && focusLost()) {
+        emitter.emit("focusMain");
+    }
+    focusAfterLoad = null;
+}
+
+// Focus went with the content it was on, or is in the closing modal
+function focusLost() {
+    const el = document.activeElement;
+    return !el || el == document.body || modalElement.value.contains(el);
+}
+
+// Accessible structure for the HTML PhiloLogic returns, and a button opening each reused passage
+function prepareText() {
+    const container = textContent.value;
+    // Headings go under the view's h2 by division number (div1, div2...), as divisions may be left unclosed
+    const headings = [];
+    for (const heading of container.querySelectorAll('[role="heading"]')) {
+        if (heading.textContent.trim()) {
+            const division = heading.parentElement.closest('[class*="xml-div"]');
+            const depth = division?.className.match(/\bxml-div(\d)\b/);
+            headings.push([heading, depth ? Number(depth[1]) : null]);
+        } else {
+            heading.removeAttribute("role");
+        }
+    }
+    const top = headings.reduce((min, [, depth]) => (depth === null ? min : Math.min(min, depth)), Infinity);
+    for (const [heading, depth] of headings) {
+        const level = depth === null ? 3 : 3 + depth - top;
+        heading.setAttribute("aria-level", String(Math.min(level, 6)));
+    }
+    for (const image of container.querySelectorAll("img:not([alt])")) {
+        image.setAttribute("alt", "illustrative image");
+    }
+    // Inline notes open below their marker; references to notes elsewhere lead nowhere here
+    for (const note of container.querySelectorAll("a.note")) {
+        note.setAttribute("role", "button");
+        note.setAttribute("aria-expanded", "false");
+    }
+    for (const reference of container.querySelectorAll(".note-ref")) {
+        reference.removeAttribute("tabindex");
+    }
+    for (const marker of container.getElementsByClassName("passage-marker")) {
+        const passage = Number(marker.getAttribute("n"));
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "reuse-number";
+        button.dataset.passage = passage;
+        button.lang = pageLanguage;
+        button.innerHTML = `<span class="visually-hidden">Reused passage </span>${passage + 1}`;
+        marker.append(button);
+        const end = document.getElementById(`end-passage-${passage}`);
+        if (end) {
+            end.lang = pageLanguage;
+            end.innerHTML = `<span class="visually-hidden">End of reused passage ${passage + 1}</span>`;
+        }
+    }
+}
+
+function passageElement(target) {
+    return target instanceof Element ? target.closest(PASSAGE) : null;
+}
+
+function passageNumber(el) {
+    return Number(el.dataset.passage ?? el.getAttribute("n"));
+}
+
+function textClick(event) {
+    const note = event.target.closest("a.note");
+    if (note) {
+        toggleNote(note);
+        return;
+    }
+    const el = passageElement(event.target);
+    if (el) {
+        getAlignments(passageNumber(el));
+    }
+}
+
+function textKeydown(event) {
+    const note = event.target.closest("a.note");
+    if (note && (event.key == "Enter" || event.key == " ")) {
+        event.preventDefault();
+        toggleNote(note);
+    }
+}
+
+function toggleNote(note) {
+    const open = note.getAttribute("aria-expanded") != "true";
+    note.setAttribute("aria-expanded", String(open));
+    note.nextElementSibling?.classList.toggle("open", open);
+}
+
+function textMouseover(event) {
+    const el = passageElement(event.target);
+    if (el) {
+        showPopover(el);
+    }
+}
+
+function textMouseout(event) {
+    const el = passageElement(event.target);
+    if (el && el == popoverTrigger && !el.contains(event.relatedTarget)) {
+        scheduleHide();
+    }
+}
+
+function textFocusin(event) {
+    if (event.target.classList.contains("reuse-number") && !quietFocus) {
+        showPopover(event.target);
+    }
+}
+
+function textFocusout(event) {
+    if (event.target == popoverTrigger) {
+        hidePopover();
+    }
+}
+
+function documentKeydown(event) {
+    if (event.key == "Escape" && popover) {
+        hidePopover();
+    }
+}
+
+// Popovers stay while the pointer is over them or their passage, or while its button has focus
+function showPopover(el) {
+    clearTimeout(hideTimer);
+    if (el == popoverTrigger) return;
+    hidePopover();
+    const passage = passageNumber(el);
+    popoverTrigger = el;
+    popover = new Popover(el, {
+        content: buildCitation(textObject.value.other_metadata[passage], otherDirection.value),
+        sanitize: false,
+        html: true,
+        trigger: "manual",
+        placement: "top",
+        customClass: "passage-popover",
+    });
+    popover.show();
+    if (popover.tip) {
+        popover.tip.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+        popover.tip.addEventListener("mouseleave", scheduleHide);
+    }
+}
+
+function scheduleHide() {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+        if (popoverTrigger && popoverTrigger != document.activeElement) {
+            hidePopover();
+        }
+    }, 300);
+}
+
+function hidePopover() {
+    clearTimeout(hideTimer);
+    if (popover) {
+        popover.dispose();
+        popoverTrigger.removeAttribute("aria-describedby");
+        popover = null;
+        popoverTrigger = null;
+    }
+}
+
+function focusElement(el) {
+    if (el) {
+        quietFocus = true;
+        el.focus({ preventScroll: true });
+        quietFocus = false;
+    } else {
+        emitter.emit("focusMain");
+    }
+}
+
+function backToTop() {
+    window.scrollTo({
+        top: 0,
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+    emitter.emit("focusMain");
+}
+
+function handleScroll() {
+    topButtonVisible.value = window.scrollY > bookPagePosition;
+}
+
+function changeDirection(newDirection) {
+    if (newDirection == direction.value) return;
+    direction.value = newDirection;
+    focusAfterLoad = `direction-${newDirection}`;
+    router.push(`/text-view/?db_table=${route.query.db_table}&doc_id=${textObject.value.doc_id}&directionSelected=${newDirection}`);
+}
+
+function plural(count, noun) {
+    return `${count} ${noun}${count == 1 ? "" : "s"}`;
+}
+
+function shownPassages(other) {
+    return expanded.value[other.id] ? other.passages : other.passages.slice(0, passageLimit);
+}
+
+function toggleSummary() {
+    summaryHidden.value = !summaryHidden.value;
+    localStorage.setItem("textpair.hideReuseSummary", summaryHidden.value);
+}
+
+function citationText(metadata) {
+    return globalConfig[`${otherDirection.value}Citation`]
+        .map((cite) => metadata[cite.field])
+        .filter((value) => value)
+        .join(" • ");
+}
+
+function toggleExpanded(id) {
+    expanded.value = { ...expanded.value, [id]: !expanded.value[id] };
+}
+
+function goToPassage(passage) {
+    const marker = textContent.value.querySelector(`.passage-marker[n="${passage}"]`);
+    vueScrollTo.scrollTo(marker, prefersReducedMotion() ? 0 : 250, {
+        easing: "ease-out",
+        offset: -150,
+        cancelable: false,
+        onDone: () => focusPassage(passage),
+    });
+}
+
+// Highlights the passage and moves focus to its button
+function focusPassage(passage) {
+    for (const el of textContent.value.querySelectorAll(".focus")) {
+        el.classList.remove("focus");
+    }
+    for (const el of textContent.value.getElementsByClassName(`passage-${passage}`)) {
+        el.classList.add("focus");
+    }
+    focusElement(textContent.value.querySelector(`.reuse-number[data-passage="${passage}"]`));
+}
+
+function buildCitation(metadataFields, side) {
+    const language = globalConfig[`${side}Language`];
+    let citation = `<ul class="list-group"${language ? ` lang="${language}"` : ""} style="list-style-type: none; margin: 0; padding: 0;">`;
+    for (const metadata of metadataFields) {
+        citation += '<li class="list-group-item">';
+        const labels = [];
+        for (const cite of globalConfig[`${side}Citation`]) {
+            const style = Object.entries(cite.style).map(([k, v]) => `${k}:${v}`).join(";");
+            if (metadata[cite.field] != "" && metadata[cite.field] != null) {
+                labels.push(`<span style="${style}">${metadata[cite.field]}</span>`);
+            }
+        }
+        citation += labels.join('<span class="separator" aria-hidden="true">&nbsp;&#9679;&nbsp;</span>') + "</li>";
+    }
+    citation += `</ul><div class="p-2" lang="${pageLanguage}"><b>Click on passage to see reuse.</b></div>`;
+    return citation;
+}
+
+function getAlignments(passage) {
+    hidePopover();
+    const marker = textContent.value.querySelector(`.passage-marker[n="${passage}"]`);
+    const [startByte, endByte] = marker.getAttribute("data-offsets").split("-");
+    modalOpener = marker.querySelector(".reuse-number");
+    axios
+        .get(`${globalConfig.apiServer}/get_passages/`, {
+            params: {
+                start_byte: startByte,
+                end_byte: endByte,
+                db_table: route.query.db_table,
+                directionSelected: route.query.directionSelected,
+                filename: textObject.value.metadata[`${route.query.directionSelected}_filename`],
+            },
+        })
+        .then((response) => {
+            if (!modalElement.value) return;
+            passagePairs.value = response.data.passages;
+            emitter.emit("announce", `Showing ${plural(passagePairs.value.length, "shared passage")}`);
+            modal = Modal.getOrCreateInstance(modalElement.value);
+            modal.show();
+        })
+        .catch((err) => {
+            alert(err);
+        });
+}
+
+// Back to the passage that opened the modal, unless the text changed meanwhile
+function restoreFocus() {
+    if (modalOpener && modalOpener.isConnected) {
+        focusElement(modalOpener);
+    }
+    modalOpener = null;
+}
 </script>
 <style lang="scss" scoped>
 @import "../assets/theme.module.scss";
@@ -348,6 +569,17 @@ export default {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* Narrow screens wrap citations rather than cut them */
+@media (max-width: 575.98px) {
+    .summary-citation :deep(p) {
+        white-space: normal;
+    }
+}
+
+#reuse-summary .card-header :focus-visible {
+    outline-color: #fff !important;
 }
 
 .passage-links .btn-outline-secondary {
@@ -375,8 +607,15 @@ export default {
     border-radius: 1.25rem;
     box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.25);
     opacity: 0;
+    /* Hidden, it leaves the tab order once faded out */
+    visibility: hidden;
+    transition: opacity 0.25s, visibility 0s 0.25s;
+}
+
+#back-to-top.visible {
+    opacity: 0.95;
+    visibility: visible;
     transition: opacity 0.25s;
-    pointer-events: none;
 }
 
 #report-error {
@@ -387,7 +626,6 @@ export default {
     pointer-events: none;
 }
 
-#back-to-top.visible,
 #report-error.visible {
     opacity: 0.95;
     pointer-events: all;
@@ -412,7 +650,6 @@ a.current-obj,
 
 #book-page {
     text-align: justify;
-    white-space: v-bind("whiteSpace");
 }
 
 :deep(.xml-pb) {
@@ -431,7 +668,7 @@ a.current-obj,
 }
 
 :deep(.highlight) {
-    background-color: red;
+    background-color: #c00;
     color: #fff;
 }
 
@@ -711,6 +948,13 @@ body {
     display: none;
 }
 
+:deep(.note-content.open) {
+    display: block;
+    margin: 0.5rem 0;
+    padding-left: 0.75rem;
+    border-left: 3px solid $button-color;
+}
+
 :deep(.note),
 :deep(.note-ref) {
     vertical-align: 0.3em;
@@ -770,7 +1014,7 @@ body {
 }
 
 :deep(.xml-add) {
-    color: #ef4500;
+    color: #b83500;
 }
 
 :deep(.xml-seg) {
@@ -885,6 +1129,20 @@ body {
 :deep([class^="passage-"].focus) {
     background-color: $passage-color;
     color: #fff;
+}
+
+/* Number opening a reused passage, at its start */
+:deep(.reuse-number) {
+    vertical-align: 0.3em;
+    margin-right: 0.2em;
+    padding: 0.1em 0.4em;
+    border: 0;
+    border-radius: 0.6em;
+    background-color: $passage-color;
+    color: #fff;
+    font-size: 0.7em;
+    font-weight: 700;
+    line-height: 1.2;
 }
 
 :deep(.xml-titlePage) {

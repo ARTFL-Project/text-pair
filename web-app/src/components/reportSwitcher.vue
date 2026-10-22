@@ -1,68 +1,35 @@
 <template>
-    <div class="btn-group mt-2" role="group" aria-label="alt-results">
-        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'searchResults' }"
-            @click="viewAllResults">View all
-            passage pairs</button>
-        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'sortedResults' }"
-            @click="sortResults">View passages by frequency of
-            reuse</button>
-        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'timeSeries' }"
-            @click="viewPassageInTimeline">View passages in
-            timeline</button>
-        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'networkGraph' }"
-            v-if="$globalConfig.showNetworkGraph" @click="viewNetworkGraph">View network
-            graph</button>
-        <button type="button" class="btn btn-outline-secondary" :class="{ active: report == 'semanticGraph' }"
-            v-if="$globalConfig.showSemanticGraph" @click="viewSemanticGraph">View semantic
-            graph</button>
-    </div>
+    <nav class="mt-2" aria-label="Result views">
+        <div class="btn-group">
+            <router-link v-for="view in views" :key="view.name" :to="`${view.path}?${query}`"
+                class="btn btn-outline-secondary" :class="{ active: route.name == view.name }"
+                :aria-current="route.name == view.name ? 'page' : undefined">{{ view.label }}</router-link>
+        </div>
+    </nav>
 </template>
-<script>
-export default {
-    name: 'reportSwitcher',
-    data() {
-        return {
-            report: this.$route.name,
-        }
-    },
-    methods: {
-        viewAllResults() {
-            let queryParams = { ...this.$route.query };
-            delete queryParams.page;
-            delete queryParams.id_anchor;
-            queryParams.db_table = this.$globalConfig.databaseName;
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-        },
-        sortResults() {
-            let queryParams = { ...this.$route.query };
-            delete queryParams.page;
-            delete queryParams.id_anchor;
-            queryParams.db_table = this.$globalConfig.databaseName;
-            this.$router.push(`/sorted-results/?${this.paramsToUrl(queryParams)}`);
-        },
-        viewPassageInTimeline() {
-            let queryParams = { ...this.$route.query };
-            delete queryParams.page;
-            delete queryParams.id_anchor;
-            queryParams.db_table = this.$globalConfig.databaseName;
-            this.$router.push(`/time/?${this.paramsToUrl(queryParams)}`);
-        },
-        viewNetworkGraph() {
-            let queryParams = { ...this.$route.query };
-            delete queryParams.page;
-            delete queryParams.id_anchor;
-            queryParams.db_table = this.$globalConfig.databaseName;
-            this.$router.push(`/network/?${this.paramsToUrl(queryParams)}`);
-        },
-        viewSemanticGraph() {
-            let queryParams = { ...this.$route.query };
-            delete queryParams.page;
-            delete queryParams.id_anchor;
-            queryParams.db_table = this.$globalConfig.databaseName;
-            this.$router.push(`/semantic/?${this.paramsToUrl(queryParams)}`);
-        },
-    }
-}
+<script setup>
+import { computed } from "vue";
+import { useRoute } from "vue-router";
+import globalConfig from "../config.js";
+import { paramsToUrl } from "../utils.js";
+
+const route = useRoute();
+
+const views = [
+    { name: "searchResults", path: "/search", label: "View all passage pairs" },
+    { name: "sortedResults", path: "/sorted-results/", label: "View passages by frequency of reuse" },
+    { name: "timeSeries", path: "/time/", label: "View passages in timeline" },
+    globalConfig.showNetworkGraph && { name: "networkGraph", path: "/network/", label: "View network graph" },
+    globalConfig.showSemanticGraph && { name: "semanticGraph", path: "/semantic/", label: "View semantic graph" },
+].filter(Boolean);
+
+const query = computed(() => {
+    const queryParams = { ...route.query };
+    delete queryParams.page;
+    delete queryParams.id_anchor;
+    queryParams.db_table = globalConfig.databaseName;
+    return paramsToUrl(queryParams);
+});
 </script>
 <style scoped>
 .btn-group .btn {
@@ -75,5 +42,11 @@ export default {
 
 .btn-group .btn:last-child {
     border-bottom-right-radius: 0;
+}
+
+@media (max-width: 767.98px) {
+    .btn-group {
+        flex-wrap: wrap;
+    }
 }
 </style>

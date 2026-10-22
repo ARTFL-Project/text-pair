@@ -2,12 +2,14 @@
     <div class="local-pair">
         <div class="row">
             <div class="col mt-4">
-                <h6 class="paired-passage-label text-center pb-2" v-html="globalConfig.sourceLabel"></h6>
+                <component :is="`h${headingLevel}`" class="h6 paired-passage-label text-center pb-2"
+                    v-html="globalConfig.sourceLabel"></component>
                 <citations :citation="globalConfig.sourceCitation" :alignment="alignment"
                     :link-to-doc="globalConfig.sourceLinkToDocMetadata"></citations>
             </div>
             <div class="col mt-4 border border-top-0 border-right-0 border-bottom-0 target-passage-container">
-                <h6 class="paired-passage-label text-center pb-2" v-html="globalConfig.targetLabel"></h6>
+                <component :is="`h${headingLevel}`" class="h6 paired-passage-label text-center pb-2"
+                    v-html="globalConfig.targetLabel"></component>
                 <citations :citation="globalConfig.targetCitation" :alignment="alignment"
                     :link-to-doc="globalConfig.targetLinkToDocMetadata"></citations>
 
@@ -28,34 +30,36 @@
 
         <div class="row passages">
             <div class="col mb-2">
-                <p class="card-text text-justify px-3 pt-2 mb-2">
+                <p class="card-text text-justify px-3 pt-2 mb-2" :lang="globalConfig.sourceLanguage || undefined">
                     {{ alignment.source_context_before }}
-                    <span class="source-passage">{{ alignment.source_passage }}</span>
+                    <span class="source-passage" v-if="sourceHtml === null">{{ alignment.source_passage }}</span>
+                    <span class="source-passage" v-else v-html="sourceHtml"></span>
                     {{ alignment.source_context_after }}
                 </p>
                 <button type="button" class="btn btn-outline-secondary position-absolute rounded-0"
                     style="bottom: 0; left: 0" v-if="globalConfig.sourceTextAvailable"
                     @click="goToContext(alignment, 'source')">
-                    View passage in context
+                    View passage in context<span class="visually-hidden">: {{ sourceLabel }}</span>
                 </button>
             </div>
             <div class="col mb-2 border border-top-0 border-right-0 border-bottom-0 target-passage-container">
-                <p class="card-text text-justify px-3 mb-2">
+                <p class="card-text text-justify px-3 mb-2" :lang="globalConfig.targetLanguage || undefined">
                     {{ alignment.target_context_before }}
-                    <span class="target-passage">{{ alignment.target_passage }}</span>
+                    <span class="target-passage" v-if="targetHtml === null">{{ alignment.target_passage }}</span>
+                    <span class="target-passage" v-else v-html="targetHtml"></span>
                     {{ alignment.target_context_after }}
                 </p>
                 <button type="button" class="btn btn-outline-secondary position-absolute rounded-0"
                     style="bottom: 0; right: 0" v-if="globalConfig.targetTextAvailable"
                     @click="goToContext(alignment, 'target')">
-                    View passage in context
+                    View passage in context<span class="visually-hidden">: {{ targetLabel }}</span>
                 </button>
             </div>
         </div>
         <div class="mb-2 ms-3" style="margin-top: -0.5rem"
             v-if="globalConfig.matchingAlgorithm == 'sa' && alignment.count > 1">
             &rarr;
-            <router-link class="" :to="`group/${alignment.group_id}`">
+            <router-link :to="`/group/${alignment.group_id}`">
                 Passage reused in {{ alignment.count }} different titles
             </router-link>
         </div>
@@ -73,23 +77,15 @@
                     class="reasoning-text small px-4 pb-1">
                     {{ alignment.llm_reasoning }}
                 </div>
-                <a class="diff-btn" diffed="false" @click="showMatches(alignment)">Show matching words</a>
-                <div class="loading position-absolute" style="display: none; left: 50%; transform: translateX(-50%)">
-                    <div class="spinner-border"
-                        style="width: 4rem; height: 4rem; position: absolute; z-index: 50; top: 30px" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                </div>
+                <button type="button" class="diff-btn" @click="showMatches">
+                    {{ showingDiff ? "Hide matching words" : "Show matching words" }}
+                </button>
             </div>
             <div v-if="globalConfig.matchingAlgorithm == 'sa'">
-                <a class="diff-btn" diffed="false" @click="showDifferences(
-                    alignment.source_passage,
-                    alignment.target_passage,
-                    alignment.source_passage_length,
-                    alignment.target_passage.length
-                )
-                    ">Show differences</a>
-                <div class="loading position-absolute" style="display: none; left: 50%; transform: translateX(-50%)">
+                <button type="button" class="diff-btn" @click="showDifferences">
+                    {{ showingDiff ? "Hide differences" : "Show differences" }}
+                </button>
+                <div class="loading position-absolute" style="left: 50%; transform: translateX(-50%)" v-if="diffLoading">
                     <div class="spinner-border"
                         style="width: 1.4rem; height: 1.4rem; position: absolute; z-index: 50; top: 5px; left: -10px;"
                         role="status">
@@ -101,148 +97,128 @@
     </div>
 </template>
 
-<script>
+<script setup>
+import emitter from "tiny-emitter/instance";
+import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import globalConfig from "../config.js";
+import { plainText } from "../utils.js";
 import citations from "./citations";
 import Worker from "./diffStrings?worker";
 
-export default {
-    name: "passagePair",
-    components: {
-        citations,
-    },
-    inject: ["$http"],
-    props: {
-        alignment: Object,
-        index: Number,
-        diffed: Boolean,
-        startByteIndex: Number,
-        endByteIndex: Number,
-    },
-    data() {
-        return {
-            loading: true,
-            globalConfig: this.$globalConfig,
-            done: false,
-            timeline: {},
-            sourcePassage: {},
-            passages: [],
-        };
-    },
-    mounted() {
-        if (this.diffed) {
-            let element = document.getElementsByClassName("diff-btn")[this.index];
-            this.showDifferences(
-                this.alignment.source_passage,
-                this.alignment.target_passage,
-                this.alignment.source_passage_length,
-                this.alignment.target_passage.length,
-                element
-            );
-        }
-    },
-    methods: {
-        showDifferences(sourceText, targetText, sourcePassageLength, targetPassageLength, diffBtn) {
-            sourceText = sourceText.replace(/\s\s+/g, ' ')
-            targetText = targetText.replace(/\s\s+/g, ' ')
-            if (sourcePassageLength > 10000 || targetPassageLength > 10000) {
-                alert("Passage of 10000 words or more may take up a long time to compare");
-            }
-            if (diffBtn == undefined) {
-                diffBtn = document.getElementsByClassName("diff-btn")[this.index];
-            }
-            let parent = diffBtn.parentNode.parentNode.parentNode;
-            let loading = parent.querySelector(".loading");
-            let sourceElement = parent.querySelector(".source-passage");
-            let targetElement = parent.querySelector(".target-passage");
-            if (diffBtn.getAttribute("diffed") == "false") {
-                loading.style.display = "initial";
-                const worker = new Worker();
-                let slicing = false;
-                let startByteIndex = this.startByteIndex
-                let endByteIndex = this.endByteIndex
-                if (this.startByteIndex != undefined && this.startByteIndex > 0) {
-                    // works around issue with diff-match-patch where no matches are found if the match is far after the beginning of the string
-                    slicing = true
-                    worker.postMessage([sourceText.slice(this.startByteIndex, this.endByteIndex), targetText]);
-                } else {
-                    worker.postMessage([sourceText, targetText]);
-                }
-                worker.onmessage = function (response) {
-                    let differences = response.data;
-                    let newSourceString = "";
+const props = defineProps({
+    alignment: Object,
+    index: Number,
+    diffed: Boolean,
+    headingLevel: { type: Number, default: 4 },
+    startByteIndex: Number,
+    endByteIndex: Number,
+});
 
-                    let newTargetString = "";
-                    for (let diffObj of differences) {
-                        let [diffCode, text] = diffObj;
-                        if (diffCode === 0) {
-                            newSourceString += text;
-                            newTargetString += text;
-                        } else if (diffCode === -1) {
-                            newSourceString += `<span class="removed">${text}</span>`;
-                        } else if (diffCode === 1) {
-                            newTargetString += `<span class="added">${text}</span>`;
-                        }
-                    }
-                    if (slicing) {
-                        newSourceString = `<span class="removed">${sourceText.slice(0, startByteIndex)}</span>${newSourceString}<span class="removed">${sourceText.slice(endByteIndex)}</span>`;
-                    }
-                    sourceElement.innerHTML = newSourceString;
-                    targetElement.innerHTML = newTargetString;
-                    diffBtn.setAttribute("diffed", "true");
-                    loading.style.display = "none";
-                    diffBtn.textContent = "Hide differences";
-                };
-            } else {
-                sourceElement.innerHTML = sourceText;
-                targetElement.innerHTML = targetText;
-                diffBtn.setAttribute("diffed", "false");
-                diffBtn.textContent = "Show differences";
+const router = useRouter();
+const sourceLabel = plainText(globalConfig.sourceLabel);
+const targetLabel = plainText(globalConfig.targetLabel);
+// Passages as HTML while differences or matches are shown, null otherwise
+const sourceHtml = ref(null);
+const targetHtml = ref(null);
+const showingDiff = ref(false);
+const diffLoading = ref(false);
+
+onMounted(() => {
+    if (props.diffed) {
+        showDifferences();
+    }
+});
+
+function escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function showDifferences() {
+    if (showingDiff.value) {
+        sourceHtml.value = null;
+        targetHtml.value = null;
+        showingDiff.value = false;
+        emitter.emit("announce", "Differences hidden");
+        return;
+    }
+    const sourceText = props.alignment.source_passage.replace(/\s\s+/g, " ");
+    const targetText = props.alignment.target_passage.replace(/\s\s+/g, " ");
+    if (props.alignment.source_passage_length > 10000 || props.alignment.target_passage.length > 10000) {
+        alert("Passage of 10000 words or more may take up a long time to compare");
+    }
+    diffLoading.value = true;
+    const worker = new Worker();
+    const startByteIndex = props.startByteIndex;
+    const endByteIndex = props.endByteIndex;
+    // works around issue with diff-match-patch where no matches are found if the match is far after the beginning of the string
+    const slicing = startByteIndex != undefined && startByteIndex > 0;
+    if (slicing) {
+        worker.postMessage([sourceText.slice(startByteIndex, endByteIndex), targetText]);
+    } else {
+        worker.postMessage([sourceText, targetText]);
+    }
+    worker.onmessage = (response) => {
+        let newSourceString = "";
+        let newTargetString = "";
+        for (const [diffCode, text] of response.data) {
+            if (diffCode === 0) {
+                newSourceString += escapeHtml(text);
+                newTargetString += escapeHtml(text);
+            } else if (diffCode === -1) {
+                newSourceString += `<del class="removed">${escapeHtml(text)}</del>`;
+            } else if (diffCode === 1) {
+                newTargetString += `<ins class="added">${escapeHtml(text)}</ins>`;
             }
+        }
+        if (slicing) {
+            newSourceString = `<del class="removed">${escapeHtml(sourceText.slice(0, startByteIndex))}</del>${newSourceString}<del class="removed">${escapeHtml(sourceText.slice(endByteIndex))}</del>`;
+        }
+        sourceHtml.value = newSourceString;
+        targetHtml.value = newTargetString;
+        showingDiff.value = true;
+        diffLoading.value = false;
+        worker.terminate();
+        emitter.emit("announce", "Differences shown");
+    };
+}
+
+function stanceClass(stance) {
+    const map = {
+        Agree: "stance-agree",
+        Disagree: "stance-disagree",
+        Neutral: "stance-neutral",
+        Unrelated: "stance-unrelated",
+    };
+    return map[stance] || "";
+}
+
+function showMatches() {
+    if (showingDiff.value) {
+        sourceHtml.value = null;
+        targetHtml.value = null;
+        showingDiff.value = false;
+        emitter.emit("announce", "Matching words hidden");
+        return;
+    }
+    sourceHtml.value = props.alignment.source_passage_with_matches.replace(/&gt;/g, ">").replace(/&lt;/g, "<");
+    targetHtml.value = props.alignment.target_passage_with_matches.replace(/&gt;/g, ">").replace(/&lt;/g, "<");
+    showingDiff.value = true;
+    emitter.emit("announce", "Matching words shown");
+}
+
+function goToContext(alignment, direction) {
+    router.push({
+        path: "/text-view/",
+        query: {
+            db_table: globalConfig.databaseName,
+            doc_id: alignment[`${direction}_doc_id`],
+            start_byte: alignment[`${direction}_start_byte`],
+            end_byte: alignment[`${direction}_end_byte`],
+            directionSelected: direction,
         },
-        stanceClass(stance) {
-            const map = {
-                Agree: "stance-agree",
-                Disagree: "stance-disagree",
-                Neutral: "stance-neutral",
-                Unrelated: "stance-unrelated",
-            };
-            return map[stance] || "";
-        },
-        showMatches: function (alignment, diffBtn) {
-            if (diffBtn == undefined) {
-                diffBtn = document.getElementsByClassName("diff-btn")[this.index];
-            }
-            let parent = diffBtn.parentNode.parentNode.parentNode;
-            let sourceElement = parent.querySelector(".source-passage");
-            let targetElement = parent.querySelector(".target-passage");
-            if (diffBtn.getAttribute("diffed") == "false") {
-                let source = alignment.source_passage_with_matches.replace(/&gt;/g, ">").replace(/&lt;/g, "<");
-                sourceElement.innerHTML = source;
-                let target = alignment.target_passage_with_matches.replace(/&gt;/g, ">").replace(/&lt;/g, "<");
-                targetElement.innerHTML = target;
-                diffBtn.setAttribute("diffed", "true");
-                diffBtn.textContent = "Hide matching words";
-            } else {
-                sourceElement.innerHTML = alignment.source_passage;
-                targetElement.innerHTML = alignment.target_passage;
-                diffBtn.setAttribute("diffed", "false");
-                diffBtn.textContent = "Show matching words";
-            }
-        },
-        goToContext(alignment, direction) {
-            this.$router.push({
-                path: "/text-view/",
-                query: {
-                    db_table: this.$globalConfig.databaseName,
-                    doc_id: alignment[`${direction}_doc_id`],
-                    start_byte: alignment[`${direction}_start_byte`],
-                    end_byte: alignment[`${direction}_end_byte`],
-                    directionSelected: direction,
-                },
-            });
-        },
-    },
-};
+    });
+}
 </script>
 
 <style lang="scss" scoped>
@@ -257,6 +233,7 @@ export default {
 :deep(.added) {
     color: $added-color;
     font-weight: 700;
+    text-decoration: underline;
 }
 
 :deep(.removed) {
@@ -268,10 +245,12 @@ export default {
 :deep(.token-match) {
     color: darkblue;
     font-weight: 700;
+    text-decoration: underline;
 }
 
 :deep(.filtered-token) {
-    opacity: 0.25;
+    color: #6c757d;
+    font-weight: 400;
 }
 
 
@@ -289,10 +268,10 @@ export default {
     text-transform: capitalize;
 }
 
-.stance-agree { background-color: #27ae60; }
-.stance-disagree { background-color: #e74c3c; }
-.stance-neutral { background-color: #7f8c8d; }
-.stance-unrelated { background-color: #95a5a6; }
+.stance-agree { background-color: #1e8449; }
+.stance-disagree { background-color: #c0392b; }
+.stance-neutral { background-color: #5f6b6d; }
+.stance-unrelated { background-color: #707070; }
 
 .reasoning-text {
     font-style: italic;
@@ -327,10 +306,10 @@ export default {
 }
 
 .tag-secondary {
-    background-color: #3498db;
+    background-color: #2471a3;
 }
 
 .tag-tertiary {
-    background-color: #9b59b6;
+    background-color: #8e44ad;
 }
 </style>

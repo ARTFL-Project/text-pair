@@ -1,54 +1,43 @@
 <template>
-    <div id="search-form" class="card rounded-0 mt-3 shadow-1">
+    <section id="search-form" class="card rounded-0 mt-3 shadow-1" aria-labelledby="search-form-title">
         <div class="card-body rounded-0" style="position: relative">
-            <h6 id="show-form" class="p-2 hide" @click="toggleSearchForm()">Show search form</h6>
-            <form @submit.prevent @keyup.enter="searchSelected()">
-                <div class="row">
-                    <div class="col">
-                        <h5 class="section-title text-center pb-2" v-html="globalConfig.sourceLabel"></h5>
-                    </div>
-                    <div class="col border border-top-0 border-right-0 border-bottom-0">
-                        <h5 class="section-title text-center pb-2" v-html="globalConfig.targetLabel"></h5>
-                    </div>
-                </div>
-
+            <h2 id="search-form-title" class="visually-hidden">Search</h2>
+            <button type="button" id="show-form" class="p-2" :class="{ hide: formOpen }" ref="showFormButton"
+                :aria-expanded="String(formOpen)" aria-controls="search-alignments" @click="toggleSearchForm(true)">Show
+                search form</button>
+            <form id="search-alignments" ref="form" role="search" aria-labelledby="search-form-title"
+                @submit.prevent="search()">
                 <!-- Metadata Fields -->
                 <div class="row">
-                    <div class="col">
+                    <fieldset class="col-12 col-md-6">
+                        <legend class="section-title text-center pb-2" v-html="globalConfig.sourceLabel"></legend>
                         <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.source"
                             :key="field.label">
-                            <span class="input-group-prepend">
-                                <span class="input-group-text rounded-0">{{ field.label }}</span>
-                            </span>
-                            <input type="text" class="form-control rounded-0" :name="field.value"
-                                v-model="formValues[field.value]" />
+                            <label class="input-group-text rounded-0" :for="`search-${field.value}`">{{ field.label
+                            }}</label>
+                            <input type="text" class="form-control rounded-0" :id="`search-${field.value}`"
+                                :name="field.value" v-model="formValues[field.value]" />
                         </div>
-                    </div>
-                    <div class="col border border-top-0 border-right-0 border-bottom-0">
+                    </fieldset>
+                    <fieldset class="col-12 col-md-6 target-fields">
+                        <legend class="section-title text-center pb-2" v-html="globalConfig.targetLabel"></legend>
                         <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.target"
                             :key="field.label">
-                            <span class="input-group-prepend">
-                                <span class="input-group-text rounded-0">{{ field.label }}</span>
-                            </span>
-                            <input type="text" class="form-control rounded-0" :name="field.value"
-                                v-model="formValues[field.value]" />
+                            <label class="input-group-text rounded-0" :for="`search-${field.value}`">{{ field.label
+                            }}</label>
+                            <input type="text" class="form-control rounded-0" :id="`search-${field.value}`"
+                                :name="field.value" v-model="formValues[field.value]" />
                         </div>
-                    </div>
+                    </fieldset>
                 </div>
                 <!-- Passage Classification -->
-                <div id="passage-classification" class="mb-3" v-if="globalConfig.passageClassification.length">
+                <fieldset id="passage-classification" class="mb-3" v-if="globalConfig.passageClassification.length">
+                    <legend class="section-title text-center pb-2">Passage Classification</legend>
                     <div class="row">
-                        <div class="col-12">
-                            <h5 class="section-title text-center pb-2">Passage Classification</h5>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col">
+                        <div class="col-12 col-md-4">
                             <div class="input-group pb-3">
-                                <span class="input-group-prepend">
-                                    <span class="input-group-text rounded-0">First Criterion</span>
-                                </span>
-                                <select class="form-control rounded-0 select-with-arrow"
+                                <label class="input-group-text rounded-0" for="classification-filter-1">First Criterion</label>
+                                <select id="classification-filter-1" class="form-control rounded-0 select-with-arrow"
                                     v-model="classificationFilters[0]">
                                     <option value="">Any classification</option>
                                     <option v-for="classItem in globalConfig.passageClassification"
@@ -58,12 +47,10 @@
                                 </select>
                             </div>
                         </div>
-                        <div class="col">
+                        <div class="col-12 col-md-4">
                             <div class="input-group pb-3">
-                                <span class="input-group-prepend">
-                                    <span class="input-group-text rounded-0">Second Criterion</span>
-                                </span>
-                                <select class="form-control rounded-0 select-with-arrow"
+                                <label class="input-group-text rounded-0" for="classification-filter-2">Second Criterion</label>
+                                <select id="classification-filter-2" class="form-control rounded-0 select-with-arrow"
                                     v-model="classificationFilters[1]">
                                     <option value="">Any classification</option>
                                     <option v-for="classItem in globalConfig.passageClassification"
@@ -73,12 +60,10 @@
                                 </select>
                             </div>
                         </div>
-                        <div class="col">
+                        <div class="col-12 col-md-4">
                             <div class="input-group pb-3">
-                                <span class="input-group-prepend">
-                                    <span class="input-group-text rounded-0">Third Criterion</span>
-                                </span>
-                                <select class="form-control rounded-0 select-with-arrow"
+                                <label class="input-group-text rounded-0" for="classification-filter-3">Third Criterion</label>
+                                <select id="classification-filter-3" class="form-control rounded-0 select-with-arrow"
                                     v-model="classificationFilters[2]">
                                     <option value="">Any classification</option>
                                     <option v-for="classItem in globalConfig.passageClassification"
@@ -93,11 +78,10 @@
                         <div class="col-12">
                             <div id="banality-filter" class="pb-3">
                                 <div class="input-group">
-                                    <span class="input-group-prepend">
-                                        <span class="input-group-text rounded-0">Banality Filter</span>
-                                    </span>
-                                    <select class="form-control rounded-0 select-with-arrow" v-model="banalitySelected"
-                                        @change="updateBanalityValue">
+                                    <label class="input-group-text rounded-0" for="banality-select">Banality
+                                        Filter</label>
+                                    <select id="banality-select" class="form-control rounded-0 select-with-arrow"
+                                        v-model="banalitySelected" @change="updateBanalityValue">
                                         <option v-for="(option, optionIndex) in formBanalityValues" :key="optionIndex"
                                             :value="option.label">
                                             {{ option.label }}
@@ -107,216 +91,141 @@
                             </div>
                         </div>
                     </div>
-                </div>
+                </fieldset>
 
-                <div id="search-alignments">
-                    <button class="btn btn-secondary rounded-0" type="button" @click="search()">Search</button>
+                <div id="search-buttons">
+                    <button class="btn btn-secondary rounded-0" type="submit">Search</button>
                     <button type="button" class="btn btn-outline-secondary rounded-0" @click="clearForm()">
                         Reset
                     </button>
                 </div>
             </form>
         </div>
-    </div>
+    </section>
 </template>
 
-<script>
+<script setup>
+import emitter from "tiny-emitter/instance";
 import Velocity from "velocity-animate";
+import { nextTick, onUnmounted, reactive, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import globalConfig from "../config.js";
+import { prefersReducedMotion } from "../utils.js";
 
-export default {
-    name: "search-form",
-    data: function () {
-        return {
-            globalConfig: this.$globalConfig,
-            formValues: this.populateSearchForm(),
-            // Add this new array for classification filters
-            classificationFilters: ["", "", ""],
-            formBanalityValues: [
-                {
-                    label: "Don't filter banalities",
-                    value: "",
+const route = useRoute();
+const router = useRouter();
+const form = ref(null);
+const showFormButton = ref(null);
+const formOpen = ref(true);
+const banalitiesStored = globalConfig.banalitiesStored;
+const formBanalityValues = [
+    { label: "Don't filter banalities", value: "" },
+    { label: "Filter all banalities", value: false },
+    { label: "Search only banalities", value: true },
+];
+const formValues = reactive(populateSearchForm());
+const classificationFilters = ref([
+    route.query.classification_filter_1 || "",
+    route.query.classification_filter_2 || "",
+    route.query.classification_filter_3 || "",
+]);
+const banalitySelected = ref("Don't filter banalities");
+if ("banality" in route.query) {
+    banalitySelected.value = route.query.banality == "true" ? "Search only banalities" : "Filter all banalities";
+}
+
+function updateFromUrl(updatedParams) {
+    for (const key in updatedParams) {
+        if (key in formValues) {
+            formValues[key] = updatedParams[key];
+        }
+    }
+}
+emitter.on("urlUpdate", updateFromUrl);
+emitter.on("toggleSearchForm", toggleSearchForm);
+onUnmounted(() => {
+    emitter.off("urlUpdate", updateFromUrl);
+    emitter.off("toggleSearchForm", toggleSearchForm);
+});
+
+if (route.path != "/") {
+    toggleSearchForm();
+}
+
+function populateSearchForm() {
+    const values = {};
+    for (const direction of ["source", "target"]) {
+        for (const key of globalConfig.metadataFields[direction]) {
+            values[key.value] = key.value in route.query ? route.query[key.value] : "";
+        }
+    }
+    values.banality = "";
+    values.timeSeriesInterval = globalConfig.timeSeriesIntervals[0].value;
+    values.directionSelected = "source";
+    return values;
+}
+
+function search() {
+    toggleSearchForm();
+
+    // Create URLSearchParams to properly handle multiple parameters with the same name
+    const urlParams = new URLSearchParams();
+
+    // Add all regular form values
+    for (const [key, value] of Object.entries(formValues)) {
+        if (value !== "" && value !== null && value !== undefined) {
+            urlParams.append(key, value);
+        }
+    }
+
+    for (const [index, filter] of classificationFilters.value.entries()) {
+        if (filter) {
+            urlParams.append(`classification_filter_${index + 1}`, filter);
+        }
+    }
+
+    router.push(`/search?${urlParams.toString()}`).then(() => emitter.emit("focusMain"));
+}
+
+function clearForm() {
+    for (const key in formValues) {
+        formValues[key] = "";
+    }
+    // Reset classification filters
+    classificationFilters.value = ["", "", ""];
+}
+
+function toggleSearchForm(moveFocus = false) {
+    nextTick(() => {
+        const duration = prefersReducedMotion() ? 0 : 200;
+        if (form.value.style.display == "none") {
+            formOpen.value = true;
+            Velocity(form.value, "slideDown", {
+                duration,
+                easing: "ease-out",
+                complete: () => {
+                    if (moveFocus === true) form.value.querySelector("input, select").focus();
                 },
-                {
-                    label: "Filter all banalities",
-                    value: false,
-                },
-                {
-                    label: "Search only banalities",
-                    value: true,
-                },
-            ],
-            banalitySelected: "Don't filter banalities",
-            directionSelected: {
-                label: this.$globalConfig.sourceLabel,
-                value: "source",
-            },
-            searchSelected: this.search,
-            banalitiesStored: this.$globalConfig.banalitiesStored,
-        };
-    },
-    created() {
-        var vm = this;
-        this.emitter.on("urlUpdate", (updatedParams) => {
-            for (let key in updatedParams) {
-                if (key in vm.formValues) {
-                    vm.formValues[key] = updatedParams[key];
-                }
-            }
-        });
-        this.emitter.on("toggleSearchForm", () => {
-            this.toggleSearchForm();
-        });
-        if ("banality" in this.$route.query) {
-            if (this.$route.query.banality == "true") {
-                this.banalitySelected = "Search only banalities";
-            } else {
-                this.banalitySelected = "Filter all banalities";
-            }
-        } else {
-            this.banalitySelected = "Don't filter banalities";
-        }
-        if (this.$route.path != "/") {
-            if (this.$route.path == "/search" || this.$route.path.startsWith("/group")) {
-                this.searchActive = true;
-                this.timeActive = false;
-                this.toggleSearchForm();
-            } else {
-                this.searchActive = false;
-                this.timeActive = true;
-                this.toggleSearchForm();
-            }
-        }
-        if (this.$route.query.directionSelected == "source") {
-            vm.directionSelected = {
-                label: this.$globalConfig.sourceLabel,
-                value: "source",
-            };
-        } else if (this.$route.query.directionSelected == "target") {
-            vm.directionSelected = {
-                label: this.$globalConfig.targetLabel,
-                value: "target",
-            };
-        } else {
-            vm.directionSelected = {
-                label: this.$globalConfig.sourceLabel,
-                value: "source",
-            };
-        }
-        if ("timeSeriesInterval" in this.$route.query) {
-            for (let interval of this.$globalConfig.timeSeriesIntervals) {
-                if (this.$route.query.timeSeriesInterval == interval.value) {
-                    vm.timeSeriesInterval = interval;
-                    break;
-                }
-            }
-        }
-
-        // Initialize classification filters from URL
-        if (this.$route.query.classification_filter_1) {
-            this.classificationFilters[0] = this.$route.query.classification_filter_1;
-        }
-        if (this.$route.query.classification_filter_2) {
-            this.classificationFilters[1] = this.$route.query.classification_filter_2;
-        }
-        if (this.$route.query.classification_filter_3) {
-            this.classificationFilters[2] = this.$route.query.classification_filter_3;
-        }
-    },
-    methods: {
-        populateSearchForm() {
-            let formValues = {};
-            if (!this.$route.query) {
-                formValues.page = 1;
-            } else {
-                for (const key of this.$globalConfig.metadataFields.source) {
-                    if (key.value in this.$route.query) {
-                        formValues[key.value] = this.$route.query[key.value];
-                    } else {
-                        formValues[key.value] = "";
-                    }
-                }
-                for (const key of this.$globalConfig.metadataFields.target) {
-                    if (key.value in this.$route.query) {
-                        formValues[key.value] = this.$route.query[key.value];
-                    } else {
-                        formValues[key.value] = "";
-                    }
-                }
-            }
-            formValues.banality = "";
-            formValues.timeSeriesInterval = this.$globalConfig.timeSeriesIntervals[0].value;
-            formValues.directionSelected = "source";
-            return formValues;
-        },
-        banalitySelect(index) {
-            this.formValues.banality = this.formBanalityValues[index].value;
-            this.banalitySelected = this.formBanalityValues[index].label;
-        },
-        search() {
-            this.toggleSearchForm();
-
-            // Create URLSearchParams to properly handle multiple parameters with the same name
-            const urlParams = new URLSearchParams();
-
-            // Add all regular form values
-            for (const [key, value] of Object.entries(this.formValues)) {
-                if (value !== "" && value !== null && value !== undefined) {
-                    urlParams.append(key, value);
-                }
-            }
-
-            for (const [index, filter] of this.classificationFilters.entries()) {
-                if (filter) {
-                    urlParams.append(`classification_filter_${index + 1}`, filter);
-                }
-            }
-
-            this.$router.push(`/search?${urlParams.toString()}`);
-        },
-        clearForm() {
-            for (const key in this.formValues) {
-                this.formValues[key] = "";
-            }
-            // Reset classification filters
-            this.classificationFilters = ["", "", ""];
-        },
-        toggleSearchForm() {
-            this.$nextTick(() => {
-                let form = document.querySelector("form");
-                if (form.style.display == "none") {
-                    document.querySelector("#show-form").classList.toggle("hide");
-                    Velocity(form, "slideDown", {
-                        duration: 200,
-                        easing: "ease-out",
-                    });
-                } else {
-                    Velocity(form, "slideUp", {
-                        duration: 200,
-                        easing: "ease-out",
-                        complete: function () {
-                            document.querySelector("#show-form").classList.toggle("hide");
-                        },
-                    });
-                }
             });
-        },
-        toggleDropdown() {
-            let element = event.srcElement.closest(".my-dropdown").querySelector("ul");
-            if (element.style.display != "inline-block") {
-                element.style.display = "inline-block";
-            } else {
-                element.style.display = "none";
-            }
-        },
-        updateBanalityValue() {
-            // Find the matching option and set its value in formValues
-            const selectedOption = this.formBanalityValues.find(option => option.label === this.banalitySelected);
-            if (selectedOption) {
-                this.formValues.banality = selectedOption.value;
-            }
+        } else {
+            Velocity(form.value, "slideUp", {
+                duration,
+                easing: "ease-out",
+                complete: () => {
+                    formOpen.value = false;
+                },
+            });
         }
-    },
-};
+    });
+}
+
+function updateBanalityValue() {
+    // Find the matching option and set its value in formValues
+    const selectedOption = formBanalityValues.find((option) => option.label === banalitySelected.value);
+    if (selectedOption) {
+        formValues.banality = selectedOption.value;
+    }
+}
 </script>
 
 <style lang="scss" scoped>
@@ -344,10 +253,16 @@ export default {
     max-height: 0 !important;
     margin: 0;
     padding: 0;
+    visibility: hidden;
 }
 
 #show-form {
     position: absolute;
+    border-width: 0;
+    background-color: transparent;
+    color: inherit;
+    font-size: 1rem;
+    font-weight: 500;
     transition: all 0.2s ease-out;
     cursor: pointer;
     top: 0;
@@ -359,9 +274,14 @@ export default {
     color: #565656;
 }
 
-#search-form>div>form>div:nth-child(1)>div.col.border.border-top-0.border-right-0.border-bottom-0,
-#search-form>div>form>div:nth-child(2)>div.col.border.border-top-0.border-right-0.border-bottom-0 {
-    border-right-width: 0 !important;
+@media (min-width: 768px) {
+    .target-fields {
+        border-left: 1px solid var(--bs-border-color);
+    }
+}
+
+fieldset legend + * {
+    clear: left;
 }
 
 .tab-line {

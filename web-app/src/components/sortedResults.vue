@@ -1,5 +1,6 @@
 <template>
     <div class="mt-3">
+        <h2 class="visually-hidden">Passages by frequency of reuse</h2>
         <div class="row" style="padding: 0 0.75rem">
             <div class="m-4" style="font-size: 120%" v-if="error">No results for your query</div>
             <search-arguments></search-arguments>
@@ -13,167 +14,98 @@
                         <span class="visually-hidden">Loading...</span>
                     </div>
                 </div>
-                <transition-group name="staggered-fade" tag="div" v-bind:css="false" v-on:before-enter="beforeEnter"
-                    v-on:enter="enter">
-                    <div class="card mb-3 rounded-0 shadow-1" style="position: relative"
+                <transition-group name="staggered-fade" tag="ol" class="list-unstyled" v-bind:css="false"
+                    v-on:before-enter="beforeEnter" v-on:enter="enter">
+                    <li class="card mb-3 rounded-0 shadow-1" style="position: relative"
                         v-for="(sourcePassage, index) in results.groups" :key="index + 1" v-bind:data-index="index">
-                        <div class="corner-btn left">{{ index + 1 }}</div>
-                        <h6 class="mt-2 pt-3" style="text-align: center;">
+                        <div class="corner-btn left" aria-hidden="true">{{ index + 1 }}</div>
+                        <h3 class="h6 mt-2 pt-3" style="text-align: center;">
+                            <span class="visually-hidden">{{ index + 1 }}. </span>
                             <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"
-                                :link-to-doc="globalConfig.sourceLinkToDocMetadata"></citations>
-                        </h6>
+                                :link-to-doc="globalConfig.sourceLinkToDocMetadata" tag="span"></citations>
+                        </h3>
                         <span class="px-3 pb-2" v-if="sourcePassage.count">The following passage is reused (in whole or in
                             part) {{
                                 sourcePassage.count.toLocaleString() }}
                             times:</span>
-                        <i class="passages px-3 pb-3">"{{ sourcePassage.source_passage }}"</i>
+                        <i class="passages px-3 pb-3" :lang="globalConfig.sourceLanguage || undefined">"{{
+                            sourcePassage.source_passage }}"</i>
                         <div class="ps-3">
-                            <router-link class="" :to="`/group/${sourcePassage.group_id}`">
-                                <button class="btn btn-secondary btn-sm mb-3">
-                                    View all reuses of this passage
-                                </button>
+                            <router-link class="btn btn-secondary btn-sm mb-3" :to="`/group/${sourcePassage.group_id}`">
+                                View all reuses of this passage
                             </router-link>
                         </div>
-                    </div>
+                    </li>
                 </transition-group>
             </div>
         </div>
-        <h5 class="mt-2 mb-4" style="text-align: center">For performance reasons, only the top 100 are displayed.</h5>
+        <p class="h5 mt-2 mb-4" style="text-align: center">For performance reasons, only the top 100 are displayed.</p>
     </div>
 </template>
 
-<script>
-import searchArguments from "./searchArguments";
-import passagePair from "./passagePair";
-import reportSwitcher from "./reportSwitcher";
-import citations from "./citations";
+<script setup>
+import axios from "axios";
+import emitter from "tiny-emitter/instance";
 import Velocity from "velocity-animate";
+import { ref, watch } from "vue";
+import { useRoute } from "vue-router";
+import globalConfig from "../config.js";
+import { paramsToUrl, prefersReducedMotion } from "../utils.js";
+import citations from "./citations";
+import reportSwitcher from "./reportSwitcher";
+import searchArguments from "./searchArguments";
 
-export default {
-    name: "sortedResults",
-    components: {
-        searchArguments, passagePair, reportSwitcher, citations
-    },
-    inject: ["$http"],
-    data() {
-        return {
-            loading: false,
-            done: false,
-            results: { groups: [] },
-            counts: null,
-            error: null,
-            globalConfig: this.$globalConfig,
-        };
-    },
-    created() {
-        // fetch the data when the view is created and the data is
-        // already being observed
-        this.fetchData();
-    },
-    watch: {
-        // call again the method if the route changes
-        $route: "fetchData",
-    },
-    methods: {
-        fetchData() {
-            this.results = { groups: [] }; // clear alignments with new search
-            this.facetResults = null; // clear facet results with new search
-            this.error = null;
-            this.loading = true;
-            let params = { ...this.$route.query };
-            params.db_table = this.$globalConfig.databaseName;
-            this.emitter.emit("searchArgsUpdate", {
-                counts: "",
+const route = useRoute();
+const loading = ref(false);
+const results = ref({ groups: [] });
+const error = ref(null);
+
+function fetchData() {
+    results.value = { groups: [] }; // clear alignments with new search
+    error.value = null;
+    loading.value = true;
+    const params = { ...route.query };
+    params.db_table = globalConfig.databaseName;
+    emitter.emit("searchArgsUpdate", {
+        counts: "",
+        searchParams: params,
+    });
+    axios
+        .get(`${globalConfig.apiServer}/sorted_results/?${paramsToUrl(params)}`)
+        .then((response) => {
+            results.value.groups = response.data.groups;
+            loading.value = false;
+            emitter.emit("searchArgsUpdate", {
+                counts: response.data.total_count,
                 searchParams: params,
             });
-            this.$http
-                .get(`${this.$globalConfig.apiServer}/sorted_results/?${this.paramsToUrl(params)}`)
-                .then((response) => {
-                    this.results.groups = response.data.groups;
-                    this.loading = false;
-                    this.done = true;
-                    this.emitter.emit("searchArgsUpdate", {
-                        counts: response.data.total_count,
-                        searchParams: params,
-                    });
-                })
-                .catch((error) => {
-                    this.loading = false;
-                    this.error = error.toString();
-                    console.log(error);
-                });
-        },
-        previousPage() {
-            let queryParams = { ...this.$route.query };
-            queryParams.page = parseInt(this.results.page) - 1;
-            queryParams.direction = "previous";
-            queryParams.id_anchor = this.results.alignments[0].page_cursor;
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-        },
-        nextPage() {
-            let queryParams = { ...this.$route.query };
-            queryParams.page = parseInt(this.results.page) + 1;
-            queryParams.direction = "next";
-            queryParams.id_anchor = this.results.alignments[this.results.alignments.length - 1].page_cursor;
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-        },
-        facetSearch(field) {
-            let queryParams = { ...this.$route.query };
-            queryParams.db_table = this.$globalConfig.databaseName;
-            queryParams.facet = field;
-            this.facetLoading = true;
-            this.$http
-                .post(`${this.$globalConfig.apiServer}/facets/?${this.paramsToUrl(queryParams)}`, {
-                    metadata: this.$globalConfig.metadataTypes,
-                })
-                .then((response) => {
-                    this.facetDirectionLabel = this.$globalConfig[`${response.data.facet.split("_")[0]}Label`];
-                    this.facetResults = response.data;
-                    this.toggleFacetList();
-                    this.facetLoading = false;
-                })
-                .catch((error) => {
-                    this.facetLoading = false;
-                    this.error = error.toString();
-                    console.log("ERROR", error);
-                });
-        },
-        toggleFacetList() {
-            Array.from(document.getElementsByClassName("facet-list")).forEach(function (element) {
-                element.classList.toggle("hide");
-            });
-            document.querySelector("#metadata-list").classList.toggle("show");
-        },
-        closeFacetResults() {
-            this.facetResults = null;
-            this.toggleFacetList();
-        },
-        filteredSearch(fieldName, value) {
-            let queryParams = { ...this.$route.query };
-            delete queryParams.page;
-            delete queryParams.id_anchor;
-            queryParams.db_table = this.$globalConfig.databaseName;
-            queryParams[fieldName] = `"${value}"`;
-            this.emitter.emit("urlUpdate", queryParams);
-            this.facetResults = null;
-            this.results = { alignments: [] };
-            this.$router.push(`/search?${this.paramsToUrl(queryParams)}`);
-        },
-        beforeEnter: function (el) {
-            el.style.opacity = 0;
-            el.style.height = 0;
-        },
-        enter: function (el, done) {
-            var delay = el.dataset.index * 100;
-            setTimeout(function () {
-                Velocity(el, { opacity: 1, height: "100%" }, { complete: done });
-            }, delay);
-        },
-        toggleSearchForm() {
-            this.emitter.emit("toggleSearchForm");
-        },
-    },
-};
+        })
+        .catch((err) => {
+            loading.value = false;
+            error.value = err.toString();
+            emitter.emit("announce", "No results for your query");
+            console.log(err);
+        });
+}
+fetchData();
+watch(() => route.fullPath, fetchData);
+
+function beforeEnter(el) {
+    if (prefersReducedMotion()) return;
+    el.style.opacity = 0;
+    el.style.height = 0;
+}
+
+function enter(el, complete) {
+    if (prefersReducedMotion()) {
+        complete();
+        return;
+    }
+    const delay = el.dataset.index * 100;
+    setTimeout(function () {
+        Velocity(el, { opacity: 1, height: "100%" }, { complete });
+    }, delay);
+}
 </script>
 
 <style scoped>
