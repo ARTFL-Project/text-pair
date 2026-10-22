@@ -271,6 +271,8 @@ class PreProcessor:
         Returns (normalized, surface_form) pairs, with a single-space pair
         between words, so joining the surface forms reconstructs the passage.
         Filtered tokens keep an empty normalized form so callers can mark them.
+        Raw text has none of PhiloLogic's stored annotations: without spaCy, words
+        keep their surface form and pos_to_keep is skipped.
         """
         surface_forms = self._tokenize_string(text)
         if not surface_forms:

@@ -65,12 +65,33 @@ def test_pos_to_keep_from_a_string():
     config = PreprocessConfig.from_kwargs(language="french", pos_to_keep="NOUN, VERB ,ADJ",
                                           spacy_model="/nonexistent/model")
     check("split and stripped", config.pos_to_keep, ("NOUN", "VERB", "ADJ"))
+    config = PreprocessConfig.from_kwargs(language="french", pos_to_keep=["NOUN", ""])
+    check("empty entries dropped", config.pos_to_keep, ("NOUN",))
+
+
+def test_pos_source_follows_spacy_model():
+    """Without spacy_model, pos_to_keep reads the POS PhiloLogic stored."""
+    for lemmatizer in ("", "philologic"):
+        config = PreprocessConfig.from_kwargs(language="french", pos_to_keep="NOUN",
+                                              lemmatizer=lemmatizer)
+        check(f"stored POS, lemmatizer={lemmatizer!r}", config.stored_pos, True)
+        check(f"no spaCy, lemmatizer={lemmatizer!r}", config.needs_spacy, False)
+        check(f"not memoizable, lemmatizer={lemmatizer!r}", config.memoizable, False)
+    config = PreprocessConfig.from_kwargs(language="french", pos_to_keep="NOUN",
+                                          spacy_model="/nonexistent/model")
+    check("spaCy POS", (config.stored_pos, config.needs_spacy), (False, True))
+    try:
+        PreprocessConfig.from_kwargs(language="french", pos_to_keep="NOUN", lemmatizer="philologic",
+                                     spacy_model="/nonexistent/model")
+    except ValueError:
+        pass
+    else:
+        FAILURES.append("lemmatizer = philologic with spaCy tagging was accepted")
 
 
 def test_spacy_only_settings_require_a_model():
     for kwargs, label in (
         ({"lemmatizer": "spacy"}, "lemmatizer = spacy"),
-        ({"pos_to_keep": "NOUN"}, "pos_to_keep"),
         ({"ents_to_keep": "PER"}, "ents_to_keep"),
     ):
         try:

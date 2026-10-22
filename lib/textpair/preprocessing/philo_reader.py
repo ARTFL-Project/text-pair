@@ -37,15 +37,16 @@ class Word(msgspec.Struct, gc=False):
     philo_type: str = "word"
 
 
-class LemmaWord(Word, gc=False):
-    """A word with the lemma PhiloLogic stored for it at load time."""
+class AnnotatedWord(Word, gc=False):
+    """A word with the lemma and POS PhiloLogic stored for it at load time."""
 
     lemma: str = ""
+    pos: str = ""
 
 
 _DECODE = msgspec.json.Decoder(Word).decode
 _DECODE_LINES = msgspec.json.Decoder(Word).decode_lines
-_DECODE_LEMMA_LINES = msgspec.json.Decoder(LemmaWord).decode_lines
+_DECODE_ANNOTATED_LINES = msgspec.json.Decoder(AnnotatedWord).decode_lines
 
 
 def read_blob(path: str) -> bytes:
@@ -55,14 +56,14 @@ def read_blob(path: str) -> bytes:
     return lz4.frame.decompress(raw) if path.endswith(".lz4") else raw
 
 
-def read_words(path: str, lemmas: bool = False) -> list[Word]:
+def read_words(path: str, annotated: bool = False) -> list[Word]:
     """Every word object in a words_and_philo_ids file.
 
     One decode_lines call rather than one decode per line: msgspec has no way to
     reuse an output object, so the objects get allocated either way, but the
     per-call overhead does not have to be.
     """
-    decode = _DECODE_LEMMA_LINES if lemmas else _DECODE_LINES
+    decode = _DECODE_ANNOTATED_LINES if annotated else _DECODE_LINES
     return decode(read_blob(path))
 
 
@@ -97,8 +98,10 @@ def split_text_objects(
         normalize = normalizer.normalize
 
     want_sent_starts = normalizer.config.needs_spacy
-    # The scanner does not read the lemma field.
+    # The scanner reads neither the lemma nor the POS field.
     stored_lemmas = normalizer.config.lemmatizer == "philologic"
+    stored_pos = normalizer.config.stored_pos
+    annotated = stored_lemmas or stored_pos
     # Sentence ids cost a split and a join per token, and are only needed when
     # something reads them. The punctuation workaround below rewrites a token's
     # position, which can only change the object it lands in when objects are
@@ -107,7 +110,7 @@ def split_text_objects(
     # keep_surface is on.
     track_sentences = level > 1 or keep_surface or want_sent_starts
 
-    if not track_sentences and not defer_normalization and not stored_lemmas:
+    if not track_sentences and not defer_normalization and not annotated:
         scanned = _scanned_objects(path, level, normalizer, keep_all)
         if scanned is not None:
             yield from scanned
@@ -118,7 +121,13 @@ def split_text_objects(
     previous_sent_id: str | None = None
     current_sent_id = ""
 
-    for word in read_words(path, lemmas=stored_lemmas):
+    words = read_words(path, annotated=annotated)
+    if stored_pos and words and not any(word.pos for word in words):
+        raise ValueError(
+            f"{path} has no stored POS tags: pos_to_keep needs a PhiloLogic database "
+            "loaded with them, or spacy_model"
+        )
+    for word in words:
         if not track_sentences:
             position = word.position
             object_id = position[: position.find(" ")]
@@ -155,8 +164,9 @@ def split_text_objects(
 
         form = modernize(word.token)
         if normalize is not None:
-            if stored_lemmas:
-                form = normalize(form, lemma=modernize(word.lemma))
+            if annotated:
+                lemma = modernize(word.lemma) if stored_lemmas else ""
+                form = normalize(form, pos=word.pos, lemma=lemma)
             else:
                 form = normalize(form)
             if not form and not keep_all:

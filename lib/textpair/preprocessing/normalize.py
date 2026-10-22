@@ -147,15 +147,18 @@ class Normalizer:
             self._raw_memo[token] = result
             return result
 
-    def normalize(self, token: str, pos: str = "", ent_type: str = "", lemma: str = "") -> str:
-        """The chain itself. Returns "" for a dropped token."""
+    def normalize(self, token: str, pos: str | None = None, ent_type: str = "", lemma: str = "") -> str:
+        """The chain itself. Returns "" for a dropped token.
+
+        `pos` None means no tag is available, as for raw text: pos_to_keep is skipped.
+        """
         if token in self.stopwords:
             return ""
         # An entity verdict is final: matching ents_to_keep bypasses the POS filter.
         if self.ents_to_keep and ent_type:
             if ent_type not in self.ents_to_keep:
                 return ""
-        elif self.pos_to_keep and pos not in self.pos_to_keep:
+        elif self.pos_to_keep and pos is not None and pos not in self.pos_to_keep:
             return ""
 
         text = token.strip()

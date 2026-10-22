@@ -195,6 +195,33 @@ def test_stored_lemmas_are_per_occurrence():
             check(f"forms with lemmatizer={lemmatizer!r}", objects[0].forms, want)
 
 
+def test_stored_pos_is_per_occurrence():
+    """Without spacy_model, pos_to_keep filters on each word's stored POS."""
+    words = [dict(word("si", "1 1 0 0 1 1 1", 0), pos="ADV", lemma="si"),
+             dict(word("si", "1 1 0 0 1 1 2", 10), pos="SCONJ", lemma="si"),
+             dict(word("yeux", "1 1 0 0 1 1 3", 20), pos="NOUN", lemma="oeil"),
+             dict(word("il", "1 1 0 0 1 1 4", 30), pos="PRON", lemma="il")]
+    options = dict(workers=1, language="french", stemmer=False, modernize=False, text_object_type="doc")
+    with tempfile.TemporaryDirectory() as root:
+        path = build_db(root, words, ROWS)
+        for kwargs, want in (({"pos_to_keep": "ADV, NOUN"}, ["si", "yeux"]),
+                             ({"pos_to_keep": "ADV, NOUN", "lemmatizer": "philologic"}, ["si", "oeil"]),
+                             ({}, ["si", "si", "yeux", "il"])):
+            objects = list(PreProcessor(**options, **kwargs).process_texts([path]))
+            check(f"forms with {kwargs}", objects[0].forms, want)
+        preproc = PreProcessor(**options, pos_to_keep="NOUN")
+        check("raw text skips the stored-POS filter",
+              [form for form, _ in preproc.process_string("si il") if form.strip()], ["si", "il"])
+    with tempfile.TemporaryDirectory() as root:
+        path = build_db(root, WORDS, ROWS)
+        try:
+            list(PreProcessor(**options, pos_to_keep="NOUN").process_texts([path]))
+        except ValueError:
+            pass
+        else:
+            FAILURES.append("pos_to_keep on a database with no stored POS was accepted")
+
+
 def main():
     for name, function in sorted(globals().items()):
         if name.startswith("test_") and callable(function):

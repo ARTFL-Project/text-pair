@@ -40,7 +40,8 @@ class PreprocessConfig:
     min_word_length: int = 2
     ascii: bool = False
 
-    # Token filtering, requires language_model
+    # Token filtering. POS tags come from spaCy when language_model is set, from
+    # the PhiloLogic words files otherwise; entities require language_model.
     pos_to_keep: tuple[str, ...] = ()
     ents_to_keep: tuple[str, ...] = ()
 
@@ -81,11 +82,12 @@ class PreprocessConfig:
             raise FileNotFoundError(f"lemmatizer file not found: {self.lemmatizer}")
         if self.lemmatizer == "spacy" and not self.language_model:
             raise ValueError("lemmatizer = spacy requires spacy_model to be set")
-        if self.lemmatizer == "philologic" and (self.pos_to_keep or self.ents_to_keep):
+        if self.lemmatizer == "philologic" and self.needs_spacy:
             # The spaCy stage would substitute its own lemmas for the stored ones.
-            raise ValueError("lemmatizer = philologic cannot be combined with pos_to_keep or ents_to_keep")
-        if self.pos_to_keep and not self.language_model:
-            raise ValueError("pos_to_keep requires spacy_model to be set")
+            raise ValueError(
+                "lemmatizer = philologic cannot be combined with spacy_model and pos_to_keep or "
+                "ents_to_keep; leave spacy_model empty to filter on the POS PhiloLogic stored"
+            )
         if self.ents_to_keep and not self.language_model:
             raise ValueError("ents_to_keep requires spacy_model to be set")
 
@@ -101,14 +103,19 @@ class PreprocessConfig:
         )
 
     @property
+    def stored_pos(self) -> bool:
+        """Whether pos_to_keep filters on the POS PhiloLogic stored at load time."""
+        return bool(self.pos_to_keep) and not self.language_model
+
+    @property
     def memoizable(self) -> bool:
         """Whether normalization is a pure function of the surface form.
 
-        False once each occurrence brings its own lemma, from spaCy or from the
-        PhiloLogic words files, since the same form can then normalize
+        False once each occurrence brings its own lemma or POS, from spaCy or from
+        the PhiloLogic words files, since the same form can then normalize
         differently depending on context.
         """
-        return self.lemmatizer not in ("spacy", "philologic")
+        return self.lemmatizer not in ("spacy", "philologic") and not self.stored_pos
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "PreprocessConfig":
@@ -126,8 +133,8 @@ def _as_tuple(value: Any) -> tuple[str, ...]:
     if not value:
         return ()
     if isinstance(value, str):
-        return tuple(i.strip() for i in value.split(",") if i.strip())
-    return tuple(value)
+        value = value.split(",")
+    return tuple(i.strip() for i in value if i and i.strip())
 
 
 def _as_path(value: Any) -> str:
