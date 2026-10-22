@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Web loading module"""
 
+import ast
+import html
 import io
 import json
 import glob
@@ -91,6 +93,78 @@ CONTROL_CHARS = dict.fromkeys(range(32))
 CONTROL_CHAR_FINDER = re.compile(r"[\x00-\x1f]").search
 
 
+# Language names of the [PREPROCESSING] language option, as BCP 47 codes for the web app's lang attributes
+LANGUAGE_CODES = {
+    "arabic": "ar",
+    "basque": "eu",
+    "catalan": "ca",
+    "chinese": "zh",
+    "czech": "cs",
+    "danish": "da",
+    "dutch": "nl",
+    "english": "en",
+    "finnish": "fi",
+    "french": "fr",
+    "german": "de",
+    "greek": "el",
+    "hebrew": "he",
+    "hindi": "hi",
+    "hungarian": "hu",
+    "indonesian": "id",
+    "irish": "ga",
+    "italian": "it",
+    "japanese": "ja",
+    "latin": "la",
+    "lithuanian": "lt",
+    "nepali": "ne",
+    "norwegian": "no",
+    "polish": "pl",
+    "portuguese": "pt",
+    "romanian": "ro",
+    "russian": "ru",
+    "serbian": "sr",
+    "spanish": "es",
+    "swedish": "sv",
+    "tamil": "ta",
+    "turkish": "tr",
+    "yiddish": "yi",
+}
+
+
+def language_code(language: str) -> str:
+    """BCP 47 code of a language name such as "french"; empty when unknown."""
+    language = language.strip().lower()
+    if re.fullmatch(r"[a-z]{2,3}(-[a-z0-9]+)*", language):
+        return language
+    return LANGUAGE_CODES.get(language, "")
+
+
+def philo_db_name(db_path: str) -> str:
+    """Title of a PhiloLogic database: dbname in its web_config.cfg, else its directory name."""
+    try:
+        with open(os.path.join(db_path, "data/web_config.cfg"), encoding="utf8") as config_file:
+            tree = ast.parse(config_file.read())
+    except (OSError, SyntaxError, ValueError):
+        tree = ast.Module(body=[], type_ignores=[])
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "dbname" for t in node.targets):
+            try:
+                name = ast.literal_eval(node.value)
+            except ValueError:
+                continue
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    return os.path.basename(os.path.normpath(db_path))
+
+
+def philo_database_label(source_path: str, target_path: str, source_against_source: bool) -> str:
+    """Header title for a database built from PhiloLogic: its name, or "source vs target" for two databases."""
+    source_name = philo_db_name(source_path)
+    target_name = source_name if source_against_source else philo_db_name(target_path)
+    label = source_name if target_name == source_name else f"{source_name} vs {target_name}"
+    return html.escape(label, quote=False)
+
+
 class WebAppConfig:
     """Web app config class"""
 
@@ -120,6 +194,15 @@ class WebAppConfig:
         self.options["targetLinkToDocMetadata"] = "target_title"
         self.options["banalitiesStored"] = store_banalities
         self.options["showSemanticGraph"] = False  # until a graph is published
+        if textpair_params is not None:
+            if textpair_params.is_philo_db:
+                self.options["databaseLabel"] = philo_database_label(
+                    source_philo_db_path, target_philo_db_path, source_against_source
+                )
+            for direction in ("source", "target"):
+                language = textpair_params.preprocessing_params[direction].get("language", "")
+                self.options[f"{direction}Language"] = language_code(language)
+            self.options["themeLanguage"] = language_code(textpair_params.graph_params.get("label_language", ""))
 
         # Populate passage classification if available
         if textpair_params and hasattr(textpair_params, "passage_classification"):
