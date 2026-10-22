@@ -7,6 +7,7 @@ import multiprocessing as mp
 import os
 import struct
 import subprocess
+import unicodedata
 from shlex import quote
 from typing import Any, Optional, Union
 
@@ -168,15 +169,20 @@ def load_commonness(path: str) -> Commonness:
 
 
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
-SPACES = re.compile(r"\p{Z}+")
+SPACES = re.compile(r"[\p{Z}\s]+")
+
+
+_MARKS = re.compile(r"\p{M}+")
 
 
 def clean_text(text: str) -> str:
-    """Clean text for banality detection"""
-    text = text.lower().strip()
-    text = PUNCTUATION.sub("", text)
-    text = SPACES.sub(" ", text)
-    return text
+    """Text as the phrase list is matched against it: lowercase, without accents,
+    punctuation, symbols and digits as spaces, and padded with a space at each end so
+    that a phrase cleaned the same way only matches whole words."""
+    text = PUNCTUATION.sub(" ", text.lower())
+    if not text.isascii():
+        text = _MARKS.sub("", unicodedata.normalize("NFKD", text))
+    return f" {SPACES.sub(' ', text).strip()} "
 
 
 class NgramDoc:
@@ -479,9 +485,10 @@ class _Verdict(msgspec.Struct):
 
 
 class _SourcePassage(msgspec.Struct):
-    """The source text alone, for phrase matching."""
+    """The two passages alone, for phrase matching."""
 
     source_passage: str
+    target_passage: str = ""
 
 
 _DECODE_PASSAGE = msgspec.json.Decoder(_Passage).decode
@@ -759,7 +766,8 @@ def _detect_records(lines, matcher, score, output_file, filtered_passages,
         since += 1
         since = _bump(progress, since)
         passage = decode(line)
-        if filtering and matcher.find_matches_as_strings(clean_text(passage.source_passage)):
+        if filtering and (matcher.find_matches_as_strings(clean_text(passage.source_passage))
+                          or matcher.find_matches_as_strings(clean_text(passage.target_passage))):
             passages_filtered += 1
             filtered_passages.write(line)
             continue

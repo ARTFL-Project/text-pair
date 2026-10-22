@@ -437,10 +437,38 @@ def check_rules(root):
                                      filename="/nonexistent/file.xml")))
 
 
+def check_phrase_matching(root):
+    """Phrases match whole words on either side, ignoring case, accents and punctuation."""
+    check("phrases: accents, hyphens, ampersands and the long s are normalized away",
+          bf.clean_text("Vostre très-humble & très-obéiſſant\nSERVITEUR")
+          == " vostre tres humble tres obeissant serviteur ")
+    work = os.path.join(root, "phrases")
+    os.makedirs(work, exist_ok=True)
+    phrases = os.path.join(work, "phrases.txt")
+    with open(phrases, "w", encoding="utf8") as handle:
+        handle.write("Garnier, Imprimeur\nvotre très humble et très obéissant\nGrâce de Dieu\n")
+    passages = [("Chez la Veuve GARNIER, Imprimeurs rue du Temple", "x", False),
+                ("Votre très-humble et très-obéissant serviteur", "x", True),
+                ("LOUIS, par la Grace de Dieu, Roy", "x", True),
+                ("une autre lettre", "votre tres humble et tres obeissant serviteur", True)]
+    path = os.path.join(work, "alignments.jsonl.lz4")
+    with lz4.frame.open(path, "wb") as handle:
+        for number, (source, target, _) in enumerate(passages):
+            handle.write(orjson.dumps({**sides(number, 6, 0), "source_passage": source,
+                                       "target_passage": target}) + b"\n")
+    filtered = bf.phrase_matcher(path, phrases, len(passages), 1)
+    removed = records_of(second_file(path, "filtered_passages.jsonl"))
+    for source, target, wanted in passages:
+        label = f"phrases: {source[:30]!r} / {target[:20]!r} {'filtered' if wanted else 'kept'}"
+        check(label, (source.encode() in removed) == wanted)
+    check("phrases: filtered count", filtered == sum(wanted for _, _, wanted in passages))
+
+
 def main():
     root = tempfile.mkdtemp(prefix="textpair_banality_")
     try:
         check_scoring(root)
+        check_phrase_matching(root)
         check_repetition(root)
         check_rules(root)
         # The frame layouts that matter: one frame cannot be split, many frames split
