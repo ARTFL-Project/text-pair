@@ -1,7 +1,8 @@
 """Corpus-wide n-gram index.
 
-  document_frequencies.bin  how many documents hold each key, for the keys in at
-                         least MIN_DOCUMENTS of them, ascending by key, after a
+  document_frequencies.bin  how many documents hold each key, and how many times on
+                         average each of those documents holds it, for the keys in
+                         at least MIN_DOCUMENTS of them, ascending by key, after a
                          header giving the corpus's document count. Read by the
                          banality filter. Always written.
   index.tab              `ngram<TAB>key` for every distinct n-gram. Read only by
@@ -69,9 +70,15 @@ DOCUMENT_FREQUENCIES = "document_frequencies.bin"
 # An alignment puts every key it matches in two documents, so only a third says the
 # key is common rather than shared; keys in fewer are left out.
 MIN_DOCUMENTS = 3
-FREQUENCY_MAGIC = b"TPDF0001"
+FREQUENCY_MAGIC = b"TPDF0002"
+# The same layout without the repetition column; still read.
+LEGACY_FREQUENCY_MAGIC = b"TPDF0001"
 FREQUENCY_HEADER = struct.Struct("<8sqq")      # magic, documents, keys
 COUNT_DTYPE = np.int32
+REPETITION_DTYPE = np.float32
+# Occurrences of a key in one document, as spilled; saturates, which only a key
+# repeated tens of thousands of times in one document reaches.
+OCCURRENCE_DTYPE = np.uint16
 # Ceiling on files handed to one sort -m. BSD sort's behaviour with thousands of
 # inputs is not something to rely on, so batches stay moderate and rounds do the
 # rest.
@@ -99,18 +106,29 @@ def build(output_path: str, write_index_tab: bool | None = False) -> int:
 
 def read_document_frequencies(path: str) -> tuple[int, np.ndarray, np.ndarray]:
     """(documents in the corpus, keys ascending, documents holding each key)."""
+    documents, keys, frequencies, _ = read_frequencies(path)
+    return documents, keys, frequencies
+
+
+def read_frequencies(path: str) -> tuple[int, np.ndarray, np.ndarray, np.ndarray | None]:
+    """Like read_document_frequencies, plus each key's mean occurrences per document
+    holding it -- None for a file written before that column existed."""
     with open(path, "rb") as handle:
         header = handle.read(FREQUENCY_HEADER.size)
         if len(header) < FREQUENCY_HEADER.size:
             raise ValueError(f"truncated document frequencies file: {path}")
         magic, documents, count = FREQUENCY_HEADER.unpack(header)
-        if magic != FREQUENCY_MAGIC:
+        if magic not in (FREQUENCY_MAGIC, LEGACY_FREQUENCY_MAGIC):
             raise ValueError(f"{path} is not a document frequencies file")
         keys = np.fromfile(handle, dtype=KEY_DTYPE, count=count)
         frequencies = np.fromfile(handle, dtype=COUNT_DTYPE, count=count)
-    if keys.size != count or frequencies.size != count:
+        repetition = None
+        if magic == FREQUENCY_MAGIC:
+            repetition = np.fromfile(handle, dtype=REPETITION_DTYPE, count=count)
+    if keys.size != count or frequencies.size != count or (
+            repetition is not None and repetition.size != count):
         raise ValueError(f"truncated document frequencies file: {path}")
-    return documents, keys, frequencies
+    return documents, keys, frequencies, repetition
 
 
 class IncrementalIndex:
@@ -189,17 +207,20 @@ class IncrementalIndex:
                 output.write(FREQUENCY_HEADER.pack(FREQUENCY_MAGIC, self._added, 0))
                 kept = 0
                 spill_path = os.path.join(self.scratch, "frequencies")
-                with open(spill_path, "wb") as spill:
+                repetition_path = os.path.join(self.scratch, "repetition")
+                with open(spill_path, "wb") as spill, open(repetition_path, "wb") as repeats:
                     # Key ranges arrive ascending, each sorted, so the keys go out in
-                    # order; the frequencies follow them in a second column.
-                    for keys, frequencies, total in _total_spilled(
+                    # order; frequencies and repetition follow them as columns.
+                    for keys, frequencies, repetition, total in _total_spilled(
                             self.directory, self.lanes, self.lanes):
                         output.write(keys.tobytes())
                         spill.write(frequencies.tobytes())
+                        repeats.write(repetition.tobytes())
                         kept += keys.size
                         distinct += total
-                with open(spill_path, "rb") as spill:
-                    shutil.copyfileobj(spill, output)
+                for column in (spill_path, repetition_path):
+                    with open(column, "rb") as spill:
+                        shutil.copyfileobj(spill, output)
                 output.seek(0)
                 output.write(FREQUENCY_HEADER.pack(FREQUENCY_MAGIC, self._added, kept))
             os.replace(f"{path}.part", path)
@@ -252,12 +273,13 @@ class _Lane:
     against a descriptor count no macOS default would allow.
     """
 
-    __slots__ = ("directory", "number", "keys", "sizes", "interior")
+    __slots__ = ("directory", "number", "keys", "occurrences", "sizes", "interior")
 
     def __init__(self, directory: str, number: int):
         self.directory = directory
         self.number = number
         self.keys: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
+        self.occurrences: list[list[np.ndarray]] = [[] for _ in range(KEY_BUCKETS)]
         self.sizes = [0] * KEY_BUCKETS
         self.interior = np.array(_KEY_EDGES[1:-1], dtype=np.int64)
 
@@ -267,16 +289,18 @@ class _Lane:
 
         with open(path, "rb") as handle:
             buffer = handle.read()
-        keys = ngram_binary.columns(buffer, path)[0]
+        keys, offsets = ngram_binary.columns(buffer, path)[:2]
         if keys.size == 0:
             return
         # A TPNG0001 index hands back int32 keys; the spill is int64 throughout.
         keys = keys.astype(KEY_DTYPE, copy=False)
+        occurrences = np.minimum(np.diff(offsets), np.iinfo(OCCURRENCE_DTYPE).max).astype(OCCURRENCE_DTYPE)
         splits = np.searchsorted(keys, self.interior)
         previous = 0
         for bucket, stop in enumerate(np.append(splits, keys.size)):
             if stop > previous:
                 self.keys[bucket].append(keys[previous:stop])
+                self.occurrences[bucket].append(occurrences[previous:stop])
                 self.sizes[bucket] += stop - previous
                 if self.sizes[bucket] >= SPILL_BLOCK:
                     self.flush(bucket)
@@ -288,7 +312,10 @@ class _Lane:
         stem = os.path.join(self.directory, f"{self.number}-{bucket}")
         with open(f"{stem}.k", "ab") as handle:
             handle.write(np.concatenate(self.keys[bucket]).tobytes())
+        with open(f"{stem}.c", "ab") as handle:
+            handle.write(np.concatenate(self.occurrences[bucket]).tobytes())
         self.keys[bucket].clear()
+        self.occurrences[bucket].clear()
         self.sizes[bucket] = 0
 
     def close(self) -> None:
@@ -298,26 +325,34 @@ class _Lane:
 
 def _aggregate_bucket(directory: str, bucket: int, lanes: int):
     """One key range's keys in at least MIN_DOCUMENTS documents, ascending, with how
-    many documents hold each, and how many distinct keys the range had."""
-    key_blocks = []
+    many documents hold each, their mean occurrences per such document, and how many
+    distinct keys the range had."""
+    key_blocks, occurrence_blocks = [], []
     for lane in range(lanes):
         stem = os.path.join(directory, f"{lane}-{bucket}")
         # A lane that never flushed this key range left no file behind.
         if not os.path.exists(f"{stem}.k"):
             continue
         keys = np.fromfile(f"{stem}.k", dtype=KEY_DTYPE)
+        occurrences = np.fromfile(f"{stem}.c", dtype=OCCURRENCE_DTYPE)
         os.remove(f"{stem}.k")
+        os.remove(f"{stem}.c")
         if keys.size:
             key_blocks.append(keys)
+            occurrence_blocks.append(occurrences)
     if not key_blocks:
         return None
     keys = key_blocks[0] if len(key_blocks) == 1 else np.concatenate(key_blocks)
-    distinct, documents = _sum_by_key(keys)
+    occurrences = (occurrence_blocks[0] if len(occurrence_blocks) == 1
+                   else np.concatenate(occurrence_blocks))
+    distinct, documents, totals = _sum_by_key(keys, occurrences)
     common = documents >= MIN_DOCUMENTS
     distinct_count = distinct.size
-    distinct, documents = distinct[common], documents[common]
+    distinct, documents, totals = distinct[common], documents[common], totals[common]
     order = np.argsort(distinct)
-    return distinct[order], documents[order].astype(COUNT_DTYPE), distinct_count
+    documents, totals = documents[order], totals[order]
+    return (distinct[order], documents.astype(COUNT_DTYPE),
+            (totals / documents).astype(REPETITION_DTYPE), distinct_count)
 
 
 # ----------------------------------------------------------------------
@@ -477,8 +512,9 @@ def _finish(process: subprocess.Popen, name: str) -> None:
 
 
 @njit(nogil=True, cache=True)
-def _accumulate(keys, table_key, table_slot, out_keys, out_counts):
-    """Count each distinct key's entries through an open-addressing table.
+def _accumulate(keys, weights, table_key, table_slot, out_keys, out_counts, out_totals):
+    """Count each distinct key's entries, and sum their weights, through an
+    open-addressing table.
 
     Returns the number of distinct keys, written to the head of the out arrays
     in order of first appearance.
@@ -499,18 +535,21 @@ def _accumulate(keys, table_key, table_slot, out_keys, out_counts):
                 table_key[slot] = key
                 out_keys[found] = key
                 out_counts[found] = 1
+                out_totals[found] = weights[i]
                 found += 1
                 break
             if table_key[slot] == key:
                 out_counts[at] += 1
+                out_totals[at] += weights[i]
                 break
             slot = (slot + np.uint64(1)) & mask
     return found
 
 
-def _sum_by_key(keys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Distinct keys and how many entries each has, in order of first appearance. An
-    entry is one document holding the key, so that is the key's document frequency.
+def _sum_by_key(keys: np.ndarray, occurrences: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Distinct keys, how many entries each has, and their summed occurrences, in
+    order of first appearance. An entry is one document holding the key, so the
+    entries are the key's document frequency.
 
     Hashing rather than sorting: a bucket holds one entry per (document, key),
     several times what it holds distinct keys.
@@ -520,5 +559,7 @@ def _sum_by_key(keys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     table_slot = np.full(size, -1, dtype=np.int64)
     out_keys = np.empty(keys.size, dtype=KEY_DTYPE)
     out_counts = np.zeros(keys.size, dtype=np.int64)
-    found = _accumulate(keys, table_key, table_slot, out_keys, out_counts)
-    return out_keys[:found], out_counts[:found]
+    out_totals = np.zeros(keys.size, dtype=np.int64)
+    found = _accumulate(keys, occurrences, table_key, table_slot, out_keys, out_counts,
+                        out_totals)
+    return out_keys[:found], out_counts[:found], out_totals[:found]

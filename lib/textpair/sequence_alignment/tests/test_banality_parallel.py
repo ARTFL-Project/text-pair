@@ -44,16 +44,19 @@ def write_ngram_doc(path, n_ngrams, keys):
         handle.write(starts.astype("<i4").tobytes())
 
 
-def write_frequencies(path, documents, frequencies):
+def write_frequencies(path, documents, frequencies, repetition=None):
     """A document_frequencies file: the magic, the corpus's document count and the
-    number of keys, then the keys ascending and how many documents hold each."""
+    number of keys, then the keys ascending, how many documents hold each, and how
+    many times on average each of those documents holds it (1 unless given)."""
     keys = np.array(sorted(frequencies), dtype="<i8")
     counts = np.array([frequencies[key] for key in keys.tolist()], dtype="<i4")
+    repeats = np.array([(repetition or {}).get(key, 1.0) for key in keys.tolist()], dtype="<f4")
     with open(path, "wb") as handle:
         handle.write(ngram_index.FREQUENCY_HEADER.pack(
             ngram_index.FREQUENCY_MAGIC, documents, keys.size))
         handle.write(keys.tobytes())
         handle.write(counts.tobytes())
+        handle.write(repeats.tobytes())
 
 
 def build_corpus(root, documents=6, ngrams=400):
@@ -323,10 +326,117 @@ def check_scoring(root):
           == score.is_banal(Passage("everywhere.bin", "half.bin")))
 
 
+def check_repetition(root):
+    """Keys the documents holding them repeat score as common, whether the corpus
+    counts say so or, for keys in too few documents to be counted, their own index."""
+    work = os.path.join(root, "repetition")
+    order = os.path.join(work, "ngrams_in_order")
+    os.makedirs(order, exist_ok=True)
+    os.makedirs(os.path.join(work, "ngrams"), exist_ok=True)
+    # keys 1..4 in 3 of 1,000 documents, 25 times each on average; 11..14 once each
+    write_frequencies(os.path.join(work, "document_frequencies.bin"), 1000,
+                      {**{k: 3 for k in range(1, 5)}, **{k: 3 for k in range(11, 15)}},
+                      {k: 25.0 for k in range(1, 5)})
+    common = bf.load_commonness(os.path.join(work, "document_frequencies.bin"))
+    check("repetition: a key repeated 25 times per document counts fully",
+          abs(common.total(np.array([1], dtype=np.int64)) - 1.0) < 1e-6)
+    check("repetition: the same frequency without repetition barely counts",
+          common.total(np.array([11], dtype=np.int64)) < 0.1)
+    # keys 31..34 are in no table; document "template" repeats them 30 times, "once" not
+    for name, repeat in (("template", 30), ("once", 1)):
+        keys = np.repeat(np.arange(31, 35), repeat)
+        write_ngram_doc(os.path.join(order, f"{name}.bin"), keys.size, keys)
+        ngram_binary.write_positions(os.path.join(work, "ngrams", f"{name}.bin"),
+                                     keys.tolist(), list(range(keys.size)), list(range(keys.size)))
+
+    class Passage:
+        def __init__(self, source, target):
+            self.source_ngrams, self.source_start_byte, self.source_end_byte = source, 0, 40
+            self.target_ngrams, self.target_start_byte, self.target_end_byte = target, 0, 40
+
+    score = bf.banality_score(os.path.join(work, "document_frequencies.bin"), order, 0.4)
+    check("repetition: rare keys both documents repeat are banal",
+          score.is_banal(Passage("template.bin", "template.bin")))
+    check("repetition: the same keys once each are not",
+          not score.is_banal(Passage("once.bin", "once.bin")))
+
+    legacy = os.path.join(root, "legacy")
+    os.makedirs(legacy, exist_ok=True)
+    with open(os.path.join(legacy, "document_frequencies.bin"), "wb") as handle:
+        handle.write(ngram_index.FREQUENCY_HEADER.pack(ngram_index.LEGACY_FREQUENCY_MAGIC, 1000, 1))
+        handle.write(np.array([21], dtype="<i8").tobytes())
+        handle.write(np.array([1000], dtype="<i4").tobytes())
+    old = bf.load_commonness(os.path.join(legacy, "document_frequencies.bin"))
+    check("repetition: a file from before repetition still scores commonness",
+          abs(old.total(np.array([21], dtype=np.int64)) - 1.0) < 1e-6)
+
+
+def check_rules(root):
+    """The rules on the passages themselves, on alignments whose n-grams are all rare."""
+    work = os.path.join(root, "rules")
+    order = os.path.join(work, "ngrams_in_order")
+    os.makedirs(order, exist_ok=True)
+    write_frequencies(os.path.join(work, "document_frequencies.bin"), 1000, {})
+    write_ngram_doc(os.path.join(order, "rare.bin"), 4, np.array([1, 2, 3, 4]))
+    tei = os.path.join(work, "text.xml")
+    body = ('<TEI><teiHeader><note>header</note></teiHeader><text><body>'
+            '<head>Chapitre premier de la seconde partie</head>'
+            '<p>Le roi parla longuement de la guerre et de ses suites.</p>'
+            '<p>Le Comte De Bussy et Madame De Sévigné à Paris.</p>'
+            '<l>Que dites-vous ? C\'est inutile ?</l><l>Que nous fait le soleil</l>'
+            '</body></text></TEI>')
+    with open(tei, "w", encoding="utf8") as handle:
+        handle.write(body)
+    raw = body.encode("utf8")
+
+    def span(text):
+        start = raw.index(text.encode("utf8"))
+        return start, start + len(text.encode("utf8"))
+
+    class Passage:
+        def __init__(self, source_text, target_text, source_span=None, target_span=None,
+                     filename=tei):
+            self.source_ngrams = self.target_ngrams = "rare.bin"
+            self.source_passage, self.target_passage = source_text, target_text
+            self.source_filename = self.target_filename = filename
+            self.source_start_byte, self.source_end_byte = source_span or (0, 0)
+            self.target_start_byte, self.target_end_byte = target_span or (0, 0)
+
+    score = bf.banality_score(os.path.join(work, "document_frequencies.bin"), order, 0.4)
+    heading = "Chapitre premier de la seconde partie"
+    prose = "Le roi parla longuement de la guerre et de ses suites."
+    names = "Le Comte De Bussy et Madame De Sévigné à Paris."
+    verse = "Que dites-vous ? C'est inutile ?</l><l>Que nous fait le soleil"
+    check("rules: plain prose is not banal",
+          not score.is_banal(Passage(prose, prose, span(prose), span(prose))))
+    check("rules: a short heading in paratext on both sides is banal",
+          score.is_banal(Passage(heading, heading, span(heading), span(heading))))
+    check("rules: paratext on one side only is not",
+          not score.is_banal(Passage(heading, prose, span(heading), span(prose))))
+    check("rules: a short citation whose numbers differ is banal",
+          score.is_banal(Passage("Moniteur, 1793, n° 211.", "Moniteur, 1794, n° 347.")))
+    check("rules: the same numbers on both sides are not, as in two numbered editions",
+          not score.is_banal(Passage("348 S'avance vers la charrette 349",
+                                     "348 S'avance vers la charrette 349")))
+    check("rules: a passage of names is banal",
+          score.is_banal(Passage(names, names, span(names), span(names))))
+    check("rules: capitals at verse line starts are not names",
+          not score.is_banal(Passage(verse, verse, span(verse), span(verse))))
+    german = bf.banality_score(os.path.join(work, "document_frequencies.bin"), order, 0.4,
+                               ("german", "german"))
+    check("rules: no names rule for a language that capitalizes nouns",
+          not german.is_banal(Passage(names, names, span(names), span(names))))
+    check("rules: a record without its text file is judged without the file rules",
+          not score.is_banal(Passage(heading, heading, span(heading), span(heading),
+                                     filename="/nonexistent/file.xml")))
+
+
 def main():
     root = tempfile.mkdtemp(prefix="textpair_banality_")
     try:
         check_scoring(root)
+        check_repetition(root)
+        check_rules(root)
         # The frame layouts that matter: one frame cannot be split, many frames split
         # unevenly, and more workers than frames must not lose or duplicate a range.
         for frames, per_frame in ((1, 500), (7, 300), (64, 50), (5, 1)):

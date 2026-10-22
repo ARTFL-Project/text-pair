@@ -7,7 +7,7 @@ import os
 from collections import defaultdict, namedtuple
 
 # The mean commonness at which a passage counts as formulaic; see banality_finder.
-BANALITY_THRESHOLD = 0.3
+BANALITY_THRESHOLD = 0.4
 from typing import Any
 
 # Checked in order; later paths override earlier ones on a per-key basis.

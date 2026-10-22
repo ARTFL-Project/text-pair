@@ -120,6 +120,32 @@ def test_repeats_inside_a_document_count_once():
         check("only the key in three documents", read(root, want_index=False)[3], {8: 3})
 
 
+def test_repetition_is_the_mean_count_per_document():
+    """Each key's occurrences per document holding it, averaged, beside its frequency."""
+    documents = [[("formula", 5)] * 1, [("formula", 5)] * 2, [("formula", 5)] * 6,
+                 [("once", 6)], [("once", 6)], [("once", 6)]]
+    with tempfile.TemporaryDirectory() as root:
+        write_corpus(root, documents)
+        ngram_index.build(root)
+        _, keys, frequencies, repetition = ngram_index.read_frequencies(
+            os.path.join(root, "index", ngram_index.DOCUMENT_FREQUENCIES))
+        got = dict(zip(keys.tolist(), zip(frequencies.tolist(), repetition.tolist())))
+        check("frequency and repetition", got, {5: (3, 3.0), 6: (3, 1.0)})
+
+
+def test_a_file_without_repetition_still_reads():
+    """A frequencies file from before the repetition column loads, without it."""
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, ngram_index.DOCUMENT_FREQUENCIES)
+        with open(path, "wb") as handle:
+            handle.write(ngram_index.FREQUENCY_HEADER.pack(ngram_index.LEGACY_FREQUENCY_MAGIC, 10, 2))
+            handle.write(np.array([3, 9], dtype="<i8").tobytes())
+            handle.write(np.array([4, 7], dtype="<i4").tobytes())
+        documents, keys, frequencies, repetition = ngram_index.read_frequencies(path)
+        check("legacy file", (documents, keys.tolist(), frequencies.tolist(), repetition),
+              (10, [3, 9], [4, 7], None))
+
+
 def test_colliding_keys_are_counted_once_per_document():
     """Two ngrams, one key: the aligner sees one key, so the index reports one."""
     documents = [

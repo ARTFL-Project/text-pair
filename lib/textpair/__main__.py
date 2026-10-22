@@ -320,6 +320,8 @@ async def run_alignment(params):
         orders = (f"{params.paths['source']['ngram_output_path']}/ngrams_in_order",
                   f"{params.paths['target']['ngram_output_path']}/ngrams_in_order")
         threshold = params.matching_params["banality_threshold"]
+        languages = (params.preprocessing_params["source"].get("language", ""),
+                     params.preprocessing_params["target"].get("language", ""))
         filtered_passages = 0
         banalities_found = 0
         if phrase_filter and auto_detect:
@@ -332,6 +334,7 @@ async def run_alignment(params):
                 count,
                 threshold,
                 params.workers,
+                languages,
             )
         elif phrase_filter:
             print("Filtering phrases...")
@@ -346,6 +349,7 @@ async def run_alignment(params):
                 count,
                 threshold,
                 params.workers,
+                languages,
             )
         if phrase_filter:
             count = update_count(count, filtered_passages, params.output_path)

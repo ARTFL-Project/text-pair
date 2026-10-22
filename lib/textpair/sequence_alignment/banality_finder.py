@@ -21,6 +21,35 @@ from tqdm import tqdm
 
 from . import ngram_binary, ngram_index
 
+# A key repeated this many times, in log, per document holding it counts as fully common.
+REPETITION_SCALE = 3.0
+# Rules on the passages themselves, besides the n-gram score.
+SHORT_PASSAGE = 20              # words, on the shorter side
+PARATEXT_SHARE = 0.5
+DIGIT_SHARE = 0.05
+NAME_SHARE = 0.5
+# TEI elements for headings, notes, letter formulas, speaker labels, stage directions,
+# references and title pages.
+PARATEXT_TAGS = frozenset((
+    "head", "argument", "trailer", "label", "figDesc", "note", "opener", "closer", "salute",
+    "signed", "dateline", "speaker", "stage", "castList", "castItem", "castGroup", "role",
+    "roleDesc", "bibl", "biblStruct", "listBibl", "docTitle", "titlePart", "byline",
+    "docAuthor", "docImprint", "titlePage", "front"))
+# Elements that start a line or a block: a capital after one is not mid-sentence.
+BLOCK_TAGS = frozenset((
+    "l", "lg", "p", "br", "lb", "head", "sp", "speaker", "stage", "div", "div1", "div2", "div3",
+    "note", "item", "list", "cell", "row", "table", "q", "quote", "epigraph", "opener", "closer",
+    "salute", "signed", "dateline", "pb", "milestone", "ab", "trailer", "argument", "label", "s"))
+# Languages that capitalize every noun, where capitals say nothing about names.
+NOUN_CAPITALIZING = frozenset(("german", "luxembourgish"))
+
+_WORD = re.compile(r"[\p{L}\p{M}\p{N}]+")
+_LETTERS = re.compile(r"[\p{L}\p{M}]+")
+_NUMBER = re.compile(r"\d+")
+_NAME_TOKENS = re.compile(
+    r"<(/?)([A-Za-z][A-Za-z0-9]*)[^>]*>|([\p{L}\p{M}]+)|(\p{N}+)|([.!?;:«»\"“”—–(…\[\]\n])")
+_TAG = re.compile(rb"<(/?)([A-Za-z][A-Za-z0-9]*)\b[^>]*?(/?)>")
+
 
 @njit(nogil=True, cache=True)
 def _fill_table(keys, values, table, table_values, used):
@@ -41,8 +70,13 @@ def _fill_table(keys, values, table, table_values, used):
 
 
 @njit(nogil=True, cache=True)
-def _total(keys, table, table_values, used):
-    """The sum of the table's values over `keys`, 0 for a key it does not hold."""
+def _total(keys, table, table_values, used, doc_keys, doc_offsets, scale):
+    """The sum of the table's values over `keys`.
+
+    A key the table does not hold is in too few documents to be common; it scores by
+    how often its own document repeats it, from that document's sorted keys and CSR
+    offsets, which may be empty.
+    """
     mask = np.uint64(table.size - 1)
     total = 0.0
     for i in range(keys.size):
@@ -50,12 +84,24 @@ def _total(keys, table, table_values, used):
         scattered = np.uint64(key) * np.uint64(0x9E3779B97F4A7C15)
         scattered ^= scattered >> np.uint64(29)
         slot = scattered & mask
+        found = False
         while used[slot] == 1:
             if table[slot] == key:
                 total += table_values[slot]
+                found = True
                 break
             slot = (slot + np.uint64(1)) & mask
+        if not found and doc_keys.size:
+            at = np.searchsorted(doc_keys, key)
+            if at < doc_keys.size and doc_keys[at] == key:
+                count = doc_offsets[at + 1] - doc_offsets[at]
+                if count > 1:
+                    total += min(np.log(count) / scale, 1.0)
     return total
+
+
+_NO_KEYS = np.zeros(0, dtype=np.int64)
+_NO_OFFSETS = np.zeros(1, dtype=np.int32)
 
 
 class Commonness:
@@ -65,15 +111,22 @@ class Commonness:
     already puts every key it matches in two -- then log(d/2) / log(N/2) for a key in
     d of the corpus's N documents: logarithmic because document frequency is Zipfian,
     and relative to N so that one threshold means much the same on any corpus.
+
+    A key the documents holding it repeat, r times each on average, scores at least
+    log(r) / REPETITION_SCALE: formulas recur within the texts that use them.
     """
 
     __slots__ = ("table", "values", "used")
 
-    def __init__(self, documents: int, keys: np.ndarray, frequencies: np.ndarray):
+    def __init__(self, documents: int, keys: np.ndarray, frequencies: np.ndarray,
+                 repetition: Optional[np.ndarray] = None):
         keys = np.ascontiguousarray(keys, dtype=np.int64)
         values = np.zeros(keys.size, dtype=np.float32)
         if documents > 2 and keys.size:
             values = np.minimum(np.log(frequencies / 2) / np.log(documents / 2), 1.0)
+            if repetition is not None:
+                repeated = np.log(np.maximum(repetition, 1.0)) / REPETITION_SCALE
+                values = np.maximum(values, np.minimum(repeated, 1.0))
             values = values.astype(np.float32)
         # Under half full, so a miss ends at the first empty slot it reaches.
         slots = 1 << max(int(keys.size * 2).bit_length(), 4)
@@ -83,22 +136,34 @@ class Commonness:
         if keys.size:
             _fill_table(keys, values, self.table, self.values, self.used)
 
-    def total(self, keys: np.ndarray) -> float:
-        """The summed commonness of `keys`, an int64 array."""
-        return float(_total(keys, self.table, self.values, self.used))
+    def total(self, keys: np.ndarray, doc_keys: np.ndarray = _NO_KEYS,
+              doc_offsets: np.ndarray = _NO_OFFSETS) -> float:
+        """The summed commonness of `keys`, an int64 array, taken from their own
+        document's index for keys the corpus table does not hold."""
+        return float(_total(keys, self.table, self.values, self.used, doc_keys, doc_offsets,
+                            REPETITION_SCALE))
+
+
+def _legacy_frequencies(path: str) -> bool:
+    with open(path, "rb") as handle:
+        return handle.read(len(ngram_index.LEGACY_FREQUENCY_MAGIC)) == ngram_index.LEGACY_FREQUENCY_MAGIC
 
 
 def load_commonness(path: str) -> Commonness:
     """The commonness of a corpus's keys, from its index/document_frequencies.bin.
 
-    An index built before the file existed gets it now, computed from ngrams/.
+    An index built before the file existed, or before it counted repetition, gets it
+    now from ngrams/; without ngrams/ an older file is used as it is.
     """
+    root = os.path.dirname(os.path.dirname(path))
     if not os.path.exists(path):
-        root = os.path.dirname(os.path.dirname(path))
         print("  counting documents per n-gram for an index built without them",
               flush=True)
         ngram_index.build(root, write_index_tab=None)
-    return Commonness(*ngram_index.read_document_frequencies(path))
+    elif _legacy_frequencies(path) and os.path.isdir(os.path.join(root, "ngrams")):
+        print("  counting n-gram repetition for an index built without it", flush=True)
+        ngram_index.build(root, write_index_tab=None)
+    return Commonness(*ngram_index.read_frequencies(path))
 
 
 PUNCTUATION = re.compile(r"[\p{P}\p{S}\p{N}]+")
@@ -122,13 +187,31 @@ class NgramDoc:
     would cast the whole column on every call.
     """
 
-    __slots__ = ["name", "keys", "start_bytes", "_map"]
+    __slots__ = ["name", "keys", "start_bytes", "_map", "_index_path", "_index"]
 
     def __init__(self, filepath):
         self.name = os.path.basename(filepath)
         with open(filepath, "rb") as input_file:
             self._map = mmap.mmap(input_file.fileno(), 0, access=mmap.ACCESS_READ)
         self.keys, self.start_bytes = ngram_binary.order_columns(self._map, filepath)
+        # The document's own index, beside ngrams_in_order/, read when first needed.
+        self._index_path = os.path.join(
+            os.path.dirname(os.path.dirname(filepath)), "ngrams", self.name)
+        self._index = None
+
+    def counts(self) -> tuple[np.ndarray, np.ndarray]:
+        """The document's distinct keys, ascending, and the CSR offsets whose
+        differences are how often it holds each; empty without an index file."""
+        if self._index is None:
+            self._index = (_NO_KEYS, _NO_OFFSETS)
+            if os.path.exists(self._index_path):
+                with open(self._index_path, "rb") as handle:
+                    index_map = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+                keys, offsets = ngram_binary.columns(index_map, self._index_path)[:2]
+                if keys.dtype != np.int64:
+                    keys = keys.astype(np.int64)
+                self._index = (keys, offsets)
+        return self._index
 
     def span(self, start_byte: int, end_byte: int) -> tuple[int, int]:
         """Index range of the n-grams starting in [start_byte, end_byte)."""
@@ -142,16 +225,112 @@ class NgramDoc:
         return self.keys[low:high].tolist()
 
 
+def _paratext_intervals(raw) -> np.ndarray:
+    """Byte ranges inside PARATEXT_TAGS elements after the teiHeader, merged, as an
+    (n, 2) array."""
+    header_end = raw.find(b"</teiHeader>")
+    spans, stack = [], []
+    for match in _TAG.finditer(raw, header_end + 12 if header_end >= 0 else 0):
+        closing, name, selfclose = match.group(1), match.group(2).decode(), match.group(3)
+        if name not in PARATEXT_TAGS or selfclose:
+            continue
+        if not closing:
+            stack.append((name, match.end()))
+            continue
+        for depth in range(len(stack) - 1, -1, -1):
+            if stack[depth][0] == name:
+                spans.append((stack[depth][1], match.start()))
+                del stack[depth:]
+                break
+    spans.sort()
+    merged: list[list[int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return np.array(merged, dtype=np.int64).reshape(-1, 2)
+
+
+class SourceFile:
+    """A text file the alignments point into, mapped, with its paratext found on first use."""
+
+    __slots__ = ["_map", "_paratext"]
+
+    def __init__(self, path: str):
+        with open(path, "rb") as handle:
+            self._map = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+        self._paratext = None
+
+    def text(self, start: int, end: int) -> str:
+        return self._map[start:end].decode("utf8", "replace")
+
+    def paratext_share(self, start: int, end: int) -> float:
+        """The fraction of [start, end) inside paratext elements."""
+        if end <= start:
+            return 0.0
+        if self._paratext is None:
+            self._paratext = _paratext_intervals(self._map)
+        spans = self._paratext
+        first = int(np.searchsorted(spans[:, 1], start, "right"))
+        inside = 0
+        for low, high in spans[first:]:
+            if low >= end:
+                break
+            inside += min(end, high) - max(start, low)
+        return inside / (end - start)
+
+
+def name_share(text: str) -> float:
+    """The share of words capitalized mid-sentence: after another word, not after a
+    line or block start, punctuation or a number. Inline tags are transparent."""
+    words = capitals = 0
+    after_word = False
+    for match in _NAME_TOKENS.finditer(text):
+        tag = match.group(2)
+        if tag is not None:
+            if tag in BLOCK_TAGS:
+                after_word = False
+            continue
+        word = match.group(3)
+        if word is None:
+            after_word = False
+            continue
+        words += 1
+        if after_word and word[0].isupper():
+            capitals += 1
+        after_word = True
+    return capitals / words if words else 0.0
+
+
+def _digit_share(text: str) -> float:
+    return sum(character.isdigit() for character in text) / len(text) if text else 0.0
+
+
+def _capitalized_share(text: str) -> float:
+    words = _LETTERS.findall(text)
+    return sum(word[0].isupper() for word in words) / len(words) if words else 0.0
+
+
 class BanalityScore:
-    """The automatic verdict: a passage is banal when the mean commonness of the
-    n-grams on both sides of it reaches `threshold`. Scoring both sides keeps the
-    verdict from depending on which document is the source."""
+    """The automatic verdict. A passage is banal when the mean commonness of the
+    n-grams on both sides of it reaches `threshold`; scoring both sides keeps the
+    verdict from depending on which document is the source.
+
+    Three rules on the passages themselves catch what n-gram counts miss: a short
+    passage mostly inside TEI paratext on both sides, a short passage of numbers that
+    differ between the sides (citations, dates), and a passage of names, most of its
+    words capitalized mid-sentence on both sides. The last is off for languages that
+    capitalize every noun."""
 
     def __init__(self, source: Commonness, source_orders: str, target: Commonness,
-                 target_orders: str, threshold: float):
+                 target_orders: str, threshold: float, languages: tuple[str, str] = ("", "")):
         self.sides = ((source, source_orders), (target, target_orders))
         self.threshold = threshold
         self.documents: dict[str, NgramDoc] = {}
+        self.files: dict[str, Optional[SourceFile]] = {}
+        self.names_rule = not any((language or "").lower() in NOUN_CAPITALIZING
+                                  for language in languages)
 
     def _document(self, directory: str, name: str) -> NgramDoc:
         path = os.path.join(directory, name)
@@ -162,6 +341,18 @@ class BanalityScore:
             document = self.documents[path] = NgramDoc(path)
         return document
 
+    def _file(self, path: str) -> Optional[SourceFile]:
+        if path in self.files:
+            return self.files[path]
+        if len(self.files) >= _DOCUMENTS_HELD:
+            del self.files[next(iter(self.files))]
+        try:
+            source_file = SourceFile(path) if path else None
+        except (OSError, ValueError):
+            source_file = None
+        self.files[path] = source_file
+        return source_file
+
     def is_banal(self, passage) -> bool:
         total = 0.0
         count = 0
@@ -170,22 +361,58 @@ class BanalityScore:
         for (commonness, directory), (name, start_byte, end_byte) in zip(self.sides, spans):
             document = self._document(directory, name)
             low, high = document.span(int(start_byte), int(end_byte))
-            total += commonness.total(document.keys[low:high])
+            total += commonness.total(document.keys[low:high], *document.counts())
             count += high - low
-        return count > 0 and total / count >= self.threshold
+        if count > 0 and total / count >= self.threshold:
+            return True
+        return self._by_rules(passage)
+
+    def _by_rules(self, passage) -> bool:
+        source_text = getattr(passage, "source_passage", "") or ""
+        target_text = getattr(passage, "target_passage", "") or ""
+        if not source_text or not target_text:
+            return False
+        source_words, target_words = _WORD.findall(source_text), _WORD.findall(target_text)
+        short = min(len(source_words), len(target_words)) < SHORT_PASSAGE
+        if (short and (_digit_share(source_text) + _digit_share(target_text)) / 2 >= DIGIT_SHARE
+                and sorted(_NUMBER.findall(source_text)) != sorted(_NUMBER.findall(target_text))):
+            return True
+        sides = ((getattr(passage, "source_filename", ""), passage.source_start_byte,
+                  passage.source_end_byte),
+                 (getattr(passage, "target_filename", ""), passage.target_start_byte,
+                  passage.target_end_byte))
+        if short and all(self._paratext(*side) >= PARATEXT_SHARE for side in sides):
+            return True
+        # Mid-sentence capitals are a subset of capitalized words, so most passages
+        # are ruled out without reading their files.
+        if (self.names_rule and _capitalized_share(source_text) >= NAME_SHARE
+                and _capitalized_share(target_text) >= NAME_SHARE):
+            return all(self._names(*side) >= NAME_SHARE for side in sides)
+        return False
+
+    def _paratext(self, path: str, start: Union[int, str], end: Union[int, str]) -> float:
+        source_file = self._file(path)
+        return source_file.paratext_share(int(start), int(end)) if source_file else 0.0
+
+    def _names(self, path: str, start: Union[int, str], end: Union[int, str]) -> float:
+        source_file = self._file(path)
+        return name_share(source_file.text(int(start), int(end))) if source_file else 0.0
 
 
 def banality_score(frequencies: Union[str, tuple[str, str]],
-                   orders: Union[str, tuple[str, str]], threshold: float) -> BanalityScore:
+                   orders: Union[str, tuple[str, str]], threshold: float,
+                   languages: Optional[tuple[str, str]] = None) -> BanalityScore:
     """The verdict for a run, from each side's document_frequencies.bin and
-    ngrams_in_order directory; one path serves both sides of a self-comparison."""
+    ngrams_in_order directory; one path serves both sides of a self-comparison.
+    `languages` are the two sides' corpus languages."""
     source_frequencies, target_frequencies = (
         (frequencies, frequencies) if isinstance(frequencies, str) else frequencies)
     source_orders, target_orders = (orders, orders) if isinstance(orders, str) else orders
     source = load_commonness(source_frequencies)
     target = (source if os.path.abspath(target_frequencies) == os.path.abspath(source_frequencies)
               else load_commonness(target_frequencies))
-    return BanalityScore(source, source_orders, target, target_orders, threshold)
+    return BanalityScore(source, source_orders, target, target_orders, threshold,
+                         languages or ("", ""))
 
 
 class _Passage(msgspec.Struct):
@@ -202,6 +429,10 @@ class _Passage(msgspec.Struct):
     target_ngrams: str
     target_start_byte: Union[int, str]
     target_end_byte: Union[int, str]
+    source_passage: str = ""
+    target_passage: str = ""
+    source_filename: str = ""
+    target_filename: str = ""
     # UNSET only when the record has no banality field at all, which is what
     # lets the verdict be spliced in rather than the record rewritten.
     banality: Union[bool, None, msgspec.UnsetType] = msgspec.UNSET
@@ -217,6 +448,9 @@ class _Filtered(msgspec.Struct):
     target_ngrams: str
     target_start_byte: Union[int, str]
     target_end_byte: Union[int, str]
+    target_passage: str = ""
+    source_filename: str = ""
+    target_filename: str = ""
     banality: Union[bool, None, msgspec.UnsetType] = msgspec.UNSET
 
 
@@ -592,13 +826,14 @@ def banality_auto_detect(
     count: Optional[int],
     threshold: float,
     workers: int = 1,
+    languages: Optional[tuple[str, str]] = None,
 ):
     """Flag passages made of n-grams common across the corpus. `frequencies` and
     `orders` are each side's document_frequencies.bin and ngrams_in_order directory,
     or one path for both."""
     _, banalities_found = _detect_pass(
         filepath, count, workers, "Running banality auto-detection...",
-        score=banality_score(frequencies, orders, threshold))
+        score=banality_score(frequencies, orders, threshold, languages))
     return banalities_found
 
 
@@ -636,6 +871,7 @@ def filter_and_flag(
     count: Optional[int],
     threshold: float,
     workers: int = 1,
+    languages: Optional[tuple[str, str]] = None,
 ) -> tuple[int, int]:
     """Phrase filtering and automatic banality detection in one pass.
 
@@ -647,7 +883,7 @@ def filter_and_flag(
     return _detect_pass(
         filepath, count, workers, "Filtering passages and detecting banalities...",
         matcher=_phrase_tree(banality_phrases_path),
-        score=banality_score(frequencies, orders, threshold))
+        score=banality_score(frequencies, orders, threshold, languages))
 
 
 def _separate_records(lines, output_file, banal_output_file, progress=None) -> int:
