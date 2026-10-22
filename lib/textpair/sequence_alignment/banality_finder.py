@@ -46,6 +46,7 @@ NOUN_CAPITALIZING = frozenset(("german", "luxembourgish"))
 _WORD = re.compile(r"[\p{L}\p{M}\p{N}]+")
 _LETTERS = re.compile(r"[\p{L}\p{M}]+")
 _NUMBER = re.compile(r"\d+")
+_ROMAN = re.compile(r"M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})")
 _NAME_TOKENS = re.compile(
     r"<(/?)([A-Za-z][A-Za-z0-9]*)[^>]*>|([\p{L}\p{M}]+)|(\p{N}+)|([.!?;:«»\"“”—–(…\[\]\n])")
 _TAG = re.compile(rb"<(/?)([A-Za-z][A-Za-z0-9]*)\b[^>]*?(/?)>")
@@ -303,8 +304,22 @@ def name_share(text: str) -> float:
     return capitals / words if words else 0.0
 
 
-def _digit_share(text: str) -> float:
-    return sum(character.isdigit() for character in text) / len(text) if text else 0.0
+def _numerals(text: str) -> tuple[float, list[str]]:
+    """The share of characters in numbers, and the numbers, sorted: digit runs, and
+    uppercase Roman numerals of two letters or more that do not follow a capitalized
+    word, since in Louis XIV the numeral is part of a name."""
+    if not text:
+        return 0.0, []
+    numbers = _NUMBER.findall(text)
+    characters = sum(character.isdigit() for character in text)
+    previous = ""
+    for word in _WORD.findall(text):
+        if (len(word) > 1 and word.isupper() and _ROMAN.fullmatch(word)
+                and not (previous[:1].isupper() and not previous.isupper())):
+            numbers.append(word)
+            characters += len(word)
+        previous = word
+    return characters / len(text), sorted(numbers)
 
 
 def _capitalized_share(text: str) -> float:
@@ -318,8 +333,8 @@ class BanalityScore:
     verdict from depending on which document is the source.
 
     Three rules on the passages themselves catch what n-gram counts miss: a short
-    passage mostly inside TEI paratext on both sides, a short passage of numbers that
-    differ between the sides (citations, dates), and a passage of names, most of its
+    passage mostly inside TEI paratext on both sides, a short passage of numbers, Arabic
+    or Roman, that differ between the sides (citations, dates), and a passage of names, most of its
     words capitalized mid-sentence on both sides. The last is off for languages that
     capitalize every noun."""
 
@@ -374,9 +389,12 @@ class BanalityScore:
             return False
         source_words, target_words = _WORD.findall(source_text), _WORD.findall(target_text)
         short = min(len(source_words), len(target_words)) < SHORT_PASSAGE
-        if (short and (_digit_share(source_text) + _digit_share(target_text)) / 2 >= DIGIT_SHARE
-                and sorted(_NUMBER.findall(source_text)) != sorted(_NUMBER.findall(target_text))):
-            return True
+        if short:
+            (source_share, source_numbers), (target_share, target_numbers) = (
+                _numerals(source_text), _numerals(target_text))
+            if ((source_share + target_share) / 2 >= DIGIT_SHARE
+                    and source_numbers != target_numbers):
+                return True
         sides = ((getattr(passage, "source_filename", ""), passage.source_start_byte,
                   passage.source_end_byte),
                  (getattr(passage, "target_filename", ""), passage.target_start_byte,

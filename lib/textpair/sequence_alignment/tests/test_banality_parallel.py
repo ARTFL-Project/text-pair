@@ -418,6 +418,12 @@ def check_rules(root):
     check("rules: the same numbers on both sides are not, as in two numbered editions",
           not score.is_banal(Passage("348 S'avance vers la charrette 349",
                                      "348 S'avance vers la charrette 349")))
+    check("rules: a short citation whose Roman numerals differ is banal",
+          score.is_banal(Passage("Mémoires de Ferrières, t. II, liv. VI.",
+                                 "Mémoires de Ferrières, t. II, liv. VIII.")))
+    check("rules: a regnal number is part of a name, not a number",
+          not score.is_banal(Passage("Louis XIII défendit sous peine des galères",
+                                     "Louis XIV défendit sous peine des galères")))
     check("rules: a passage of names is banal",
           score.is_banal(Passage(names, names, span(names), span(names))))
     check("rules: capitals at verse line starts are not names",
