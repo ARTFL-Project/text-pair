@@ -143,6 +143,7 @@ let quietFocus = false;
 let focusAfterLoad = null;
 // Responses to earlier requests, or after leaving the view, are dropped
 let textRequest = 0;
+let sideSwitchedFor = null;
 
 const otherDirection = computed(() => (direction.value == "source" ? "target" : "source"));
 const passageCounts = computed(() => textObject.value.passage_counts || {});
@@ -238,6 +239,7 @@ function fetchText(sameView = false) {
                         .join(" ");
                     return words.replace(/\s+/g, " ").trim().slice(0, 100);
                 });
+                if (route.query.start_byte && route.query.end_byte && switchSide()) return;
                 emitter.emit("announce", `Text loaded: ${summaryHeading.value}`);
                 if (route.query.start_byte && route.query.end_byte) {
                     goToPassage(response.data.passage_number);
@@ -476,6 +478,20 @@ function citationText(metadata) {
 
 function toggleExpanded(id) {
     expanded.value = { ...expanded.value, [id]: !expanded.value[id] };
+}
+
+// A link can name the other side of the passage's alignments, as for a reuse the group view shows facing its passage
+function switchSide() {
+    const start = Number(route.query.start_byte);
+    const found = [...textContent.value.getElementsByClassName("passage-marker")].some((marker) => {
+        const [first, last] = marker.getAttribute("data-offsets").split("-").map(Number);
+        return first <= start && start <= last;
+    });
+    const link = `${route.query.doc_id}:${route.query.start_byte}`;
+    if (found || sideSwitchedFor == link || !textObject.value.passage_counts[otherDirection.value]) return false;
+    sideSwitchedFor = link;
+    router.replace({ query: { ...route.query, directionSelected: otherDirection.value } });
+    return true;
 }
 
 function goToPassage(passage) {

@@ -85,9 +85,10 @@ onMounted(() => {
     modalElement.value.addEventListener("hidden.bs.modal", returnFocus);
 });
 
+// Hidden rather than disposed, so the next page doesn't inherit the modal's scroll lock
 onBeforeUnmount(() => {
     modalElement.value.removeEventListener("hidden.bs.modal", returnFocus);
-    modal.dispose();
+    modal.hide();
 });
 
 function fetchData() {
@@ -119,10 +120,11 @@ function showDifferences(reuse) {
     modalOpener = document.activeElement;
     showPair.value = false;
     localAlignment.value = { ...sourcePassage.value };
+    // The reuse's own side only: it holds both sides of its alignment
+    const side = `${reuse.direction}_`;
     for (const key in reuse) {
-        const newKey = key.replace(/source_/, "target_");
-        if (newKey.startsWith("target_")) {
-            localAlignment.value[newKey] = reuse[key];
+        if (key.startsWith(side)) {
+            localAlignment.value[`target_${key.slice(side.length)}`] = reuse[key];
         }
     }
     localAlignment.value.count = 1;
