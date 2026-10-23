@@ -99,7 +99,7 @@
 
 <script setup>
 import emitter from "tiny-emitter/instance";
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import globalConfig from "../config.js";
 import { plainText } from "../utils.js";
@@ -123,12 +123,36 @@ const sourceHtml = ref(null);
 const targetHtml = ref(null);
 const showingDiff = ref(false);
 const diffLoading = ref(false);
+let worker = null;
 
 onMounted(() => {
     if (props.diffed) {
         showDifferences();
     }
 });
+
+function stopWorker() {
+    if (worker) {
+        worker.terminate();
+        worker = null;
+    }
+}
+
+// Lists and modals reuse this component for the next pair: drop the previous pair's differences
+watch(
+    () => props.alignment,
+    () => {
+        stopWorker();
+        sourceHtml.value = null;
+        targetHtml.value = null;
+        showingDiff.value = false;
+        diffLoading.value = false;
+        if (props.diffed) {
+            showDifferences();
+        }
+    }
+);
+onUnmounted(stopWorker);
 
 function escapeHtml(text) {
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -148,17 +172,20 @@ function showDifferences() {
         alert("Passage of 10000 words or more may take up a long time to compare");
     }
     diffLoading.value = true;
-    const worker = new Worker();
+    stopWorker();
+    const current = new Worker();
+    worker = current;
     const startByteIndex = props.startByteIndex;
     const endByteIndex = props.endByteIndex;
     // works around issue with diff-match-patch where no matches are found if the match is far after the beginning of the string
     const slicing = startByteIndex != undefined && startByteIndex > 0;
     if (slicing) {
-        worker.postMessage([sourceText.slice(startByteIndex, endByteIndex), targetText]);
+        current.postMessage([sourceText.slice(startByteIndex, endByteIndex), targetText]);
     } else {
-        worker.postMessage([sourceText, targetText]);
+        current.postMessage([sourceText, targetText]);
     }
-    worker.onmessage = (response) => {
+    current.onmessage = (response) => {
+        if (current !== worker) return;
         let newSourceString = "";
         let newTargetString = "";
         for (const [diffCode, text] of response.data) {
@@ -178,7 +205,7 @@ function showDifferences() {
         targetHtml.value = newTargetString;
         showingDiff.value = true;
         diffLoading.value = false;
-        worker.terminate();
+        stopWorker();
         emitter.emit("announce", "Differences shown");
     };
 }
