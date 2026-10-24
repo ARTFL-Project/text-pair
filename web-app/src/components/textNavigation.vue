@@ -1,7 +1,7 @@
 <template>
-    <div class="row mt-1" id="all-content">
+    <div class="row mt-1" id="all-content" :class="`text-side-${direction}`">
         <div class="col-12 col-sm-10 offset-sm-1 col-lg-8 offset-lg-2" id="center-content">
-            <h2 class="h4 text-title text-center mt-3 mb-2" :class="{ 'visually-hidden': !textObject.metadata }">
+            <h2 class="text-title" :class="{ 'visually-hidden': !textObject.metadata }">
                 <span class="visually-hidden">Full text<template v-if="textObject.metadata">: </template></span>
                 <citations :citation="globalConfig[`${direction}Citation`]" :alignment="textObject.metadata" tag="span"
                     v-if="textObject.metadata"></citations>
@@ -15,7 +15,7 @@
             <div class="m-4" style="font-size: 120%" v-if="error">{{ error }}</div>
             <template v-else>
                 <div class="d-flex justify-content-center mb-3" v-if="bothDirections">
-                    <div class="btn-group" role="group" aria-label="Direction of reuse">
+                    <div class="btn-group direction-toggle" role="group" aria-label="Direction of reuse">
                         <button type="button" class="btn btn-outline-secondary" id="direction-target"
                             :class="{ active: direction == 'target' }" :aria-pressed="String(direction == 'target')"
                             :disabled="!passageCounts.target" @click="changeDirection('target')">
@@ -28,10 +28,11 @@
                         </button>
                     </div>
                 </div>
-                <div class="card shadow-sm mb-3" id="reuse-summary" v-if="textObject.text">
+                <div class="card shadow-1 mb-4" id="reuse-summary" v-if="textObject.text"
+                    :class="`side-${otherDirection}`">
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <h3 class="fs-6 fw-normal lh-base mb-0">{{ summaryHeading }}</h3>
-                        <button type="button" class="btn btn-sm btn-outline-light py-0" v-if="otherTexts.length"
+                        <h3 class="summary-heading">{{ summaryHeading }}</h3>
+                        <button type="button" class="summary-toggle" v-if="otherTexts.length"
                             :aria-expanded="String(!summaryHidden)" aria-controls="reuse-summary-list"
                             @click="toggleSummary()">
                             {{ summaryHidden ? "Show" : "Hide" }}<span class="visually-hidden"> texts sharing
@@ -41,12 +42,17 @@
                     <template v-if="!summaryHidden && otherTexts.length">
                         <ul class="list-group list-group-flush" id="reuse-summary-list">
                             <li class="list-group-item" v-for="other in otherTexts" :key="other.id">
-                                <div class="summary-citation" :title="citationText(other.metadata)">
-                                    <citations :citation="globalConfig[`${otherDirection}Citation`]"
-                                        :alignment="other.metadata" :link-to-doc="`${otherDirection}_title`"></citations>
+                                <div class="summary-row">
+                                    <div class="summary-citation" :title="citationText(other.metadata)">
+                                        <citations :citation="globalConfig[`${otherDirection}Citation`]"
+                                            :alignment="other.metadata" :link-to-doc="`${otherDirection}_title`">
+                                        </citations>
+                                    </div>
+                                    <span class="summary-gap" v-if="yearGap(other) !== null">{{ yearGap(other)
+                                    }}</span>
                                 </div>
                                 <div class="passage-links px-3 pb-1">
-                                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                                    <button type="button" class="passage-chip"
                                         v-for="passage in shownPassages(other)" :key="passage"
                                         :title="passageSnippets[passage]" @click="goToPassage(passage)">
                                         <span class="visually-hidden">Passage </span>{{ passage + 1 }}
@@ -65,8 +71,8 @@
                         </div>
                     </template>
                 </div>
-                <div class="card mb-4 pb-4 shadow">
-                    <div id="book-page" class="text-view px-4" ref="bookPage" role="region" aria-label="Document text">
+                <div class="card book-card mb-4 shadow-1">
+                    <div id="book-page" class="text-view" ref="bookPage" role="region" aria-label="Document text">
                         <div id="text-obj-content" class="text-content-area" ref="textContent" v-html="textObject.text"
                             :lang="globalConfig[`${direction}Language`] || undefined" @click="textClick"
                             @keydown="textKeydown" @mouseover="textMouseover" @mouseout="textMouseout"
@@ -476,6 +482,17 @@ function citationText(metadata) {
         .join(" • ");
 }
 
+// Years between this text and another, as in the bridge of a pair
+function yearGap(other) {
+    const own = parseInt(textObject.value.metadata[`${direction.value}_year`]);
+    const theirs = parseInt(other.metadata[`${otherDirection.value}_year`]);
+    if (isNaN(own) || isNaN(theirs)) return null;
+    const gap = Math.abs(theirs - own);
+    if (gap == 0) return "same year";
+    const years = `${gap} ${gap == 1 ? "year" : "years"}`;
+    return theirs > own ? `${years} later` : `${years} earlier`;
+}
+
 function toggleExpanded(id) {
     expanded.value = { ...expanded.value, [id]: !expanded.value[id] };
 }
@@ -517,7 +534,7 @@ function focusPassage(passage) {
 
 function buildCitation(metadataFields, side) {
     const language = globalConfig[`${side}Language`];
-    let citation = `<ul class="list-group"${language ? ` lang="${language}"` : ""} style="list-style-type: none; margin: 0; padding: 0;">`;
+    let citation = `<ul class="list-group popover-side-${side}"${language ? ` lang="${language}"` : ""} style="list-style-type: none; margin: 0; padding: 0;">`;
     for (const metadata of metadataFields) {
         citation += '<li class="list-group-item">';
         const labels = [];
@@ -529,7 +546,7 @@ function buildCitation(metadataFields, side) {
         }
         citation += labels.join('<span class="separator" aria-hidden="true">&nbsp;&#9679;&nbsp;</span>') + "</li>";
     }
-    citation += `</ul><div class="p-2" lang="${pageLanguage}"><b>Click on passage to see reuse.</b></div>`;
+    citation += `</ul><div class="p-2 popover-hint" lang="${pageLanguage}"><b>Click on passage to see reuse.</b></div>`;
     return citation;
 }
 
@@ -571,8 +588,84 @@ function restoreFocus() {
 <style lang="scss" scoped>
 @import "../assets/theme.module.scss";
 
+.text-title {
+    margin: 2rem auto 1.5rem;
+    max-width: 44rem;
+    font-size: 1.55rem;
+    font-weight: 400;
+    line-height: 1.35;
+    text-align: center;
+}
+
+.text-title :deep([data-field="author"]) {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-family: $font-ui;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.text-title :deep([data-field="author"] .separator) {
+    display: none;
+}
+
+.text-title :deep([data-field="title"]) {
+    color: $header-color;
+}
+
+.text-title :deep([data-field="year"]) {
+    @include display-type;
+    color: $ink;
+}
+
+.direction-toggle .btn {
+    font-weight: 600;
+}
+
+// The texts on the other side, in that side's ink
+#reuse-summary {
+    border-top: 3px solid $target-color;
+    border-radius: 3px;
+}
+
+#reuse-summary.side-source {
+    border-top-color: $source-color;
+}
+
+#reuse-summary .card-header {
+    padding: 0.7rem 1rem;
+}
+
+.summary-heading {
+    margin: 0;
+    color: $ink;
+    font-family: $font-text;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.summary-toggle {
+    flex: 0 0 auto;
+    padding: 0.15rem 0.7rem;
+    border: 1px solid rgba($button-color, 0.55);
+    border-radius: 2rem;
+    background-color: #fff;
+    color: $link-color;
+    font-family: $font-ui;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.summary-toggle:hover {
+    background-color: $source-tint;
+}
+
 #reuse-summary .list-group-item {
-    padding: 0;
+    padding: 0.6rem 1rem 0.5rem;
+    border-color: $rule-color;
 }
 
 /* Long lists scroll within the card, rather than push the text down */
@@ -581,10 +674,32 @@ function restoreFocus() {
     overflow-y: auto;
 }
 
+.summary-row {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+}
+
+.summary-citation {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 .summary-citation :deep(p) {
+    margin: 0 !important;
+    padding: 0 !important;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.summary-gap {
+    flex: 0 0 auto;
+    color: $muted;
+    font-family: $font-ui;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
 }
 
 /* Narrow screens wrap citations rather than cut them */
@@ -592,16 +707,62 @@ function restoreFocus() {
     .summary-citation :deep(p) {
         white-space: normal;
     }
+
+    .summary-row {
+        flex-direction: column;
+        gap: 0.15rem;
+    }
 }
 
-#reuse-summary .card-header :focus-visible {
-    outline-color: #fff !important;
+#reuse-summary .card-footer {
+    background-color: $paper;
+    border-color: $rule-color;
+    color: $muted !important;
 }
 
-.passage-links .btn-outline-secondary {
-    min-width: 2.25rem;
-    margin: 0 0.25rem 0.375rem 0;
-    padding: 0 0.375rem;
+.passage-links {
+    padding: 0.45rem 0 0 !important;
+}
+
+// Passage numbers: small chips leading to each passage in the text
+.passage-chip {
+    min-width: 2rem;
+    margin: 0 0.25rem 0.3rem 0;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid rgba($button-color, 0.5);
+    border-radius: 2rem;
+    background-color: #fff;
+    color: $link-color;
+    font-family: $font-ui;
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.passage-chip:hover {
+    border-color: $button-color;
+    background-color: $source-tint;
+}
+
+.text-side-target .passage-chip {
+    border-color: rgba($target-color, 0.5);
+    color: $target-color;
+}
+
+.text-side-target .passage-chip:hover {
+    border-color: $target-color;
+    background-color: $target-tint;
+}
+
+.text-side-target .passage-chip:focus-visible {
+    outline-color: $target-color !important;
+}
+
+.passage-links .btn-link {
+    font-family: $font-ui;
+    font-size: 0.75rem;
+    font-weight: 600;
+    vertical-align: baseline;
 }
 
 .separator {
@@ -611,6 +772,9 @@ function restoreFocus() {
     vertical-align: middle;
 }
 
+.book-card {
+    border-radius: 3px;
+}
 
 /* Floats over the corner of the page, where it stays clear of the text on wide screens */
 #back-to-top {
@@ -664,8 +828,30 @@ a.current-obj,
     background: #e8e8e8;
 }
 
+// The page itself: a reading measure, generous leading
 #book-page {
+    max-width: 44rem;
+    margin: 0 auto;
+    padding: 2.5rem 2rem 3rem;
+    color: $ink;
+    font-size: 1.08rem;
+    line-height: 1.72;
     text-align: justify;
+    hyphens: auto;
+}
+
+// Narrow pages read ragged right, without the gaps of justified lines
+@media (max-width: 575.98px) {
+    #book-page {
+        padding: 1.75rem 1.1rem 2rem;
+        text-align: left;
+    }
+}
+
+:deep(b.headword[role="heading"]) {
+    @include display-type;
+    color: $header-color;
+    letter-spacing: 0.02em;
 }
 
 :deep(.xml-pb) {
@@ -677,6 +863,28 @@ a.current-obj,
 :deep(.xml-pb::before) {
     content: "-" attr(n) "-";
     white-space: pre;
+}
+
+// Page breaks as a quiet folio between rules
+:deep(.xml-pb-image) {
+    display: flex !important;
+    align-items: center;
+    gap: 1rem;
+    margin: 1.25rem 0 !important;
+    color: $muted;
+    font-family: $font-ui;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    line-height: 1;
+}
+
+:deep(.xml-pb-image::before),
+:deep(.xml-pb-image::after) {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background-color: $rule-color;
 }
 
 :deep(p) {
@@ -1136,29 +1344,53 @@ body {
     opacity: 1;
 }
 
-:deep([class^="passage-"]) {
-    color: $passage-color;
-    font-weight: 700;
+// Reused passages in this text's ink, over a light wash of it
+#text-obj-content :deep([class^="passage-"]) {
+    color: $source-deep;
+    font-weight: 600;
+    background-color: rgba($source-color, 0.07);
+    box-shadow: 0 1px 0 rgba($source-color, 0.35);
     cursor: pointer;
 }
 
-:deep([class^="passage-"].focus) {
-    background-color: $passage-color;
+.text-side-target #text-obj-content :deep([class^="passage-"]) {
+    color: $target-deep;
+    background-color: rgba($target-color, 0.07);
+    box-shadow: 0 1px 0 rgba($target-color, 0.35);
+}
+
+#text-obj-content :deep([class^="passage-"].focus) {
+    background-color: $source-color;
+    box-shadow: none;
     color: #fff;
+}
+
+.text-side-target #text-obj-content :deep([class^="passage-"].focus) {
+    background-color: $target-color;
 }
 
 /* Number opening a reused passage, at its start */
 :deep(.reuse-number) {
     vertical-align: 0.3em;
-    margin-right: 0.2em;
-    padding: 0.1em 0.4em;
+    margin-right: 0.25em;
+    padding: 0.12em 0.45em;
     border: 0;
-    border-radius: 0.6em;
-    background-color: $passage-color;
+    border-radius: 0.7em;
+    background-color: $source-color;
     color: #fff;
-    font-size: 0.7em;
+    font-family: $font-ui;
+    font-size: 0.66em;
     font-weight: 700;
     line-height: 1.2;
+    text-indent: 0;
+}
+
+.text-side-target :deep(.reuse-number) {
+    background-color: $target-color;
+}
+
+.text-side-target :deep(.reuse-number:focus-visible) {
+    outline-color: $target-color !important;
 }
 
 :deep(.xml-titlePage) {

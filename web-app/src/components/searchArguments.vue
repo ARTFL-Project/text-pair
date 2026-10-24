@@ -1,34 +1,32 @@
 <template>
     <!-- Compact version when no search params on either side -->
-    <div v-if="hasNoParams" class="compact-search-args p-2 mb-2 shadow-1"
-        style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125)">
-        <div class="p-2" v-if="!counts || counts === '...'">
+    <div v-if="hasNoParams" class="compact-search-args query-summary">
+        <div v-if="!counts || counts === '...'">
             <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
             results across all documents
         </div>
-        <div class="p-2" v-else>
-            <strong>{{ counts }}</strong> results across all documents
+        <div v-else>
+            <strong class="result-count">{{ counts }}</strong> results across all documents
         </div>
     </div>
 
     <!-- Regular version when search params exist -->
-    <div v-else id="search-arguments" class="mt-1 mb-2 pt-2 shadow-1"
-        style="background-clip: border-box; border: 1px solid rgba(0, 0, 0, 0.125);">
-        <div class="mb-1 p-2" style="font-size: 1rem">
+    <div v-else id="search-arguments" class="query-summary">
+        <div class="query-count">
             <span v-if="!counts || counts === '...'">
                 <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
                 results for the following query:
             </span>
             <span v-else>
-                <strong>{{ counts }}</strong> results for the following query:
+                <strong class="result-count">{{ counts }}</strong> results for the following query:
             </span>
         </div>
-        <div class="row pl-2">
-            <div class="col-12 col-md-6 rounded-0 pb-2 search-args-group" v-for="(paramGroup, groupIndex) in searchParams"
-                :key="groupIndex">
-                <h3 class="h6 text-center text-capitalize mb-2">
-                    <span v-html="paramGroup.direction"></span>
-                    Parameters:
+        <div class="query-sides">
+            <div class="search-args-group" v-for="(paramGroup, groupIndex) in searchParams" :key="groupIndex"
+                :class="groupIndex ? 'side-target-color' : 'side-source-color'">
+                <h3 class="query-side">
+                    <span class="side-mark" :class="groupIndex ? 'target' : 'source'" aria-hidden="true"></span>
+                    <span v-html="paramGroup.direction"></span>&nbsp;Parameters:
                 </h3>
                 <ul class="list-unstyled mb-0" v-if="paramGroup.params != null">
                     <li class="metadata-args" v-for="metadata in paramGroup.params" :key="metadata.fieldName">
@@ -45,8 +43,9 @@
                 </ul>
                 <div class="metadata-args none" v-if="paramGroup.params == null">None</div>
             </div>
+            <span class="query-arrow" aria-hidden="true"></span>
         </div>
-        <div class="my-2 pb-1 px-2" v-if="banality">
+        <div class="query-banality" v-if="banality">
             <div class="metadata-args rounded-pill">
                 <span class="metadata-label"> Banality filter </span>
                 <span class="metadata-value">
@@ -131,93 +130,165 @@ function checkValue(value) {
     return value == '""' ? "N/A" : value;
 }
 </script>
-<style scoped>
-#search-arguments {
-    font-family: "Open-Sans", sans-serif;
+<style lang="scss" scoped>
+@import "../assets/theme.module.scss";
+
+.query-summary {
+    width: 100%;
+    margin-top: 0.25rem;
+    padding: 0.25rem 0 0;
+    font-family: $font-ui;
+    font-size: 0.95rem;
+    color: $muted;
 }
 
-.compact-search-args {
-    font-family: "Open-Sans", sans-serif;
-    font-size: 1rem;
-    line-height: 1.2;
+.result-count {
+    margin-right: 0.15rem;
+    color: $header-color;
+    @include display-type;
+    font-size: 1.9rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.query-count {
+    margin-bottom: 0.6rem;
+}
+
+// Both sides of the query, joined like the sides of a pair
+.query-sides {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0 4rem;
+    padding: 0.85rem 1.1rem 0.35rem;
+    border: 1px solid $rule-color;
+    border-radius: 3px;
+    background-color: #fff;
+}
+
+.query-arrow {
+    position: absolute;
+    top: 1.45rem;
+    left: calc(50% - 1.5rem);
+    width: 3rem;
+    height: 1.5px;
+    background: linear-gradient(90deg, $source-color, $target-color);
+}
+
+.query-arrow::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: -3.5px;
+    width: 8px;
+    height: 8px;
+    border-top: 1.5px solid $target-color;
+    border-right: 1.5px solid $target-color;
+    transform: rotate(45deg);
+}
+
+.query-side {
+    @include kicker;
+    display: flex;
+    align-items: center;
+    margin: 0 0 0.6rem;
+    color: inherit;
 }
 
 .metadata-args {
-    border: 1px solid #ddd;
-    display: -webkit-inline-box !important;
-    display: -ms-inline-flexbox !important;
     display: inline-flex !important;
-    margin-right: 5px;
-    border-radius: 50rem;
-    width: -webkit-fit-content;
-    width: -moz-fit-content;
+    margin: 0 0.4rem 0.5rem 0;
+    border: 1px solid currentColor !important;
+    border-radius: 2rem;
     width: fit-content;
-    line-height: 2;
-    margin-bottom: 0.5rem;
+    line-height: 1.9;
+    background-color: #fff;
+    font-size: 0.85rem;
+}
+
+.side-source-color .metadata-args {
+    border-color: rgba($source-color, 0.5) !important;
+}
+
+.side-target-color .metadata-args {
+    border-color: rgba($target-color, 0.5) !important;
 }
 
 .metadata-args.none {
     border-width: 0px !important;
+    color: $muted;
+    font-style: italic;
 }
 
 .metadata-label {
-    display: -webkit-box;
-    display: -ms-flexbox;
     display: flex;
-    -webkit-box-align: center;
-    -ms-flex-align: center;
     align-items: center;
-    border: solid #ddd;
-    border-width: 0 1px 0 0;
-    border-top-left-radius: 50rem;
-    border-bottom-left-radius: 50rem;
-    padding: 0 0.5rem;
+    padding: 0 0.4rem 0 0.7rem;
+    border-radius: 2rem 0 0 2rem;
+    background-color: transparent !important;
+    color: inherit !important;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 
 .metadata-value {
-    display: -webkit-box;
-    display: -ms-flexbox;
     display: flex;
-    -webkit-box-align: center;
-    -ms-flex-align: center;
     align-items: center;
-    -webkit-box-decoration-break: clone;
+    padding: 0 0.4rem;
+    color: $ink;
     box-decoration-break: clone;
-    padding: 0 0.5rem;
 }
 
 .remove-metadata {
-    background-color: transparent;
-    border-width: 0;
-    color: inherit;
-    display: -webkit-box;
-    display: -ms-flexbox;
     display: flex;
-    -webkit-box-align: center;
-    -ms-flex-align: center;
     align-items: center;
-    padding-right: 5px;
-    padding-left: 5px;
-    border-left: 1px solid #ddd;
-    border-top-right-radius: 50rem;
-    border-bottom-right-radius: 50rem;
-    padding: 0 0.5rem;
+    padding: 0 0.6rem 0 0.45rem;
+    border: 0;
+    border-radius: 0 2rem 2rem 0;
+    background-color: transparent;
+    color: inherit;
+    font-size: 1rem;
 }
 
 .remove-metadata:hover {
     cursor: pointer;
+    background-color: $source-tint !important;
+    color: $source-deep !important;
 }
 
-.corner-btn.right {
-    position: initial;
-    line-height: 29px;
-    padding: 5px;
-    border-width: 0px 0px 1px 1px;
+.side-target-color .remove-metadata:hover {
+    background-color: $target-tint !important;
+    color: $target-deep !important;
 }
 
-@media (min-width: 768px) {
-    .search-args-group:last-of-type {
-        border-left: 1px solid #ddd;
+.side-target-color .remove-metadata:focus-visible {
+    outline-color: $target-color !important;
+}
+
+.query-banality {
+    margin-top: 0.75rem;
+    color: $source-color;
+}
+
+.compact-search-args {
+    padding-bottom: 0.25rem;
+}
+
+@media (max-width: 767.98px) {
+    .query-sides {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.75rem;
+    }
+
+    .query-arrow {
+        display: none;
+    }
+
+    .result-count {
+        font-size: 1.6rem;
     }
 }
 </style>

@@ -1,43 +1,56 @@
 <template>
-    <section id="search-form" class="card rounded-0 mt-3 shadow-1" aria-labelledby="search-form-title">
-        <div class="card-body rounded-0" style="position: relative">
+    <section id="search-form" class="card mt-3 shadow-1" :class="{ open: formOpen }"
+        aria-labelledby="search-form-title">
+        <div class="card-body" style="position: relative">
             <h2 id="search-form-title" class="visually-hidden">Search</h2>
-            <button type="button" id="show-form" class="p-2" :class="{ hide: formOpen }" ref="showFormButton"
-                :aria-expanded="String(formOpen)" aria-controls="search-alignments" @click="toggleSearchForm(true)">Show
-                search form</button>
+            <button type="button" id="show-form" :class="{ hide: formOpen }" ref="showFormButton"
+                :aria-expanded="String(formOpen)" aria-controls="search-alignments" @click="toggleSearchForm(true)">
+                <svg class="show-form-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                    <circle cx="8.5" cy="8.5" r="5.25" fill="none" stroke="currentColor" stroke-width="1.75" />
+                    <path d="M12.5 12.5l4.25 4.25" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
+                </svg>
+                <span class="show-form-label">Show search form</span>
+                <svg class="show-form-chevron" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                    <path d="M5.5 8l4.5 4.5L14.5 8" fill="none" stroke="currentColor" stroke-width="1.75"
+                        stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </button>
             <form id="search-alignments" ref="form" role="search" aria-labelledby="search-form-title"
                 @submit.prevent="search()">
                 <!-- Metadata Fields -->
-                <div class="row">
-                    <fieldset class="col-12 col-md-6">
-                        <legend class="section-title text-center pb-2" v-html="globalConfig.sourceLabel"></legend>
+                <div class="form-sides">
+                    <fieldset class="form-side side-source-color">
+                        <legend class="section-title"><span class="side-mark source" aria-hidden="true"></span><span
+                                v-html="globalConfig.sourceLabel"></span></legend>
                         <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.source"
                             :key="field.label">
-                            <label class="input-group-text rounded-0" :for="`search-${field.value}`">{{ field.label
+                            <label class="input-group-text" :for="`search-${field.value}`">{{ field.label
                             }}</label>
-                            <input type="text" class="form-control rounded-0" :id="`search-${field.value}`"
+                            <input type="text" class="form-control" :id="`search-${field.value}`"
                                 :name="field.value" v-model="formValues[field.value]" />
                         </div>
                     </fieldset>
-                    <fieldset class="col-12 col-md-6 target-fields">
-                        <legend class="section-title text-center pb-2" v-html="globalConfig.targetLabel"></legend>
+                    <span class="form-arrow" aria-hidden="true"></span>
+                    <fieldset class="form-side side-target-color">
+                        <legend class="section-title"><span class="side-mark target" aria-hidden="true"></span><span
+                                v-html="globalConfig.targetLabel"></span></legend>
                         <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.target"
                             :key="field.label">
-                            <label class="input-group-text rounded-0" :for="`search-${field.value}`">{{ field.label
+                            <label class="input-group-text" :for="`search-${field.value}`">{{ field.label
                             }}</label>
-                            <input type="text" class="form-control rounded-0" :id="`search-${field.value}`"
+                            <input type="text" class="form-control" :id="`search-${field.value}`"
                                 :name="field.value" v-model="formValues[field.value]" />
                         </div>
                     </fieldset>
                 </div>
                 <!-- Passage Classification -->
                 <fieldset id="passage-classification" class="mb-3" v-if="globalConfig.passageClassification.length">
-                    <legend class="section-title text-center pb-2">Passage Classification</legend>
+                    <legend class="section-title">Passage Classification</legend>
                     <div class="row">
                         <div class="col-12 col-md-4">
                             <div class="input-group pb-3">
-                                <label class="input-group-text rounded-0" for="classification-filter-1">First Criterion</label>
-                                <select id="classification-filter-1" class="form-control rounded-0 select-with-arrow"
+                                <label class="input-group-text" for="classification-filter-1">First Criterion</label>
+                                <select id="classification-filter-1" class="form-control select-with-arrow"
                                     v-model="classificationFilters[0]">
                                     <option value="">Any classification</option>
                                     <option v-for="classItem in globalConfig.passageClassification"
@@ -49,8 +62,8 @@
                         </div>
                         <div class="col-12 col-md-4">
                             <div class="input-group pb-3">
-                                <label class="input-group-text rounded-0" for="classification-filter-2">Second Criterion</label>
-                                <select id="classification-filter-2" class="form-control rounded-0 select-with-arrow"
+                                <label class="input-group-text" for="classification-filter-2">Second Criterion</label>
+                                <select id="classification-filter-2" class="form-control select-with-arrow"
                                     v-model="classificationFilters[1]">
                                     <option value="">Any classification</option>
                                     <option v-for="classItem in globalConfig.passageClassification"
@@ -62,8 +75,8 @@
                         </div>
                         <div class="col-12 col-md-4">
                             <div class="input-group pb-3">
-                                <label class="input-group-text rounded-0" for="classification-filter-3">Third Criterion</label>
-                                <select id="classification-filter-3" class="form-control rounded-0 select-with-arrow"
+                                <label class="input-group-text" for="classification-filter-3">Third Criterion</label>
+                                <select id="classification-filter-3" class="form-control select-with-arrow"
                                     v-model="classificationFilters[2]">
                                     <option value="">Any classification</option>
                                     <option v-for="classItem in globalConfig.passageClassification"
@@ -78,9 +91,9 @@
                         <div class="col-12">
                             <div id="banality-filter" class="pb-3">
                                 <div class="input-group">
-                                    <label class="input-group-text rounded-0" for="banality-select">Banality
+                                    <label class="input-group-text" for="banality-select">Banality
                                         Filter</label>
-                                    <select id="banality-select" class="form-control rounded-0 select-with-arrow"
+                                    <select id="banality-select" class="form-control select-with-arrow"
                                         v-model="banalitySelected" @change="updateBanalityValue">
                                         <option v-for="(option, optionIndex) in formBanalityValues" :key="optionIndex"
                                             :value="option.label">
@@ -94,8 +107,8 @@
                 </fieldset>
 
                 <div id="search-buttons">
-                    <button class="btn btn-secondary rounded-0" type="submit">Search</button>
-                    <button type="button" class="btn btn-outline-secondary rounded-0" @click="clearForm()">
+                    <button class="btn btn-secondary" type="submit">Search</button>
+                    <button type="button" class="btn btn-outline-secondary" @click="clearForm()">
                         Reset
                     </button>
                 </div>
@@ -232,20 +245,109 @@ function updateBanalityValue() {
 @import "../assets/theme.module.scss";
 
 #search-form {
-    font-family: "Open-Sans", sans-serif;
+    font-family: $font-ui;
+    border-radius: 3px;
+    transition: background-color 0.2s ease-out, border-color 0.2s ease-out, box-shadow 0.2s ease-out;
 }
 
-.input-group>span {
-    font-size: 0.85rem !important;
+// Closed, the card is the toggle: a bar that lifts on hover
+#search-form:not(.open):hover {
+    border-color: rgba($button-color, 0.45);
+    box-shadow: $lift;
 }
 
-.input-group> :not(:first-child):not(.dropdown-menu):not(.valid-tooltip):not(.valid-feedback):not(.invalid-tooltip):not(.invalid-feedback) {
-    border-left-color: $link-color;
+#search-form .card-body {
+    padding: 0;
+    transition: padding 0.2s ease-out;
+}
+
+#search-form.open .card-body {
+    padding: 1.4rem 1.5rem 1.25rem;
 }
 
 .input-group-text,
 .form-control {
-    font-size: inherit;
+    font-size: 0.85rem;
+}
+
+// Fields of each side: a label cell tinted in the side's color
+.input-group-text {
+    flex: 0 0 8.25rem;
+    justify-content: flex-start;
+    font-weight: 600;
+    border-color: $input-border-color !important;
+}
+
+.side-source-color .input-group-text {
+    color: $source-deep !important;
+    background-color: $source-tint !important;
+}
+
+.side-target-color .input-group-text {
+    color: $target-deep !important;
+    background-color: $target-tint !important;
+}
+
+#passage-classification .input-group-text {
+    flex-basis: auto;
+    color: $ink !important;
+    background-color: $paper !important;
+}
+
+.input-group > :not(:first-child):not(.dropdown-menu):not(.valid-tooltip):not(.valid-feedback):not(.invalid-tooltip):not(.invalid-feedback) {
+    border-left-color: $input-border-color;
+}
+
+.side-target-color .form-control:focus {
+    border-color: $target-color !important;
+    box-shadow: 0 0 0 0.05rem $target-color !important;
+}
+
+.side-target-color :focus-visible {
+    outline-color: $target-color !important;
+}
+
+.form-sides {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 5rem minmax(0, 1fr);
+}
+
+.form-side {
+    min-width: 0;
+}
+
+.side-source-color.form-side {
+    grid-column: 1;
+}
+
+.side-target-color.form-side {
+    grid-column: 3;
+}
+
+// The search reads like a pair: earlier, then later
+.form-arrow {
+    grid-column: 2;
+    grid-row: 1;
+    position: relative;
+    align-self: start;
+    justify-self: center;
+    width: 3rem;
+    height: 1.5px;
+    margin-top: 0.62rem;
+    background: linear-gradient(90deg, $source-color, $target-color);
+}
+
+.form-arrow::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: -3.5px;
+    width: 8px;
+    height: 8px;
+    border-top: 1.5px solid $target-color;
+    border-right: 1.5px solid $target-color;
+    transform: rotate(45deg);
 }
 
 .hide {
@@ -257,55 +359,54 @@ function updateBanalityValue() {
 }
 
 #show-form {
-    position: absolute;
-    border-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    min-height: 2.875rem;
+    padding: 0.5rem 1rem;
+    border: 0;
+    border-radius: 3px;
     background-color: transparent;
-    color: inherit;
-    font-size: 1rem;
-    font-weight: 500;
-    transition: all 0.2s ease-out;
+    color: $ink-2;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-align: left;
     cursor: pointer;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
+    transition: color 0.12s ease;
 }
 
 #show-form:hover {
-    color: #565656;
+    color: $source-deep;
 }
 
-@media (min-width: 768px) {
-    .target-fields {
-        border-left: 1px solid var(--bs-border-color);
-    }
+#show-form.hide {
+    position: absolute;
+    min-height: 0;
+    height: 0;
+    overflow: hidden;
+}
+
+#show-form svg {
+    flex: 0 0 auto;
+    width: 1.125rem;
+    height: 1.125rem;
+}
+
+.show-form-label {
+    flex: 1 1 auto;
+}
+
+.show-form-chevron {
+    color: $muted;
+}
+
+.show-form-icon {
+    color: $button-color;
 }
 
 fieldset legend + * {
     clear: left;
-}
-
-.tab-line {
-    position: relative;
-    width: 100%;
-    top: -16.9px;
-    color: $button-color;
-    opacity: 0.4;
-    z-index: 0;
-}
-
-.report {
-    position: relative;
-    z-index: 1;
-}
-
-.selected {
-    border-bottom-color: #fff;
-}
-
-.report:hover {
-    background: #fff !important;
-    color: $button-color !important;
-    border-bottom-color: #fff;
 }
 
 #reuse-classification {
@@ -336,23 +437,26 @@ fieldset legend + * {
     }
 }
 
-/* Enhanced section styling */
 .section-title {
-    font-weight: 600;
-    color: #343a40;
-    font-size: 1.1rem;
-    padding-bottom: 0.5rem;
-    margin-bottom: 1rem;
+    @include kicker;
+    display: flex;
+    align-items: center;
+    float: none;
+    width: 100%;
+    margin-bottom: 0.9rem;
+    padding: 0;
+    color: inherit;
+    font-size: 0.74rem;
 }
 
-.section-divider {
-    margin: 1.5rem auto;
-    width: 50%;
-    border-top: 2px solid #e9ecef;
+#passage-classification {
+    margin-top: 0.75rem;
+    padding-top: 1rem;
+    border-top: 1px solid $rule-color;
 }
 
-#reuse-classification {
-    padding: 1.25rem;
+#passage-classification .section-title {
+    color: $muted;
 }
 
 #banality-filter {
@@ -375,6 +479,18 @@ fieldset legend + * {
     }
 }
 
+#search-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 0.6rem;
+    margin-top: 0.4rem;
+}
+
+#search-buttons .btn {
+    min-width: 6.5rem;
+    font-weight: 600;
+}
+
 /* Select styling enhancements */
 .select-with-arrow {
     appearance: none;
@@ -385,5 +501,38 @@ fieldset legend + * {
     background-position: calc(100% - 10px) center;
     padding-right: 28px;
     /* Space for the arrow */
+}
+
+@media (max-width: 767.98px) {
+    #search-form.open .card-body {
+        padding: 1rem;
+    }
+
+    .form-sides {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .side-source-color.form-side,
+    .side-target-color.form-side {
+        grid-column: 1;
+    }
+
+    .form-arrow {
+        grid-column: 1;
+        grid-row: 2;
+        width: 1.5px;
+        height: 1.75rem;
+        margin: -0.5rem 0 0.75rem;
+        justify-self: start;
+        left: 0.25rem;
+        background: linear-gradient($source-color, $target-color);
+    }
+
+    .form-arrow::after {
+        top: auto;
+        bottom: 0;
+        right: -3.5px;
+        transform: rotate(135deg);
+    }
 }
 </style>

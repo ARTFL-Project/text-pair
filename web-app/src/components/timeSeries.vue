@@ -6,7 +6,7 @@
             <search-arguments></search-arguments>
         </div>
         <report-switcher></report-switcher>
-        <div class="card p-4">
+        <div class="card time-card shadow-1">
             <div id="time-series-options">
                 <span id="time-interval-label">Group results by</span>
                 <div class="interval-dropdown" @focusout="onDropdownFocusout" @keydown.esc="closeDropdown">
@@ -57,12 +57,14 @@
                         Each bar links to the passages of its period. Use the left and right arrow keys to move
                         between periods, Home and End for the first and last.
                     </p>
-                    <div class="time-panel" v-for="panel in panels" :key="panel.direction">
+                    <div class="time-panel" :class="`side-${panel.direction}-color`" v-for="panel in panels"
+                        :key="panel.direction">
                         <h3 class="panel-title">
+                            <span class="side-mark" :class="panel.direction" aria-hidden="true"></span>
                             <span v-html="panel.label"></span> <span class="panel-total">{{
                                 panel.total.toLocaleString() }} dated passages</span>
                         </h3>
-                        <svg :width="width" :height="svgHeight" class="time-svg" role="group"
+                        <svg :width="width" :height="panelHeight(panel.direction)" class="time-svg" role="group"
                             :aria-label="chartLabel(panel)" aria-describedby="time-chart-help"
                             @keydown="onKeydown(panel.direction, $event)" @mouseleave="onChartLeave">
                             <g aria-hidden="true">
@@ -70,18 +72,21 @@
                                     <line class="grid-line" :x1="marginLeft" :x2="width - MARGIN.right"
                                         :y1="yScale(tick, panel.direction)" :y2="yScale(tick, panel.direction)" />
                                     <text class="tick-label" :x="marginLeft - 8" :y="yScale(tick, panel.direction)"
-                                        dy="0.32em" text-anchor="end">{{ tick.toLocaleString() }}</text>
+                                        dy="0.32em" text-anchor="end" v-if="tick || !flipped(panel.direction)">{{
+                                            tick.toLocaleString() }}</text>
                                 </g>
                                 <rect class="hover-wash" v-if="isActive(panel.direction)" :x="bandX(active.index)"
-                                    :y="MARGIN.top" :width="band" :height="PLOT_HEIGHT" />
+                                    :y="plotTop(panel.direction)" :width="band" :height="PLOT_HEIGHT" />
                                 <path v-for="(bin, i) in visibleBins" :key="bin.year"
-                                    :d="barPath(i, bin, panel.direction)" :fill="barColor"
+                                    :d="barPath(i, bin, panel.direction)" :fill="barColors[panel.direction]"
                                     :class="{ hovered: isActive(panel.direction) && active.index === i }" />
-                                <line class="baseline" :x1="marginLeft" :x2="width - MARGIN.right" :y1="baseline"
-                                    :y2="baseline" />
-                                <text class="tick-label" v-for="tick in xTicks" :key="tick.year"
-                                    :x="bandX(tick.index) + band / 2" :y="baseline + 18" text-anchor="middle">{{
-                                        tick.year }}</text>
+                                <line class="baseline" :x1="marginLeft" :x2="width - MARGIN.right"
+                                    :y1="baselineOf(panel.direction)" :y2="baselineOf(panel.direction)" />
+                                <template v-if="!flipped(panel.direction)">
+                                    <text class="tick-label year-label" v-for="tick in xTicks" :key="tick.year"
+                                        :x="bandX(tick.index) + band / 2" :y="baseline + 19" text-anchor="middle">{{
+                                            tick.year }}</text>
+                                </template>
                             </g>
                             <template v-for="(bin, i) in visibleBins" :key="`hit-${bin.year}`">
                                 <a v-if="bin[panel.direction]" class="bar-link" :data-index="i"
@@ -90,11 +95,11 @@
                                     :aria-label="barLabel(bin, panel.direction)"
                                     @click="openPassages($event, panel.direction, bin.year)"
                                     @focus="onBarFocus(i, panel.direction, $event)" @blur="focused = null">
-                                    <rect class="hit-area" :x="bandX(i)" :y="MARGIN.top" :width="band"
+                                    <rect class="hit-area" :x="bandX(i)" :y="plotTop(panel.direction)" :width="band"
                                         :height="PLOT_HEIGHT" @mousemove="hoverBin(i, panel.direction, $event)" />
                                 </a>
-                                <rect v-else class="hit-area empty" aria-hidden="true" :x="bandX(i)" :y="MARGIN.top"
-                                    :width="band" :height="PLOT_HEIGHT"
+                                <rect v-else class="hit-area empty" aria-hidden="true" :x="bandX(i)"
+                                    :y="plotTop(panel.direction)" :width="band" :height="PLOT_HEIGHT"
                                     @mousemove="hoverBin(i, panel.direction, $event)" />
                             </template>
                         </svg>
@@ -105,7 +110,8 @@
                     :class="{ clickable: activeBin[active.direction] }" :style="tooltipStyle" aria-hidden="true"
                     @mouseleave="onTooltipLeave" @click="onTooltipClick">
                     <div class="tooltip-period">{{ periodLabel(activeBin.year) }}</div>
-                    <div v-for="panel in panels" :key="panel.direction">
+                    <div v-for="panel in panels" :key="panel.direction" class="tooltip-row">
+                        <span class="side-mark" :class="[panel.direction, `side-${panel.direction}-color`]"></span>
                         <strong>{{ activeBin[panel.direction].toLocaleString() }}</strong>
                         <span v-html="panel.label" class="ms-1"></span>
                     </div>
@@ -187,7 +193,7 @@ const tooltipWidth = ref(0);
 // Year of the bar each chart's Tab stop lands on
 const cursorYear = reactive({ source: null, target: null });
 const dropdownOpen = ref(false);
-const barColor = cssVariables.color;
+const barColors = { source: cssVariables.sourceColor, target: cssVariables.targetColor };
 const chartArea = ref(null);
 const tooltip = ref(null);
 const intervalToggle = ref(null);
@@ -266,6 +272,8 @@ const marginLeft = computed(() => {
 });
 const svgHeight = MARGIN.top + PLOT_HEIGHT + MARGIN.bottom;
 const baseline = MARGIN.top + PLOT_HEIGHT;
+// The later series hangs from its top edge, mirroring the earlier one across the year axis
+const FLIPPED_TOP = 1;
 const band = computed(
     () => Math.max(0, width.value - marginLeft.value - MARGIN.right) / Math.max(1, visibleBins.value.length)
 );
@@ -436,8 +444,25 @@ function fitToData() {
     announceRange();
 }
 
+function flipped(direction) {
+    return direction === "target";
+}
+
+function plotTop(direction) {
+    return flipped(direction) ? FLIPPED_TOP : MARGIN.top;
+}
+
+function baselineOf(direction) {
+    return flipped(direction) ? FLIPPED_TOP : baseline;
+}
+
+function panelHeight(direction) {
+    return flipped(direction) ? FLIPPED_TOP + PLOT_HEIGHT + MARGIN.top : svgHeight;
+}
+
 function yScale(value, direction) {
-    return baseline - (value / yTicks.value[direction].at(-1)) * PLOT_HEIGHT;
+    const offset = (value / yTicks.value[direction].at(-1)) * PLOT_HEIGHT;
+    return flipped(direction) ? FLIPPED_TOP + offset : baseline - offset;
 }
 
 function bandX(index) {
@@ -452,9 +477,16 @@ function barPath(index, bin, direction) {
     const gap = band.value >= 6 ? 2 : band.value >= 3 ? 1 : 0;
     const barWidth = Math.min(MAX_BAR_WIDTH, band.value - gap);
     const x = bandX(index) + (band.value - barWidth) / 2;
-    const height = Math.max(1, baseline - yScale(value, direction));
-    const top = baseline - height;
+    const height = Math.max(1, Math.abs(baselineOf(direction) - yScale(value, direction)));
     const r = Math.min(4, barWidth / 2, height);
+    if (flipped(direction)) {
+        const bottom = FLIPPED_TOP + height;
+        return (
+            `M${x},${FLIPPED_TOP}V${bottom - r}A${r},${r} 0 0 0 ${x + r},${bottom}` +
+            `H${x + barWidth - r}A${r},${r} 0 0 0 ${x + barWidth},${bottom - r}V${FLIPPED_TOP}Z`
+        );
+    }
+    const top = baseline - height;
     return (
         `M${x},${baseline}V${top + r}A${r},${r} 0 0 1 ${x + r},${top}` +
         `H${x + barWidth - r}A${r},${r} 0 0 1 ${x + barWidth},${top + r}V${baseline}Z`
@@ -521,7 +553,7 @@ function onBarFocus(index, direction, event) {
         keyboard: true,
         bandLeft: svgBox.left - box.left + bandX(index),
         bandRight: svgBox.left - box.left + bandX(index) + band.value,
-        y: svgBox.top - box.top + MARGIN.top,
+        y: svgBox.top - box.top + plotTop(direction),
     };
     tooltipDismissed.value = false;
 }
@@ -633,6 +665,28 @@ onBeforeUnmount(() => {
     gap: 0.4rem;
 }
 
+#time-series-options {
+    padding-bottom: 1rem;
+    border-bottom: 1px solid theme.$rule-color;
+    font-family: theme.$font-ui;
+    font-size: 0.85rem;
+    color: theme.$muted;
+}
+
+#time-series-options .btn-light {
+    font-weight: 600;
+}
+
+.time-card {
+    padding: 1.5rem 1.75rem;
+    border-radius: 3px;
+}
+
+.time-table {
+    font-family: theme.$font-ui;
+    font-size: 0.85rem;
+}
+
 .interval-dropdown {
     position: relative;
     display: inline-block;
@@ -663,8 +717,9 @@ onBeforeUnmount(() => {
 
 .range-note {
     margin-top: 0.5rem;
-    color: #6c757d;
-    font-size: 0.85rem;
+    color: theme.$muted;
+    font-family: theme.$font-ui;
+    font-size: 0.8rem;
 }
 
 .range-error {
@@ -689,22 +744,33 @@ onBeforeUnmount(() => {
     }
 }
 
-.time-panel + .time-panel {
-    margin-top: 1rem;
+.time-panel {
+    display: flex;
+    flex-direction: column;
+}
+
+// The later series' title goes under its bars, which hang below the year axis
+.time-panel.side-target-color .panel-title {
+    order: 2;
+    margin-top: 0.6rem;
 }
 
 .panel-title {
-    font-size: inherit;
-    font-weight: 600;
-    line-height: inherit;
-    margin: 0 0 0 0.5rem;
+    @include theme.kicker;
+    display: flex;
+    align-items: center;
+    margin: 0 0 0.6rem 0.25rem;
+    color: inherit;
+    font-size: 0.74rem;
 }
 
 .panel-total {
-    font-weight: 400;
-    color: #6c757d;
-    margin-left: 0.25rem;
-    font-size: 0.85rem;
+    margin-left: 0.6rem;
+    color: theme.$muted;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    font-size: 0.8rem;
 }
 
 .time-svg {
@@ -712,24 +778,32 @@ onBeforeUnmount(() => {
 }
 
 .grid-line {
-    stroke: #eee;
+    stroke: theme.$rule-color;
     stroke-width: 1;
+    stroke-dasharray: 2 3;
 }
 
 .baseline {
-    stroke: #ccc;
+    stroke: theme.$rule-strong;
     stroke-width: 1;
 }
 
 .tick-label {
-    font-family: "Open-Sans", sans-serif;
-    font-size: 12px;
+    font-family: theme.$font-ui;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
-    fill: #6c757d;
+    fill: theme.$muted;
+}
+
+// Years between the two series, shared by both
+.year-label {
+    font-size: 12.5px;
+    font-weight: 600;
+    fill: theme.$ink;
 }
 
 .hover-wash {
-    fill: #f2f2f2;
+    fill: theme.$paper;
 }
 
 path.hovered {
@@ -759,8 +833,11 @@ path.hovered {
     position: absolute;
     z-index: 10;
     background-color: #fff;
-    border: 1px solid #ddd;
-    padding: 0.4rem 0.6rem;
+    border: 1px solid theme.$rule-strong;
+    border-radius: 3px;
+    padding: 0.45rem 0.7rem;
+    font-family: theme.$font-ui;
+    font-size: 0.85rem;
     width: max-content;
     max-width: 100%;
     font-variant-numeric: tabular-nums;
@@ -772,8 +849,19 @@ path.hovered {
 
 .tooltip-period,
 .tooltip-hint {
-    color: #6c757d;
-    font-size: 0.85rem;
+    color: theme.$muted;
+    font-size: 0.8rem;
+}
+
+.tooltip-row .side-mark {
+    font-size: 0.8rem;
+}
+
+.tooltip-period {
+    color: theme.$ink;
+    @include theme.display-type;
+    font-size: 1.05rem;
+    font-weight: 600;
 }
 
 .tooltip-hint {

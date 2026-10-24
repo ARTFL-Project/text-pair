@@ -14,12 +14,12 @@
                 <div class="d-flex justify-content-center position-relative flex-column align-items-center"
                     v-if="loading">
                     <div class="spinner-border"
-                        style="width: 10rem; height: 10rem; position: absolute; z-index: 50; top: 300px; color: #fff"
+                        style="width: 10rem; height: 10rem; position: absolute; z-index: 50; top: 300px"
                         role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
-                    <div class="position-absolute fw-bold fs-6 text-center"
-                        style="z-index: 51; top: 370px; width: 200px; color: #fff;">
+                    <div class="position-absolute fw-bold fs-6 text-center loading-message"
+                        style="z-index: 51; top: 370px; width: 200px;">
                         {{ loadingMessage }}
                     </div>
                 </div>
@@ -50,10 +50,12 @@
                             aria-label="Which side of the pair to match" title="Which side of the pair to match">
                             <input type="radio" class="btn-check" name="semanticAuthorRole" id="roleSource"
                                 value="source" v-model="authorRole">
-                            <label class="btn btn-outline-secondary" for="roleSource">source</label>
+                            <label class="btn btn-outline-secondary" for="roleSource"><span class="side-mark source"
+                                    aria-hidden="true"></span>source</label>
                             <input type="radio" class="btn-check" name="semanticAuthorRole" id="roleTarget"
                                 value="target" v-model="authorRole">
-                            <label class="btn btn-outline-secondary" for="roleTarget">target</label>
+                            <label class="btn btn-outline-secondary" for="roleTarget"><span class="side-mark target"
+                                    aria-hidden="true"></span>target</label>
                             <input type="radio" class="btn-check" name="semanticAuthorRole" id="roleEither"
                                 value="either" v-model="authorRole">
                             <label class="btn btn-outline-secondary" for="roleEither">either</label>
@@ -186,7 +188,7 @@
                                             @focus="hoveredOption = o.value" @blur="hoveredOption = null"
                                             :title="o.label">
                                             <span class="dim-fill" aria-hidden="true"
-                                                :style="{ width: (o.shareOfContext * 100) + '%', backgroundColor: activeDimension === 'theme' ? getClusterColor(o.value) : '#9ab0c8' }">
+                                                :style="{ width: (o.shareOfContext * 100) + '%', backgroundColor: activeDimension === 'theme' ? getClusterColor(o.value) : '#d9c9bd' }">
                                             </span>
                                             <span class="dim-row-body">
                                                 <span v-if="activeDimension === 'theme'" class="legend-color-box me-1"
@@ -696,7 +698,7 @@ function getClusterColor(clusterId) {
     // Check if this is a mini-cluster (singleton/noise cluster)
     // Mini-clusters have IDs >= n_clusters (the real clusters)
     if (rawData.value?.points && clusterId >= (rawData.value.metadata?.n_themes || 0)) {
-        return '#FFFFFF';  // White for mini-clusters
+        return '#a39a90';  // Warm grey for mini-clusters
     }
 
     // Check if we already assigned a color to this cluster
@@ -707,7 +709,10 @@ function getClusterColor(clusterId) {
     // Golden-angle hue spacing, so colours stay separated for any
     // number of clusters. Hex, not hsl(), which the renderer rejects.
     const index = clusterColorMap.size;
-    const color = hslToHex((index * 137.508) % 360, 70 + (index % 2) * 15, 55 + (index % 3) * 8);
+    // Deep tones for the paper map; yellows and greens, which read lighter, go darker
+    const hue = (index * 137.508) % 360;
+    const light = 36 + (index % 3) * 7 - (hue > 40 && hue < 200 ? 12 : 0);
+    const color = hslToHex(hue, 58 + (index % 2) * 14, light);
     clusterColorMap.set(clusterId, color);
     return color;
 }
@@ -725,7 +730,7 @@ function initializeGraph() {
     const vivid = [];
     for (let i = 0; i <= maxTheme; i++) vivid.push(getClusterColor(i));
     noiseCategory = maxTheme + 1;
-    vivid.push("#39465a");
+    vivid.push("#c9c0b4");
     // Second half of the palette is the same colours desaturated, for
     // points outside the current highlight.
     dimOffset = vivid.length;
@@ -758,7 +763,7 @@ function initializeGraph() {
         lassoOnLongPress: true,
         // Escape is handled below, so closing the modal keeps the lasso
         deselectOnEscape: false,
-        backgroundColor: [0.043, 0.047, 0.06, 1],
+        backgroundColor: [0.976, 0.965, 0.945, 1],
         xScale: null,
         yScale: null,
     });
@@ -1248,12 +1253,13 @@ onBeforeUnmount(() => {
     order: -1;
     flex: 0 0 380px;
     align-self: stretch;
-    border-right: 1px solid theme.$graph-btn-panel-color;
+    border-right: 1px solid theme.$rule-strong;
     display: flex;
     flex-direction: column;
-    background-color: rgba(256, 256, 256, 0.94);
-    border-color: theme.$graph-btn-panel-color;
+    background-color: #fff;
+    border-color: theme.$rule-strong;
     border-radius: 0;
+    box-shadow: none !important;
 }
 
 .graph-sidebar .nav-tabs {
@@ -1364,10 +1370,11 @@ onBeforeUnmount(() => {
     max-height: calc(100% - 24px);
     display: flex;
     flex-direction: column;
-    background-color: rgba(255, 255, 255, 0.92);
-    border: 1px solid theme.$graph-btn-panel-color;
-    border-radius: 4px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    background-color: rgba(255, 255, 255, 0.95);
+    border: 1px solid theme.$rule-strong;
+    border-top: 3px solid theme.$header-color;
+    border-radius: 3px;
+    box-shadow: 0 6px 24px -10px rgba(64, 40, 24, 0.4);
 }
 
 .theme-legend-title {
@@ -1418,7 +1425,7 @@ onBeforeUnmount(() => {
 }
 
 .theme-legend-item-on {
-    background-color: rgba(0, 123, 255, 0.18);
+    background-color: theme.$source-tint-strong;
     font-weight: 600;
 }
 
@@ -1445,10 +1452,7 @@ onBeforeUnmount(() => {
     min-width: 2.25rem;
 }
 
-/* The ring sits on the dark map */
-.map-controls .btn:focus-visible {
-    outline-color: #fff !important;
-}
+
 
 .filter-chip {
     font-size: 0.9rem;
@@ -1479,11 +1483,11 @@ onBeforeUnmount(() => {
 }
 
 .legend-color-box {
-    width: 16px;
-    height: 16px;
-    border-radius: 3px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
     flex-shrink: 0;
-    border: 1px solid rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(0, 0, 0, 0.35);
 }
 
 .node-info-panel .node-label-text {
@@ -1517,8 +1521,19 @@ onBeforeUnmount(() => {
     font-size: 0.9rem;
 }
 
+.loading-message {
+    color: theme.$ink;
+}
+
+.theme-legend-head strong {
+    @include theme.display-type;
+    color: theme.$header-color;
+    font-size: 1rem;
+}
+
+// Paper canvas, with a slow drift of ink specks behind the map
 #sigma-container.vector-space-bg {
-    background: radial-gradient(ellipse at bottom, #1B2735 0%, #090A0F 100%);
+    background-color: theme.$paper;
     position: relative;
     overflow: hidden;
 }
@@ -1530,14 +1545,15 @@ onBeforeUnmount(() => {
     left: 0;
     right: 0;
     bottom: 0;
+    z-index: 1;
     background-image:
-        radial-gradient(2px 2px at 20% 30%, white, transparent),
-        radial-gradient(2px 2px at 60% 70%, white, transparent),
-        radial-gradient(1px 1px at 50% 50%, white, transparent),
-        radial-gradient(1px 1px at 80% 10%, white, transparent),
-        radial-gradient(2px 2px at 90% 60%, white, transparent),
-        radial-gradient(1px 1px at 33% 80%, white, transparent),
-        radial-gradient(1px 1px at 15% 95%, white, transparent);
+        radial-gradient(2px 2px at 20% 30%, rgba(142, 50, 50, 0.5), transparent),
+        radial-gradient(2px 2px at 60% 70%, rgba(30, 84, 135, 0.5), transparent),
+        radial-gradient(1.5px 1.5px at 50% 50%, rgba(42, 37, 34, 0.45), transparent),
+        radial-gradient(1.5px 1.5px at 80% 10%, rgba(142, 50, 50, 0.45), transparent),
+        radial-gradient(2px 2px at 90% 60%, rgba(30, 84, 135, 0.45), transparent),
+        radial-gradient(1.5px 1.5px at 33% 80%, rgba(42, 37, 34, 0.4), transparent),
+        radial-gradient(1.5px 1.5px at 15% 95%, rgba(30, 84, 135, 0.45), transparent);
     background-size: 200% 200%, 180% 180%, 220% 220%, 190% 190%, 210% 210%, 240% 240%, 230% 230%;
     background-position: 0% 0%, 10% 10%, 20% 20%, 30% 30%, 40% 40%, 50% 50%, 60% 60%;
     background-repeat: repeat;
@@ -1576,7 +1592,7 @@ onBeforeUnmount(() => {
         order: 0;
         flex: 0 0 auto;
         border-right: 0;
-        border-top: 1px solid theme.$graph-btn-panel-color;
+        border-top: 1px solid theme.$rule-strong;
     }
 
     .theme-legend {

@@ -9,28 +9,88 @@ $popover-max-width: 50%;
 // Theme colors
 $header-color: rgb(95, 2, 2);
 $button-color: rgb(173, 66, 66);
-$button-color-active: rgba(160, 55, 55, 0.9);
+$button-color-active: rgb(150, 48, 48);
 $link-color: rgb(142, 50, 50);
-$passage-color: rgb(155, 65, 55);
+$passage-color: rgb(142, 50, 50);
 $card-header-color: rgb(173, 66, 66);
-$removed-color: rgb(85, 122, 42);
-$added-color: rgb(0, 115, 150);
 $graph-btn-panel-color: rgb(176, 82, 82);
 $focus-color: $link-color;
+
+// The two sides of a pair: maroon for the earlier text, Prussian blue for the later one
+$source-color: $link-color;
+$source-deep: #6b1a1a;
+$source-tint: #f7ebe8;
+$source-tint-strong: #f1d9d3;
+$target-color: #1e5487;
+$target-deep: #143c63;
+$target-tint: #e9f0f6;
+$target-tint-strong: #d5e3ef;
+// Differences, apart from the side inks
+$removed-color: #3f5f14;
+$removed-tint: #ecf3e1;
+$added-color: #0b5a80;
+$added-tint: #e5f0f7;
+
+// Paper, ink and rules
+$paper: #f9f6f1;
+$ink: #2a2522;
+$muted: #6a6058;
+$rule-color: #e4dcd1;
+$rule-strong: #cfc4b6;
+$paper-2: #fbf9f6;
+$well: #f1ebe3;
+$ink-2: #4a433e;
+$lift: 0 1px 2px rgba(64, 40, 24, 0.06), 0 6px 18px -6px rgba(64, 40, 24, 0.2);
+
+$font-display: "Bodoni Moda", Didot, "Bodoni 72", serif;
+$font-text: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+$font-ui: "Open Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+
 // Borders of form controls at 3:1 against white
-$input-border-color: rgb(133, 133, 133);
-$form-range-track-bg: rgb(133, 133, 133);
+$input-border-color: rgb(133, 125, 117);
+$form-range-track-bg: rgb(133, 125, 117);
+
+// Bootstrap
+$primary: $button-color;
+$secondary: $button-color;
+$info: $button-color;
+$body-color: $ink;
+$border-color: $rule-color;
+$card-border-color: $rule-color;
+$font-family-sans-serif: $font-ui;
+$font-family-base: $font-text;
+$list-group-border-color: $rule-color;
+$list-group-action-hover-bg: $source-tint;
+$pagination-border-color: $rule-color;
+$modal-header-border-color: $rule-color;
+$popover-border-color: $rule-strong;
+$border-radius: 0.1875rem;
+$border-radius-sm: 0.125rem;
+$border-radius-lg: 0.25rem;
+
+// Didone display type, at a sturdy optical size so its hairlines hold on screen
+@mixin display-type {
+    font-family: $font-display;
+    font-variation-settings: "opsz" 11;
+    font-variant-numeric: lining-nums;
+}
+
+// Small uppercase label over a section or a side
+@mixin kicker {
+    font-family: $font-ui;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    line-height: 1.3;
+    text-transform: uppercase;
+}
+
 // Themed elements
 
-.site-header {
-    background-color: $header-color !important;
-}
-.navbar-brand,
 .site-header .nav-link {
     color: #fff !important;
 }
 
-$secondary: $button-color;
 .btn-secondary.active {
     background-color: $button-color-active !important;
 }
@@ -40,9 +100,8 @@ a.btn-outline-secondary:hover {
     color: #fff !important;
 }
 
-$info: $button-color;
 .btn-light {
-    border: solid 1px rgb(206, 212, 218) !important;
+    border: solid 1px $rule-strong !important;
 }
 
 .btn-light.active {
@@ -61,8 +120,7 @@ a.btn-secondary {
     color: #fff !important;
 }
 
-.number,
-.card-header {
+.number {
     background-color: $header-color !important;
     color: #fff !important;
 }
@@ -102,10 +160,6 @@ input[type="text"]:focus {
     border-color: $button-color !important;
 }
 
-.corner-btn {
-    background-color: $header-color !important;
-    color: #fff !important;
-}
 .popover-body ul {
     border-width: 0 !important;
 }
@@ -120,5 +174,10 @@ $popover-body-padding-y: 0;
 $popover-body-padding-x: 0;
 
 :export {
-    color: $passage-color
+    color: $passage-color;
+    sourceColor: $source-color;
+    targetColor: $target-color;
+    paper: $paper;
+    ink: $ink;
+    muted: $muted;
 }
