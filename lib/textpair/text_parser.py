@@ -42,7 +42,7 @@ def parse_files(
     navigable_objects = [
         text_object
         for text_object, depth in PHILO_TEXT_OBJECT_LEVELS.items()
-        if PHILO_TEXT_OBJECT_LEVELS[object_level] >= depth
+        if max(PHILO_TEXT_OBJECT_LEVELS[object_level], PHILO_TEXT_OBJECT_LEVELS["div1"]) >= depth
     ]
     if file_type == "tei":
         loader = Loader.set_class_attributes(
