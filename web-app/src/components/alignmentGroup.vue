@@ -583,7 +583,6 @@ function showDifferences(reuse) {
     max-height: 0;
     font-size: 1rem;
     overflow: hidden;
-    z-index: -1;
     position: relative;
     line-height: 0;
     padding: 0 1rem;
