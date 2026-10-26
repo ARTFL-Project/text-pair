@@ -89,13 +89,13 @@
                                 }}</span>
                                 <span class="section-head">{{ sectionLabel(section) }}</span>
                             </p>
-                            <button type="button" class="section-button" id="section-toc-toggle"
-                                :aria-expanded="String(tocOpen)" aria-controls="section-toc" @click="toggleToc()">
-                                Contents
-                            </button>
                             <button type="button" class="section-button" id="section-next" :disabled="!section.next"
                                 @click="goToSection(section.next, 'section-next')">
                                 Next<span class="visually-hidden"> section</span> <span aria-hidden="true">&rarr;</span>
+                            </button>
+                            <button type="button" class="section-button toc-toggle" id="section-toc-toggle"
+                                :aria-expanded="String(tocOpen)" aria-controls="section-toc" @click="toggleToc()">
+                                Table of contents
                             </button>
                         </div>
                         <ul class="section-toc" id="section-toc" ref="tocList" v-if="tocOpen">
@@ -105,9 +105,8 @@
                                     :aria-current="index == section.index ? 'true' : null"
                                     @click="goToSection(item.philo_id, 'section-label')">
                                     <span class="toc-head">{{ sectionLabel(item, index) }}</span>
-                                    <span class="toc-count" v-if="item.passages">{{ item.passages }}<span
-                                            class="visually-hidden"> reused {{ item.passages == 1 ? "passage starts" :
-                                                "passages start" }} here</span></span>
+                                    <span class="toc-count" v-if="item.passages">{{ plural(item.passages, "reused passage")
+                                    }}</span>
                                 </button>
                             </li>
                         </ul>
@@ -958,7 +957,7 @@ function restoreFocus() {
 }
 
 .section-label {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-width: 0;
     margin: 0;
     line-height: 1.3;
@@ -1000,6 +999,10 @@ function restoreFocus() {
 .section-button:hover:not(:disabled),
 .section-button[aria-expanded="true"] {
     background-color: $source-tint;
+}
+
+.toc-toggle {
+    margin-left: auto;
 }
 
 .section-bar.side-target .section-button {
@@ -1068,14 +1071,13 @@ function restoreFocus() {
 
 .toc-count {
     flex: 0 0 auto;
-    min-width: 1.6rem;
-    padding: 0 0.4rem;
+    padding: 0 0.5rem;
     border-radius: 2rem;
     background-color: $source-tint-strong;
     font-family: $font-ui;
     font-size: 0.72rem;
     font-weight: 700;
-    text-align: center;
+    white-space: nowrap;
 }
 
 .section-bar.side-target .toc-count {
