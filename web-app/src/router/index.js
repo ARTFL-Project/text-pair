@@ -60,6 +60,8 @@ const router = createRouter({
     scrollBehavior(to, from, savedPosition) {
         if (savedPosition) {
             return savedPosition;
+        } else if (to.name == "textNavigation" && from.name == "textNavigation" && to.query.passage !== undefined) {
+            return false;
         } else {
             return {
                 left: 0,

@@ -53,9 +53,13 @@
                                 </div>
                                 <div class="passage-links px-3 pb-1">
                                     <button type="button" class="passage-chip"
+                                        :class="{ elsewhere: !inSection(passage) }"
                                         v-for="passage in shownPassages(other)" :key="passage"
-                                        :title="passageSnippets[passage]" @click="goToPassage(passage)">
-                                        <span class="visually-hidden">Passage </span>{{ passage + 1 }}
+                                        :title="passageSnippets[passage] || passageSectionLabel(passage)"
+                                        @click="openPassage(passage)">
+                                        <span class="visually-hidden">Passage </span>{{ passage + 1 }}<span
+                                            class="visually-hidden" v-if="!inSection(passage)">, in {{
+                                                passageSectionLabel(passage) }}</span>
                                     </button>
                                     <button type="button" class="btn btn-sm btn-link"
                                         v-if="other.passages.length > passageLimit"
@@ -68,8 +72,46 @@
                         </ul>
                         <div class="card-footer text-muted small">
                             Numbers are passages in the order of the text: click one to go to it.
+                            <template v-if="section">Dashed numbers are in other sections.</template>
                         </div>
                     </template>
+                </div>
+                <div class="section-bar" :class="`side-${direction}`" v-if="section">
+                    <nav aria-label="Sections of this text" @keydown.esc="tocOpen && closeToc()">
+                        <div class="section-nav">
+                            <button type="button" class="section-button" id="section-previous"
+                                :disabled="!section.previous" @click="goToSection(section.previous, 'section-previous')">
+                                <span aria-hidden="true">&larr;</span> Previous<span class="visually-hidden">
+                                    section</span>
+                            </button>
+                            <p class="section-label" id="section-label" tabindex="-1" :title="sectionLabel(section)">
+                                <span class="section-position">Section {{ section.index + 1 }} of {{ sections.length
+                                }}</span>
+                                <span class="section-head">{{ sectionLabel(section) }}</span>
+                            </p>
+                            <button type="button" class="section-button" id="section-toc-toggle"
+                                :aria-expanded="String(tocOpen)" aria-controls="section-toc" @click="toggleToc()">
+                                Contents
+                            </button>
+                            <button type="button" class="section-button" id="section-next" :disabled="!section.next"
+                                @click="goToSection(section.next, 'section-next')">
+                                Next<span class="visually-hidden"> section</span> <span aria-hidden="true">&rarr;</span>
+                            </button>
+                        </div>
+                        <ul class="section-toc" id="section-toc" ref="tocList" v-if="tocOpen">
+                            <li v-for="(item, index) in sections" :key="item.philo_id">
+                                <button type="button" class="toc-item"
+                                    :class="{ current: index == section.index, reused: item.passages }"
+                                    :aria-current="index == section.index ? 'true' : null"
+                                    @click="goToSection(item.philo_id, 'section-label')">
+                                    <span class="toc-head">{{ sectionLabel(item, index) }}</span>
+                                    <span class="toc-count" v-if="item.passages">{{ item.passages }}<span
+                                            class="visually-hidden"> reused {{ item.passages == 1 ? "passage starts" :
+                                                "passages start" }} here</span></span>
+                                </button>
+                            </li>
+                        </ul>
+                    </nav>
                 </div>
                 <div class="card book-card mb-4 shadow-1">
                     <div id="book-page" class="text-view" ref="bookPage" role="region" aria-label="Document text">
@@ -79,6 +121,17 @@
                             @focusin="textFocusin" @focusout="textFocusout"></div>
                     </div>
                 </div>
+                <nav class="section-nav section-nav-end mb-4" aria-label="Sections of this text, end of section"
+                    v-if="section">
+                    <button type="button" class="section-button" :disabled="!section.previous"
+                        @click="goToSection(section.previous, 'section-label')">
+                        <span aria-hidden="true">&larr;</span> Previous<span class="visually-hidden"> section</span>
+                    </button>
+                    <button type="button" class="section-button" :disabled="!section.next"
+                        @click="goToSection(section.next, 'section-label')">
+                        Next<span class="visually-hidden"> section</span> <span aria-hidden="true">&rarr;</span>
+                    </button>
+                </nav>
             </template>
         </div>
         <div>
@@ -138,6 +191,8 @@ const passageSnippets = ref([]);
 const bookPage = ref(null);
 const textContent = ref(null);
 const modalElement = ref(null);
+const tocList = ref(null);
+const tocOpen = ref(false);
 
 let bookPagePosition = 0;
 let modal = null;
@@ -151,6 +206,8 @@ let focusAfterLoad = null;
 let textRequest = 0;
 let sideSwitchedFor = null;
 
+const section = computed(() => textObject.value.section);
+const sections = computed(() => textObject.value.sections || []);
 const otherDirection = computed(() => (direction.value == "source" ? "target" : "source"));
 const passageCounts = computed(() => textObject.value.passage_counts || {});
 // Both sides are the same texts, so this one has passages in either direction
@@ -186,7 +243,10 @@ fetchText();
 watch(
     () => route.fullPath,
     () => {
-        if (route.name == "textNavigation") {
+        if (route.name != "textNavigation") return;
+        if (inLoadedSection()) {
+            goToPassage(Number(route.query.passage));
+        } else {
             fetchText(true);
         }
     }
@@ -217,6 +277,7 @@ function fetchText(sameView = false) {
     error.value = null;
     expanded.value = {};
     passageSnippets.value = [];
+    tocOpen.value = false;
     hidePopover();
     if (modal != null) {
         modal.hide();
@@ -225,7 +286,7 @@ function fetchText(sameView = false) {
     const request = ++textRequest;
     axios
         .get(`${globalConfig.apiServer}/text_view/`, {
-            params: route.query,
+            params: { ...route.query, by_section: true },
         })
         .then((response) => {
             if (request != textRequest) return;
@@ -246,11 +307,17 @@ function fetchText(sameView = false) {
                     return words.replace(/\s+/g, " ").trim().slice(0, 100);
                 });
                 if (route.query.start_byte && route.query.end_byte && switchSide()) return;
-                emitter.emit("announce", `Text loaded: ${summaryHeading.value}`);
-                if (route.query.start_byte && route.query.end_byte) {
+                emitter.emit("announce", loadedMessage());
+                if (route.query.passage !== undefined) {
+                    goToPassage(Number(route.query.passage));
+                } else if (route.query.start_byte && route.query.end_byte) {
                     goToPassage(response.data.passage_number);
                 } else if (focusAfterLoad) {
-                    focusElement(document.getElementById(focusAfterLoad));
+                    const el = document.getElementById(focusAfterLoad);
+                    focusElement(el?.disabled ? document.getElementById("section-label") : el);
+                    if (section.value) {
+                        scrollToText();
+                    }
                 } else if (sameView && focusLost()) {
                     emitter.emit("focusMain");
                 }
@@ -262,6 +329,99 @@ function fetchText(sameView = false) {
             loading.value = false;
             showError(`The text could not be loaded (${err.message}).`, sameView);
         });
+}
+
+function loadedMessage() {
+    if (!section.value) {
+        return `Text loaded: ${summaryHeading.value}`;
+    }
+    const shown = plural(section.value.passages.length, "reused passage");
+    return `${sectionPosition()}, ${sectionLabel(section.value)}: ${shown}. ${summaryHeading.value}`;
+}
+
+function sectionPosition() {
+    return `Section ${section.value.index + 1} of ${sections.value.length}`;
+}
+
+// Headless divisions, such as PhiloLogic's placeholders, are named by their number
+function sectionLabel(item, index = item.index) {
+    return item.head || `Section ${index + 1}`;
+}
+
+function passageSectionLabel(passage) {
+    const id = textObject.value.passage_sections?.[passage];
+    const index = sections.value.findIndex((item) => item.philo_id == id);
+    return index < 0 ? "" : sectionLabel(sections.value[index], index);
+}
+
+function inSection(passage) {
+    return !section.value || section.value.passages.includes(passage);
+}
+
+// The route asks for a passage of the section on show, so there is nothing to fetch
+function inLoadedSection() {
+    const query = route.query;
+    return (
+        section.value &&
+        query.passage !== undefined &&
+        query.div1_id == section.value.philo_id &&
+        query.doc_id == textObject.value.doc_id &&
+        query.directionSelected == direction.value &&
+        !loading.value
+    );
+}
+
+function sectionQuery(extra) {
+    return {
+        db_table: route.query.db_table,
+        doc_id: textObject.value.doc_id,
+        directionSelected: direction.value,
+        ...(section.value ? { div1_id: section.value.philo_id } : {}),
+        ...extra,
+    };
+}
+
+function goToSection(id, focusId) {
+    tocOpen.value = false;
+    if (id == section.value.philo_id) {
+        focusElement(document.getElementById(focusId));
+        return;
+    }
+    focusAfterLoad = focusId;
+    router.push({ query: sectionQuery({ div1_id: id }) });
+}
+
+function openPassage(passage) {
+    if (!section.value) {
+        goToPassage(passage);
+        return;
+    }
+    const div1Id = inSection(passage) ? section.value.philo_id : textObject.value.passage_sections[passage];
+    router.push({ query: sectionQuery({ div1_id: div1Id, passage }) });
+}
+
+function toggleToc() {
+    tocOpen.value = !tocOpen.value;
+    if (tocOpen.value) {
+        nextTick(() => {
+            const current = tocList.value?.querySelector(".current");
+            if (current) {
+                tocList.value.scrollTop = current.offsetTop - tocList.value.clientHeight / 2;
+            }
+        });
+    }
+}
+
+function closeToc() {
+    tocOpen.value = false;
+    focusElement(document.getElementById("section-toc-toggle"));
+}
+
+function scrollToText() {
+    window.scrollTo({
+        top: Math.max(bookPagePosition - 200, 0),
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
 }
 
 function showError(message, sameView) {
@@ -459,7 +619,7 @@ function changeDirection(newDirection) {
     if (newDirection == direction.value) return;
     direction.value = newDirection;
     focusAfterLoad = `direction-${newDirection}`;
-    router.push(`/text-view/?db_table=${route.query.db_table}&doc_id=${textObject.value.doc_id}&directionSelected=${newDirection}`);
+    router.push({ query: sectionQuery({ directionSelected: newDirection }) });
 }
 
 function plural(count, noun) {
@@ -512,7 +672,8 @@ function switchSide() {
 }
 
 function goToPassage(passage) {
-    const marker = textContent.value.querySelector(`.passage-marker[n="${passage}"]`);
+    const marker = textContent.value?.querySelector(`.passage-marker[n="${passage}"]`);
+    if (!marker) return;
     vueScrollTo.scrollTo(marker, prefersReducedMotion() ? 0 : 250, {
         easing: "ease-out",
         offset: -150,
@@ -756,6 +917,180 @@ function restoreFocus() {
 
 .text-side-target .passage-chip:focus-visible {
     outline-color: $target-color !important;
+}
+
+// Passages in other sections: lighter, dashed, and not filled
+.passage-chip.elsewhere {
+    border-style: dashed;
+    background-color: transparent;
+    font-weight: 400;
+}
+
+.passage-chip.elsewhere:hover {
+    background-color: $source-tint;
+}
+
+.text-side-target .passage-chip.elsewhere:hover {
+    background-color: $target-tint;
+}
+
+.section-bar {
+    margin-bottom: 0.75rem;
+    border: 1px solid $rule-color;
+    border-top: 3px solid $target-color;
+    border-radius: 3px;
+    background-color: #fff;
+}
+
+.section-bar.side-source {
+    border-top-color: $source-color;
+}
+
+.section-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+}
+
+.section-nav-end {
+    justify-content: space-between;
+}
+
+.section-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    line-height: 1.3;
+}
+
+.section-position {
+    display: block;
+    color: $muted;
+    font-family: $font-ui;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.section-head {
+    display: block;
+    overflow: hidden;
+    color: $ink;
+    font-family: $font-text;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.section-button {
+    flex: 0 0 auto;
+    padding: 0.2rem 0.75rem;
+    border: 1px solid rgba($button-color, 0.55);
+    border-radius: 2rem;
+    background-color: #fff;
+    color: $link-color;
+    font-family: $font-ui;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.section-button:hover:not(:disabled),
+.section-button[aria-expanded="true"] {
+    background-color: $source-tint;
+}
+
+.section-bar.side-target .section-button {
+    border-color: rgba($target-color, 0.5);
+    color: $target-color;
+}
+
+.section-bar.side-target .section-button:hover:not(:disabled),
+.section-bar.side-target .section-button[aria-expanded="true"] {
+    background-color: $target-tint;
+}
+
+.section-button:disabled {
+    border-color: $rule-color;
+    color: $muted;
+    opacity: 0.7;
+}
+
+// The table of contents scrolls within its panel, as the reuse summary does
+.section-toc {
+    position: relative;
+    max-height: 18rem;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    border-top: 1px solid $rule-color;
+    list-style: none;
+}
+
+.toc-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    width: 100%;
+    padding: 0.35rem 0.75rem;
+    border: 0;
+    border-bottom: 1px solid $rule-color;
+    background-color: transparent;
+    color: $link-color;
+    font-family: $font-text;
+    font-size: 0.9rem;
+    text-align: left;
+}
+
+.toc-item:hover {
+    background-color: $source-tint;
+}
+
+.section-bar.side-target .toc-item {
+    color: $target-color;
+}
+
+.section-bar.side-target .toc-item:hover {
+    background-color: $target-tint;
+}
+
+.toc-item.current {
+    background-color: $well;
+    font-weight: 700;
+}
+
+.toc-item.reused .toc-head {
+    font-weight: 600;
+}
+
+.toc-count {
+    flex: 0 0 auto;
+    min-width: 1.6rem;
+    padding: 0 0.4rem;
+    border-radius: 2rem;
+    background-color: $source-tint-strong;
+    font-family: $font-ui;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: center;
+}
+
+.section-bar.side-target .toc-count {
+    background-color: $target-tint-strong;
+}
+
+@media (max-width: 575.98px) {
+    .section-nav {
+        flex-wrap: wrap;
+    }
+
+    .section-label {
+        flex-basis: 100%;
+        order: -1;
+    }
 }
 
 .passage-links .btn-link {

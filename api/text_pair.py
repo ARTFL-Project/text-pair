@@ -7,6 +7,7 @@ import html
 import itertools
 import os
 import re
+import sqlite3
 import time
 from collections import Counter, OrderedDict, defaultdict, namedtuple
 from pathlib import Path
@@ -164,6 +165,9 @@ def parse_args(request):
         "philo_id",
         "doc_id",
         "philo_path",
+        "div1_id",
+        "passage",
+        "by_section",
         "classification_filter_1",
         "classification_filter_2",
         "classification_filter_3",
@@ -900,6 +904,55 @@ def merge_passages(rows: list, direction: str) -> list[dict]:
     return merged
 
 
+def load_divisions(philo_path: str, doc_id: str) -> list[dict]:
+    """The div1 sections of a document, in order, as PhiloLogic's toms.db has them."""
+    conn = sqlite3.connect(f"file:{os.path.join(philo_path, 'data', 'toms.db')}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT philo_id, head, CAST(start_byte AS INT), CAST(end_byte AS INT) FROM toms "
+            "WHERE philo_type = 'div1' AND philo_id LIKE ? ORDER BY CAST(start_byte AS INT)",
+            (f"{doc_id.split('_')[0]} %",),
+        ).fetchall()
+    except sqlite3.OperationalError:  # no head column: a database of documents only
+        rows = []
+    finally:
+        conn.close()
+    return [
+        {"philo_id": "_".join(philo_id.split()[:2]), "head": (head or "").strip(), "start_byte": start, "end_byte": end}
+        for philo_id, head, start, end in rows
+    ]
+
+
+def clip_passages(passages: list[dict], division: dict) -> list[tuple[int, dict]]:
+    """The passages overlapping a section, with their global numbers, clipped to its bounds."""
+    clipped = []
+    for number, passage in enumerate(passages):
+        if passage["end_byte"] > division["start_byte"] and passage["start_byte"] < division["end_byte"]:
+            start = max(passage["start_byte"], division["start_byte"])
+            end = min(passage["end_byte"], division["end_byte"])
+            clipped.append((number, {"start_byte": start, "end_byte": end}))
+    return clipped
+
+
+def number_passages(text: str, clipped: list[tuple[int, dict]], passages: list[dict]) -> str:
+    """Renumbers the markers PhiloLogic made, counting from 0 in the section, to the passages' global numbers,
+    and gives them their whole offsets."""
+    numbers = [number for number, _ in clipped]
+
+    def marker(match):
+        number = numbers[int(match["n"])]
+        passage = passages[number]
+        return f'{match["head"]}data-offsets="{passage["start_byte"]}-{passage["end_byte"]}" n="{number}"'
+
+    def renumber(match):
+        number = numbers[int(match["n"])]
+        return f'{match["head"]}{number}{match["tail"]}{number}"'
+
+    text = re.sub(r'(?P<head><span class="passage-marker" )data-offsets="[\d-]+" n="(?P<n>\d+)"', marker, text)
+    text = re.sub(r'(?P<head><span n=")(?P<n>\d+)(?P<tail>" id="end-passage-)\d+"', renumber, text)
+    return re.sub(r'(?P<head><span class="passage-)\d+(?P<tail>" n=")(?P<n>\d+)"', renumber, text)
+
+
 @app.get("/text_view/")
 @app.get("/text-pair-api/text_view/")
 def text_view(request: Request):
@@ -960,13 +1013,34 @@ def text_view(request: Request):
         metadata = {direction + key[len(other) :]: value for key, value in own_fields if key.startswith(f"{other}_")}
 
     philo_db = DB(f"{philo_path}/data", width=7)
-    philo_request = PHILO_REQUEST("", "", "", passages)
+    # Web app builds older than section navigation expect the whole text
+    divisions = load_divisions(philo_path, doc_id) if "by_section" in request.query_params else []
+    division = None
+    shown_passages = list(enumerate(passages))
+    object_id = " ".join((doc_id.split("_") + ["0"] * 7)[:7])
+    if divisions:
+        division_starts = [division["start_byte"] for division in divisions]
+        try:
+            start_byte = int(request.query_params["start_byte"])
+        except (KeyError, ValueError):
+            start_byte = None
+        wanted = request.query_params.get("div1_id")
+        index = next((i for i, div in enumerate(divisions) if div["philo_id"] == wanted), None)
+        if index is None and start_byte is not None:
+            index = max(bisect.bisect_right(division_starts, start_byte) - 1, 0)
+        division = divisions[index or 0]
+        division["index"] = index or 0
+        shown_passages = clip_passages(passages, division)
+        object_id = " ".join(division["philo_id"].split("_") + ["0"] * 5)
+    philo_request = PHILO_REQUEST("", "", "", [passage for _, passage in shown_passages])
     philo_text_object, _ = get_text_obj(
-        philo_db[" ".join((doc_id.split("_") + ["0"] * 7)[:7])],
+        philo_db[object_id],
         PHILO_CONFIG(philo_path, "", "", ""),
         philo_request,
         philo_db.locals["token_regex"],
     )
+    if division:
+        philo_text_object = number_passages(philo_text_object, shown_passages, passages)
 
     # Find passage number in passage pairs for autoscroll
     passage_number = 0
@@ -976,9 +1050,9 @@ def text_view(request: Request):
             if passage["start_byte"] <= start_byte <= passage["end_byte"]:
                 passage_number = i
                 break
-    except KeyError:
+    except (KeyError, ValueError):
         pass
-    return {
+    result = {
         "text": philo_text_object,
         "metadata": metadata,
         "direction": direction,
@@ -987,6 +1061,21 @@ def text_view(request: Request):
         "other_metadata": [list(texts.values()) for texts in other_texts],
         "passage_counts": passage_counts,
     }
+    if division:
+        # A passage belongs to the section it starts in
+        passage_divisions = [max(bisect.bisect_right(division_starts, passage["start_byte"]) - 1, 0) for passage in passages]
+        counts = Counter(passage_divisions)
+        result["section"] = {
+            **{key: division[key] for key in ("philo_id", "head", "start_byte", "end_byte", "index")},
+            "passages": [number for number, _ in shown_passages],
+            "previous": divisions[division["index"] - 1]["philo_id"] if division["index"] > 0 else None,
+            "next": divisions[division["index"] + 1]["philo_id"] if division["index"] + 1 < len(divisions) else None,
+        }
+        result["sections"] = [
+            {"philo_id": div["philo_id"], "head": div["head"], "passages": counts[i]} for i, div in enumerate(divisions)
+        ]
+        result["passage_sections"] = [divisions[index]["philo_id"] for index in passage_divisions]
+    return result
 
 
 @app.get("/get_passages/")
