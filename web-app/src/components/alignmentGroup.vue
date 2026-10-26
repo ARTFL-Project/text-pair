@@ -310,6 +310,20 @@ function showDifferences(reuse) {
     margin: 0;
 }
 
+.epigraph-text p::after {
+    content: "\2060\201D";
+    content: "\2060\201D" / "";
+    position: relative;
+    top: 0.625rem;
+    right: -0.735rem;
+    vertical-align: -1.25rem;
+    margin-right: -0.37em;
+    color: $button-color;
+    font-size: 4rem;
+    font-style: normal;
+    line-height: 0;
+}
+
 .epigraph-source {
     margin-top: 0.75rem;
     padding-left: 1.75rem;
