@@ -2,11 +2,11 @@
     <component :is="tag" class="pt-2 mb-2 px-3" :class="{ 'd-block': tag != 'p' }" :lang="language">
         <span class="citation" v-for="(cite, citeIndex) in citation" :key="citeIndex"
             :data-field="cite.field.replace(/^(source|target)_/, '')">
+            <span class="separator px-2" aria-hidden="true"
+                v-if="citeIndex > 0 && alignment[citation[citeIndex - 1].field]">&#9679;</span>
             <router-link :to="href" :style="cite.style"
                 v-if="linkToDoc == cite.field && textAvailable">{{ alignment[cite.field] }}</router-link>
             <span :style="cite.style" v-else-if="alignment[cite.field]">{{ alignment[cite.field] }}</span>
-            <span class="separator px-2" aria-hidden="true"
-                v-if="alignment[cite.field] && citeIndex != citation.length - 1">&#9679;</span>
         </span>
     </component>
 </template>
@@ -45,6 +45,12 @@ const href = computed(() => {
 .citation {
     font-weight: 400;
     line-height: 1.45;
+    white-space: nowrap;
+}
+
+// Only the separator is held to the item after it
+.citation > :not(.separator) {
+    white-space: normal;
 }
 
 .citation[data-field="author"] {
