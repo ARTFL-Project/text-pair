@@ -926,6 +926,53 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
     database.close()
 
 
+def network_fields(searchable_fields: list[str], fields_in_table: list[str]) -> list[str]:
+    """Metadata fields the network view can aggregate by: present on both sides, not passage or year."""
+    fields = []
+    for field in searchable_fields:
+        if not field.startswith("source_"):
+            continue
+        name = field[len("source_") :]
+        if name in ("passage", "passage_length", "year") or name in fields:
+            continue
+        if field in fields_in_table and f"target_{name}" in fields_in_table:
+            fields.append(name)
+    return fields
+
+
+def load_members_table(alignments_table: str, fields: list[str], workers: int = 1):
+    """One row per passage family and document reusing it, for the network view."""
+    config = read_global_config()
+    table_name = f"{alignments_table}_members"
+    database_config = {
+        "user": config["DATABASE"]["database_user"],
+        "password": config["DATABASE"]["database_password"],
+        "database": config["DATABASE"]["database_name"],
+    }
+    database = psycopg2.connect(**database_config)
+    cursor = database.cursor()
+    tune_load_session(cursor)
+    cursor.execute("SET work_mem = '256MB'")
+    print("Storing passage members for the network view...", flush=True)
+
+    def side(direction):
+        columns = ", ".join(f"{direction}_{field} AS {field}" for field in fields)
+        return (
+            f"SELECT x AS group_id, {direction}_doc_id AS doc_id, {direction}_year AS year, {columns} "
+            f"FROM {alignments_table}, unnest(group_id) x"
+        )
+
+    cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+    cursor.execute(f"CREATE TABLE {table_name} AS {side('source')} UNION {side('target')}")
+    statements = [f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING BTREE(group_id)"]
+    statements.extend(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})" for field in fields)
+    database.commit()
+    create_indexes(statements, database_config, workers)
+    database.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor.execute(f"ANALYZE {table_name}")
+    database.close()
+
+
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
     os.system(f"rm -rf {db_path}")
@@ -1007,6 +1054,11 @@ def create_web_app(
             groups_file,
             table,
             web_config.searchable_fields(),
+            load_workers(textpair_params),
+        )
+        load_members_table(
+            table,
+            network_fields(web_config.searchable_fields(), fields_in_table),
             load_workers(textpair_params),
         )
 

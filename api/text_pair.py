@@ -172,6 +172,9 @@ def parse_args(request):
         "classification_filter_2",
         "classification_filter_3",
         "aggregation_field",
+        "graph",
+        "focus",
+        "focus_role",
         "min_threshold",
         "max_nodes",
         "node_id",
@@ -208,19 +211,6 @@ def parse_args(request):
         else:
             if value:
                 query_args[key] = value
-
-    # Handle network graph node expansion: remove source/target filters before query_builder
-    aggregation_field = request.query_params.get("aggregation_field", "author")
-    source_param = request.query_params.get(f"source_{aggregation_field}", "").strip('"')
-    target_param = request.query_params.get(f"target_{aggregation_field}", "").strip('"')
-
-    if source_param and target_param and source_param == target_param:
-        # This is a node expansion request - remove source/target filters from query_args
-        # so query_builder doesn't process them (we'll add OR logic in get_network_data)
-        if f"source_{aggregation_field}" in query_args:
-            del query_args.dict[f"source_{aggregation_field}"]
-        if f"target_{aggregation_field}" in query_args:
-            del query_args.dict[f"target_{aggregation_field}"]
 
     metadata_field_types = get_pg_type(other_args["db_table"])
     metadata_field_types["rowid"] = "INTEGER"
@@ -1103,245 +1093,266 @@ def get_passages(request: Request):
     return {"passages": passages}
 
 
-@app.get("/network_data/")
-@app.get("/text-pair-api/network_data/")
-def get_network_data(request: Request):
-    """Get network graph data aggregated by author or title
-    Returns nodes and edges for visualization with Sigma.js"""
-    sql_fields, sql_values, other_args, _ = parse_args(request)
+# Passages reused by more authors (or titles) than this say little about any pair
+# of them, and the pairs they add grow quadratically.
+CANON_MAX_MEMBERS = 20
+# Sampled betweenness visits about this many edges, which bounds its time on large graphs.
+BETWEENNESS_EDGE_VISITS = 20_000_000
+NETWORK_CENTRALITIES = {
+    "provenance": ("reused", "reuses", "authority", "bridging"),
+    "canon": ("degree", "bridging"),
+}
 
-    # Get parameters for network configuration
-    aggregation_field = request.query_params.get("aggregation_field", "author")  # author or title
-    min_threshold = int(request.query_params.get("min_threshold", 5))
-    max_nodes = int(request.query_params.get("max_nodes", 10000))
 
+def network_connection():
+    """A connection whose network queries may hash and sort in memory."""
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    conn.cursor().execute("SET LOCAL work_mem = '256MB'")
+    return conn
 
-    # Determine which fields to aggregate by
-    if aggregation_field == "author":
-        source_field = "source_author"
-        target_field = "target_author"
-    else:  # title
-        source_field = "source_title"
-        target_field = "target_title"
 
-    # Check if the requested fields exist in the table
-    field_types = get_pg_type(other_args.db_table)
-    if source_field not in field_types or target_field not in field_types:
-        conn.close()
+def network_members(cursor, table, field, sql_fields, sql_values, families=None, nodes=None, name="members") -> str:
+    """A relation of (group_id, doc_id, year, node): each passage family and document reusing it
+    among the selected alignments, optionally only for some families (a (query, values) pair) or nodes."""
+    if families is not None:
+        # A literal list, not a subquery: the planner can then use the group_id indexes
+        ids_cursor = cursor.connection.cursor()
+        ids_cursor.execute(*families)
+        families = [row[0] for row in ids_cursor]
+    if not sql_fields and field in get_pg_type(f"{table}_members"):
+        conditions, values = [], []
+        if families is not None:
+            conditions.append("group_id = ANY(%s)")
+            values.append(families)
+        if nodes is not None:
+            conditions.append(f"{field} = ANY(%s)")
+            values.append(nodes)
+        query = f"SELECT group_id, doc_id, year, {field} AS node FROM {table}_members"
+        if not conditions:
+            return f"({query})"
+        query += " WHERE " + " AND ".join(conditions)
+    else:
+        parts, values = [], []
+        for direction in ("source", "target"):
+            conditions = [sql_fields] if sql_fields else []
+            values.extend(sql_values)
+            if families is not None:
+                conditions.append("group_id && %s::integer[] AND x = ANY(%s)")
+                values.extend([families, families])
+            if nodes is not None:
+                conditions.append(f"{direction}_{field} = ANY(%s)")
+                values.append(nodes)
+            where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+            parts.append(
+                f"SELECT x AS group_id, {direction}_doc_id AS doc_id, {direction}_year AS year, "
+                f"{direction}_{field} AS node FROM {table}, unnest(group_id) x{where}"
+            )
+        query = " UNION ".join(parts)
+    cursor.execute(f"CREATE TEMP TABLE {name} AS {query}", values)
+    cursor.execute(f"ANALYZE {name}")
+    return name
+
+
+def network_links(graph, table, field, members, focus, focus_role, sizes=None) -> tuple[str, list]:
+    """A query for one (group_id, source, target, weight) row per passage linking two nodes.
+
+    Canon weighs each passage by the nodes reusing it in `sizes`, the whole corpus, or in
+    `members` when that is the whole corpus already.
+    """
+    if graph == "provenance":
+        focus_clause, values = "", []
+        if focus and focus_role == "anchor":
+            focus_clause, values = f"AND g.source_{field} = %s", [focus]
+        elif focus and focus_role == "reuser":
+            focus_clause, values = "AND m.node = %s", [focus]
+        return (
+            f"""SELECT DISTINCT m.group_id, g.source_{field} AS source, m.node AS target, 1.0 AS weight
+            FROM {members} m JOIN {table}_groups g USING (group_id)
+            WHERE m.node <> g.source_{field} AND m.node <> '' AND g.source_{field} <> '' {focus_clause}""",
+            values,
+        )
+    focus_families, pair_clause, values = "", "a.node < b.node", []
+    if focus:
+        focus_families = f"AND group_id IN (SELECT group_id FROM {members} f WHERE f.node = %s)"
+        pair_clause = "a.node <> b.node AND a.node = %s"
+        values = [focus, focus]
+    family_sizes = (
+        "SELECT group_id, count(*) AS n FROM m GROUP BY group_id HAVING count(*)"
+        if sizes is None
+        else f"SELECT group_id, count(DISTINCT node) AS n FROM {sizes} s WHERE node <> '' GROUP BY group_id HAVING count(DISTINCT node)"
+    )
+    return (
+        f"""WITH m AS (SELECT DISTINCT group_id, node FROM {members} z WHERE node <> '' {focus_families}),
+        n AS ({family_sizes} BETWEEN 2 AND {CANON_MAX_MEMBERS}),
+        mm AS (SELECT group_id, node, n FROM m JOIN n USING (group_id))
+        SELECT a.group_id, a.node AS source, b.node AS target, 1.0 / (a.n - 1) AS weight
+        FROM mm a JOIN mm b ON a.group_id = b.group_id AND {pair_clause}""",
+        values,
+    )
+
+
+def network_centrality(G, mode) -> dict:
+    """Each node's score for one measure of importance."""
+    if mode == "reused":
+        return dict(G.out_degree(weight="passages"))
+    if mode == "reuses":
+        return dict(G.in_degree(weight="passages"))
+    if mode == "authority":
+        return nx.pagerank(G.reverse(copy=False), weight="passages")  # credit flows from reuser to source
+    if mode == "degree":
+        return dict(G.degree(weight="weight"))
+    visits = G.number_of_edges() * (1 if G.is_directed() else 2)
+    k = max(50, BETWEENNESS_EDGE_VISITS // max(visits, 1))
+    k = k if k < G.number_of_nodes() else None
+    return nx.betweenness_centrality(G, k=k, weight="distance", seed=0)  # strong links are short
+
+
+@app.get("/network_data/")
+@app.get("/text-pair-api/network_data/")
+def get_network_data(request: Request):
+    """Network of authors (or titles) over passage families, for Sigma.js.
+
+    provenance: from the author of a passage's earliest occurrence to each author reusing it.
+    canon: between authors reusing the same passages, each weighted 1/(n-1) over the n authors
+    reusing it in the whole corpus.
+    """
+    sql_fields, sql_values, other_args, _ = parse_args(request)
+    field = other_args.aggregation_field or "author"
+    graph = other_args.graph or "provenance"
+    if graph not in NETWORK_CENTRALITIES:
+        return {"error": f"Unknown graph '{graph}'"}
+    modes = NETWORK_CENTRALITIES[graph]
+    centrality_mode = other_args.centrality if other_args.centrality in modes else modes[0]
+    min_threshold = int(other_args.min_threshold or 5)
+    max_nodes = int(other_args.max_nodes or 10000)
+    table = str(other_args.db_table)
+    field_types = get_pg_type(table)
+    if f"source_{field}" not in field_types or f"target_{field}" not in field_types:
         return {
-            "error": f"Field '{aggregation_field}' not available in database",
+            "error": f"Field '{field}' not available in database",
             "available_fields": list(field_types.keys()),
         }
 
-    # Build aggregation query
-    # Special case: if filtering by same node in both source and target, use OR logic
-    source_param = request.query_params.get(f"source_{aggregation_field}", "").strip('"')
-    target_param = request.query_params.get(f"target_{aggregation_field}", "").strip('"')
-
-    # At this point, sql_fields and sql_values are clean (parse_args removed source/target filters for node expansion)
-    where_clause = f"WHERE {sql_fields}" if sql_fields else ""
-
-    if source_param and target_param and source_param == target_param:
-        # User wants all connections for a specific node (both as source and target)
-        # Add OR filter to existing filters
-        node_filter = f"({source_field} = %s OR {target_field} = %s)"
-        if where_clause:
-            where_clause += f" AND {node_filter}"
-            sql_values = list(sql_values) + [source_param, source_param]
-        else:
-            where_clause = f"WHERE {node_filter}"
-            sql_values = [source_param, source_param]
-
-    # Query to get aggregated edges (author/title pairs) - DIRECTED
-    edge_query = f"""
-        SELECT
-            {source_field} as source,
-            {target_field} as target,
-            COUNT(*) as weight
-        FROM {other_args.db_table}
-        {where_clause}
-        GROUP BY {source_field}, {target_field}
-        HAVING COUNT(*) >= %s
-            AND {source_field} IS NOT NULL
-            AND {target_field} IS NOT NULL
-            AND {source_field} != ''
-            AND {target_field} != ''
-            AND {source_field} != {target_field}
-        ORDER BY weight DESC
-    """
-
-    # Execute with threshold parameter added to sql_values
-    threshold_params = list(sql_values) + [min_threshold]
-    cursor.execute(edge_query, threshold_params)
-
-    edges = []
-    node_weights_total = defaultdict(int)  # Track total connections per node
-    node_weights_as_source = defaultdict(int)  # Track times as source
-    node_weights_as_target = defaultdict(int)  # Track times as target
-    node_set = set()
-
-    for row in cursor:
-        source = row["source"]
-        target = row["target"]
-        weight = row["weight"]
-
-        # Skip empty strings (extra safety check)
-        if not source or not target:
-            continue
-
-        edges.append({"source": source, "target": target, "weight": weight})
-
-        node_set.add(source)
-        node_set.add(target)
-        node_weights_total[source] += weight
-        node_weights_total[target] += weight
-        node_weights_as_source[source] += weight
-        node_weights_as_target[target] += weight
-
-    # Limit to top N nodes by total weight (most connected)
-    if len(node_set) > max_nodes:
-        top_nodes = set(
-            sorted(
-                node_weights_total.keys(),
-                key=lambda x: node_weights_total[x],
-                reverse=True,
-            )[:max_nodes]
+    conn = network_connection()
+    try:
+        cursor = conn.cursor()
+        members = network_members(cursor, table, field, sql_fields, sql_values)
+        sizes = None
+        if graph == "canon" and sql_fields:
+            families = (f"SELECT DISTINCT group_id FROM {members}", [])
+            sizes = network_members(cursor, table, field, "", [], families=families, name="corpus")
+        links, values = network_links(graph, table, field, members, other_args.focus, other_args.focus_role, sizes)
+        cursor.execute(f"CREATE TEMP TABLE link AS {links}", values)
+        cursor.execute("ANALYZE link")
+        cursor.execute(
+            """CREATE TEMP TABLE edge AS SELECT source, target, count(*) AS passages, sum(weight)::float AS weight
+            FROM link GROUP BY source, target HAVING count(*) >= %s""",
+            (min_threshold,),
         )
-        # Filter edges to only include top nodes
-        edges = [e for e in edges if e["source"] in top_nodes and e["target"] in top_nodes]
+        cursor.execute("SELECT source, target, passages, weight FROM edge")
+        edges = [{"source": s, "target": t, "passages": p, "weight": w} for s, t, p, w in cursor]
+        cursor.execute("SELECT count(DISTINCT group_id) FROM link")
+        total_passages = cursor.fetchone()[0]
 
-    # Always recalculate node_set based on final edges (handles self-loop filtering and top-node filtering)
-    node_set = set()
+        # Limit to the most connected nodes
+        strength = defaultdict(int)
+        for edge in edges:
+            strength[edge["source"]] += edge["passages"]
+            strength[edge["target"]] += edge["passages"]
+        if len(strength) > max_nodes:
+            kept = set(sorted(strength, key=strength.get, reverse=True)[:max_nodes])
+            edges = [e for e in edges if e["source"] in kept and e["target"] in kept]
+        node_ids = sorted({node for edge in edges for node in (edge["source"], edge["target"])})
+
+        cursor.execute(
+            f"""SELECT node, percentile_disc(0.5) WITHIN GROUP (ORDER BY year) FROM
+            (SELECT DISTINCT node, doc_id, year FROM {members} m WHERE year IS NOT NULL AND node = ANY(%s)) d
+            GROUP BY node""",
+            (node_ids,),
+        )
+        years = dict(cursor.fetchall())
+    finally:
+        conn.rollback()
+        conn.close()
+
+    G = nx.DiGraph() if graph == "provenance" else nx.Graph()
+    G.add_nodes_from(node_ids)
     for edge in edges:
-        node_set.add(edge["source"])
-        node_set.add(edge["target"])
+        G.add_edge(edge["source"], edge["target"], passages=edge["passages"], weight=edge["weight"], distance=1 / edge["weight"])
+    centrality = network_centrality(G, centrality_mode)
 
-    # Calculate centrality metrics using NetworkX
-    centrality_mode = request.query_params.get("centrality", "degree")  # degree, eigenvector, or betweenness
-
-    # Build NetworkX graph for centrality calculations
-    G = nx.DiGraph()
-    for edge in edges:
-        G.add_edge(edge["source"], edge["target"], weight=edge["weight"])
-
-    # Calculate centrality based on mode
-    if centrality_mode == "eigenvector":
-        try:
-            centrality = nx.eigenvector_centrality(G, max_iter=100, weight="weight")
-        except:
-            # Fall back to degree centrality if eigenvector fails (e.g., disconnected graph)
-            centrality = dict(G.degree(weight="weight"))
-    elif centrality_mode == "betweenness":
-        centrality = nx.betweenness_centrality(G, weight="weight")
-    else:  # degree (default)
-        centrality = dict(G.degree(weight="weight"))
-
-    # Create nodes list with metadata
     nodes = []
-    for node_id in node_set:
-        nodes.append(
-            {
-                "id": node_id,
-                "label": node_id,
-                "size": centrality.get(node_id, 0),  # Size based on centrality metric
-                "centrality": centrality.get(node_id, 0),  # Also keep as separate field for reference
-                "total_alignments": node_weights_total[node_id],
-                "as_source": node_weights_as_source[node_id],
-                "as_target": node_weights_as_target[node_id],
-                "type": aggregation_field,
-            }
-        )
-
-    conn.rollback()
-    conn.close()
+    for node_id in node_ids:
+        node = {
+            "id": node_id,
+            "label": node_id,
+            "centrality": centrality.get(node_id, 0),
+            "year": years.get(node_id),
+            "passages": G.degree(node_id, weight="passages"),
+            "type": field,
+        }
+        if graph == "provenance":
+            node["reused"] = G.out_degree(node_id, weight="passages")
+            node["reuses"] = G.in_degree(node_id, weight="passages")
+        nodes.append(node)
 
     return {
         "nodes": nodes,
         "edges": edges,
-        "aggregation_field": aggregation_field,
+        "graph": graph,
+        "aggregation_field": field,
         "centrality_mode": centrality_mode,
         "total_nodes": len(nodes),
         "total_edges": len(edges),
+        "total_passages": total_passages,
         "threshold": min_threshold,
     }
 
 
-@app.get("/count_by_year/")
-@app.get("/network_data/edge_details/")
-@app.get("/text-pair-api/network_data/edge_details/")
-def get_edge_details(request: Request):
-    """Get sample alignments for a specific edge (source->target pair)
-    Returns paginated list of actual passage alignments"""
+@app.get("/network_passages/")
+@app.get("/text-pair-api/network_passages/")
+def get_network_passages(request: Request):
+    """The passages behind one network edge, most reused first."""
     sql_fields, sql_values, other_args, _ = parse_args(request)
+    field = other_args.aggregation_field or "author"
+    graph = other_args.graph or "provenance"
+    source, target = str(other_args.source), str(other_args.target)
+    limit, offset = int(other_args.limit or 20), int(other_args.offset or 0)
+    table = str(other_args.db_table)
+    field_types = get_pg_type(table)
+    if not source or not target or f"source_{field}" not in field_types or f"target_{field}" not in field_types:
+        return {"error": "source, target and an aggregation_field present in the database are required"}
 
-    source_node = request.query_params.get("source")
-    target_node = request.query_params.get("target")
-    node_type = request.query_params.get("node_type", "author")
-    limit = int(request.query_params.get("limit", 50))
-    offset = int(request.query_params.get("offset", 0))
-
-    if not source_node or not target_node:
-        return {"error": "source and target parameters are required"}
-
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-    # Determine field names
-    if node_type == "author":
-        source_field = "source_author"
-        target_field = "target_author"
-    else:
-        source_field = "source_title"
-        target_field = "target_title"
-
-    # Build query to get specific alignments (DIRECTED - matches get_network_data logic)
-    edge_where = f"({source_field} = %s AND {target_field} = %s)"
-    if sql_fields:
-        where_clause = f"WHERE {sql_fields} AND {edge_where}"
-        query_params = list(sql_values) + [source_node, target_node]
-    else:
-        where_clause = f"WHERE {edge_where}"
-        query_params = [source_node, target_node]
-
-    # Get total count
-    count_query = f"SELECT COUNT(*) FROM {other_args.db_table} {where_clause}"
-    cursor.execute(count_query, query_params)
-    total_count = cursor.fetchone()[0]
-
-    # Get sample alignments
-    alignments_query = f"""
-        SELECT * FROM {other_args.db_table}
-        {where_clause}
-        ORDER BY rowid
-        LIMIT %s OFFSET %s
-    """
-    cursor.execute(alignments_query, query_params + [limit, offset])
-
-    alignments = []
-    for row in cursor:
-        alignments.append(dict(row))
-
-    conn.rollback()
-    conn.close()
-
-    return {
-        "alignments": alignments,
-        "total_count": total_count,
-        "limit": limit,
-        "offset": offset,
-        "source": source_node,
-        "target": target_node,
-    }
+    conn = network_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if graph == "provenance":
+            anchored = (f"SELECT group_id FROM {table}_groups WHERE source_{field} = %s", [source])
+            members = network_members(cursor, table, field, sql_fields, sql_values, families=anchored, nodes=[target])
+            cursor.execute(f"SELECT DISTINCT group_id FROM {members} m")
+        else:
+            pair = network_members(cursor, table, field, sql_fields, sql_values, nodes=[source, target], name="pair")
+            shared = (f"SELECT group_id FROM {pair} p GROUP BY group_id HAVING count(DISTINCT node) = 2", [])
+            corpus = network_members(cursor, table, field, "", [], families=shared, name="corpus")
+            cursor.execute(
+                f"SELECT group_id FROM {corpus} c WHERE node <> '' GROUP BY group_id HAVING count(DISTINCT node) <= %s",
+                (CANON_MAX_MEMBERS,),
+            )
+        family_ids = [row["group_id"] for row in cursor]
+        cursor.execute(
+            f"""SELECT group_id, "count", source_author, source_title, source_year, left(source_passage, 400) AS source_passage
+            FROM {table}_groups WHERE group_id = ANY(%s) ORDER BY "count" DESC, group_id LIMIT %s OFFSET %s""",
+            (family_ids, limit, offset),
+        )
+        passages = [dict(row) for row in cursor]
+    finally:
+        conn.rollback()
+        conn.close()
+    return {"passages": passages, "total_count": len(family_ids), "source": source, "target": target}
 
 
 # Registered with and without the trailing slash: a slashless request otherwise
