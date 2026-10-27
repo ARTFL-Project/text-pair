@@ -3,6 +3,7 @@
         <div class="pair-grid">
             <div class="pair-side side-source">
                 <component :is="`h${headingLevel}`" class="side-label">
+                    <span class="pair-number" aria-hidden="true" v-if="number">{{ number }}</span>
                     <span class="side-mark source" aria-hidden="true"></span>
                     <span class="side-label-text" v-html="globalConfig.sourceLabel"></span>
                 </component>
@@ -86,7 +87,7 @@
             class="reasoning-text">
             {{ alignment.llm_reasoning }}
         </p>
-        <!-- The pair's family on the left; comparing the two texts on the right -->
+        <!-- The pair's family on the left; comparing the two texts in the middle; their key on the right -->
         <div class="pair-footer">
             <router-link class="reuse-link" :to="`/group/${alignment.group_id}`"
                 v-if="globalConfig.matchingAlgorithm == 'sa' && alignment.count > 1">
@@ -97,14 +98,7 @@
                 Passage reused in {{ alignment.count }} different titles
             </router-link>
             <div class="pair-actions">
-                <span class="diff-key" v-if="showingDiff && globalConfig.matchingAlgorithm == 'sa'" aria-hidden="true">
-                    <del class="removed">removed</del>
-                    <ins class="added">added</ins>
-                </span>
                 <template v-if="globalConfig.matchingAlgorithm == 'sa'">
-                    <span class="spinner-border spinner-border-sm diff-spinner" role="status" v-if="diffLoading">
-                        <span class="visually-hidden">Loading...</span>
-                    </span>
                     <button type="button" class="diff-btn" :class="{ active: showingDiff }" @click="showDifferences">
                         <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                             <path d="M8 2.5v5M5.5 5h5M5.5 12h5" fill="none" stroke="currentColor" stroke-width="1.5"
@@ -122,6 +116,15 @@
                     {{ showingDiff ? "Hide matching words" : "Show matching words" }}
                 </button>
             </div>
+            <div class="pair-status">
+                <span class="spinner-border spinner-border-sm diff-spinner" role="status" v-if="diffLoading">
+                    <span class="visually-hidden">Loading...</span>
+                </span>
+                <span class="diff-key" v-if="showingDiff && globalConfig.matchingAlgorithm == 'sa'" aria-hidden="true">
+                    <del class="removed">removed</del>
+                    <ins class="added">added</ins>
+                </span>
+            </div>
         </div>
     </div>
 </template>
@@ -138,6 +141,7 @@ import Worker from "./diffStrings?worker";
 const props = defineProps({
     alignment: Object,
     index: Number,
+    number: Number,
     diffed: Boolean,
     headingLevel: { type: Number, default: 4 },
     startByteIndex: Number,
@@ -345,6 +349,17 @@ function goToContext(alignment, direction) {
     background: linear-gradient(90deg, rgba($target-color, 0.6), rgba($target-color, 0));
 }
 
+// Running number leading the source label; negative margins keep it from growing the row
+.pair-number {
+    margin: -1em 0.6rem -1em 0;
+    color: $header-color;
+    @include display-type;
+    font-size: 1.05rem;
+    font-variant-numeric: lining-nums tabular-nums;
+    font-weight: 600;
+    line-height: 1;
+}
+
 .side-label-text {
     min-width: 0;
 }
@@ -409,6 +424,7 @@ function goToContext(alignment, direction) {
 
 // The bridge: what separates the two texts in time, and the control comparing them
 .bridge-relation {
+    grid-column: 1;
     grid-row: 1 / span 3;
     position: relative;
     display: flex;
@@ -417,28 +433,30 @@ function goToContext(alignment, direction) {
     text-align: center;
 }
 
-// Thread across the gutter, ending in an arrowhead at the later text
-.bridge-relation::before {
-    content: "";
-    position: absolute;
-    top: calc(0.15rem + 0.45rem);
-    left: 0;
-    right: 0.35rem;
-    height: 1.5px;
-    background: linear-gradient(90deg, $source-color, $target-color);
-}
+// Thread across the gutter, ending in an arrowhead: centred in the label row, like the labels' own threads
+@media (min-width: 768px) {
+    .pair-bridge::before,
+    .pair-bridge::after {
+        content: "";
+        grid-column: 1;
+        grid-row: 1;
+        align-self: center;
+        margin-right: 0.35rem;
+    }
 
-.bridge-relation::after {
-    content: "";
-    position: absolute;
-    top: calc(0.15rem + 0.45rem - 4px);
-    right: 0.35rem;
-    width: 9px;
-    height: 9px;
-    border-top: 1.5px solid $target-color;
-    border-right: 1.5px solid $target-color;
-    transform: translateX(1px) rotate(45deg);
-    transform-origin: center;
+    .pair-bridge::before {
+        height: 1.5px;
+        background: linear-gradient(90deg, $source-color, $target-color);
+    }
+
+    .pair-bridge::after {
+        justify-self: end;
+        width: 9px;
+        height: 9px;
+        border-top: 1.5px solid $target-color;
+        border-right: 1.5px solid $target-color;
+        transform: translateX(1px) rotate(45deg);
+    }
 }
 
 .bridge-gap {
@@ -500,6 +518,7 @@ function goToContext(alignment, direction) {
 }
 
 .bridge-spine {
+    grid-column: 1;
     grid-row: 4 / span 2;
     justify-self: center;
     width: 0;
@@ -556,10 +575,10 @@ function goToContext(alignment, direction) {
     font-weight: 400;
 }
 
-// Full width under the pair: its family at the left, the comparison at the right
+// Full width under the pair: its family at the left, the comparison in the middle, its key at the right
 .pair-footer {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
     gap: 0.5rem 1rem;
     margin: 1.1rem calc(-1 * var(--pair-pad-x, 0px)) calc(-1 * var(--pair-pad-bottom, 0px));
@@ -574,6 +593,9 @@ function goToContext(alignment, direction) {
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: start;
     margin-left: -0.25rem;
     padding: 0.125rem 0.25rem;
     font-size: 0.82rem;
@@ -588,12 +610,19 @@ function goToContext(alignment, direction) {
 }
 
 .pair-actions {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    justify-content: center;
+}
+
+.pair-status {
+    grid-column: 3;
+    grid-row: 1;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: flex-end;
     gap: 0.5rem 0.75rem;
-    margin-left: auto;
 }
 
 // Key to the marks in the passages, while they are shown
@@ -733,8 +762,6 @@ function goToContext(alignment, direction) {
         text-align: left;
     }
 
-    .bridge-relation::before,
-    .bridge-relation::after,
     .bridge-spine {
         display: none;
     }
@@ -760,6 +787,26 @@ function goToContext(alignment, direction) {
 
     .side-target .side-label {
         padding-top: 0.25rem;
+    }
+
+    .pair-footer {
+        grid-template-columns: minmax(0, 1fr);
+        justify-items: center;
+    }
+
+    .reuse-link,
+    .pair-actions,
+    .pair-status {
+        grid-column: 1;
+        grid-row: auto;
+    }
+
+    .reuse-link {
+        justify-self: start;
+    }
+
+    .pair-status:empty {
+        display: none;
     }
 }
 </style>

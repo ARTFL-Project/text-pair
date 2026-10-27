@@ -19,8 +19,8 @@
                     <li class="card pair-card mb-3 shadow-1" v-for="(alignment, index) in results.alignments"
                         :key="results.start_position + index + 1" v-bind:data-index="index">
                         <h3 class="visually-hidden">Passage pair {{ results.start_position + index + 1 }}</h3>
-                        <div class="pair-number" aria-hidden="true">{{ results.start_position + index + 1 }}</div>
-                        <passage-pair :alignment="alignment" :index="index" :diffed="false"></passage-pair>
+                        <passage-pair :alignment="alignment" :index="index" :diffed="false"
+                            :number="results.start_position + index + 1"></passage-pair>
                     </li>
                 </transition-group>
                 <nav aria-label="Pages of results" v-if="done">
@@ -285,32 +285,6 @@ function enter(el, complete) {
     border-radius: 3px;
 }
 
-// Running number at the end of the thread, top right
-.pair-number {
-    position: absolute;
-    z-index: 1;
-    top: 1.38rem;
-    right: 1.25rem;
-    padding-left: 0.6rem;
-    background-color: #fff;
-    color: $header-color;
-    @include display-type;
-    font-size: 1.05rem;
-    font-weight: 600;
-    line-height: 1;
-}
-
-.pair-number::before {
-    content: "No.";
-    margin-right: 0.3rem;
-    font-family: $font-ui;
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    vertical-align: 0.12rem;
-}
-
 .page-link {
     cursor: pointer;
 }
@@ -538,11 +512,6 @@ function enter(el, complete) {
     .pair-card {
         --pair-pad-x: 1rem;
         padding-top: 1rem;
-    }
-
-    .pair-number {
-        top: 1.08rem;
-        right: 1rem;
     }
 }
 </style>
