@@ -514,7 +514,7 @@ def group_passages(corpus: list, run_dir: str = "", workers: int = 1) -> _Famili
     listed_offsets = np.concatenate(([0], np.cumsum(np.bincount(pairs // n_families, minlength=wf.shape[0])))).astype(np.int64)
     list_offsets, list_members = _group_lists(window_of, site_of, family, listed_offsets, pairs % n_families)
 
-    # a family's documents are those of the alignments carrying it: what its page shows
+    # a family's documents: those of both ends of the alignments carrying or listing it, its anchor's too
     per_alignment = np.repeat(np.arange(list_offsets.shape[0] - 1), np.diff(list_offsets))
     doc_keys = np.unique(np.concatenate((list_members * n_files + wf[window_of[2 * per_alignment]],
                                          list_members * n_files + wf[window_of[2 * per_alignment + 1]])))
