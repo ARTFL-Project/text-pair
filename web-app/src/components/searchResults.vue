@@ -55,8 +55,10 @@
                         options</button>
                     <div id="facet-fields" ref="facetFields">
                         <div class="facet-list side-source-color" :class="{ hide: facetsCollapsed }">
-                            <h4 class="facet-side"><span class="side-mark source" aria-hidden="true"></span>in <span
-                                    v-html="globalConfig.sourceLabel"></span></h4>
+                            <h4 class="facet-side">
+                                <span class="side-mark source" aria-hidden="true"></span>
+                                <span>in <span v-html="globalConfig.sourceLabel"></span></span>
+                            </h4>
                             <div class="list-group list-group-flush">
                                 <button type="button" class="list-group-item list-group-item-action facet-field"
                                     v-for="(field, index) in globalConfig.facetsFields.source" :key="index"
@@ -66,8 +68,10 @@
                             </div>
                         </div>
                         <div class="facet-list side-target-color" :class="{ hide: facetsCollapsed }">
-                            <h4 class="facet-side"><span class="side-mark target" aria-hidden="true"></span>in <span
-                                    v-html="globalConfig.targetLabel"></span></h4>
+                            <h4 class="facet-side">
+                                <span class="side-mark target" aria-hidden="true"></span>
+                                <span>in <span v-html="globalConfig.targetLabel"></span></span>
+                            </h4>
                             <div class="list-group list-group-flush">
                                 <button type="button" class="list-group-item list-group-item-action facet-field"
                                     v-for="(field, index) in globalConfig.facetsFields.target" :key="index"
@@ -350,6 +354,7 @@ function enter(el, complete) {
     transition: all 0.2s ease-out, visibility 0s 0.2s;
 }
 
+// "in" and the label are one flex item; apart, the space after "in" would collapse
 .facet-side {
     @include kicker;
     display: flex;
