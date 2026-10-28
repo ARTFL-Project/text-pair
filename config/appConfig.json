@@ -17,8 +17,8 @@
     ],
     "sourcePhiloDBPath": "",
     "targetPhiloDBPath": "",
-    "sourceLabel": "Source",
-    "targetLabel": "Target",
+    "sourceLabel": "Earlier occurrence",
+    "targetLabel": "Later occurrence",
     "sourceCitation": [
         {
             "field": "source_author",
@@ -100,7 +100,7 @@
     "facetsFields": {
         "source": [
             {
-                "label": "Passage",
+                "label": "Passage text",
                 "value": "source_passage"
             },
             {
@@ -122,7 +122,7 @@
         ],
         "target": [
             {
-                "label": "Passage",
+                "label": "Passage text",
                 "value": "target_passage"
             },
             {

@@ -30,7 +30,10 @@ BLOCKS = [
     ),
     (
         "Names of the source and target texts throughout the interface. May contain HTML.",
-        [Option("source_label", ("sourceLabel",), ""), Option("target_label", ("targetLabel",), "")],
+        [
+            Option("source_label", ("sourceLabel",), "Earlier occurrence"),
+            Option("target_label", ("targetLabel",), "Later occurrence"),
+        ],
     ),
     (
         "Show the network graph view: true or false. It stays hidden anyway if passages\n"
@@ -55,7 +58,7 @@ BLOCKS = [
         ],
     ),
     (
-        'Fields of the "Browse by Counts" panel, in the same format as those of the search form.',
+        'Fields of the "Top Occurrences by" panel, in the same format as those of the search form.',
         [
             Option("source_facets", ("facetsFields", "source"), [], FIELD),
             Option("target_facets", ("facetsFields", "target"), [], FIELD),

@@ -159,7 +159,7 @@ The `textpair` script automatically generates a Web Application in the directory
 
 The settings of `app_settings.toml` are:
 
--   `database_label`, `source_label` and `target_label`: the title of the database, and the names of the source and target texts. Labels support HTML tags. When the texts come from PhiloLogic databases, the title starts as the `dbname` of their `web_config.cfg`, as "source vs target" when the two databases differ.
+-   `database_label`, `source_label` and `target_label`: the title of the database, and the names of the source and target texts. Labels support HTML tags. The source and target start as "Earlier occurrence" and "Later occurrence". When the texts come from PhiloLogic databases, the title starts as the `dbname` of their `web_config.cfg`, as "source vs target" when the two databases differ.
 -   `network_graph` and `semantic_graph`: show or hide these two views (`true` or `false`). The network graph is hidden anyway when passages were not grouped into families. `semantic_graph` is set to `true` when a graph is built, with `build_graph = true` in `[GRAPH]` or with `--graph_only`; if it is `true` without a graph, the view says so.
 -   `branding`: links in the header, each as `{ label = "...", link = "..." }`.
 -   `source_search_fields` and `target_search_fields`: the fields of the search form, in order, each as `{ field = "source_author", label = "Author" }`, where `field` is the name of the metadata field in the SQL database.

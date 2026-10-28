@@ -48,14 +48,14 @@
                             <path d="M2.5 3.5h11M2.5 8h7M2.5 12.5h4" fill="none" stroke="currentColor"
                                 stroke-width="1.75" stroke-linecap="round" />
                         </svg>
-                        Browse by Counts
+                        Top Occurrences by
                     </h3>
-                    <button type="button" id="metadata-list" :class="{ show: facetsCollapsed }"
-                        aria-expanded="false" aria-controls="facet-fields" @click="toggleFacetList()">Show
+                    <button type="button" id="metadata-list" :class="{ show: facetsCollapsed }" aria-expanded="false"
+                        aria-controls="facet-fields" @click="toggleFacetList()">Show
                         options</button>
                     <div id="facet-fields" ref="facetFields">
                         <div class="facet-list side-source-color" :class="{ hide: facetsCollapsed }">
-                            <h4 class="facet-side"><span class="side-mark source" aria-hidden="true"></span><span
+                            <h4 class="facet-side"><span class="side-mark source" aria-hidden="true"></span>in <span
                                     v-html="globalConfig.sourceLabel"></span></h4>
                             <div class="list-group list-group-flush">
                                 <button type="button" class="list-group-item list-group-item-action facet-field"
@@ -66,7 +66,7 @@
                             </div>
                         </div>
                         <div class="facet-list side-target-color" :class="{ hide: facetsCollapsed }">
-                            <h4 class="facet-side"><span class="side-mark target" aria-hidden="true"></span><span
+                            <h4 class="facet-side"><span class="side-mark target" aria-hidden="true"></span>in <span
                                     v-html="globalConfig.targetLabel"></span></h4>
                             <div class="list-group list-group-flush">
                                 <button type="button" class="list-group-item list-group-item-action facet-field"
@@ -336,7 +336,7 @@ function enter(el, complete) {
     transition: all 0.2s ease-out, visibility 0s;
 }
 
-.facet-list + .facet-list {
+.facet-list+.facet-list {
     border-top: 1px solid $rule-color;
 }
 

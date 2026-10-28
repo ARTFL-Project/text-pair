@@ -340,8 +340,8 @@ const PAGE_SIZE = 50;
 const themeLang = globalConfig.themeLanguage || undefined;
 const sourceLang = globalConfig.sourceLanguage || undefined;
 const targetLang = globalConfig.targetLanguage || undefined;
-const sourceLabel = plainText(globalConfig.sourceLabel) || "Source";
-const targetLabel = plainText(globalConfig.targetLabel) || "Target";
+const sourceLabel = plainText(globalConfig.sourceLabel) || "Earlier occurrence";
+const targetLabel = plainText(globalConfig.targetLabel) || "Later occurrence";
 
 const route = useRoute();
 const viewName = route.name;
