@@ -266,7 +266,7 @@ function enter(el, complete) {
         complete();
         return;
     }
-    const delay = el.dataset.index * 100;
+    const delay = Math.min(el.dataset.index, 10) * 100;
     setTimeout(function () {
         Velocity(el, { opacity: 1, height: "100%" }, { complete });
     }, delay);

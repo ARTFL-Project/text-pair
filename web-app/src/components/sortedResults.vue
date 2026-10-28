@@ -17,8 +17,8 @@
                 <transition-group name="staggered-fade" tag="ol" class="list-unstyled" v-bind:css="false"
                     v-on:before-enter="beforeEnter" v-on:enter="enter">
                     <li class="card family-card mb-3 shadow-1" v-for="(sourcePassage, index) in results.groups"
-                        :key="index + 1" v-bind:data-index="index">
-                        <div class="family-rank" aria-hidden="true">{{ index + 1 }}</div>
+                        :key="sourcePassage.group_id" v-bind:data-index="index">
+                        <div class="family-rank" aria-hidden="true">{{ results.start_position + index + 1 }}</div>
                         <div class="family-body side-source-color">
                             <div class="family-figure" aria-hidden="true" v-if="sourcePassage.count">
                                 <span class="family-figure-number">{{ sourcePassage.count.toLocaleString() }}</span>
@@ -28,7 +28,7 @@
                                         :style="{ width: `${(100 * sourcePassage.count) / maxCount}%` }"></span></span>
                             </div>
                             <h3 class="family-citation">
-                                <span class="visually-hidden">{{ index + 1 }}. </span>
+                                <span class="visually-hidden">{{ results.start_position + index + 1 }}. </span>
                                 <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"
                                     :link-to-doc="globalConfig.sourceLinkToDocMetadata" tag="span"></citations>
                             </h3>
@@ -50,9 +50,28 @@
                         </div>
                     </li>
                 </transition-group>
+                <nav aria-label="Pages of results" v-if="pages > 1">
+                    <ul class="pagination justify-content-center mb-4">
+                        <li class="page-item" v-if="results.page > 1">
+                            <button type="button" class="page-link" @click="goToPage(results.page - 1)"
+                                aria-label="Previous page">
+                                <span aria-hidden="true">&laquo;</span>
+                            </button>
+                        </li>
+                        <li class="page-item active">
+                            <span class="page-link" aria-current="page">Page {{ results.page.toLocaleString() }} of {{
+                                pages.toLocaleString() }}</span>
+                        </li>
+                        <li class="page-item" v-if="results.page < pages">
+                            <button type="button" class="page-link" @click="goToPage(results.page + 1)"
+                                aria-label="Next page">
+                                <span aria-hidden="true">&raquo;</span>
+                            </button>
+                        </li>
+                    </ul>
+                </nav>
             </div>
         </div>
-        <p class="top-note">For performance reasons, only the top 100 are displayed.</p>
     </div>
 </template>
 
@@ -61,7 +80,7 @@ import axios from "axios";
 import emitter from "tiny-emitter/instance";
 import Velocity from "velocity-animate";
 import { computed, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
 import { paramsToUrl, prefersReducedMotion } from "../utils.js";
 import citations from "./citations";
@@ -69,16 +88,20 @@ import reportSwitcher from "./reportSwitcher";
 import searchArguments from "./searchArguments";
 
 const route = useRoute();
+const router = useRouter();
 const loading = ref(false);
-const results = ref({ groups: [] });
+const results = ref({ groups: [], start_position: 0 });
 const error = ref(null);
-// Most reused passage, for the bars of the others
-const maxCount = computed(() => Math.max(1, ...results.value.groups.map((group) => group.count || 0)));
+// Most reused passage of the whole result, for the bars of the others
+const maxCount = computed(() => results.value.max_count || 1);
+const pages = computed(() => Math.ceil((results.value.total_count || 0) / (results.value.page_size || 1)));
+let request = 0;
 
 function fetchData() {
-    results.value = { groups: [] }; // clear alignments with new search
+    results.value = { groups: [], start_position: 0 }; // clear alignments with new search
     error.value = null;
     loading.value = true;
+    const current = ++request;
     const params = { ...route.query };
     params.db_table = globalConfig.databaseName;
     emitter.emit("searchArgsUpdate", {
@@ -88,7 +111,8 @@ function fetchData() {
     axios
         .get(`${globalConfig.apiServer}/sorted_results/?${paramsToUrl(params)}`)
         .then((response) => {
-            results.value.groups = response.data.groups;
+            if (current != request) return;
+            results.value = response.data;
             loading.value = false;
             emitter.emit("searchArgsUpdate", {
                 counts: response.data.total_count,
@@ -96,6 +120,7 @@ function fetchData() {
             });
         })
         .catch((err) => {
+            if (current != request) return;
             loading.value = false;
             error.value = err.toString();
             emitter.emit("announce", "No results for your query");
@@ -104,6 +129,12 @@ function fetchData() {
 }
 fetchData();
 watch(() => route.fullPath, fetchData);
+
+function goToPage(page) {
+    const queryParams = { ...route.query };
+    queryParams.page = page;
+    router.push(`${route.path}?${paramsToUrl(queryParams)}`).then(() => emitter.emit("focusMain"));
+}
 
 function beforeEnter(el) {
     if (prefersReducedMotion()) return;
@@ -116,7 +147,7 @@ function enter(el, complete) {
         complete();
         return;
     }
-    const delay = el.dataset.index * 100;
+    const delay = Math.min(el.dataset.index, 10) * 100;
     setTimeout(function () {
         Velocity(el, { opacity: 1, height: "100%" }, { complete });
     }, delay);
@@ -129,18 +160,20 @@ function enter(el, complete) {
 // Rank in the left margin, the count large at the top right
 .family-card {
     display: grid;
-    grid-template-columns: 3rem minmax(0, 1fr);
+    grid-template-columns: minmax(3rem, auto) minmax(0, 1fr);
     border-radius: 3px;
 }
 
 .family-rank {
-    padding-top: 1.2rem;
+    padding: 1.2rem 0.4rem 0;
     color: $header-color;
     @include display-type;
     font-size: 1.05rem;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
     line-height: 1.2;
     text-align: center;
+    white-space: nowrap;
 }
 
 .family-body {
@@ -244,8 +277,8 @@ function enter(el, complete) {
 }
 
 // Over the theme's white text for hovered outline links
-.family-link:hover,
-.family-link:focus {
+a.family-link:hover,
+a.family-link:focus {
     color: $source-deep !important;
 }
 
@@ -254,12 +287,13 @@ function enter(el, complete) {
     height: 0.875rem;
 }
 
-.top-note {
-    margin: 1rem 0 2.5rem;
-    color: $muted;
-    font-family: $font-ui;
-    font-size: 0.85rem;
-    text-align: center;
+.page-link {
+    cursor: pointer;
+}
+
+.pagination .page-item.active .page-link {
+    @include display-type;
+    font-weight: 600;
 }
 
 @media (max-width: 767.98px) {
@@ -274,7 +308,11 @@ function enter(el, complete) {
 
 @media (max-width: 575.98px) {
     .family-card {
-        grid-template-columns: 2.25rem minmax(0, 1fr);
+        grid-template-columns: minmax(2.25rem, auto) minmax(0, 1fr);
+    }
+
+    .family-rank {
+        padding-inline: 0.15rem;
     }
 
     .family-body {
