@@ -2,7 +2,7 @@
     <div class="mt-3">
         <h2 class="visually-hidden">Passage pairs</h2>
         <div class="row" style="padding: 0 0.75rem">
-            <div class="m-4" style="font-size: 120%" v-if="error">No results for your query</div>
+            <div class="m-4" style="font-size: 120%" v-if="error">No matches for your query</div>
             <search-arguments></search-arguments>
         </div>
         <report-switcher />
@@ -23,7 +23,7 @@
                             :number="results.start_position + index + 1"></passage-pair>
                     </li>
                 </transition-group>
-                <nav aria-label="Pages of results" v-if="done">
+                <nav aria-label="Pages of matches" v-if="done">
                     <ul class="pagination justify-content-center mb-4">
                         <li class="page-item" v-if="results.page > 1">
                             <button type="button" class="page-link" @click="previousPage()" aria-label="Previous page">
@@ -48,7 +48,7 @@
                             <path d="M2.5 3.5h11M2.5 8h7M2.5 12.5h4" fill="none" stroke="currentColor"
                                 stroke-width="1.75" stroke-linecap="round" />
                         </svg>
-                        Top Occurrences by
+                        Count matches by
                     </h3>
                     <button type="button" id="metadata-list" :class="{ show: facetsCollapsed }" aria-expanded="false"
                         aria-controls="facet-fields" @click="toggleFacetList()">Show
@@ -94,7 +94,7 @@
                 <section class="card facet-results shadow-1 mt-3" v-if="facetResults"
                     :class="facetResults.facet.startsWith('target_') ? 'side-target-color' : 'side-source-color'"
                     aria-labelledby="facet-results-title">
-                    <button type="button" class="corner-btn destroy right" aria-label="Close frequency results"
+                    <button type="button" class="corner-btn destroy right" aria-label="Close counts"
                         @click="closeFacetResults()"><span aria-hidden="true">&times;</span></button>
                     <h4 id="facet-results-title" ref="facetResultsTitle" class="card-header facet-results-title"
                         tabindex="-1">
@@ -103,7 +103,7 @@
                         <span class="text-capitalize">{{ facetResults.facet.split("_")[1] }}</span>
                     </h4>
                     <div class="facet-results-body">
-                        <div class="facet-note">Showing top 100 results</div>
+                        <div class="facet-note">Showing the top 100 values</div>
                         <div class="list-group list-group-flush">
                             <button type="button" class="list-group-item list-group-item-action facet-result"
                                 v-for="(field, index) in facetResults.results.slice(0, 100)" :key="index"
@@ -165,8 +165,8 @@ function fetchData() {
         .then((response) => {
             loading.value = false;
             if (!response.data.alignments || !response.data.alignments.length) {
-                error.value = "No results";
-                emitter.emit("announce", "No results for your query");
+                error.value = "No matches";
+                emitter.emit("announce", "No matches for your query");
                 return;
             }
             results.value = response.data;
@@ -189,7 +189,7 @@ function fetchData() {
         .catch((err) => {
             loading.value = false;
             error.value = err.toString();
-            emitter.emit("announce", "No results for your query");
+            emitter.emit("announce", "No matches for your query");
             console.log(err);
         });
 }

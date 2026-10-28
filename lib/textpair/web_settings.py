@@ -58,7 +58,7 @@ BLOCKS = [
         ],
     ),
     (
-        'Fields of the "Top Occurrences by" panel, in the same format as those of the search form.',
+        'Fields of the "Count matches by" panel, in the same format as those of the search form.',
         [
             Option("source_facets", ("facetsFields", "source"), [], FIELD),
             Option("target_facets", ("facetsFields", "target"), [], FIELD),

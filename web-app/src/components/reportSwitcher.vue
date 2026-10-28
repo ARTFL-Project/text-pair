@@ -1,5 +1,5 @@
 <template>
-    <nav class="report-switcher" aria-label="Result views">
+    <nav class="report-switcher" aria-label="Views of matches">
         <div class="btn-group segmented">
             <router-link v-for="view in views" :key="view.name" :to="`${view.path}?${query}`"
                 class="btn btn-outline-secondary" :class="{ active: route.name == view.name }"

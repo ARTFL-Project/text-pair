@@ -3,10 +3,10 @@
     <div v-if="hasNoParams" class="compact-search-args query-summary">
         <div v-if="!counts || counts === '...'">
             <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
-            results across all documents
+            {{ noun }} across all documents
         </div>
         <div v-else>
-            <strong class="result-count">{{ counts }}</strong> results across all documents
+            <strong class="result-count">{{ counts }}</strong> {{ noun }} across all documents
         </div>
     </div>
 
@@ -15,10 +15,10 @@
         <div class="query-count">
             <span v-if="!counts || counts === '...'">
                 <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
-                results for the following query:
+                {{ noun }} for the following query:
             </span>
             <span v-else>
-                <strong class="result-count">{{ counts }}</strong> results for the following query:
+                <strong class="result-count">{{ counts }}</strong> {{ noun }} for the following query:
             </span>
         </div>
         <div class="query-sides">
@@ -64,9 +64,14 @@ import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
 import { paramsToUrl, plainText } from "../utils.js";
 
+const props = defineProps({ unit: { type: String, default: "match" } }); // what the views count
+
 const route = useRoute();
 const router = useRouter();
 const counts = ref("...");
+const single = ref(false);
+const nouns = { match: ["match", "matches"], passage: ["passage", "passages"] };
+const noun = computed(() => nouns[props.unit][single.value ? 0 : 1]);
 const searchParams = ref([
     { direction: globalConfig.sourceLabel, params: null },
     { direction: globalConfig.targetLabel, params: null },
@@ -75,6 +80,7 @@ const banality = ref(null);
 
 function update(params) {
     counts.value = params.counts.toLocaleString();
+    single.value = Number(params.counts) === 1;
     searchParams.value = processParams(params.searchParams);
     if ("banality" in params.searchParams && params.searchParams.banality.length > 0) {
         banality.value = params.searchParams.banality == "false" ? "Filter all" : "Only banalities";
@@ -82,7 +88,7 @@ function update(params) {
         banality.value = false;
     }
     if (params.counts !== "") {
-        emitter.emit("announce", `${counts.value} results`);
+        emitter.emit("announce", `${counts.value} ${noun.value}`);
     }
 }
 emitter.on("searchArgsUpdate", update);

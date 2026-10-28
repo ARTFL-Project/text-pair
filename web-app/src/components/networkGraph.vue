@@ -4,7 +4,7 @@
         <div class="container-fluid">
             <div class="row" style="padding: 0 0.75rem">
                 <div class="m-4" style="font-size: 120%" v-if="error">{{ error }}</div>
-                <search-arguments></search-arguments>
+                <search-arguments unit="passage"></search-arguments>
             </div>
             <report-switcher />
 
