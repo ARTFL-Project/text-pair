@@ -5,6 +5,7 @@ import bisect
 import configparser
 import html
 import itertools
+import math
 import os
 import re
 import sqlite3
@@ -846,37 +847,64 @@ def get_passage_group(request: Request, group_id: int):
     return full_results
 
 
+# As many passage families to a page as alignments to a page of search results
+SORTED_PAGE_SIZE = 50
+# Family columns the sorted results do not show: the cards need the passage and its citation
+FAMILY_CARD_EXCLUDED = {"source_context_before", "source_context_after", "source_ngrams"}
+
+
+def family_candidates(cursor, table: str, sql_fields: str, sql_values: list) -> tuple[str, tuple]:
+    """A WHERE clause and its params for the passage families in the running.
+
+    Without filters every family is. With them, those with an alignment that matches.
+    """
+    if not sql_fields:
+        return "", ()
+    cursor.execute(f"SELECT group_id FROM {table} WHERE {sql_fields}", sql_values)
+    candidates: set[int] = set()
+    for row in cursor:
+        gid_value = row["group_id"]
+        if isinstance(gid_value, list):
+            candidates.update(int(gid) for gid in gid_value if gid is not None)
+        elif gid_value is not None:
+            candidates.add(int(gid_value))
+    return "WHERE group_id = ANY(%s)", (list(candidates),)
+
+
 @app.get("/sorted_results/")
 @app.get("/text-pair-api/sorted_results/")
 def get_sorted_results(request: Request):
-    """Sort results based on the number of passages within each group"""
+    """One page of passage families, the most reused first"""
     sql_fields, sql_values, other_args, _ = parse_args(request)
+    groups_table = f"{other_args.db_table}_groups"
+    columns = ", ".join(f'g."{column}"' for column in get_pg_type(groups_table) if column not in FAMILY_CARD_EXCLUDED)
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    groups_table = f"{other_args.db_table}_groups"
+    where, params = family_candidates(cursor, other_args.db_table, sql_fields, sql_values)
 
-    # The groups table holds how many documents each passage appears in; filters, when
-    # there are any, only decide which passages are in the running.
-    where, params = "", ()
-    if sql_fields:
-        cursor.execute(f"SELECT group_id FROM {other_args.db_table} WHERE {sql_fields}", sql_values)
-        candidates: set[int] = set()
-        for row in cursor:
-            gid_value = row["group_id"]
-            if isinstance(gid_value, list):
-                candidates.update(int(gid) for gid in gid_value if gid is not None)
-            elif gid_value is not None:
-                candidates.add(int(gid_value))
-        where, params = "WHERE group_id = ANY(%s)", (list(candidates),)
-    cursor.execute(f"SELECT COUNT(*) FROM {groups_table} {where}", params)
-    total = cursor.fetchone()[0]
-    cursor.execute(f'SELECT * FROM {groups_table} {where} ORDER BY "count" DESC, group_id LIMIT 100', params)
-    results = {"total_count": total, "groups": [dict(row) for row in cursor]}
-
+    cursor.execute(f'SELECT COUNT(*), MAX("count") FROM {groups_table} {where}', params)
+    total, max_count = cursor.fetchone()
+    page = min(max(1, other_args.page), max(1, math.ceil(total / SORTED_PAGE_SIZE)))  # type: ignore
+    start_position = (page - 1) * SORTED_PAGE_SIZE
+    # The page is picked from the index alone, so skipping to a deep one reads no rows
+    cursor.execute(
+        f"""SELECT {columns} FROM {groups_table} g
+        JOIN (SELECT group_id FROM {groups_table} {where} ORDER BY "count" DESC, group_id LIMIT %s OFFSET %s) p
+        USING (group_id) ORDER BY g."count" DESC, g.group_id""",
+        (*params, SORTED_PAGE_SIZE, start_position),
+    )
+    results = {
+        "groups": [dict(row) for row in cursor],
+        "page": page,
+        "page_size": SORTED_PAGE_SIZE,
+        "start_position": start_position,
+        "total_count": total,
+        "max_count": max_count or 0,
+    }
     conn.rollback()
     conn.close()
     return results

@@ -916,7 +916,10 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
                 statements.append(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING HASH({field})")
         elif field_type in ("INTEGER", "BOOLEAN"):
             statements.append(f"CREATE INDEX {field}_{table_name}_idx ON {table_name} USING BTREE({field})")
-    statements.append(f"CREATE INDEX count_{table_name}_idx ON {table_name} USING BTREE(count)")
+    # The sorted results page through families in this order (see extras/add_groups_index.py)
+    statements.append(
+        f'CREATE INDEX count_group_id_{table_name}_idx ON {table_name} USING BTREE("count" DESC, group_id)'
+    )
     statements.append(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
 
     database.commit()  # index builds run on their own connections and must see the rows
