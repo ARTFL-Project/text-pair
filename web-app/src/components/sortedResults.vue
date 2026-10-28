@@ -22,7 +22,7 @@
                         <div class="family-body side-source-color">
                             <div class="family-figure" aria-hidden="true" v-if="sourcePassage.count">
                                 <span class="family-figure-number">{{ sourcePassage.count.toLocaleString() }}</span>
-                                <span class="family-figure-label">{{ sourcePassage.count == 1 ? "reuse" : "reuses"
+                                <span class="family-figure-label">{{ sourcePassage.count == 1 ? "document" : "documents"
                                 }}</span>
                                 <span class="family-figure-track"><span class="family-figure-bar"
                                         :style="{ width: `${(100 * sourcePassage.count) / maxCount}%` }"></span></span>
@@ -32,9 +32,9 @@
                                 <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"
                                     :link-to-doc="globalConfig.sourceLinkToDocMetadata" tag="span"></citations>
                             </h3>
-                            <span class="family-count" v-if="sourcePassage.count">The following passage is reused (in
-                                whole or in part) <strong>{{ sourcePassage.count.toLocaleString() }}</strong>
-                                times:</span>
+                            <span class="family-count" v-if="sourcePassage.count">The following passage appears (in
+                                whole or in part) in <strong>{{ sourcePassage.count.toLocaleString() }}</strong>
+                                {{ sourcePassage.count == 1 ? "document" : "documents" }}:</span>
                             <q class="family-quote passages" :lang="globalConfig.sourceLanguage || undefined">{{
                                 sourcePassage.source_passage }}</q>
                             <div>
@@ -211,7 +211,7 @@ function enter(el, complete) {
     font-size: 0.8rem;
 }
 
-// Reuses against the most reused passage, carried from the earlier text to the later ones
+// The count against the top family's, carried from the earlier text to the later ones
 .family-figure-track {
     display: flex;
     justify-content: flex-end;

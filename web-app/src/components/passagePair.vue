@@ -95,7 +95,7 @@
                     <path d="M3 3v5.5a2 2 0 0 0 2 2h7.5M10 8l2.5 2.5L10 13" fill="none" stroke="currentColor"
                         stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
-                Passage reused in {{ alignment.count }} different titles
+                Passage appears in {{ alignment.count }} documents
             </router-link>
             <div class="pair-actions">
                 <template v-if="globalConfig.matchingAlgorithm == 'sa'">

@@ -21,7 +21,9 @@
         </div>
         <p class="lineage-dek" v-if="reuseCount">
             <strong>{{ reuseCount.toLocaleString() }}</strong> {{ reuseCount == 1 ? "reuse" : "reuses" }}<template
-                v-if="timeline.length">, {{ periodText }}</template>
+                v-if="documentCount"> in <strong>{{ documentCount.toLocaleString() }}</strong> other
+                {{ documentCount == 1 ? "document" : "documents" }}</template><template v-if="timeline.length">, {{
+                    periodText }}</template>
         </p>
         <div id="timeline-container" :class="{ 'origin-first': originIndex === 0 }">
             <div id="vertical-line"></div>
@@ -159,6 +161,13 @@ function gapLabel(value) {
 const reuseCount = computed(() =>
     Array.isArray(timeline.value) ? timeline.value.reduce((sum, date) => sum + date.result.length, 0) : 0
 );
+// Documents other than the original's: the sorted results' count for the passage, less the original
+const documentCount = computed(() => {
+    if (!Array.isArray(timeline.value)) return 0;
+    const files = new Set(timeline.value.flatMap((date) => date.result.map((reuse) => reuse.target_filename)));
+    files.delete(sourcePassage.value.source_filename);
+    return files.size;
+});
 const periodText = computed(() => {
     const years = timeline.value.map(yearOf).filter((year) => year !== null);
     if (!years.length) return "undated";
