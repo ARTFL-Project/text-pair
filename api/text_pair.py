@@ -11,6 +11,7 @@ import re
 import sqlite3
 import time
 from collections import Counter, OrderedDict, defaultdict, namedtuple
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
@@ -115,24 +116,34 @@ class FormArguments:
         return repr(self.dict)
 
 
-def get_pg_type(table_name):
-    """Find PostgreSQL field type"""
-    with psycopg2.connect(
+@contextmanager
+def pg_connection():
+    """A PostgreSQL connection, closed when the block ends, however it ends, and its transaction with it.
+
+    psycopg2's own `with` ends the transaction but leaves the connection open.
+    """
+    conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
         password=GLOBAL_CONFIG["DATABASE"]["database_password"],
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name ='{table_name}'"
-        )
-        field_types = {field: field_type.upper() for field, field_type in cursor}
-    return field_types
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def get_pg_type(conn, table_name):
+    """Find PostgreSQL field type"""
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name ='{table_name}'")
+    return {field: field_type.upper() for field, field_type in cursor}
 
 
 def has_passage_families(table) -> bool:
     """Whether alignments were grouped into passage families, as the network view needs."""
-    return get_pg_type(table).get("group_id") == "ARRAY" and bool(get_pg_type(f"{table}_groups"))
+    with pg_connection() as conn:
+        return get_pg_type(conn, table).get("group_id") == "ARRAY" and bool(get_pg_type(conn, f"{table}_groups"))
 
 
 def text_data_path(db_dir: str, config: dict, direction: str) -> str | None:
@@ -143,7 +154,7 @@ def text_data_path(db_dir: str, config: dict, direction: str) -> str | None:
     return None
 
 
-def parse_conditions(request):
+def parse_conditions(request, conn):
     """Parse URL args into the filter conditions, the other args and the table's field types"""
     query_args = FormArguments()
     other_args = FormArguments()
@@ -214,14 +225,14 @@ def parse_conditions(request):
             if value:
                 query_args[key] = value
 
-    metadata_field_types = get_pg_type(other_args["db_table"])
+    metadata_field_types = get_pg_type(conn, other_args["db_table"])
     metadata_field_types["rowid"] = "INTEGER"
     return build_conditions(query_args, other_args, metadata_field_types), other_args, metadata_field_types
 
 
-def parse_args(request):
+def parse_args(request, conn):
     """Parse URL args"""
-    conditions, other_args, metadata_field_types = parse_conditions(request)
+    conditions, other_args, metadata_field_types = parse_conditions(request, conn)
     sql_fields, sql_values = join_conditions(conditions)
     return sql_fields, sql_values, other_args, list(metadata_field_types.keys())
 
@@ -354,7 +365,7 @@ def build_conditions(query_args, other_args, field_types) -> list[Condition]:
             conditions.append(Condition(field, query, params))
         else:
             continue
-    if other_args.banality != "":
+    if other_args.banality != "" and "banality" in field_types:  # the column exists only where banalities are stored
         conditions.append(
             Condition("banality", "banality=%s", [str(other_args.banality).lower() in ("true", "t", "1", "yes")])
         )
@@ -494,61 +505,55 @@ def occurrences(rows, group: dict) -> list[dict]:
 @app.get("/text-pair-api/search_alignments/")
 def search_alignments(request: Request):
     """Search alignments according to URL params"""
-    sql_fields, sql_values, other_args, column_names = parse_args(request)
-    field_types = get_pg_type(other_args.db_table)
-    group_id_type = field_types.get("group_id", "INTEGER")
-    forward = other_args.direction == "next"
-    sort_key = ", ".join(PAGE_SORT_EXPRESSIONS)
-    conditions = [sql_fields] if sql_fields else []
-    sql_values = list(sql_values)
+    with pg_connection() as conn:
+        sql_fields, sql_values, other_args, column_names = parse_args(request, conn)
+        field_types = get_pg_type(conn, other_args.db_table)
+        group_id_type = field_types.get("group_id", "INTEGER")
+        forward = other_args.direction == "next"
+        sort_key = ", ".join(PAGE_SORT_EXPRESSIONS)
+        conditions = [sql_fields] if sql_fields else []
+        sql_values = list(sql_values)
 
-    anchor = parse_page_cursor(other_args.id_anchor)
-    if anchor is not None:
-        placeholders = ", ".join("%s" for _ in PAGE_SORT_EXPRESSIONS)
-        conditions.append(f"({sort_key}) {'>' if forward else '<'} ({placeholders})")
-        sql_values.extend(anchor)
+        anchor = parse_page_cursor(other_args.id_anchor)
+        if anchor is not None:
+            placeholders = ", ".join("%s" for _ in PAGE_SORT_EXPRESSIONS)
+            conditions.append(f"({sort_key}) {'>' if forward else '<'} ({placeholders})")
+            sql_values.extend(anchor)
 
-    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    order_by = sort_key if forward else ", ".join(f"{e} DESC" for e in PAGE_SORT_EXPRESSIONS)
-    query = f"SELECT * FROM {other_args.db_table} {where_clause} ORDER BY {order_by} LIMIT 50"
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(query, sql_values)
-    alignments = []
-    group_ids = []
-    for row in cursor:
-        metadata = {key: row[key] for key in column_names}
-        metadata["page_cursor"] = page_cursor(row)
-        try:
-            metadata["group_id"] = row["group_id"]
-            if group_id_type == "ARRAY":
-                group_ids.extend([int(gid) for gid in metadata["group_id"]])
-            else:
-                group_ids.append(metadata["group_id"])
-        except KeyError:
-            pass
-        alignments.append(metadata)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        order_by = sort_key if forward else ", ".join(f"{e} DESC" for e in PAGE_SORT_EXPRESSIONS)
+        query = f"SELECT * FROM {other_args.db_table} {where_clause} ORDER BY {order_by} LIMIT 50"
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute(query, sql_values)
+        alignments = []
+        group_ids = []
+        for row in cursor:
+            metadata = {key: row[key] for key in column_names}
+            metadata["page_cursor"] = page_cursor(row)
+            try:
+                metadata["group_id"] = row["group_id"]
+                if group_id_type == "ARRAY":
+                    group_ids.extend([int(gid) for gid in metadata["group_id"]])
+                else:
+                    group_ids.append(metadata["group_id"])
+            except KeyError:
+                pass
+            alignments.append(metadata)
 
-    if other_args.direction == "previous":
-        alignments.reverse()
-        group_ids.reverse()
+        if other_args.direction == "previous":
+            alignments.reverse()
+            group_ids.reverse()
 
-    # Check if groups table exists
-    cursor.execute(
-        f"""SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{other_args.db_table}_groups')"""
-    )
-    if cursor.fetchone()[0] is True:
-        counts_per_group = group_counts(cursor, f"{other_args.db_table}_groups", set(group_ids))
-        for alignment in alignments:
-            ids = alignment["group_id"] if group_id_type == "ARRAY" else [alignment["group_id"]]
-            # in more than one family, an alignment is as reused as the most reused of them
-            alignment["count"] = max((counts_per_group.get(int(gid), 0) for gid in ids), default=0)
-    conn.rollback()
-    conn.close()
+        # Check if groups table exists
+        cursor.execute(
+            f"""SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{other_args.db_table}_groups')"""
+        )
+        if cursor.fetchone()[0] is True:
+            counts_per_group = group_counts(cursor, f"{other_args.db_table}_groups", set(group_ids))
+            for alignment in alignments:
+                ids = alignment["group_id"] if group_id_type == "ARRAY" else [alignment["group_id"]]
+                # in more than one family, an alignment is as reused as the most reused of them
+                alignment["count"] = max((counts_per_group.get(int(gid), 0) for gid in ids), default=0)
 
     previous_url = ""
     current_path = re.sub(r"&(page|id_anchor|direction)=[^&]*", "", request.url.path)
@@ -578,56 +583,50 @@ def search_alignments(request: Request):
 @app.get("/text-pair/{db_path}/retrieve_all_docs/")
 def retrieve_all(request: Request):
     """Retrieve all docs and only return metadata"""
-    sql_fields, sql_values, other_args, column_names = parse_args(request)
-    if other_args.field.startswith("source_"):  # type: ignore
-        direction = "source_"
-    else:
-        direction = "target_"
-    filtered_columns = {
-        "source_filename",
-        "source_passage",
-        "source_context_before",
-        "source_context_after",
-        "source_start_byte",
-        "source_end_byte",
-        "target_filename",
-        "target_passage",
-        "target_context_before",
-        "target_context_after",
-        "target_start_byte",
-        "target_end_byte",
-        "rowid",
-    }
-    column_names = [
-        column_name
-        for column_name in column_names
-        if column_name not in filtered_columns and column_name.startswith(direction)
-    ]
-    docs_found = {}
-    doc_id = f"{direction}doc_id"
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    if sql_values:
-        query = (
-            f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
-        )
-        cursor.execute(query, sql_values)
-    else:
-        query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}'"""
-        cursor.execute(query)
-    for row in cursor:
-        if row[doc_id] not in docs_found:
-            docs_found[row[doc_id]] = {
-                "count": 0,
-                **{key: row[key] for key in column_names},
-            }
-        docs_found[row[doc_id]]["count"] += 1
-    conn.rollback()
-    conn.close()
+    with pg_connection() as conn:
+        sql_fields, sql_values, other_args, column_names = parse_args(request, conn)
+        if other_args.field.startswith("source_"):  # type: ignore
+            direction = "source_"
+        else:
+            direction = "target_"
+        filtered_columns = {
+            "source_filename",
+            "source_passage",
+            "source_context_before",
+            "source_context_after",
+            "source_start_byte",
+            "source_end_byte",
+            "target_filename",
+            "target_passage",
+            "target_context_before",
+            "target_context_after",
+            "target_start_byte",
+            "target_end_byte",
+            "rowid",
+        }
+        column_names = [
+            column_name
+            for column_name in column_names
+            if column_name not in filtered_columns and column_name.startswith(direction)
+        ]
+        docs_found = {}
+        doc_id = f"{direction}doc_id"
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        if sql_values:
+            query = (
+                f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}' AND {sql_fields}"""
+            )
+            cursor.execute(query, sql_values)
+        else:
+            query = f"""SELECT * FROM {other_args.db_table} WHERE {other_args.field}='{other_args.value}'"""
+            cursor.execute(query)
+        for row in cursor:
+            if row[doc_id] not in docs_found:
+                docs_found[row[doc_id]] = {
+                    "count": 0,
+                    **{key: row[key] for key in column_names},
+                }
+            docs_found[row[doc_id]]["count"] += 1
     return list(docs_found.values())
 
 
@@ -636,29 +635,23 @@ def retrieve_all(request: Request):
 def retrieve_all_passage_pairs(request: Request):
     """Retrieve all passage pair metadata matching a particular query
     NOTE that this does not retrieve passages themselves"""
-    sql_fields, sql_values, other_args, column_names = parse_args(request)
-    filtered_columns = {
-        "source_passage",
-        "source_context_before",
-        "source_context_after",
-        "source_filename",
-        "target_passage",
-        "target_context_before",
-        "target_context_after",
-        "target_filename",
-    }
-    column_names = [column_name for column_name in column_names if column_name not in filtered_columns]
-    query = f"SELECT * FROM {other_args.db_table} WHERE {sql_fields}"
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(query, sql_values)
-    results = [{key: row[key] for key in column_names} for row in cursor]
-    conn.rollback()
-    conn.close()
+    with pg_connection() as conn:
+        sql_fields, sql_values, other_args, column_names = parse_args(request, conn)
+        filtered_columns = {
+            "source_passage",
+            "source_context_before",
+            "source_context_after",
+            "source_filename",
+            "target_passage",
+            "target_context_before",
+            "target_context_after",
+            "target_filename",
+        }
+        column_names = [column_name for column_name in column_names if column_name not in filtered_columns]
+        query = f"SELECT * FROM {other_args.db_table} WHERE {sql_fields}"
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute(query, sql_values)
+        results = [{key: row[key] for key in column_names} for row in cursor]
     return results
 
 
@@ -666,21 +659,15 @@ def retrieve_all_passage_pairs(request: Request):
 @app.get("/text-pair-api/count_results/")
 def count_results(request: Request):
     """Search alignments according to URL params"""
-    sql_fields, sql_values, other_args, _ = parse_args(request)
-    if sql_fields:
-        query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE {sql_fields}"
-    else:
-        query = f"SELECT COUNT(*) FROM {other_args.db_table}"
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(query, sql_values)
-    result_object = {"counts": cursor.fetchone()[0]}
-    conn.rollback()
-    conn.close()
+    with pg_connection() as conn:
+        sql_fields, sql_values, other_args, _ = parse_args(request, conn)
+        if sql_fields:
+            query = f"SELECT COUNT(*) FROM {other_args.db_table} WHERE {sql_fields}"
+        else:
+            query = f"SELECT COUNT(*) FROM {other_args.db_table}"
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute(query, sql_values)
+        result_object = {"counts": cursor.fetchone()[0]}
     return result_object
 
 
@@ -692,32 +679,26 @@ DATABASE_STATS = {}
 @app.get("/text-pair-api/database_stats/")
 def database_stats(request: Request):
     """Counts of passage pairs, and of the passage families they form, for the landing page"""
-    _, _, other_args, _ = parse_args(request)
-    table = str(other_args.db_table)
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor()
-    cursor.execute("SELECT to_regclass(%s)::oid, to_regclass(%s)::oid", (table, f"{table}_groups"))
-    key = (table, *cursor.fetchone())
-    if key[1] is None:
-        conn.close()
-        return {"error": f"No table {table}"}
-    if key not in DATABASE_STATS:
-        cursor.execute(f"SELECT count(*) FROM {table}")
-        stats = {"pairs_count": cursor.fetchone()[0]}
-        if key[2] is not None:
-            fields = [field for field in ("author", "title") if f"source_{field}" in get_pg_type(f"{table}_groups")]
-            counts = ", ".join(["count(*)", *(f"count(DISTINCT source_{field})" for field in fields)])
-            cursor.execute(f"SELECT {counts} FROM {table}_groups")
-            group_count, *field_counts = cursor.fetchone()
-            stats["group_count"] = group_count
-            stats.update({f"{field}_group_count": count for field, count in zip(fields, field_counts)})
-        DATABASE_STATS[key] = stats
-    conn.rollback()
-    conn.close()
+    with pg_connection() as conn:
+        _, _, other_args, _ = parse_args(request, conn)
+        table = str(other_args.db_table)
+        cursor = conn.cursor()
+        cursor.execute("SELECT to_regclass(%s)::oid, to_regclass(%s)::oid", (table, f"{table}_groups"))
+        key = (table, *cursor.fetchone())
+        if key[1] is None:
+            return {"error": f"No table {table}"}
+        if key not in DATABASE_STATS:
+            cursor.execute(f"SELECT count(*) FROM {table}")
+            stats = {"pairs_count": cursor.fetchone()[0]}
+            if key[2] is not None:
+                group_types = get_pg_type(conn, f"{table}_groups")
+                fields = [field for field in ("author", "title") if f"source_{field}" in group_types]
+                counts = ", ".join(["count(*)", *(f"count(DISTINCT source_{field})" for field in fields)])
+                cursor.execute(f"SELECT {counts} FROM {table}_groups")
+                group_count, *field_counts = cursor.fetchone()
+                stats["group_count"] = group_count
+                stats.update({f"{field}_group_count": count for field, count in zip(fields, field_counts)})
+            DATABASE_STATS[key] = stats
     return DATABASE_STATS[key]
 
 
@@ -726,39 +707,33 @@ def database_stats(request: Request):
 def generate_time_series(request: Request):
     """Generate a time series from search results"""
     # TODO: don't assume year is the field to use
-    sql_fields, sql_values, other_args, _ = parse_args(request)
-    if sql_fields:
-        query = f"select interval AS year, COUNT(*) FROM \
-                (SELECT floor({other_args.directionSelected}_year/{other_args.timeSeriesInterval})*{other_args.timeSeriesInterval} \
-                AS interval FROM {other_args.db_table} WHERE {sql_fields}) t \
-                GROUP BY interval ORDER BY interval"
-    else:
-        query = f"select interval AS year, COUNT(*) FROM \
-                (SELECT floor({other_args.directionSelected}_year/{other_args.timeSeriesInterval})*{other_args.timeSeriesInterval} \
-                AS interval FROM {other_args.db_table}) t \
-                GROUP BY interval ORDER BY interval"
-    results = []
-    total_results = 0
-    next_year = None
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(query, sql_values)
-    for year, count in cursor:
-        if year is None:
-            continue
-        if next_year is not None:
-            while year > next_year:
-                results.append({"year": next_year, "count": 0})
-                next_year += other_args.timeSeriesInterval
-        results.append({"year": year, "count": count})
-        next_year = year + other_args.timeSeriesInterval
-        total_results += count
-    conn.rollback()
-    conn.close()
+    with pg_connection() as conn:
+        sql_fields, sql_values, other_args, _ = parse_args(request, conn)
+        if sql_fields:
+            query = f"select interval AS year, COUNT(*) FROM \
+                    (SELECT floor({other_args.directionSelected}_year/{other_args.timeSeriesInterval})*{other_args.timeSeriesInterval} \
+                    AS interval FROM {other_args.db_table} WHERE {sql_fields}) t \
+                    GROUP BY interval ORDER BY interval"
+        else:
+            query = f"select interval AS year, COUNT(*) FROM \
+                    (SELECT floor({other_args.directionSelected}_year/{other_args.timeSeriesInterval})*{other_args.timeSeriesInterval} \
+                    AS interval FROM {other_args.db_table}) t \
+                    GROUP BY interval ORDER BY interval"
+        results = []
+        total_results = 0
+        next_year = None
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute(query, sql_values)
+        for year, count in cursor:
+            if year is None:
+                continue
+            if next_year is not None:
+                while year > next_year:
+                    results.append({"year": next_year, "count": 0})
+                    next_year += other_args.timeSeriesInterval
+            results.append({"year": year, "count": count})
+            next_year = year + other_args.timeSeriesInterval
+            total_results += count
     return {"counts": total_results, "results": results}
 
 
@@ -766,51 +741,45 @@ def generate_time_series(request: Request):
 @app.post("/text-pair-api/facets/")
 def facets(request: Request):
     """Retrieve facet result"""
-    sql_fields, sql_values, other_args, _ = parse_args(request)
-    results = []
-    total_count = 0
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    if sql_fields:
-        query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
-            WHERE {sql_fields} GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
-    else:
-        query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
-            GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
-    cursor.execute(query, sql_values)
-    if not other_args.facet.endswith("passage_length"):  # type: ignore
-        for result in cursor:
-            field_name, count = result
-            results.append({"field": field_name, "count": count})
-            total_count += count
-    else:
-        counts = Counter()
-        for length, count in cursor:
-            if length < 26:
-                counts["1-25"] += count
-            if 25 < length < 101:
-                counts["26-100"] += count
-            elif 100 < length < 251:
-                counts["101-250"] += count
-            elif 250 < length < 501:
-                counts["251-500"] += count
-            elif 500 < length < 1001:
-                counts["501-1000"] += count
-            elif 1000 < length < 3001:
-                counts["1001-3000"] += count
-            elif length > 3000:
-                counts["3001-"] += count
-            total_count += count
-        results = [
-            {"field": interval, "count": count}
-            for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
-        ]
-    conn.rollback()
-    conn.close()
+    with pg_connection() as conn:
+        sql_fields, sql_values, other_args, _ = parse_args(request, conn)
+        results = []
+        total_count = 0
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        if sql_fields:
+            query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
+                WHERE {sql_fields} GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
+        else:
+            query = f"SELECT {other_args.facet}, COUNT(*) FROM {other_args.db_table} \
+                GROUP BY {other_args.facet} ORDER BY COUNT(*) DESC"
+        cursor.execute(query, sql_values)
+        if not other_args.facet.endswith("passage_length"):  # type: ignore
+            for result in cursor:
+                field_name, count = result
+                results.append({"field": field_name, "count": count})
+                total_count += count
+        else:
+            counts = Counter()
+            for length, count in cursor:
+                if length < 26:
+                    counts["1-25"] += count
+                if 25 < length < 101:
+                    counts["26-100"] += count
+                elif 100 < length < 251:
+                    counts["101-250"] += count
+                elif 250 < length < 501:
+                    counts["251-500"] += count
+                elif 500 < length < 1001:
+                    counts["501-1000"] += count
+                elif 1000 < length < 3001:
+                    counts["1001-3000"] += count
+                elif length > 3000:
+                    counts["3001-"] += count
+                total_count += count
+            results = [
+                {"field": interval, "count": count}
+                for interval, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)
+            ]
     return {"facet": other_args.facet, "results": results, "total_count": total_count}
 
 
@@ -818,7 +787,8 @@ def facets(request: Request):
 @app.get("/text-pair-api/metadata/")
 def metadata(request: Request):
     """Retrieve all searchable metadata fields"""
-    _, _, _, metadata_fields = parse_args(request)
+    with pg_connection() as conn:
+        _, _, _, metadata_fields = parse_args(request, conn)
     return metadata_fields
 
 
@@ -826,31 +796,25 @@ def metadata(request: Request):
 @app.get("/text-pair-api/group/{group_id}")
 def get_passage_group(request: Request, group_id: int):
     """Retrieve a passage group"""
-    alignment_table = request.query_params["db_table"]
-    field_types = get_pg_type(alignment_table)
-    group_id_type = field_types.get("group_id", "INTEGER").upper()
-    groups_table = f"{alignment_table}_groups"
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    with pg_connection() as conn:
+        alignment_table = request.query_params["db_table"]
+        field_types = get_pg_type(conn, alignment_table)
+        group_id_type = field_types.get("group_id", "INTEGER").upper()
+        groups_table = f"{alignment_table}_groups"
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Query groups_table
-    cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
-    original_passage = dict(cursor.fetchone())
-    anchor_doc = original_passage["source_doc_id"]
+        # Query groups_table
+        cursor.execute(f"""SELECT * FROM {groups_table} WHERE group_id=%s""", (group_id,))
+        original_passage = dict(cursor.fetchone())
+        anchor_doc = original_passage["source_doc_id"]
 
-    # Query the main alignment_table using the correct operator based on its group_id type
-    if group_id_type == "ARRAY":
-        query = f"SELECT * FROM {alignment_table} WHERE group_id @> ARRAY[%s]::integer[]"
-    else:  # Backward compatibility for INTEGER type
-        query = f"SELECT * FROM {alignment_table} WHERE group_id=%s"
-    cursor.execute(query, (group_id,))
-    rows = cursor.fetchall()
-    conn.rollback()
-    conn.close()
+        # Query the main alignment_table using the correct operator based on its group_id type
+        if group_id_type == "ARRAY":
+            query = f"SELECT * FROM {alignment_table} WHERE group_id @> ARRAY[%s]::integer[]"
+        else:  # Backward compatibility for INTEGER type
+            query = f"SELECT * FROM {alignment_table} WHERE group_id=%s"
+        cursor.execute(query, (group_id,))
+        rows = cursor.fetchall()
 
     reuses = occurrences(rows, original_passage)
     passage_list = []
@@ -1003,58 +967,54 @@ def ranked_page(cursor, statement: str, params: list, page: int) -> tuple[int, l
 @app.get("/text-pair-api/sorted_results/")
 def get_sorted_results(request: Request):
     """One page of passage families, the most reused first"""
-    conditions, other_args, _ = parse_conditions(request)
-    table = other_args.db_table
-    groups_table = f"{table}_groups"
-    columns = ", ".join(f'g."{column}"' for column in get_pg_type(groups_table) if column not in FAMILY_CARD_EXCLUDED)
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    ranked = family_filter_query(cursor, table, conditions) if conditions else None
+    with pg_connection() as conn:
+        conditions, other_args, _ = parse_conditions(request, conn)
+        table = other_args.db_table
+        groups_table = f"{table}_groups"
+        columns = ", ".join(
+            f'g."{column}"' for column in get_pg_type(conn, groups_table) if column not in FAMILY_CARD_EXCLUDED
+        )
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        ranked = family_filter_query(cursor, table, conditions) if conditions else None
 
-    if ranked is not None:
-        page, ranks, total, best = ranked_page(cursor, *ranked, max(1, other_args.page))  # type: ignore
-        start_position = (page - 1) * SORTED_PAGE_SIZE
-        max_count = 0
-        if best is not None:  # the best-ranked family has the highest count
+        if ranked is not None:
+            page, ranks, total, best = ranked_page(cursor, *ranked, max(1, other_args.page))  # type: ignore
+            start_position = (page - 1) * SORTED_PAGE_SIZE
+            max_count = 0
+            if best is not None:  # the best-ranked family has the highest count
+                cursor.execute(
+                    f'SELECT g."count" FROM {table}_family_rank f JOIN {groups_table} g USING (group_id) WHERE f.rank = %s',
+                    (best,),
+                )
+                max_count = cursor.fetchone()[0]
             cursor.execute(
-                f'SELECT g."count" FROM {table}_family_rank f JOIN {groups_table} g USING (group_id) WHERE f.rank = %s',
-                (best,),
+                f"""SELECT {columns} FROM {groups_table} g JOIN {table}_family_rank f USING (group_id)
+                WHERE f.rank = ANY(%s) ORDER BY f.rank""",
+                (ranks,),
             )
-            max_count = cursor.fetchone()[0]
-        cursor.execute(
-            f"""SELECT {columns} FROM {groups_table} g JOIN {table}_family_rank f USING (group_id)
-            WHERE f.rank = ANY(%s) ORDER BY f.rank""",
-            (ranks,),
-        )
-    else:
-        sql_fields, sql_values = join_conditions(conditions)
-        where, params = family_candidates(cursor, table, sql_fields, sql_values)
+        else:
+            sql_fields, sql_values = join_conditions(conditions)
+            where, params = family_candidates(cursor, table, sql_fields, sql_values)
 
-        cursor.execute(f'SELECT COUNT(*), MAX("count") FROM {groups_table} {where}', params)
-        total, max_count = cursor.fetchone()
-        page = min(max(1, other_args.page), max(1, math.ceil(total / SORTED_PAGE_SIZE)))  # type: ignore
-        start_position = (page - 1) * SORTED_PAGE_SIZE
-        # The page is picked from the index alone, so skipping to a deep one reads no rows
-        cursor.execute(
-            f"""SELECT {columns} FROM {groups_table} g
-            JOIN (SELECT group_id FROM {groups_table} {where} ORDER BY "count" DESC, group_id LIMIT %s OFFSET %s) p
-            USING (group_id) ORDER BY g."count" DESC, g.group_id""",
-            (*params, SORTED_PAGE_SIZE, start_position),
-        )
-    results = {
-        "groups": [dict(row) for row in cursor],
-        "page": page,
-        "page_size": SORTED_PAGE_SIZE,
-        "start_position": start_position,
-        "total_count": total,
-        "max_count": max_count or 0,
-    }
-    conn.rollback()
-    conn.close()
+            cursor.execute(f'SELECT COUNT(*), MAX("count") FROM {groups_table} {where}', params)
+            total, max_count = cursor.fetchone()
+            page = min(max(1, other_args.page), max(1, math.ceil(total / SORTED_PAGE_SIZE)))  # type: ignore
+            start_position = (page - 1) * SORTED_PAGE_SIZE
+            # The page is picked from the index alone, so skipping to a deep one reads no rows
+            cursor.execute(
+                f"""SELECT {columns} FROM {groups_table} g
+                JOIN (SELECT group_id FROM {groups_table} {where} ORDER BY "count" DESC, group_id LIMIT %s OFFSET %s) p
+                USING (group_id) ORDER BY g."count" DESC, g.group_id""",
+                (*params, SORTED_PAGE_SIZE, start_position),
+            )
+        results = {
+            "groups": [dict(row) for row in cursor],
+            "page": page,
+            "page_size": SORTED_PAGE_SIZE,
+            "start_position": start_position,
+            "total_count": total,
+            "max_count": max_count or 0,
+        }
     return results
 
 
@@ -1123,39 +1083,33 @@ def number_passages(text: str, clipped: list[tuple[int, dict]], passages: list[d
 @app.get("/text-pair-api/text_view/")
 def text_view(request: Request):
     """A document's full text, marking the passages it shares with other texts on one side of the alignments"""
-    _, _, other_args, _ = parse_args(request)
-    access_control = check_access_control(request)
-    if access_control is False:  # TODO check if user has access to this database
-        return {"error": "You do not have access to this database"}
-    table, direction = str(other_args.db_table), str(other_args.directionSelected)
-    other = "target" if direction == "source" else "source"
-    db_dir = os.path.join(APP_PATH, table)
-    config = load_app_config(db_dir)
-    philo_path = text_data_path(db_dir, config, direction)
-    if philo_path is None:
-        return {"error": "The full text of this document is no longer available."}
-    other_path = text_data_path(db_dir, config, other)
-    # When both sides are the same texts, a document has passages on each, under the same doc_id
-    same_texts = other_path is not None and os.path.realpath(other_path) == os.path.realpath(philo_path)
+    with pg_connection() as conn:
+        _, _, other_args, _ = parse_args(request, conn)
+        access_control = check_access_control(request)
+        if access_control is False:  # TODO check if user has access to this database
+            return {"error": "You do not have access to this database"}
+        table, direction = str(other_args.db_table), str(other_args.directionSelected)
+        other = "target" if direction == "source" else "source"
+        db_dir = os.path.join(APP_PATH, table)
+        config = load_app_config(db_dir)
+        philo_path = text_data_path(db_dir, config, direction)
+        if philo_path is None:
+            return {"error": "The full text of this document is no longer available."}
+        other_path = text_data_path(db_dir, config, other)
+        # When both sides are the same texts, a document has passages on each, under the same doc_id
+        same_texts = other_path is not None and os.path.realpath(other_path) == os.path.realpath(philo_path)
 
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    # The text object aligned, which a VSA passage's philo_id, that of its first sentence, is within
-    doc_id = str(other_args.doc_id)
-    if not doc_id:
-        cursor.execute(f"SELECT {direction}_doc_id FROM {table} WHERE {direction}_philo_id = %s LIMIT 1", (other_args.philo_id,))
-        doc_id = (cursor.fetchone() or {}).get(f"{direction}_doc_id", "")
-    if same_texts:
-        cursor.execute(f"SELECT * FROM {table} WHERE source_doc_id = %s OR target_doc_id = %s", (doc_id, doc_id))
-    else:
-        cursor.execute(f"SELECT * FROM {table} WHERE {direction}_doc_id = %s", (doc_id,))
-    rows = cursor.fetchall()
-    conn.rollback()
-    conn.close()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # The text object aligned, which a VSA passage's philo_id, that of its first sentence, is within
+        doc_id = str(other_args.doc_id)
+        if not doc_id:
+            cursor.execute(f"SELECT {direction}_doc_id FROM {table} WHERE {direction}_philo_id = %s LIMIT 1", (other_args.philo_id,))
+            doc_id = (cursor.fetchone() or {}).get(f"{direction}_doc_id", "")
+        if same_texts:
+            cursor.execute(f"SELECT * FROM {table} WHERE source_doc_id = %s OR target_doc_id = %s", (doc_id, doc_id))
+        else:
+            cursor.execute(f"SELECT * FROM {table} WHERE {direction}_doc_id = %s", (doc_id,))
+        rows = cursor.fetchall()
     if not rows:
         return {"error": "This text shares no passages with others."}
     sides = {side: [row for row in rows if row[f"{side}_doc_id"] == doc_id] for side in (direction, other)}
@@ -1248,24 +1202,18 @@ def text_view(request: Request):
 @app.get("/text-pair-api/get_passages/")
 def get_passages(request: Request):
     """Retrieve aligned passages"""
-    _, _, other_args, _ = parse_args(request)
-    start_byte = int(request.query_params["start_byte"])
-    end_byte = int(request.query_params["end_byte"])
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cursor.execute(
-        f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s",
-        (request.query_params["filename"], start_byte, end_byte),
-    )
-    passages = []
-    for row in cursor:
-        passages.append({field: value for field, value in row.items()})
-    conn.rollback()
-    conn.close()
+    with pg_connection() as conn:
+        _, _, other_args, _ = parse_args(request, conn)
+        start_byte = int(request.query_params["start_byte"])
+        end_byte = int(request.query_params["end_byte"])
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            f"SELECT * FROM {other_args.db_table} WHERE {other_args.directionSelected}_filename = %s AND {other_args.directionSelected}_start_byte >=%s AND {other_args.directionSelected}_end_byte <=%s",
+            (request.query_params["filename"], start_byte, end_byte),
+        )
+        passages = []
+        for row in cursor:
+            passages.append({field: value for field, value in row.items()})
     return {"passages": passages}
 
 
@@ -1280,15 +1228,12 @@ NETWORK_CENTRALITIES = {
 }
 
 
+@contextmanager
 def network_connection():
     """A connection whose network queries may hash and sort in memory."""
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    conn.cursor().execute("SET LOCAL work_mem = '256MB'")
-    return conn
+    with pg_connection() as conn:
+        conn.cursor().execute("SET LOCAL work_mem = '256MB'")
+        yield conn
 
 
 def network_members(cursor, table, field, sql_fields, sql_values, families=None, nodes=None, name="members") -> str:
@@ -1299,7 +1244,7 @@ def network_members(cursor, table, field, sql_fields, sql_values, families=None,
         ids_cursor = cursor.connection.cursor()
         ids_cursor.execute(*families)
         families = [row[0] for row in ids_cursor]
-    if not sql_fields and field in get_pg_type(f"{table}_members"):
+    if not sql_fields and field in get_pg_type(cursor.connection, f"{table}_members"):
         conditions, values = [], []
         if families is not None:
             conditions.append("group_id = ANY(%s)")
@@ -1396,25 +1341,24 @@ def get_network_data(request: Request):
     canon: between authors reusing the same passages, each weighted 1/(n-1) over the n authors
     reusing it in the whole corpus.
     """
-    sql_fields, sql_values, other_args, _ = parse_args(request)
-    field = other_args.aggregation_field or "author"
-    graph = other_args.graph or "provenance"
-    if graph not in NETWORK_CENTRALITIES:
-        return {"error": f"Unknown graph '{graph}'"}
-    modes = NETWORK_CENTRALITIES[graph]
-    centrality_mode = other_args.centrality if other_args.centrality in modes else modes[0]
-    min_threshold = int(other_args.min_threshold or 5)
-    max_nodes = int(other_args.max_nodes or 10000)
-    table = str(other_args.db_table)
-    field_types = get_pg_type(table)
-    if f"source_{field}" not in field_types or f"target_{field}" not in field_types:
-        return {
-            "error": f"Field '{field}' not available in database",
-            "available_fields": list(field_types.keys()),
-        }
+    with network_connection() as conn:
+        sql_fields, sql_values, other_args, _ = parse_args(request, conn)
+        field = other_args.aggregation_field or "author"
+        graph = other_args.graph or "provenance"
+        if graph not in NETWORK_CENTRALITIES:
+            return {"error": f"Unknown graph '{graph}'"}
+        modes = NETWORK_CENTRALITIES[graph]
+        centrality_mode = other_args.centrality if other_args.centrality in modes else modes[0]
+        min_threshold = int(other_args.min_threshold or 5)
+        max_nodes = int(other_args.max_nodes or 10000)
+        table = str(other_args.db_table)
+        field_types = get_pg_type(conn, table)
+        if f"source_{field}" not in field_types or f"target_{field}" not in field_types:
+            return {
+                "error": f"Field '{field}' not available in database",
+                "available_fields": list(field_types.keys()),
+            }
 
-    conn = network_connection()
-    try:
         cursor = conn.cursor()
         members = network_members(cursor, table, field, sql_fields, sql_values)
         sizes = None
@@ -1451,9 +1395,6 @@ def get_network_data(request: Request):
             (node_ids,),
         )
         years = dict(cursor.fetchall())
-    finally:
-        conn.rollback()
-        conn.close()
 
     G = nx.DiGraph() if graph == "provenance" else nx.Graph()
     G.add_nodes_from(node_ids)
@@ -1493,18 +1434,17 @@ def get_network_data(request: Request):
 @app.get("/text-pair-api/network_passages/")
 def get_network_passages(request: Request):
     """The passages behind one network edge, most reused first."""
-    sql_fields, sql_values, other_args, _ = parse_args(request)
-    field = other_args.aggregation_field or "author"
-    graph = other_args.graph or "provenance"
-    source, target = str(other_args.source), str(other_args.target)
-    limit, offset = int(other_args.limit or 20), int(other_args.offset or 0)
-    table = str(other_args.db_table)
-    field_types = get_pg_type(table)
-    if not source or not target or f"source_{field}" not in field_types or f"target_{field}" not in field_types:
-        return {"error": "source, target and an aggregation_field present in the database are required"}
+    with network_connection() as conn:
+        sql_fields, sql_values, other_args, _ = parse_args(request, conn)
+        field = other_args.aggregation_field or "author"
+        graph = other_args.graph or "provenance"
+        source, target = str(other_args.source), str(other_args.target)
+        limit, offset = int(other_args.limit or 20), int(other_args.offset or 0)
+        table = str(other_args.db_table)
+        field_types = get_pg_type(conn, table)
+        if not source or not target or f"source_{field}" not in field_types or f"target_{field}" not in field_types:
+            return {"error": "source, target and an aggregation_field present in the database are required"}
 
-    conn = network_connection()
-    try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         if graph == "provenance":
             anchored = (f"SELECT group_id FROM {table}_groups WHERE source_{field} = %s", [source])
@@ -1525,9 +1465,6 @@ def get_network_passages(request: Request):
             (family_ids, limit, offset),
         )
         passages = [dict(row) for row in cursor]
-    finally:
-        conn.rollback()
-        conn.close()
     return {"passages": passages, "total_count": len(family_ids), "source": source, "target": target}
 
 
@@ -1546,22 +1483,18 @@ def get_alignment_by_rowid(request: Request):
     The embedding is 13 KB of a 16.5 KB response and the client has no use for
     it, since the map is already drawn from the precomputed projection.
     """
-    _, _, other_args, _ = parse_args(request)
-    db_table = str(other_args.db_table)
-    try:
-        rowid = int(request.query_params["rowid"])
-    except (KeyError, TypeError, ValueError):
-        return {"error": "rowid is required and must be an integer"}
+    with pg_connection() as conn:
+        _, _, other_args, _ = parse_args(request, conn)
+        db_table = str(other_args.db_table)
+        try:
+            rowid = int(request.query_params["rowid"])
+        except (KeyError, TypeError, ValueError):
+            return {"error": "rowid is required and must be an integer"}
 
-    with psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    ) as conn:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         columns = [
             c
-            for c in get_pg_type(db_table)
+            for c in get_pg_type(conn, db_table)
             if c != "embedding"
         ]
         if not columns:
@@ -1591,7 +1524,8 @@ def get_semantic_scatter_data(request: Request):
 
     Precomputed by textpair_graph, so this is a file read.
     """
-    _, _, other_args, _ = parse_args(request)
+    with pg_connection() as conn:
+        _, _, other_args, _ = parse_args(request, conn)
     db_name = str(other_args.db_table)
     scatter_path = os.path.join(APP_PATH, db_name, "graph_data", "scatter_data.json")
     if not os.path.exists(scatter_path):
@@ -1608,7 +1542,8 @@ def get_semantic_graph_data(request: Request):
     Returns nodes and edges for (author, cluster) pair visualization.
     The Vue component will build the Graphology graph client-side.
     """
-    sql_fields, sql_values, other_args, _ = parse_args(request)
+    with pg_connection() as conn:
+        sql_fields, sql_values, other_args, _ = parse_args(request, conn)
 
     # Path to precomputed graph model files
     db_name = str(other_args.db_table)
@@ -1662,51 +1597,45 @@ def get_semantic_graph_data(request: Request):
             cluster_label_map = {int(k): v for k, v in labels_data.items()}
 
     # Query alignments from database
-    conn = psycopg2.connect(
-        user=GLOBAL_CONFIG["DATABASE"]["database_user"],
-        password=GLOBAL_CONFIG["DATABASE"]["database_password"],
-        database=GLOBAL_CONFIG["DATABASE"]["database_name"],
-    )
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    with pg_connection() as conn:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-    if sql_fields:
-        query = f"SELECT rowid, source_author, target_author FROM {other_args.db_table} WHERE {sql_fields}"
-    else:
-        query = f"SELECT rowid, source_author, target_author FROM {other_args.db_table}"
-    cursor.execute(query, sql_values)
+        if sql_fields:
+            query = f"SELECT rowid, source_author, target_author FROM {other_args.db_table} WHERE {sql_fields}"
+        else:
+            query = f"SELECT rowid, source_author, target_author FROM {other_args.db_table}"
+        cursor.execute(query, sql_values)
 
-    # Build (author, cluster) pairs from filtered alignments
-    from collections import defaultdict
+        # Build (author, cluster) pairs from filtered alignments
+        from collections import defaultdict
 
-    pair_passage_counts = defaultdict(int)
-    pair_embeddings_2d = defaultdict(list)
+        pair_passage_counts = defaultdict(int)
+        pair_embeddings_2d = defaultdict(list)
 
-    for row in cursor:
-        rowid = row["rowid"]
-        source_author = row["source_author"]
-        target_author = row["target_author"]
+        for row in cursor:
+            rowid = row["rowid"]
+            source_author = row["source_author"]
+            target_author = row["target_author"]
 
-        alignment_idx = rowid - 1
-        if alignment_idx < 0 or alignment_idx >= len(cluster_labels_modified):
-            continue
-
-        cluster_id = int(cluster_labels_modified[alignment_idx])
-        if cluster_id < 0:
-            # Unthemed: HDBSCAN called it noise and the graph was built without
-            # --merge-unthemed. Mirrors the same skip in build_precomputed_api_graph.
-            continue
-        embedding_2d = embeddings_umap_2d[alignment_idx]
-
-        for author_name in [source_author, target_author]:
-            if author_name not in author_to_id:
+            alignment_idx = rowid - 1
+            if alignment_idx < 0 or alignment_idx >= len(cluster_labels_modified):
                 continue
 
-            author_id = author_to_id[author_name]
-            pair_key = (author_id, cluster_id)
-            pair_passage_counts[pair_key] += 1
-            pair_embeddings_2d[pair_key].append(embedding_2d)
+            cluster_id = int(cluster_labels_modified[alignment_idx])
+            if cluster_id < 0:
+                # Unthemed: HDBSCAN called it noise and the graph was built without
+                # --merge-unthemed. Mirrors the same skip in build_precomputed_api_graph.
+                continue
+            embedding_2d = embeddings_umap_2d[alignment_idx]
 
-    conn.close()
+            for author_name in [source_author, target_author]:
+                if author_name not in author_to_id:
+                    continue
+
+                author_id = author_to_id[author_name]
+                pair_key = (author_id, cluster_id)
+                pair_passage_counts[pair_key] += 1
+                pair_embeddings_2d[pair_key].append(embedding_2d)
 
     # Calculate mean positions
     pair_positions = {}
