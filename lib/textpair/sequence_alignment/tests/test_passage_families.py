@@ -5,12 +5,14 @@
 
 Each case is a handful of synthetic alignments between synthetic documents, laid out
 so that one rule decides the outcome: overlapping windows of one passage merging, a
-window running past two passages not fusing them, the floor on fragments, sliding
-windows over a long copy staying bounded, a passage aligned only with a member
-joining its family, a family whose earliest occurrence is only ever a target, and a
-group's passage moved back up to five words to start its sentence -- never past a comma or
-the like, though an apostrophe does not stop it, and on a word, not an opening quote -- unless
-that would make it another group's passage exactly. Serial and parallel runs must then write the same files.
+window running past two passages not fusing them (even when each has only one window), the
+floor on fragments, sliding windows over a long copy staying bounded, a passage aligned only
+with a member joining its family, a passage that most of its partners put in one family not
+being taken into another by a longer window, a family whose earliest occurrence is only ever a
+target, and a group's passage moved back up to five words to start its sentence -- never past a
+comma or the like, though an apostrophe does not stop it, and on a word, not an opening quote --
+unless that would make it another group's passage exactly. Serial and parallel runs must then
+write the same files.
 """
 import os
 import shutil
@@ -85,7 +87,10 @@ def build(root):
                        ("E", 1600), ("F", 1700), ("G", 1700), ("H", 1700), ("I", 1700), ("J", 1700),
                        ("K", 1600), ("L", 1700), ("M", 1700), ("N", 1700), ("O", 1700),
                        ("P", 1600), ("R", 1700), ("S", 1600), ("T", 1700), ("U", 1800),
-                       ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700), ("Q", 1700), ("Y2", 1600), ("Y3", 1600)):
+                       ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700), ("Q", 1700), ("Y2", 1600), ("Y3", 1600),
+                       ("FB", 1700), ("FC", 1600), ("FD", 1650), ("FE", 1650),
+                       ("DD", 1600), ("P1", 1700), ("P2", 1700), ("P3", 1700), ("P4", 1700), ("P5", 1700),
+                       ("GG", 1750), ("BR", 1800)):
         c.doc(name, year)
     # one passage in A, reached through three windows of different extents
     c.align("A", 100, 400, "B", 0, 300)
@@ -141,6 +146,19 @@ def build(root):
     c.align("Y3", 30, 190, "Z", 700, 860)
     c.align("Y3", 230, 390, "Q", 900, 1060)
     c.align("Y3", 430, 590, "Z", 1100, 1260)
+    # two passages in FB with a window each, and a longer window over both: it must not fuse them
+    c.align("FB", 0, 50, "FC", 0, 50)
+    c.align("FB", 100, 174, "FD", 0, 74)
+    c.align("FB", 0, 365, "FE", 0, 365)
+    # DD's opening is quoted by four documents, once in a slightly longer window and once in a much
+    # longer one; GG also quotes the opening, and is aligned with DD only through the long window;
+    # BR reuses a stretch of the long window alone
+    for other in ("P1", "P2", "P3", "P4"):
+        c.align("DD", 172, 221, other, 0, 49)
+        c.align("GG", 323, 370, other, 0, 49)
+    c.align("DD", 172, 265, "P5", 0, 93)
+    c.align("DD", 172, 730, "GG", 323, 417)
+    c.align("DD", 235, 447, "BR", 0, 212)
     # S is the earliest occurrence but only ever a target
     c.align("T", 0, 200, "S", 0, 200)
     c.align("T", 0, 200, "U", 0, 200)
@@ -187,6 +205,17 @@ def main():
         run_on = families_of("E", 0, 700)
         check("the window across both is listed under each", first <= run_on and second <= run_on)
         check("... and still has a family of its own", len(run_on - first - second) == 1)
+
+        fb_a, fb_b, across = families_of("FB", 0, 50), families_of("FB", 100, 174), families_of("FB", 0, 365)
+        check("passages with one window each are not fused by a window over both", not fb_a & fb_b)
+        check("... which is listed under each", fb_a <= across and fb_b <= across)
+
+        dd, long_dd, stretch = families_of("DD", 172, 221), families_of("DD", 172, 730), families_of("DD", 235, 447)
+        check("a longer window over a passage's opening is listed under it", dd <= long_dd)
+        check("... and a quoting document aligned only through it stays in its own family",
+              families_of("GG", 323, 370) == dd)
+        check("... while a stretch only the long window shares is a family of its own",
+              len(stretch - dd) == 1 and not stretch & dd)
 
         k = families_of("K", 0, 1000)
         check("a fragment 15% of a passage joins it", families_of("K", 500, 650) == k)

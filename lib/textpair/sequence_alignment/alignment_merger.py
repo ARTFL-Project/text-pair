@@ -246,12 +246,31 @@ def _ending_past(tree, size, limit, beyond, out, stack):
 
 
 @njit(nogil=True, cache=True)
+def _chained_without_longest(starts, ends, members):
+    """Whether `members` still overlap one another in a chain once the longest is left out."""
+    n = members.shape[0]
+    s, e = starts[members], ends[members]
+    keep = np.arange(n) != np.argmax(e - s)
+    s, e = s[keep], e[keep]
+    by_start = np.argsort(s)
+    reach = e[by_start[0]]
+    for j in range(1, n - 1):
+        i = by_start[j]
+        if s[i] >= reach:
+            return False
+        reach = max(reach, e[i])
+    return True
+
+
+@njit(nogil=True, cache=True)
 def _carve(starts, ends, bounds, inside, floor, contain):
     """Sites for every cluster of windows. Returns each window's site, each site's core and
     first member, and the (site, window) pairs of longer windows listed under a site.
 
     A site is built at the point most live windows cover: its core is where at least
-    half of those overlap, and it takes the windows lying mostly inside the core.
+    half of those overlap, and it takes the windows lying mostly inside the core. With an
+    even number of windows that core spans the two middle ones; if that lets a long window
+    hold separate passages together, the core is where more than half of them overlap.
     """
     site_of = np.full(starts.shape[0], -1, np.int64)
     core_s = np.empty(starts.shape[0], np.int64)
@@ -299,27 +318,36 @@ def _carve(starts, ends, bounds, inside, floor, contain):
         while alive:
             point = xs[_deepest(mx, add, size)]
             g = _ending_past(tree, esize, np.searchsorted(s, point, side="right"), point, out, stack)
+            cover = out[:g].copy()
             need = (g + 1) // 2
-            cs = np.sort(s[out[:g]])[need - 1]
-            ce = np.sort(e[out[:g]])[g - need]
-            core = ce - cs
-            m = _ending_past(tree, esize, np.searchsorted(s, ce, side="left"), cs, out, stack)
-            n_members = 0
-            best, best_overlap = -1, _NONE
-            for j in range(m):
-                i = out[j]
-                overlap = min(e[i], ce) - max(s[i], cs)
-                if overlap > best_overlap:
-                    best, best_overlap = i, overlap
-                if overlap >= inside * (e[i] - s[i]) and (e[i] - s[i]) >= floor * core:
-                    out[n_members] = i  # members fill the front of `out`, behind j
-                    n_members += 1
-                elif overlap >= contain * core:
-                    if n_held == held_site.shape[0]:
-                        held_site = np.concatenate((held_site, np.empty_like(held_site)))
-                        held_window = np.concatenate((held_window, np.empty_like(held_window)))
-                    held_site[n_held], held_window[n_held] = n_sites, c0 + i
-                    n_held += 1
+            held_start = n_held
+            while True:
+                cs = np.sort(s[cover])[need - 1]
+                ce = np.sort(e[cover])[g - need]
+                core = ce - cs
+                m = _ending_past(tree, esize, np.searchsorted(s, ce, side="left"), cs, out, stack)
+                n_members = 0
+                n_held = held_start
+                best, best_overlap = -1, _NONE
+                for j in range(m):
+                    i = out[j]
+                    overlap = min(e[i], ce) - max(s[i], cs)
+                    if overlap > best_overlap:
+                        best, best_overlap = i, overlap
+                    if overlap >= inside * (e[i] - s[i]) and (e[i] - s[i]) >= floor * core:
+                        out[n_members] = i  # members fill the front of `out`, behind j
+                        n_members += 1
+                    elif overlap >= contain * core:
+                        if n_held == held_site.shape[0]:
+                            held_site = np.concatenate((held_site, np.empty_like(held_site)))
+                            held_window = np.concatenate((held_window, np.empty_like(held_window)))
+                        held_site[n_held], held_window[n_held] = n_sites, c0 + i
+                        n_held += 1
+                # only the longest window links these members: retry on a strict majority
+                if need * 2 == g and n_members > 2 and not _chained_without_longest(s, e, out[:n_members]):
+                    need += 1
+                    continue
+                break
             if n_members == 0:  # nothing sits inside: the window overlapping it most stands alone
                 out[0] = best
                 n_members = 1
@@ -338,7 +366,8 @@ def _carve(starts, ends, bounds, inside, floor, contain):
 @njit(nogil=True, cache=True)
 def _anchor(order, offsets, partners, adopt):
     """Families over sites taken in `order`: a site joins the family most of its placed
-    partners are in, or else anchors a new one and takes its unplaced partners."""
+    partners are in, or else anchors a new one and takes its unplaced partners, except
+    those that most of their own partners have already placed elsewhere."""
     family = np.full(order.shape[0], -1, np.int64)
     anchors = np.empty(order.shape[0], np.int64)
     placed = np.empty(max(partners.shape[0], 1), np.int64)
@@ -364,8 +393,16 @@ def _anchor(order, offsets, partners, adopt):
         family[sid] = n_families
         anchors[n_families] = sid
         for j in range(p0, p1):
-            if family[partners[j]] < 0:
-                family[partners[j]] = n_families
+            q = partners[j]
+            if family[q] >= 0:
+                continue
+            elsewhere = 0  # a partner mostly placed in other families is left to join them
+            for x in range(offsets[q], offsets[q + 1]):
+                if family[partners[x]] >= 0 and family[partners[x]] != n_families:
+                    elsewhere += 1
+            if elsewhere and elsewhere >= adopt * (offsets[q + 1] - offsets[q]):
+                continue
+            family[q] = n_families
         n_families += 1
     return family, anchors[:n_families].copy()
 
