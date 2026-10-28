@@ -976,6 +976,143 @@ def load_members_table(alignments_table: str, fields: list[str], workers: int = 
     database.close()
 
 
+# Alignment-level columns the sorted results can be filtered on without the alignments table
+FAMILY_FILTER_ALIGNMENT_FIELDS = ("source_passage_length", "target_passage_length", "banality")
+
+
+def family_filter_fields(searchable_fields: list[str], fields_in_table: set[str], direction: str) -> list[str]:
+    """Searchable fields of one side that belong to the document, so can be matched once per document."""
+    return [
+        field
+        for field in searchable_fields
+        if field.startswith(f"{direction}_")
+        and field in fields_in_table
+        and not field.endswith(("passage", "passage_length"))
+    ]
+
+
+def load_family_filter_tables(alignments_table: str, searchable_fields: list[str], workers: int = 1) -> bool:
+    """Tables that pick the passage families a search leaves in the running, in the order of the sorted results.
+
+    A family is in the running when any alignment carrying it matches the filters. Alignments are not
+    searched for that. Each side's distinct documents are (`_source_meta`, `_target_meta`); `_family_rank`
+    puts the families in `"count" DESC, group_id` order, and the other tables hold family ranks:
+    `_source_families` and `_target_families` one per family and document, `_family_alignments` one per
+    family and alignment, for filters on both sides. `_family_filters` is made last, to mark them complete.
+    """
+    config = read_global_config()
+    database_config = {
+        "user": config["DATABASE"]["database_user"],
+        "password": config["DATABASE"]["database_password"],
+        "database": config["DATABASE"]["database_name"],
+    }
+    database = psycopg2.connect(**database_config)
+    database.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)  # each step is visible when done
+    cursor = database.cursor()
+    tune_load_session(cursor)
+    cursor.execute("SET work_mem = '1GB'")
+    cursor.execute(
+        """SELECT column_name, data_type FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = %s""",
+        (alignments_table,),
+    )
+    columns = dict(cursor.fetchall())
+    if "group_id" not in columns or any(f"{side}_doc_id" not in columns for side in ("source", "target")):
+        database.close()
+        return False
+    print("Storing family filters for the sorted results...", flush=True)
+
+    built = ("family_rank", "source_meta", "target_meta", "family_alignments", "source_families", "target_families")
+    for name in ("family_filters", *built):
+        cursor.execute(f"DROP TABLE IF EXISTS {alignments_table}_{name}")
+
+    fields = {side: family_filter_fields(searchable_fields, set(columns), side) for side in ("source", "target")}
+    for side in fields:
+        select = ", ".join([f"{side}_doc_id", *fields[side]])
+        cursor.execute(
+            f"""CREATE TABLE {alignments_table}_{side}_meta AS
+            SELECT (ROW_NUMBER() OVER (ORDER BY {side}_doc_id))::int AS id, * FROM
+            (SELECT DISTINCT {select} FROM {alignments_table}) documents"""
+        )
+        cursor.execute(f"ANALYZE {alignments_table}_{side}_meta")
+    cursor.execute(
+        f"""CREATE TABLE {alignments_table}_family_rank AS
+        SELECT (ROW_NUMBER() OVER (ORDER BY "count" DESC, group_id))::int AS rank, group_id
+        FROM {alignments_table}_groups"""
+    )
+    cursor.execute(f"ALTER TABLE {alignments_table}_family_rank ADD PRIMARY KEY (rank)")
+    cursor.execute(
+        f"CREATE UNIQUE INDEX group_id_{alignments_table}_family_rank_idx ON {alignments_table}_family_rank(group_id)"
+    )
+    cursor.execute(f"ANALYZE {alignments_table}_family_rank")
+
+    # Documents are told apart by their id and fields together, so this holds even if a field varies within one
+    joins = ""
+    for side in fields:
+        same = " AND ".join(f"{side[0]}.{field} IS NOT DISTINCT FROM a.{field}" for field in fields[side])
+        joins += f" JOIN {alignments_table}_{side}_meta {side[0]} ON {side[0]}.{side}_doc_id = a.{side}_doc_id"
+        joins += f" AND {same}" if same else ""
+    if columns["group_id"] == "ARRAY":
+        joins += " CROSS JOIN LATERAL unnest(a.group_id) AS g(group_id)"
+        family = "g.group_id"
+    else:
+        family = "a.group_id"
+    alignment_fields = [field for field in FAMILY_FILTER_ALIGNMENT_FIELDS if field in columns]
+    cursor.execute(
+        f"""CREATE TABLE {alignments_table}_family_alignments AS
+        SELECT f.rank AS r, s.id AS s, t.id AS t{"".join(f", a.{field}" for field in alignment_fields)}
+        FROM {alignments_table} a {joins}
+        JOIN {alignments_table}_family_rank f ON f.group_id = {family}
+        ORDER BY f.rank"""
+    )
+    statements = []
+    for side in fields:
+        column = side[0]
+        families = f"{alignments_table}_{side}_families"
+        meta = f"{alignments_table}_{side}_meta"
+        cursor.execute(
+            f"""CREATE TABLE {families} AS
+            SELECT r, {column}, (COUNT(*) OVER (PARTITION BY r))::int AS n
+            FROM (SELECT DISTINCT r, {column} FROM {alignments_table}_family_alignments) pairs
+            ORDER BY r, {column}"""
+        )
+        cursor.execute(f"ALTER TABLE {meta} ADD COLUMN n int")
+        cursor.execute(
+            f"""UPDATE {meta} m SET n = COALESCE(d.n, 0)
+            FROM (SELECT m2.id, COUNT(f.r) AS n FROM {meta} m2
+                  LEFT JOIN {families} f ON f.{column} = m2.id GROUP BY m2.id) d
+            WHERE d.id = m.id"""
+        )
+        statements.append(f"ALTER TABLE {meta} ADD PRIMARY KEY (id)")
+        for field in fields[side]:
+            if columns[field].upper() == "TEXT":
+                statements.append(f"CREATE INDEX {field}_{meta}_trigrams_idx ON {meta} USING GIN({field} gin_trgm_ops)")
+            else:
+                statements.append(f"CREATE INDEX {field}_{meta}_idx ON {meta} USING BTREE({field})")
+        statements.append(f"CREATE UNIQUE INDEX {column}_{families}_idx ON {families}({column}, r) INCLUDE (n)")
+        statements.append(
+            f"CREATE INDEX {column}_{alignments_table}_family_alignments_idx "
+            f"ON {alignments_table}_family_alignments({column}, r)"
+        )
+    for field in alignment_fields:
+        if field != "banality":
+            statements.append(
+                f"CREATE INDEX {field}_{alignments_table}_family_alignments_idx "
+                f"ON {alignments_table}_family_alignments({field}, r)"
+            )
+    create_indexes(statements, database_config, workers)
+
+    # Index-only scans need the visibility map, which only a vacuum fills in
+    for name in built:
+        cursor.execute(f"VACUUM (ANALYZE) {alignments_table}_{name}")
+    cursor.execute(
+        f"CREATE TABLE {alignments_table}_family_filters AS "
+        f"SELECT COUNT(*)::int AS families FROM {alignments_table}_family_rank"
+    )
+    database.close()
+    return True
+
+
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
     os.system(f"rm -rf {db_path}")
@@ -1064,6 +1201,7 @@ def create_web_app(
             network_fields(web_config.searchable_fields(), fields_in_table),
             load_workers(textpair_params),
         )
+        load_family_filter_tables(table, web_config.searchable_fields(), load_workers(textpair_params))
 
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)

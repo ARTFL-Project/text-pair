@@ -12,6 +12,7 @@ import sqlite3
 import time
 from collections import Counter, OrderedDict, defaultdict, namedtuple
 from pathlib import Path
+from typing import NamedTuple
 
 import networkx as nx
 import numpy as np
@@ -142,8 +143,8 @@ def text_data_path(db_dir: str, config: dict, direction: str) -> str | None:
     return None
 
 
-def parse_args(request):
-    """Parse URL args"""
+def parse_conditions(request):
+    """Parse URL args into the filter conditions, the other args and the table's field types"""
     query_args = FormArguments()
     other_args = FormArguments()
     other_args_keys = [
@@ -215,7 +216,13 @@ def parse_args(request):
 
     metadata_field_types = get_pg_type(other_args["db_table"])
     metadata_field_types["rowid"] = "INTEGER"
-    sql_fields, sql_values = query_builder(query_args, other_args, metadata_field_types)
+    return build_conditions(query_args, other_args, metadata_field_types), other_args, metadata_field_types
+
+
+def parse_args(request):
+    """Parse URL args"""
+    conditions, other_args, metadata_field_types = parse_conditions(request)
+    sql_fields, sql_values = join_conditions(conditions)
     return sql_fields, sql_values, other_args, list(metadata_field_types.keys())
 
 
@@ -248,10 +255,22 @@ def parse_page_cursor(value) -> list[int] | None:
     return anchor if len(anchor) == len(PAGE_CURSOR_FIELDS) else None
 
 
-def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
-    """Takes query arguments and returns an SQL WHERE clause"""
-    sql_fields: list[str] = []
-    sql_values: list[str] = []
+class Condition(NamedTuple):
+    """One WHERE condition, the field it filters, and the values of its placeholders"""
+
+    field: str
+    sql: str
+    values: list
+
+
+def join_conditions(conditions: list[Condition]) -> tuple[str, list]:
+    """The WHERE clause that ANDs conditions together, with its values"""
+    return " AND ".join(c.sql for c in conditions), [value for c in conditions for value in c.values]
+
+
+def build_conditions(query_args, other_args, field_types) -> list[Condition]:
+    """Takes query arguments and returns the conditions of an SQL WHERE clause"""
+    conditions: list[Condition] = []
     for field, value in query_args.items():
         value: str = value.strip()
         field_type = field_types.get(field, "TEXT").upper()
@@ -264,23 +283,22 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
                 filter_gid = int(value)
                 if field_type == "INTEGER":
                     query = f"{field} = %s"
-                    sql_values.append(filter_gid)
+                    params = [filter_gid]
                 elif field_type == "ARRAY":  # Covers INTEGER[]
                     # Use array containment operator
                     query = f"{field} @> ARRAY[%s]::integer[]"
-                    sql_values.append(filter_gid)
+                    params = [filter_gid]
                 elif field_type == "JSONB":
                     # Assumes JSONB stores an array of numbers
                     # Use JSONB containment operator
                     query = f"{field} @> %s::jsonb"
                     # Pass the integer as a JSON array string containing that number
-                    sql_values.append(f"[{filter_gid}]")
+                    params = [f"[{filter_gid}]"]
                 else:  # Fallback to integer equality for unknown types
                     query = f"{field} = %s"
-                    sql_values.append(filter_gid)
+                    params = [filter_gid]
 
-                if query:  # Only append if a query was successfully constructed
-                    sql_fields.append(query)
+                conditions.append(Condition(field, query, params))
 
             except (ValueError, TypeError):
                 # Ignore if the provided group_id filter value is not an integer
@@ -301,44 +319,45 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
                 if value.startswith('"'):
                     if value == '""':
                         query = f"{field} = %s"
-                        sql_values.append("")
+                        params = [""]
                     else:
                         query = f"{field}=%s"
-                        sql_values.append(value[1:-1])
+                        params = [value[1:-1]]
                 elif value.startswith("NOT "):
                     split_value = " ".join(value.split()[1:]).strip()
                     query = f"{field} !~* %s"
-                    sql_values.append(rf"\m{split_value}\M")
+                    params = [rf"\m{split_value}\M"]
                 # elif value.startswith("OR "):  ## TODO: add support to OR queries by changing the join logic at the end of the function
                 #     split_value = " ".join(value.split()[1:]).strip()
                 #     query = "{} !~* %s".format(field)
                 #     sql_values.append('\m{}\M'.format(split_value))
                 else:
                     query = f"{field} ~* %s"
-                    sql_values.append(rf"\m{value}\M")
-                sql_fields.append(query)
+                    params = [rf"\m{value}\M"]
+                conditions.append(Condition(field, query, params))
         elif field_type in ("INTEGER", "FLOAT"):
             value = value.replace('"', "")
             if "-" in value:
                 values = [v for v in re.split(r"(-)", value) if v]
                 if values[0] == "-":
                     query = f"{field} <= %s"
-                    sql_values.append(values[1])
+                    params = [values[1]]
                 elif values[-1] == "-":
                     query = f"{field} >= %s"
-                    sql_values.append(values[0])
+                    params = [values[0]]
                 else:
                     query = f"{field} BETWEEN %s AND %s"
-                    sql_values.extend([values[0], values[2]])
+                    params = [values[0], values[2]]
             else:
                 query = f"{field} = %s"
-                sql_values.append(value)
-            sql_fields.append(query)
+                params = [value]
+            conditions.append(Condition(field, query, params))
         else:
             continue
     if other_args.banality != "":
-        sql_fields.append("banality=%s")
-        sql_values.append(str(other_args.banality).lower() in ("true", "t", "1", "yes"))
+        conditions.append(
+            Condition("banality", "banality=%s", [str(other_args.banality).lower() in ("true", "t", "1", "yes")])
+        )
 
     # Add classification filter condition
     for i in range(1, 4):  # Handle classification_filter_1, classification_filter_2, classification_filter_3
@@ -346,12 +365,11 @@ def query_builder(query_args, other_args, field_types) -> tuple[str, list[str]]:
         if filter_key in other_args and other_args[filter_key]:
             # Each filter value must match in at least one classification field
             condition = "(target_first_class=%s OR target_second_class=%s OR target_third_class=%s)"
-            sql_fields.append(condition)
             # Add the same filter value three times (once for each field)
             filter_value = other_args[filter_key]
-            sql_values.extend([filter_value, filter_value, filter_value])
+            conditions.append(Condition("classification", condition, [filter_value] * 3))
 
-    return " AND ".join(sql_fields), sql_values
+    return conditions
 
 
 def check_access_control(request: Request):
@@ -871,12 +889,123 @@ def family_candidates(cursor, table: str, sql_fields: str, sql_values: list) -> 
     return "WHERE group_id = ANY(%s)", (list(candidates),)
 
 
+# Cached by the oid of the table that marks the family filter tables as complete, so a rebuild invalidates it
+FAMILY_FILTER_COLUMNS: dict[int, dict[str, set[str]]] = {}
+
+
+def family_filter_columns(cursor, table: str) -> dict[str, set[str]] | None:
+    """The fields the family filter tables can answer for, or None if the database has no such tables."""
+    cursor.execute("SELECT to_regclass(%s)::oid", (f"{table}_family_filters",))
+    oid = cursor.fetchone()[0]
+    if oid is None:
+        return None
+    if oid not in FAMILY_FILTER_COLUMNS:
+        names = {
+            "source": f"{table}_source_meta",
+            "target": f"{table}_target_meta",
+            "alignments": f"{table}_family_alignments",
+        }
+        cursor.execute(
+            """SELECT table_name, column_name FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = ANY(%s)""",
+            (list(names.values()),),
+        )
+        found = cursor.fetchall()
+        columns = {kind: {column for name, column in found if name == names[kind]} for kind in names}
+        columns["alignments"] -= {"r", "s", "t"}
+        FAMILY_FILTER_COLUMNS[oid] = columns
+    return FAMILY_FILTER_COLUMNS[oid]
+
+
+def family_filter_query(cursor, table: str, conditions: list[Condition]) -> tuple[str, list] | None:
+    """A statement picking the families with an alignment matching every condition, by rank, or None.
+
+    Family rank is the place in `"count" DESC, group_id` order. The statement takes LIMIT and OFFSET
+    as its last two params and returns each family's rank with how many families match and the
+    best rank among them. None when a condition needs the alignments table itself.
+    """
+    columns = family_filter_columns(cursor, table)
+    if columns is None:
+        return None
+    by_kind: dict[str, list[Condition]] = {"source": [], "target": [], "alignments": []}
+    for condition in conditions:
+        for kind, fields in columns.items():
+            if condition.field in fields and (kind == "alignments" or condition.field.startswith(f"{kind}_")):
+                by_kind[kind].append(condition)
+                break
+        else:
+            return None
+
+    # What a side's conditions match is looked up in its small table of distinct documents.
+    sides = {side: join_conditions(by_kind[side]) for side in ("source", "target") if by_kind[side]}
+    rank_table = f"{table}_family_rank"
+    if len(sides) == 1 and not by_kind["alignments"]:
+        side = next(iter(sides))
+        side_where, side_params = sides[side]
+        column, meta, families = side[0], f"{table}_{side}_meta", f"{table}_{side}_families"
+        cursor.execute(f"SELECT COALESCE(SUM(n), 0) FROM {meta} WHERE {side_where}", side_params)
+        matching = cursor.fetchone()[0]
+        cursor.execute(f"SELECT COALESCE(SUM(n), 0) FROM {meta}")
+        if cursor.fetchone()[0] < 2 * matching:
+            # Most of the documents match, so find the families left out: those with every document outside
+            cursor.execute(f"SELECT id FROM {meta} WHERE (({side_where}) IS NOT TRUE)", side_params)
+            return (
+                f"""WITH x AS MATERIALIZED (
+                    SELECT r FROM {families} WHERE {column} = ANY(%s) GROUP BY r, n HAVING COUNT(*) = n)
+                SELECT f.rank, (SELECT MAX(rank) FROM {rank_table}) - (SELECT COUNT(*) FROM x),
+                    (SELECT g.rank FROM {rank_table} g WHERE NOT EXISTS (SELECT 1 FROM x WHERE x.r = g.rank)
+                     ORDER BY g.rank LIMIT 1)
+                FROM {rank_table} f WHERE NOT EXISTS (SELECT 1 FROM x WHERE x.r = f.rank)
+                ORDER BY f.rank LIMIT %s OFFSET %s""",
+                [[row[0] for row in cursor]],
+            )
+        cursor.execute(f"SELECT id FROM {meta} WHERE {side_where}", side_params)
+        source, where, params = families, f"{column} = ANY(%s)", [[row[0] for row in cursor]]
+    else:
+        # Both sides, or a field of the alignment itself: the one alignment has to match them all
+        source, matches, params = f"{table}_family_alignments", [], []
+        for side, (side_where, side_params) in sides.items():
+            cursor.execute(f"SELECT id FROM {table}_{side}_meta WHERE {side_where}", side_params)
+            matches.append(f"{side[0]} = ANY(%s)")
+            params.append([row[0] for row in cursor])
+        if by_kind["alignments"]:
+            alignment_where, alignment_params = join_conditions(by_kind["alignments"])
+            matches.append(alignment_where)
+            params.extend(alignment_params)
+        where = " AND ".join(matches)
+    return (
+        f"""WITH c AS MATERIALIZED (SELECT r FROM {source} WHERE {where} GROUP BY r)
+        SELECT r, (SELECT COUNT(*) FROM c), (SELECT MIN(r) FROM c) FROM c ORDER BY r LIMIT %s OFFSET %s""",
+        params,
+    )
+
+
+def ranked_page(cursor, statement: str, params: list, page: int) -> tuple[int, list[int], int, int | None]:
+    """A page of the families a family filter query picks: its number, their ranks, how many in all, the best rank.
+
+    A page past the last gives the last.
+    """
+
+    def pick(start: int, size: int):
+        cursor.execute(statement, (*params, size, start))
+        rows = cursor.fetchall()
+        return [row[0] for row in rows], (rows[0][1] if rows else 0), (rows[0][2] if rows else None)
+
+    ranks, total, best = pick((page - 1) * SORTED_PAGE_SIZE, SORTED_PAGE_SIZE)
+    if not ranks and page > 1:
+        _, total, best = pick(0, 1)
+        page = max(1, math.ceil(total / SORTED_PAGE_SIZE))
+        ranks, _, _ = pick((page - 1) * SORTED_PAGE_SIZE, SORTED_PAGE_SIZE)
+    return page, ranks, total, best
+
+
 @app.get("/sorted_results/")
 @app.get("/text-pair-api/sorted_results/")
 def get_sorted_results(request: Request):
     """One page of passage families, the most reused first"""
-    sql_fields, sql_values, other_args, _ = parse_args(request)
-    groups_table = f"{other_args.db_table}_groups"
+    conditions, other_args, _ = parse_conditions(request)
+    table = other_args.db_table
+    groups_table = f"{table}_groups"
     columns = ", ".join(f'g."{column}"' for column in get_pg_type(groups_table) if column not in FAMILY_CARD_EXCLUDED)
     conn = psycopg2.connect(
         user=GLOBAL_CONFIG["DATABASE"]["database_user"],
@@ -884,19 +1013,38 @@ def get_sorted_results(request: Request):
         database=GLOBAL_CONFIG["DATABASE"]["database_name"],
     )
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    where, params = family_candidates(cursor, other_args.db_table, sql_fields, sql_values)
+    ranked = family_filter_query(cursor, table, conditions) if conditions else None
 
-    cursor.execute(f'SELECT COUNT(*), MAX("count") FROM {groups_table} {where}', params)
-    total, max_count = cursor.fetchone()
-    page = min(max(1, other_args.page), max(1, math.ceil(total / SORTED_PAGE_SIZE)))  # type: ignore
-    start_position = (page - 1) * SORTED_PAGE_SIZE
-    # The page is picked from the index alone, so skipping to a deep one reads no rows
-    cursor.execute(
-        f"""SELECT {columns} FROM {groups_table} g
-        JOIN (SELECT group_id FROM {groups_table} {where} ORDER BY "count" DESC, group_id LIMIT %s OFFSET %s) p
-        USING (group_id) ORDER BY g."count" DESC, g.group_id""",
-        (*params, SORTED_PAGE_SIZE, start_position),
-    )
+    if ranked is not None:
+        page, ranks, total, best = ranked_page(cursor, *ranked, max(1, other_args.page))  # type: ignore
+        start_position = (page - 1) * SORTED_PAGE_SIZE
+        max_count = 0
+        if best is not None:  # the best-ranked family has the highest count
+            cursor.execute(
+                f'SELECT g."count" FROM {table}_family_rank f JOIN {groups_table} g USING (group_id) WHERE f.rank = %s',
+                (best,),
+            )
+            max_count = cursor.fetchone()[0]
+        cursor.execute(
+            f"""SELECT {columns} FROM {groups_table} g JOIN {table}_family_rank f USING (group_id)
+            WHERE f.rank = ANY(%s) ORDER BY f.rank""",
+            (ranks,),
+        )
+    else:
+        sql_fields, sql_values = join_conditions(conditions)
+        where, params = family_candidates(cursor, table, sql_fields, sql_values)
+
+        cursor.execute(f'SELECT COUNT(*), MAX("count") FROM {groups_table} {where}', params)
+        total, max_count = cursor.fetchone()
+        page = min(max(1, other_args.page), max(1, math.ceil(total / SORTED_PAGE_SIZE)))  # type: ignore
+        start_position = (page - 1) * SORTED_PAGE_SIZE
+        # The page is picked from the index alone, so skipping to a deep one reads no rows
+        cursor.execute(
+            f"""SELECT {columns} FROM {groups_table} g
+            JOIN (SELECT group_id FROM {groups_table} {where} ORDER BY "count" DESC, group_id LIMIT %s OFFSET %s) p
+            USING (group_id) ORDER BY g."count" DESC, g.group_id""",
+            (*params, SORTED_PAGE_SIZE, start_position),
+        )
     results = {
         "groups": [dict(row) for row in cursor],
         "page": page,
