@@ -230,7 +230,7 @@ def parse_request(request, conn):
         "offset",
         "centrality",
         "banality",
-        "scope",
+        "scope",  # in the links of the sorted view's earlier tabs; ignored
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
@@ -1023,15 +1023,10 @@ def ranked_page(cursor, statement: str, params: list, page: int) -> tuple[int, l
     return page, ranks, total, best
 
 
-# How the sorted results read the filters: by where a passage was first found (origin), by whether the text
-# it was first found in is the one it was taken from (direct), or by any match of the passage (any)
-SORTED_SCOPES = ("origin", "direct", "any")
-
-
-class ScopeParts(NamedTuple):
+class OriginParts(NamedTuple):
     """A search split by what it asks of a passage family, with the columns the family filter tables have"""
 
-    source: list[Condition]  # the earlier text: the anchor, under origin
+    source: list[Condition]  # the earlier text: the anchor
     target: list[Condition]  # the later text
     aligned: list[Condition]  # the alignment, such as its passage length
     columns: dict[str, set[str]]
@@ -1058,24 +1053,24 @@ def has_family_anchors(cursor, table: str) -> bool:
     return cursor.fetchone()[0] == 2
 
 
-def scope_parts(cursor, table: str, conditions: list[Condition], scope: str, groups_columns) -> ScopeParts | None:
+def origin_parts(cursor, table: str, conditions: list[Condition], groups_columns) -> OriginParts | None:
     """The conditions sorted by what they ask of a family, or None if the family filter tables cannot answer them.
 
-    Under origin the source side filters the anchor as the groups table has it, so passage text counts too,
-    and the target side has to be found on both sides of the alignments, as a later occurrence is.
+    The source side filters the anchor as the groups table has it, so passage text counts too, and the target
+    side has to be found on both sides of the alignments, as a later occurrence is.
     """
     columns = family_filter_columns(cursor, table)
     if columns is None or not has_family_anchors(cursor, table):
         return None
-    parts = ScopeParts([], [], [], columns)
+    parts = OriginParts([], [], [], columns)
     for condition in conditions:
         field = condition.field
         if field in columns["alignments"]:
             parts.aligned.append(condition)
-        elif field.startswith("source_") and field in (groups_columns if scope == "origin" else columns["source"]):
+        elif field.startswith("source_") and field in groups_columns:
             parts.source.append(condition)
         elif field.startswith("target_") and field in columns["target"]:
-            if scope == "origin" and field_on_side(field, "source") not in columns["source"]:
+            if field_on_side(field, "source") not in columns["source"]:
                 return None
             parts.target.append(condition)
         else:
@@ -1090,68 +1085,45 @@ def matching_ids(cursor, table: str, side: str, conditions: list[Condition]) -> 
     return [row[0] for row in cursor]
 
 
-def scoped_family_query(cursor, table: str, parts: ScopeParts, scope: str) -> tuple[str, list]:
-    """A statement like family_filter_query's, for the families that meet a search read by origin or direct reuse.
+def origin_family_query(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
+    """A statement like family_filter_query's, for the families that meet a search read by where they were first found.
 
-    Origin: the anchor meets the source conditions, and some other document of the family, on either side of
-    the alignments, the target conditions. Where an alignment condition is set too, that alignment has the later
-    document at one end. Direct: some alignment meets every condition and has the anchor's document as its source.
+    The anchor meets the source conditions, and some other document of the family, on either side of the
+    alignments, the target conditions. Where an alignment condition is set too, that alignment has the later
+    document at one end.
     """
     rank_table = quote_ident(f"{table}_family_rank")
     alignments = quote_ident(f"{table}_family_alignments")
     a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
     prefix = ""
-    if scope == "origin":
-        params: list = []
-        # The families that meet the source conditions come first, and only their later occurrences are looked up
-        anchored, anchor = "{rows} x JOIN " + rank_table + " f ON f.rank = x.r", "f"
-        if parts.source:
-            where, params = join_conditions(parts.source)
-            groups_table = quote_ident(f"{table}_groups")
-            prefix = (
-                f"s AS MATERIALIZED (SELECT f.rank AS r, f.anchor_s, f.anchor_t FROM {groups_table} g "
-                f"JOIN {rank_table} f USING (group_id) WHERE {where}), "
+    params: list = []
+    # The families that meet the source conditions come first, and only their later occurrences are looked up
+    anchored, anchor = "{rows} x JOIN " + rank_table + " f ON f.rank = x.r", "f"
+    if parts.source:
+        where, params = join_conditions(parts.source)
+        groups_table = quote_ident(f"{table}_groups")
+        prefix = (
+            f"s AS MATERIALIZED (SELECT f.rank AS r, f.anchor_s, f.anchor_t FROM {groups_table} g "
+            f"JOIN {rank_table} f USING (group_id) WHERE {where}), "
+        )
+        anchored, anchor = "s JOIN {rows} x ON x.r = s.r", "s"
+    if parts.target:
+        branches = []
+        for side in ("target", "source"):
+            ids = matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target])
+            column = side[0]
+            rows = alignments if parts.aligned else quote_ident(f"{table}_{side}_families")
+            branches.append(
+                f"SELECT DISTINCT x.r FROM {anchored.format(rows=rows)} WHERE x.{column} = ANY(%s) "
+                f"AND x.{column} IS DISTINCT FROM {anchor}.anchor_{column} AND {a_where}"
             )
-            anchored, anchor = "s JOIN {rows} x ON x.r = s.r", "s"
-        if parts.target:
-            branches = []
-            for side in ("target", "source"):
-                ids = matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target])
-                column = side[0]
-                rows = alignments if parts.aligned else quote_ident(f"{table}_{side}_families")
-                branches.append(
-                    f"SELECT DISTINCT x.r FROM {anchored.format(rows=rows)} WHERE x.{column} = ANY(%s) "
-                    f"AND x.{column} IS DISTINCT FROM {anchor}.anchor_{column} AND {a_where}"
-                )
-                params += [ids, *a_params]
-            body = " UNION ".join(branches)
-        elif parts.aligned:
-            body = f"SELECT DISTINCT x.r FROM {anchored.format(rows=alignments)} WHERE {a_where}"
-            params += a_params
-        else:
-            body = "SELECT r FROM s"
+            params += [ids, *a_params]
+        body = " UNION ".join(branches)
+    elif parts.aligned:
+        body = f"SELECT DISTINCT x.r FROM {anchored.format(rows=alignments)} WHERE {a_where}"
+        params += a_params
     else:
-        source_ids = matching_ids(cursor, table, "source", parts.source) if parts.source else None
-        if parts.target or parts.aligned:
-            body = f"SELECT x.r FROM {alignments} x JOIN {rank_table} f ON f.rank = x.r WHERE x.s = f.anchor_s"
-            params = []
-            if source_ids is not None:
-                body += " AND x.s = ANY(%s)"
-                params.append(source_ids)
-            if parts.target:
-                body += " AND x.t = ANY(%s)"
-                params.append(matching_ids(cursor, table, "target", parts.target))
-            if parts.aligned:
-                body += f" AND {a_where}"
-                params += a_params
-            body += " GROUP BY x.r"
-        else:
-            families = quote_ident(f"{table}_source_families")
-            body = (
-                f"SELECT x.r FROM {families} x JOIN {rank_table} f ON f.rank = x.r "
-                "WHERE x.s = f.anchor_s AND x.s = ANY(%s)"
-            )
-            params = [source_ids]
+        body = "SELECT r FROM s"
     return (
         f"""WITH {prefix}c AS MATERIALIZED ({body})
         SELECT r, (SELECT COUNT(*) FROM c), (SELECT MIN(r) FROM c) FROM c ORDER BY r LIMIT %s OFFSET %s""",
@@ -1159,10 +1131,10 @@ def scoped_family_query(cursor, table: str, parts: ScopeParts, scope: str) -> tu
     )
 
 
-def found_again(cursor, table: str, parts: ScopeParts, scope: str, ranks: list[int]) -> dict[int, dict]:
+def found_again(cursor, table: str, parts: OriginParts, ranks: list[int]) -> dict[int, dict]:
     """For each rank, the documents that meet the later-side conditions, as many as there are and the first two.
 
-    The documents are the ones scoped_family_query asks for, so every family on the page has some.
+    The documents are the ones origin_family_query asks for, so every family on the page has some.
     """
     if not parts.target or not ranks:
         return {}
@@ -1171,45 +1143,24 @@ def found_again(cursor, table: str, parts: ScopeParts, scope: str, ranks: list[i
     rank_table = quote_ident(f"{table}_family_rank")
     alignments = quote_ident(f"{table}_family_alignments")
     a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
-    if scope == "direct":
-        # Looked up by the anchor's document, so that only its alignments in the page's families are read
-        cursor.execute(
-            f"SELECT rank, anchor_s FROM {rank_table} WHERE rank = ANY(%s) AND anchor_s IS NOT NULL", (ranks,)
+    branches, params = [], []
+    for side in ("target", "source"):
+        column = side[0]
+        meta = quote_ident(f"{table}_{side}_meta")
+        select = ", ".join(
+            f"m.{quote_ident(field_on_side(field, side))} AS {quote_ident(field)}"
+            if field_on_side(field, side) in columns[side]
+            else f"NULL AS {quote_ident(field)}"
+            for field in fields
         )
-        pairs = cursor.fetchall()
-        meta = quote_ident(f"{table}_target_meta")
-        select = ", ".join(f"m.{quote_ident(field)}" for field in fields)
-        statement = (
-            f"SELECT x.r, {select} FROM unnest(%s::int[], %s::int[]) AS v(r, s) "
-            f"JOIN {alignments} x ON x.r = v.r AND x.s = v.s JOIN {meta} m ON m.id = x.t "
-            f"WHERE x.t = ANY(%s) AND {a_where}"
+        rows = alignments if parts.aligned else quote_ident(f"{table}_{side}_families")
+        branches.append(
+            f"SELECT x.r, {select} FROM {rows} x JOIN {rank_table} f ON f.rank = x.r "
+            f"JOIN {meta} m ON m.id = x.{column} WHERE x.r = ANY(%s) AND x.{column} = ANY(%s) "
+            f"AND x.{column} IS DISTINCT FROM f.anchor_{column} AND {a_where}"
         )
-        params: list = [
-            [rank for rank, _ in pairs],
-            [anchor for _, anchor in pairs],
-            matching_ids(cursor, table, "target", parts.target),
-            *a_params,
-        ]
-    else:
-        branches, params = [], []
-        for side in ("target", "source"):
-            column = side[0]
-            meta = quote_ident(f"{table}_{side}_meta")
-            select = ", ".join(
-                f"m.{quote_ident(field_on_side(field, side))} AS {quote_ident(field)}"
-                if field_on_side(field, side) in columns[side]
-                else f"NULL AS {quote_ident(field)}"
-                for field in fields
-            )
-            rows = alignments if parts.aligned else quote_ident(f"{table}_{side}_families")
-            branches.append(
-                f"SELECT x.r, {select} FROM {rows} x JOIN {rank_table} f ON f.rank = x.r "
-                f"JOIN {meta} m ON m.id = x.{column} WHERE x.r = ANY(%s) AND x.{column} = ANY(%s) "
-                f"AND x.{column} IS DISTINCT FROM f.anchor_{column} AND {a_where}"
-            )
-            params += [ranks, matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target]), *a_params]
-        statement = " UNION ALL ".join(branches)
-    cursor.execute(statement, params)
+        params += [ranks, matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target]), *a_params]
+    cursor.execute(" UNION ALL ".join(branches), params)
     documents: dict[int, dict[str, dict]] = defaultdict(dict)
     for row in cursor:
         documents[row["r"]][row["target_doc_id"]] = {field: row[field] for field in fields}
@@ -1228,7 +1179,7 @@ def found_again(cursor, table: str, parts: ScopeParts, scope: str, ranks: list[i
 def origin_groups_where(conditions: list[Condition], groups_columns) -> tuple[str, list] | None:
     """A WHERE clause on the groups table for a search made only of conditions on the earlier text, or None.
 
-    Under origin these are conditions on the anchor, which the groups table holds, so no family tables are needed.
+    These are conditions on the anchor, which the groups table holds, so no family tables are needed.
     """
     if all(c.field.startswith("source_") and c.field in groups_columns for c in conditions):
         where, params = join_conditions(conditions)
@@ -1236,41 +1187,25 @@ def origin_groups_where(conditions: list[Condition], groups_columns) -> tuple[st
     return None
 
 
-def direct_candidates(cursor, table: str, conditions: list[Condition], group_id_type: str) -> tuple[str, tuple]:
-    """A WHERE clause and its params for the families with a matching alignment from the anchor's document"""
-    where, params = join_conditions(conditions)
-    groups_table = quote_ident(f"{table}_groups")
-    unnest = "CROSS JOIN LATERAL unnest(a.group_id) AS u(gid)" if group_id_type == "ARRAY" else ""
-    family = "u.gid" if group_id_type == "ARRAY" else "a.group_id"
-    cursor.execute(
-        f"""SELECT DISTINCT g.group_id FROM (SELECT group_id, source_doc_id FROM {quote_ident(table)} WHERE {where}) a
-        {unnest} JOIN {groups_table} g ON g.group_id = {family} AND g.source_doc_id = a.source_doc_id""",
-        params,
-    )
-    return "WHERE group_id = ANY(%s)", ([row[0] for row in cursor],)
-
-
-class ScopedFamilies(NamedTuple):
+class OriginFamilies(NamedTuple):
     """The families a search leaves in the running, as a statement by rank or a WHERE clause on the groups table"""
 
-    applied: str  # the scope they were picked by
+    applied: str  # the rule they were picked by: origin, or any where the search fell back to it
     ranked: tuple[str, list] | None = None
     where: tuple[str, list | tuple] | None = None
-    parts: ScopeParts | None = None  # what the ranked statement was made from, for the evidence
+    parts: OriginParts | None = None  # what the ranked statement was made from, for the evidence
     selective: bool = False  # whether `where` may leave few of the groups
 
 
-def scoped_families(cursor, table: str, conditions, scope: str, groups_columns, group_id_type: str) -> ScopedFamilies:
-    """Pick the families by the search read as `scope`, or as any if this database's tables cannot answer it"""
-    if scope == "origin" and (where := origin_groups_where(conditions, groups_columns)):
-        return ScopedFamilies(scope, where=where, selective=True)
-    if parts := scope_parts(cursor, table, conditions, scope, groups_columns):
+def origin_families(cursor, table: str, conditions: list[Condition], groups_columns) -> OriginFamilies:
+    """Pick the families by where they were first found, or by any match if this database's tables cannot say"""
+    if where := origin_groups_where(conditions, groups_columns):
+        return OriginFamilies("origin", where=where, selective=True)
+    if parts := origin_parts(cursor, table, conditions, groups_columns):
         # Parallel plans of these statements sometimes never finish
         cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
-        return ScopedFamilies(scope, ranked=scoped_family_query(cursor, table, parts, scope), parts=parts)
-    if scope == "direct" and family_filter_columns(cursor, table) is None:
-        return ScopedFamilies(scope, where=direct_candidates(cursor, table, conditions, group_id_type))
-    return ScopedFamilies("any", ranked=family_filter_query(cursor, table, conditions))
+        return OriginFamilies("origin", ranked=origin_family_query(cursor, table, parts), parts=parts)
+    return OriginFamilies("any", ranked=family_filter_query(cursor, table, conditions))
 
 
 @app.get("/sorted_results/")
@@ -1278,30 +1213,19 @@ def scoped_families(cursor, table: str, conditions, scope: str, groups_columns, 
 def get_sorted_results(request: Request):
     """One page of passage families, the most reused first.
 
-    The search's `scope` says which families are in the running. Origin, the default, reads the earlier text's
-    fields as those of the family's anchor, its first appearance, and the later text's as those of another
-    occurrence. Direct asks for a match with the anchor's document as its earlier text. Any asks for a match,
-    whichever its place in the family. A search that origin or direct cannot answer from this database's tables
-    is answered as any, and the response says so with `scope`.
+    The earlier text's fields are read as those of the family's anchor, its first appearance, and the later
+    text's as those of another occurrence. A search this database's tables cannot read so is answered by any
+    match of the passage, and the response says so with `scope`.
     """
     with pg_connection() as conn:
-        conditions, other_args, field_types = parse_conditions(request, conn)
-        scope = other_args.scope or "origin"
-        if scope not in SORTED_SCOPES:
-            raise HTTPException(400, "scope must be origin, direct or any")
+        conditions, other_args, _ = parse_conditions(request, conn)
         table = other_args.db_table
         groups_table = quote_ident(f"{table}_groups")
         groups_columns = get_pg_type(conn, f"{table}_groups")
         columns = ", ".join(f'g."{column}"' for column in groups_columns if column not in FAMILY_CARD_EXCLUDED)
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        served = ScopedFamilies(scope)
-        if conditions and scope == "any":
-            served = ScopedFamilies(scope, ranked=family_filter_query(cursor, table, conditions))
-        elif conditions:
-            served = scoped_families(
-                cursor, table, conditions, scope, groups_columns, field_types.get("group_id", "INTEGER").upper()
-            )
+        served = origin_families(cursor, table, conditions, groups_columns) if conditions else OriginFamilies("origin")
         ranked, where, parts = served.ranked, served.where, served.parts
 
         evidence = {}
@@ -1316,7 +1240,7 @@ def get_sorted_results(request: Request):
                 )
                 max_count = cursor.fetchone()[0]
             if parts is not None:
-                evidence = found_again(cursor, table, parts, scope, ranks)
+                evidence = found_again(cursor, table, parts, ranks)
             cursor.execute(
                 f"""SELECT {columns}, f.rank AS family_rank FROM {groups_table} g JOIN {quote_ident(f"{table}_family_rank")} f USING (group_id)
                 WHERE f.rank = ANY(%s) ORDER BY f.rank""",
@@ -1360,9 +1284,8 @@ def get_sorted_results(request: Request):
             "start_position": start_position,
             "total_count": total,
             "max_count": max_count or 0,
+            "scope": served.applied,
         }
-        if scope != "any":
-            results["scope"] = served.applied
     return results
 
 

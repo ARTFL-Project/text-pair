@@ -6,10 +6,8 @@
             <search-arguments unit="passage"></search-arguments>
         </div>
         <report-switcher></report-switcher>
-        <scope-tabs panel-id="sorted-panel"></scope-tabs>
         <div class="row">
-            <div class="col position-relative" id="sorted-panel" :role="panelLabel ? 'tabpanel' : undefined"
-                :aria-labelledby="panelLabel">
+            <div class="col position-relative">
                 <div class="d-flex justify-content-center position-relative" v-if="loading">
                     <div class="spinner-border"
                         style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px" role="status">
@@ -89,10 +87,9 @@ import Velocity from "velocity-animate";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { fieldPhrase, hasSearch, paramsToUrl, prefersReducedMotion } from "../utils.js";
+import { fieldPhrase, paramsToUrl, prefersReducedMotion } from "../utils.js";
 import citations from "./citations";
 import reportSwitcher from "./reportSwitcher";
-import scopeTabs from "./scopeTabs";
 import searchArguments from "./searchArguments";
 
 const route = useRoute();
@@ -105,17 +102,12 @@ const maxCount = computed(() => results.value.max_count || 1);
 const pages = computed(() => Math.ceil((results.value.total_count || 0) / (results.value.page_size || 1)));
 let request = 0;
 
-const scope = computed(() => route.query.scope || "origin");
-// The tab that names the cards below it, where there are tabs
-const panelLabel = computed(() =>
-    hasSearch(route.query) && ["origin", "direct"].includes(scope.value) ? `scope-tab-${scope.value}` : undefined
-);
 // What the cards that show where a passage was found again say it was found in, from the later side's fields
 const foundLead = computed(() => {
     const phrases = globalConfig.metadataFields.target
         .filter((field) => route.query[field.value] && !field.value.endsWith("passage_length"))
         .map((field) => fieldPhrase(field.label, route.query[field.value]));
-    return `${scope.value == "direct" ? "Reused directly" : "Found again"} in ${phrases.join(" and ")}`;
+    return `Found again in ${phrases.join(" and ")}`;
 });
 
 // A document of the later side as its citation fields give it: author, title (year)
@@ -145,8 +137,7 @@ function fetchData() {
     emitter.emit("searchArgsUpdate", {
         counts: "",
         searchParams: params,
-        scope: scope.value,
-        requestedScope: scope.value,
+        scope: "origin",
     });
     axios
         .get(`${globalConfig.apiServer}/sorted_results/?${paramsToUrl(params)}`)
@@ -157,8 +148,7 @@ function fetchData() {
             emitter.emit("searchArgsUpdate", {
                 counts: response.data.total_count,
                 searchParams: params,
-                scope: response.data.scope || scope.value,
-                requestedScope: scope.value,
+                scope: response.data.scope || "any",
             });
         })
         .catch((err) => {

@@ -1009,8 +1009,8 @@ def add_family_anchors(cursor, alignments_table: str) -> bool:
 
     `anchor_s` is the id the anchor's document has among the documents on the source side of the alignments,
     `anchor_t` among those on the target side; either is NULL where it has none. Safe to repeat. The sorted
-    results' origin and direct filters tell the anchor's document from the others by these ids, which
-    is only possible if each document has one id, so nothing is stored (False) where one has several.
+    results' origin filters tell the anchor's document from the others by these ids, which is only
+    possible if each document has one id, so nothing is stored (False) where one has several.
     The columns appear all at once, but `_family_rank` is locked while they are filled.
     """
     for side in ("source", "target"):

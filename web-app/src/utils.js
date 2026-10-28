@@ -1,5 +1,3 @@
-import globalConfig from "./config.js";
-
 // Query string from params, skipping empty values; arrays repeat the key.
 export function paramsToUrl(params) {
     const urlParams = [];
@@ -34,14 +32,4 @@ export function fieldPhrase(label, value) {
     if (value == '""') return `no ${name}`;
     const shown = /^\d+-\d+$/.test(value) ? value.replace("-", "\u2013") : value;
     return `${/^[aeiou]/.test(name) ? "an" : "a"} ${name} \u201c${shown}\u201d`;
-}
-
-// Whether a route's query holds a search: a value for a field of the form, or a banality or classification filter.
-export function hasSearch(query) {
-    const fields = [...globalConfig.metadataFields.source, ...globalConfig.metadataFields.target];
-    return (
-        fields.some((field) => query[field.value]) ||
-        query.banality !== undefined ||
-        [1, 2, 3].some((number) => query[`classification_filter_${number}`])
-    );
 }

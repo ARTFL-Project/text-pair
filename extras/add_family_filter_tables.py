@@ -12,11 +12,11 @@ directory to read its searchable fields from, or no document ids. Run it with th
 environment's Python, and expect minutes per million alignments plus the disk they take (a few
 percent of the alignments table).
 
-Databases that have the tables from before the sorted results' "first found" tabs get only what those
-need: each family's anchor document, as two id columns of `_family_rank` (add_family_anchors in
-lib/textpair/web_loader.py), and an index of each documents table by family (family_rank_indexes).
-The anchors are one UPDATE of the family table, seconds per million families, during which the
-sorted view of that database waits for it.
+Databases that have the tables from before the sorted results read filters by where a passage was first
+found get only what that needs: each family's anchor document, as two id columns of `_family_rank`
+(add_family_anchors in lib/textpair/web_loader.py), and an index of each documents table by family
+(family_rank_indexes). The anchors are one UPDATE of the family table, seconds per million families,
+during which the sorted view of that database waits for it.
 """
 
 import os

@@ -77,9 +77,8 @@
             <span class="query-arrow" aria-hidden="true"></span>
         </div>
         <p class="query-note" v-if="scope == 'any'">
-            {{ fellBack ? "This database cannot read this search by where a passage was first found, so every" :
-                "Every" }} passage with a match for these filters is listed, wherever its text falls in the history of
-            the passage.
+            This database cannot read this search by where a passage was first found, so every passage with a match
+            for these filters is listed, wherever its text falls in the history of the passage.
         </p>
         <div class="query-banality" v-if="banality">
             <div class="metadata-args rounded-pill">
@@ -113,16 +112,13 @@ const searchParams = ref([
     { direction: globalConfig.targetLabel, params: null },
 ]);
 const banality = ref(null);
-// The rule a sorted view applied, origin, direct or any, and the one it was asked for
+// The rule a sorted view applied: origin, or any where the database cannot read the search by it
 const scope = ref(null);
-const requestedScope = ref(null);
-const fellBack = computed(() => requestedScope.value && requestedScope.value != scope.value);
 
 function update(params) {
     counts.value = params.counts.toLocaleString();
     single.value = Number(params.counts) === 1;
     scope.value = params.scope || null;
-    requestedScope.value = params.requestedScope || null;
     searchParams.value = processParams(params.searchParams);
     if ("banality" in params.searchParams && params.searchParams.banality.length > 0) {
         banality.value = params.searchParams.banality == "false" ? "Filter all" : "Only banalities";
@@ -130,8 +126,7 @@ function update(params) {
         banality.value = false;
     }
     if (params.counts !== "") {
-        const rule = hasNoParams.value ? "" : { origin: ", any later reuse", direct: ", direct reuse" }[scope.value] || "";
-        emitter.emit("announce", `${counts.value} ${noun.value}${rule}`);
+        emitter.emit("announce", `${counts.value} ${noun.value}`);
     }
 }
 emitter.on("searchArgsUpdate", update);
@@ -146,7 +141,7 @@ const hasNoParams = computed(() => {
 
 // The search in sentence form: where the passages were first found, and how they were reused
 const sentence = computed(() => {
-    if (!["origin", "direct"].includes(scope.value)) return null;
+    if (scope.value != "origin") return null;
     const [source, target] = searchParams.value.map((group) => group.params || []);
     const lengths = [...source, ...target].filter((metadata) => metadata.fieldName.endsWith("passage_length"));
     const first = source.filter((metadata) => !lengths.includes(metadata));
@@ -154,12 +149,7 @@ const sentence = computed(() => {
     const clauses = [];
     const and = () => (clauses.length ? "and " : "");
     if (first.length) clauses.push({ lead: "first found in", side: "source", chips: first });
-    if (later.length) {
-        const lead = scope.value == "direct" ? "reused directly in" : "found again in";
-        clauses.push({ lead: and() + lead, side: "target", chips: later });
-    } else if (scope.value == "direct" && first.length) {
-        clauses.push({ lead: "and reused directly", side: "target", chips: [] });
-    }
+    if (later.length) clauses.push({ lead: and() + "found again in", side: "target", chips: later });
     if (lengths.length) clauses.push({ lead: and() + "in a match with", side: "source", chips: lengths });
     return clauses;
 });
