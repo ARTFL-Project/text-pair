@@ -50,7 +50,7 @@
                         </div>
                     </li>
                 </transition-group>
-                <nav aria-label="Pages of matches" v-if="pages > 1">
+                <nav aria-label="Pages of passages" v-if="pages > 1">
                     <ul class="pagination justify-content-center mb-4">
                         <li class="page-item" v-if="results.page > 1">
                             <button type="button" class="page-link" @click="goToPage(results.page - 1)"
