@@ -6,8 +6,10 @@
             <search-arguments unit="passage"></search-arguments>
         </div>
         <report-switcher></report-switcher>
+        <scope-tabs panel-id="sorted-panel"></scope-tabs>
         <div class="row">
-            <div class="col position-relative">
+            <div class="col position-relative" id="sorted-panel" :role="panelLabel ? 'tabpanel' : undefined"
+                :aria-labelledby="panelLabel">
                 <div class="d-flex justify-content-center position-relative" v-if="loading">
                     <div class="spinner-border"
                         style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px" role="status">
@@ -29,6 +31,7 @@
                             </div>
                             <h3 class="family-citation">
                                 <span class="visually-hidden">{{ results.start_position + index + 1 }}. </span>
+                                <span class="family-origin">First found in:</span>
                                 <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"
                                     :link-to-doc="globalConfig.sourceLinkToDocMetadata" tag="span"></citations>
                             </h3>
@@ -37,6 +40,10 @@
                                 {{ sourcePassage.count == 1 ? "document" : "documents" }}:</span>
                             <q class="family-quote passages" :lang="globalConfig.sourceLanguage || undefined">{{
                                 sourcePassage.source_passage }}</q>
+                            <p class="family-found" v-if="sourcePassage.found_again">
+                                <span class="family-found-lead">{{ foundLead }}:</span>{{ " " + foundDocuments(sourcePassage) }}<span
+                                    class="family-found-count">{{ " \u2014 " + foundCount(sourcePassage) }}</span>
+                            </p>
                             <div>
                                 <router-link class="btn btn-outline-secondary btn-sm family-link"
                                     :to="`/group/${sourcePassage.group_id}`">
@@ -82,9 +89,10 @@ import Velocity from "velocity-animate";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { paramsToUrl, prefersReducedMotion } from "../utils.js";
+import { fieldPhrase, hasSearch, paramsToUrl, prefersReducedMotion } from "../utils.js";
 import citations from "./citations";
 import reportSwitcher from "./reportSwitcher";
+import scopeTabs from "./scopeTabs";
 import searchArguments from "./searchArguments";
 
 const route = useRoute();
@@ -97,6 +105,36 @@ const maxCount = computed(() => results.value.max_count || 1);
 const pages = computed(() => Math.ceil((results.value.total_count || 0) / (results.value.page_size || 1)));
 let request = 0;
 
+const scope = computed(() => route.query.scope || "origin");
+// The tab that names the cards below it, where there are tabs
+const panelLabel = computed(() =>
+    hasSearch(route.query) && ["origin", "direct"].includes(scope.value) ? `scope-tab-${scope.value}` : undefined
+);
+// What the cards that show where a passage was found again say it was found in, from the later side's fields
+const foundLead = computed(() => {
+    const phrases = globalConfig.metadataFields.target
+        .filter((field) => route.query[field.value] && !field.value.endsWith("passage_length"))
+        .map((field) => fieldPhrase(field.label, route.query[field.value]));
+    return `${scope.value == "direct" ? "Reused directly" : "Found again"} in ${phrases.join(" and ")}`;
+});
+
+// A document of the later side as its citation fields give it: author, title (year)
+function citationText(occurrence) {
+    const parts = (globalConfig.targetCitation || [])
+        .filter((cite) => occurrence[cite.field])
+        .map((cite) => (/year$/.test(cite.field) ? `(${occurrence[cite.field]})` : occurrence[cite.field]));
+    return parts.join(", ").replace(", (", " (");
+}
+
+// The documents the later side's fields found a passage again in, as many as the card has room for
+function foundDocuments(group) {
+    return group.found_again.documents.map(citationText).join("; ");
+}
+
+function foundCount(group) {
+    return `${group.found_again.matching.toLocaleString()} of ${group.count.toLocaleString()} documents`;
+}
+
 function fetchData() {
     results.value = { groups: [], start_position: 0 }; // clear alignments with new search
     error.value = null;
@@ -107,6 +145,8 @@ function fetchData() {
     emitter.emit("searchArgsUpdate", {
         counts: "",
         searchParams: params,
+        scope: scope.value,
+        requestedScope: scope.value,
     });
     axios
         .get(`${globalConfig.apiServer}/sorted_results/?${paramsToUrl(params)}`)
@@ -117,6 +157,8 @@ function fetchData() {
             emitter.emit("searchArgsUpdate", {
                 counts: response.data.total_count,
                 searchParams: params,
+                scope: response.data.scope || scope.value,
+                requestedScope: scope.value,
             });
         })
         .catch((err) => {
@@ -238,6 +280,39 @@ function enter(el, complete) {
 .family-citation :deep(span.d-block) {
     margin: 0 !important;
     padding: 0 !important;
+}
+
+// Says what the citation is: the passage's earliest text, which need not be the one a search matched
+.family-origin {
+    display: block;
+    margin-bottom: 0.1rem;
+    color: $muted;
+    font-family: $font-ui;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+// Where the later side's fields found the passage again, in the later side's ink
+.family-found {
+    max-width: 90ch;
+    margin: 0 0 0.25rem;
+    padding-left: 0.65rem;
+    border-left: 3px solid rgba($target-color, 0.5);
+    color: $ink;
+    font-family: $font-ui;
+    font-size: 0.82rem;
+    line-height: 1.5;
+}
+
+.family-found-lead {
+    color: $target-deep;
+    font-weight: 600;
+}
+
+.family-found-count {
+    color: $muted;
+    white-space: nowrap;
 }
 
 .family-count {

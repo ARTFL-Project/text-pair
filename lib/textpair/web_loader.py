@@ -991,6 +991,51 @@ def family_filter_fields(searchable_fields: list[str], fields_in_table: set[str]
     ]
 
 
+def family_rank_indexes(alignments_table: str) -> list[str]:
+    """Statements that index each side's documents by family, as they are otherwise indexed by document only.
+
+    The sorted results read the documents of given families: of the few that meet an origin filter's
+    earlier-side conditions, and of the 50 of a page, to show where each was found again.
+    """
+    return [
+        f"CREATE INDEX IF NOT EXISTS r_{alignments_table}_{side}_families_idx "
+        f"ON {alignments_table}_{side}_families(r) INCLUDE ({side[0]})"
+        for side in ("source", "target")
+    ]
+
+
+def add_family_anchors(cursor, alignments_table: str) -> bool:
+    """Store each family's anchor document on `_family_rank`, as its ids in `_source_meta` and `_target_meta`.
+
+    `anchor_s` is the id the anchor's document has among the documents on the source side of the alignments,
+    `anchor_t` among those on the target side; either is NULL where it has none. Safe to repeat. The sorted
+    results' origin and direct filters tell the anchor's document from the others by these ids, which
+    is only possible if each document has one id, so nothing is stored (False) where one has several.
+    The columns appear all at once, but `_family_rank` is locked while they are filled.
+    """
+    for side in ("source", "target"):
+        cursor.execute(f"SELECT COUNT(*) > COUNT(DISTINCT {side}_doc_id) FROM {alignments_table}_{side}_meta")
+        if cursor.fetchone()[0]:
+            return False
+    rank = f"{alignments_table}_family_rank"
+    cursor.execute("BEGIN")
+    try:
+        cursor.execute(f"ALTER TABLE {rank} ADD COLUMN IF NOT EXISTS anchor_s int, ADD COLUMN IF NOT EXISTS anchor_t int")
+        cursor.execute(
+            f"""UPDATE {rank} f SET anchor_s = s.id, anchor_t = t.id
+            FROM {alignments_table}_groups g
+            LEFT JOIN {alignments_table}_source_meta s ON s.source_doc_id = g.source_doc_id
+            LEFT JOIN {alignments_table}_target_meta t ON t.target_doc_id = g.source_doc_id
+            WHERE g.group_id = f.group_id"""
+        )
+        cursor.execute("COMMIT")
+    except psycopg2.Error:
+        cursor.execute("ROLLBACK")
+        raise
+    cursor.execute(f"VACUUM (ANALYZE) {rank}")
+    return True
+
+
 def load_family_filter_tables(alignments_table: str, searchable_fields: list[str], workers: int = 1) -> bool:
     """Tables that pick the passage families a search leaves in the running, in the order of the sorted results.
 
@@ -998,7 +1043,8 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     searched for that. Each side's distinct documents are (`_source_meta`, `_target_meta`); `_family_rank`
     puts the families in `"count" DESC, group_id` order, and the other tables hold family ranks:
     `_source_families` and `_target_families` one per family and document, `_family_alignments` one per
-    family and alignment, for filters on both sides. `_family_filters` is made last, to mark them complete.
+    family and alignment, for filters on both sides. `_family_rank` also holds each family's anchor document
+    (see add_family_anchors). `_family_filters` is made last, to mark them complete.
     """
     config = read_global_config()
     database_config = {
@@ -1045,6 +1091,7 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
         f"CREATE UNIQUE INDEX group_id_{alignments_table}_family_rank_idx ON {alignments_table}_family_rank(group_id)"
     )
     cursor.execute(f"ANALYZE {alignments_table}_family_rank")
+    add_family_anchors(cursor, alignments_table)
 
     # Documents are told apart by their id and fields together, so this holds even if a field varies within one
     joins = ""
@@ -1094,6 +1141,7 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
             f"CREATE INDEX {column}_{alignments_table}_family_alignments_idx "
             f"ON {alignments_table}_family_alignments({column}, r)"
         )
+    statements.extend(family_rank_indexes(alignments_table))
     for field in alignment_fields:
         if field != "banality":
             statements.append(

@@ -11,6 +11,12 @@ A database is skipped if it already has them (--force rebuilds), or has no group
 directory to read its searchable fields from, or no document ids. Run it with the textpair
 environment's Python, and expect minutes per million alignments plus the disk they take (a few
 percent of the alignments table).
+
+Databases that have the tables from before the sorted results' "first found" tabs get only what those
+need: each family's anchor document, as two id columns of `_family_rank` (add_family_anchors in
+lib/textpair/web_loader.py), and an index of each documents table by family (family_rank_indexes).
+The anchors are one UPDATE of the family table, seconds per million families, during which the
+sorted view of that database waits for it.
 """
 
 import os
@@ -20,7 +26,7 @@ from argparse import ArgumentParser
 from configparser import ConfigParser
 
 import psycopg2
-from textpair.web_loader import load_family_filter_tables
+from textpair.web_loader import add_family_anchors, family_rank_indexes, load_family_filter_tables
 from textpair.web_settings import load_app_config
 
 GLOBAL_CONFIG = ConfigParser()
@@ -51,6 +57,21 @@ def has_columns(cursor, table, columns):
 def table_exists(cursor, table):
     cursor.execute("SELECT to_regclass(%s) IS NOT NULL", (table,))
     return cursor.fetchone()[0]
+
+
+def has_anchors(cursor, table):
+    return has_columns(cursor, f"{table}_family_rank", ("anchor_s", "anchor_t"))
+
+
+def missing_rank_indexes(cursor, table):
+    """The statements of family_rank_indexes for indexes the database does not have yet."""
+    missing = []
+    for statement in family_rank_indexes(table):
+        name = statement.split()[5]
+        cursor.execute("SELECT to_regclass(%s) IS NULL", (name,))
+        if cursor.fetchone()[0]:
+            missing.append(statement)
+    return missing
 
 
 def searchable_fields(table):
@@ -88,7 +109,28 @@ def main():
             print(f"  {table}: no groups table or document ids, skipped")
             continue
         if table_exists(cursor, f"{table}_family_filters") and not args.force:
-            print(f"  {table}: tables already present")
+            anchors = has_anchors(cursor, table)
+            indexes = missing_rank_indexes(cursor, table)
+            if anchors and not indexes:
+                print(f"  {table}: tables already present")
+            elif args.dry_run:
+                print(f"  {table}: would add the anchors and indexes to the family filter tables")
+            else:
+                print(f"  {table}: adding the anchors and indexes...", flush=True)
+                started = time.time()
+                try:
+                    done = anchors or add_family_anchors(cursor, table)
+                    for statement in indexes if done else []:
+                        cursor.execute(statement)
+                    for name in ("source_families", "target_families") if indexes else ():
+                        cursor.execute(f"VACUUM (ANALYZE) {table}_{name}")
+                except psycopg2.Error as error:
+                    print(f"  {table}: FAILED: {str(error).strip()}", file=sys.stderr)
+                    continue
+                if done:
+                    print(f"  {table}: done in {time.time() - started:.1f} s")
+                else:
+                    print(f"  {table}: a document has several ids, anchors not stored")
             continue
         fields = searchable_fields(table)
         if fields is None:

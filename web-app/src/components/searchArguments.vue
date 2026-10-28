@@ -10,6 +10,37 @@
         </div>
     </div>
 
+    <!-- Sorted by where passages were first found: the search as a sentence about the passages -->
+    <div v-else-if="sentence" id="search-arguments" class="query-summary">
+        <p class="query-sentence">
+            <span v-if="!counts || counts === '...'">
+                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>{{ noun }}
+            </span>
+            <span v-else><strong class="result-count">{{ counts }}</strong> {{ noun }}</span>
+            <template v-for="clause in sentence" :key="clause.lead">
+                <span class="query-lead">{{ " " + clause.lead + " " }}</span>
+                <span class="query-chips" :class="clause.side == 'target' ? 'side-target-color' : 'side-source-color'">
+                    <span class="metadata-args" v-for="metadata in clause.chips" :key="metadata.fieldName">
+                        <span class="metadata-value">{{ metadata.phrase }}</span>
+                        <button type="button" class="remove-metadata"
+                            :aria-label="`Remove ${metadata.sideName} ${metadata.label} ${checkValue(metadata.value)}`"
+                            @click="removeMetadata(metadata)">&times;</button>
+                    </span>
+                </span>
+            </template>
+        </p>
+        <div class="query-banality" v-if="banality">
+            <div class="metadata-args rounded-pill">
+                <span class="metadata-label"> Banality filter </span>
+                <span class="metadata-value">
+                    {{ banality }}
+                </span>
+                <button type="button" class="remove-metadata" :aria-label="`Remove banality filter ${banality}`"
+                    @click="removeMetadata({ fieldName: 'banality' })">&times;</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Regular version when search params exist -->
     <div v-else id="search-arguments" class="query-summary">
         <div class="query-count">
@@ -45,6 +76,11 @@
             </div>
             <span class="query-arrow" aria-hidden="true"></span>
         </div>
+        <p class="query-note" v-if="scope == 'any'">
+            {{ fellBack ? "This database cannot read this search by where a passage was first found, so every" :
+                "Every" }} passage with a match for these filters is listed, wherever its text falls in the history of
+            the passage.
+        </p>
         <div class="query-banality" v-if="banality">
             <div class="metadata-args rounded-pill">
                 <span class="metadata-label"> Banality filter </span>
@@ -62,7 +98,7 @@ import emitter from "tiny-emitter/instance";
 import { computed, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { paramsToUrl, plainText } from "../utils.js";
+import { fieldPhrase, paramsToUrl, plainText } from "../utils.js";
 
 const props = defineProps({ unit: { type: String, default: "match" } }); // what the views count
 
@@ -77,10 +113,16 @@ const searchParams = ref([
     { direction: globalConfig.targetLabel, params: null },
 ]);
 const banality = ref(null);
+// The rule a sorted view applied, origin, direct or any, and the one it was asked for
+const scope = ref(null);
+const requestedScope = ref(null);
+const fellBack = computed(() => requestedScope.value && requestedScope.value != scope.value);
 
 function update(params) {
     counts.value = params.counts.toLocaleString();
     single.value = Number(params.counts) === 1;
+    scope.value = params.scope || null;
+    requestedScope.value = params.requestedScope || null;
     searchParams.value = processParams(params.searchParams);
     if ("banality" in params.searchParams && params.searchParams.banality.length > 0) {
         banality.value = params.searchParams.banality == "false" ? "Filter all" : "Only banalities";
@@ -88,7 +130,8 @@ function update(params) {
         banality.value = false;
     }
     if (params.counts !== "") {
-        emitter.emit("announce", `${counts.value} ${noun.value}`);
+        const rule = hasNoParams.value ? "" : { origin: ", any later reuse", direct: ", direct reuse" }[scope.value] || "";
+        emitter.emit("announce", `${counts.value} ${noun.value}${rule}`);
     }
 }
 emitter.on("searchArgsUpdate", update);
@@ -101,16 +144,40 @@ const hasNoParams = computed(() => {
     return noSourceParams && noTargetParams && !banality.value;
 });
 
+// The search in sentence form: where the passages were first found, and how they were reused
+const sentence = computed(() => {
+    if (!["origin", "direct"].includes(scope.value)) return null;
+    const [source, target] = searchParams.value.map((group) => group.params || []);
+    const lengths = [...source, ...target].filter((metadata) => metadata.fieldName.endsWith("passage_length"));
+    const first = source.filter((metadata) => !lengths.includes(metadata));
+    const later = target.filter((metadata) => !lengths.includes(metadata));
+    const clauses = [];
+    const and = () => (clauses.length ? "and " : "");
+    if (first.length) clauses.push({ lead: "first found in", side: "source", chips: first });
+    if (later.length) {
+        const lead = scope.value == "direct" ? "reused directly in" : "found again in";
+        clauses.push({ lead: and() + lead, side: "target", chips: later });
+    } else if (scope.value == "direct" && first.length) {
+        clauses.push({ lead: "and reused directly", side: "target", chips: [] });
+    }
+    if (lengths.length) clauses.push({ lead: and() + "in a match with", side: "source", chips: lengths });
+    return clauses;
+});
+
 function processParams(params) {
     const processed = [];
     for (const direction of ["source", "target"]) {
         const paramGroup = [];
+        const sideName = plainText(globalConfig[`${direction}Label`]);
         for (const metadata of globalConfig.metadataFields[direction]) {
             if (metadata.value in params && params[metadata.value].length > 0) {
+                const phrase = fieldPhrase(metadata.label, params[metadata.value]);
                 paramGroup.push({
                     label: metadata.label,
                     fieldName: metadata.value,
                     value: params[metadata.value],
+                    sideName,
+                    phrase: metadata.value.endsWith("passage_length") ? `${phrase} in the ${sideName.toLowerCase()}` : phrase,
                 });
             }
         }
@@ -159,6 +226,30 @@ function checkValue(value) {
 
 .query-count {
     margin-bottom: 0.6rem;
+}
+
+// The sorted view's search read as a sentence, the filters as pills in the colors of their sides
+.query-sentence {
+    margin: 0;
+    color: $ink-2;
+    font-size: 1.05rem;
+    line-height: 2.2;
+}
+
+.query-lead {
+    margin: 0 0.15rem;
+}
+
+.query-sentence .metadata-args {
+    margin-bottom: 0;
+    font-size: 0.95rem;
+    vertical-align: baseline;
+}
+
+.query-note {
+    margin: 0.6rem 0 0;
+    font-size: 0.85rem;
+    font-style: italic;
 }
 
 // Both sides of the query, joined like the sides of a pair
