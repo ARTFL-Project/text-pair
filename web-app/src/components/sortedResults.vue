@@ -4,6 +4,8 @@
         <div class="row" style="padding: 0 0.75rem">
             <div class="m-4" style="font-size: 120%" v-if="error">No reused passages for your query</div>
             <search-arguments unit="reused"></search-arguments>
+            <p class="passage-note">Each passage is shown from its earliest occurrence in this collection; the passage
+                itself may be older.</p>
         </div>
         <report-switcher></report-switcher>
         <div class="row">
@@ -29,7 +31,7 @@
                             </div>
                             <h3 class="family-citation">
                                 <span class="visually-hidden">{{ results.start_position + index + 1 }}. </span>
-                                <span class="family-origin">First found in:</span>
+                                <span class="family-origin">First found here in:</span>
                                 <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"
                                     :link-to-doc="globalConfig.sourceLinkToDocMetadata" tag="span"></citations>
                             </h3>
@@ -188,6 +190,14 @@ function enter(el, complete) {
 
 <style lang="scss" scoped>
 @import "../assets/theme.module.scss";
+
+// The search's one sentence about the passages
+.passage-note {
+    margin: 0.35rem 0 0;
+    color: $muted;
+    font-family: $font-ui;
+    font-size: 0.85rem;
+}
 
 // Rank in the left margin, the count large at the top right
 .family-card {
