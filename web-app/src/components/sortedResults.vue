@@ -54,7 +54,7 @@
                                 sourcePassage.source_passage }}</q>
                             <p class="family-found" v-if="sourcePassage.found_again">
                                 <span class="family-found-lead">{{ foundLead }}:</span>{{ " " + foundDocuments(sourcePassage) }}<span
-                                    class="family-found-count">{{ " \u2014 " + foundCount(sourcePassage) }}</span>
+                                    class="family-found-count" v-if="foundCount(sourcePassage)">{{ " \u2014 " + foundCount(sourcePassage) }}</span>
                             </p>
                             <div>
                                 <router-link class="btn btn-outline-secondary btn-sm family-link"
@@ -143,12 +143,21 @@ function citationText(occurrence) {
     return parts.join(", ").replace(", (", " (") || UNATTRIBUTED;
 }
 
-// The documents the later side's fields found a passage again in, as many as the card has room for
-function foundDocuments(group) {
-    return group.found_again.documents.map(citationText).join("; ");
+// Every reusing document meets the later side's fields: the line says no more than who they are
+function foundAll(group) {
+    return group.found_again.matching >= reuses(group);
 }
 
+// The documents the later side's fields found a passage again in, as many as the card has room for
+function foundDocuments(group) {
+    const { documents, matching } = group.found_again;
+    const list = documents.map(citationText).join("; ");
+    return foundAll(group) && matching > documents.length ? `${list}; and ${matching - documents.length} more` : list;
+}
+
+// How many of the reusing documents they are, unless all
 function foundCount(group) {
+    if (foundAll(group)) return "";
     return `${group.found_again.matching.toLocaleString()} of ${reuses(group).toLocaleString()} documents`;
 }
 
