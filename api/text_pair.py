@@ -847,7 +847,9 @@ def metadata(request: Request):
 
 
 @app.get("/group/{group_id}")
+@app.get("/group/{group_id}/")
 @app.get("/text-pair-api/group/{group_id}")
+@app.get("/text-pair-api/group/{group_id}/")
 def get_passage_group(request: Request, group_id: int):
     """Retrieve a passage group"""
     with pg_connection() as conn:
