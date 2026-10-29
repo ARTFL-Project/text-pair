@@ -77,8 +77,9 @@
             <span class="query-arrow" aria-hidden="true"></span>
         </div>
         <p class="query-note" v-if="scope == 'any'">
-            This database cannot read this search by where a passage was first found, so every passage with a match
-            for these filters is listed, wherever its text falls in the history of the passage.
+            This database cannot read this search by where a passage was first found, so every reused passage that
+            appears in a pair of texts meeting these filters is listed, wherever its text falls in the history of the
+            passage.
         </p>
         <div class="query-banality" v-if="banality">
             <div class="metadata-args rounded-pill">
@@ -99,13 +100,14 @@ import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
 import { fieldPhrase, paramsToUrl, plainText } from "../utils.js";
 
-const props = defineProps({ unit: { type: String, default: "match" } }); // what the views count
+// What the view counts: shared passages, the pairs of texts, or reused passages, the families
+const props = defineProps({ unit: { type: String, default: "shared" } });
 
 const route = useRoute();
 const router = useRouter();
 const counts = ref("...");
 const single = ref(false);
-const nouns = { match: ["match", "matches"], passage: ["passage", "passages"] };
+const nouns = { shared: ["shared passage", "shared passages"], reused: ["reused passage", "reused passages"] };
 const noun = computed(() => nouns[props.unit][single.value ? 0 : 1]);
 const searchParams = ref([
     { direction: globalConfig.sourceLabel, params: null },
@@ -150,7 +152,7 @@ const sentence = computed(() => {
     const and = () => (clauses.length ? "and " : "");
     if (first.length) clauses.push({ lead: "first found in", side: "source", chips: first });
     if (later.length) clauses.push({ lead: and() + "found again in", side: "target", chips: later });
-    if (lengths.length) clauses.push({ lead: and() + "in a match with", side: "source", chips: lengths });
+    if (lengths.length) clauses.push({ lead: and() + "in a shared passage with", side: "source", chips: lengths });
     return clauses;
 });
 

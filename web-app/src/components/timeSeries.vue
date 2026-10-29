@@ -2,13 +2,13 @@
     <div id="time-series-chart" class="mt-3">
         <h2 class="visually-hidden">Passages in timeline</h2>
         <div class="row" style="padding: 0 0.75rem">
-            <div class="m-4" style="font-size: 120%;" v-if="error">No matches for your query</div>
+            <div class="m-4" style="font-size: 120%;" v-if="error">No shared passages for your query</div>
             <search-arguments></search-arguments>
         </div>
         <report-switcher></report-switcher>
         <div class="card time-card shadow-1">
             <div id="time-series-options">
-                <span id="time-interval-label">Group matches by</span>
+                <span id="time-interval-label">Group shared passages by</span>
                 <div class="interval-dropdown" @focusout="onDropdownFocusout" @keydown.esc="closeDropdown">
                     <button type="button" id="time-interval-toggle" ref="intervalToggle"
                         class="btn btn-sm btn-light rounded-0" aria-labelledby="time-interval-label time-interval-toggle"
@@ -379,7 +379,7 @@ function fetchData() {
             if (id === requestId) {
                 loading.value = false;
                 error.value = err.toString();
-                emitter.emit("announce", "No matches for your query");
+                emitter.emit("announce", "No shared passages for your query");
             }
             console.log(err);
         });

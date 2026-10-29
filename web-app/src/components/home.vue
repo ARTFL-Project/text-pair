@@ -6,7 +6,7 @@
             <ul class="stats-figures" v-else-if="stats">
                 <li>
                     <span class="figure">{{ stats.pairs_count.toLocaleString() }}</span>
-                    <span class="figure-caption">passage pairs in this database</span>
+                    <span class="figure-caption">shared passages in this database</span>
                 </li>
                 <li v-if="stats.group_count != null">
                     <span class="figure">{{ stats.group_count.toLocaleString() }}</span>

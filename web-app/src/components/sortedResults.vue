@@ -2,8 +2,8 @@
     <div class="mt-3">
         <h2 class="visually-hidden">Reused passages</h2>
         <div class="row" style="padding: 0 0.75rem">
-            <div class="m-4" style="font-size: 120%" v-if="error">No matches for your query</div>
-            <search-arguments unit="passage"></search-arguments>
+            <div class="m-4" style="font-size: 120%" v-if="error">No reused passages for your query</div>
+            <search-arguments unit="reused"></search-arguments>
         </div>
         <report-switcher></report-switcher>
         <div class="row">
@@ -55,7 +55,7 @@
                         </div>
                     </li>
                 </transition-group>
-                <nav aria-label="Pages of passages" v-if="pages > 1">
+                <nav aria-label="Pages of reused passages" v-if="pages > 1">
                     <ul class="pagination justify-content-center mb-4">
                         <li class="page-item" v-if="results.page > 1">
                             <button type="button" class="page-link" @click="goToPage(results.page - 1)"
@@ -155,7 +155,7 @@ function fetchData() {
             if (current != request) return;
             loading.value = false;
             error.value = err.toString();
-            emitter.emit("announce", "No matches for your query");
+            emitter.emit("announce", "No reused passages for your query");
             console.log(err);
         });
 }

@@ -2,7 +2,7 @@
     <div class="mt-3">
         <h2 class="visually-hidden">Shared passages</h2>
         <div class="row" style="padding: 0 0.75rem">
-            <div class="m-4" style="font-size: 120%" v-if="error">No matches for your query</div>
+            <div class="m-4" style="font-size: 120%" v-if="error">No shared passages for your query</div>
             <search-arguments></search-arguments>
         </div>
         <report-switcher />
@@ -18,12 +18,12 @@
                     v-on:before-enter="beforeEnter" v-on:enter="enter">
                     <li class="card pair-card mb-3 shadow-1" v-for="(alignment, index) in results.alignments"
                         :key="results.start_position + index + 1" v-bind:data-index="index">
-                        <h3 class="visually-hidden">Passage pair {{ results.start_position + index + 1 }}</h3>
+                        <h3 class="visually-hidden">Shared passage {{ results.start_position + index + 1 }}</h3>
                         <passage-pair :alignment="alignment" :index="index" :diffed="false"
                             :number="results.start_position + index + 1"></passage-pair>
                     </li>
                 </transition-group>
-                <nav aria-label="Pages of matches" v-if="done">
+                <nav aria-label="Pages of shared passages" v-if="done">
                     <ul class="pagination justify-content-center mb-4">
                         <li class="page-item" v-if="results.page > 1">
                             <button type="button" class="page-link" @click="previousPage()" aria-label="Previous page">
@@ -48,7 +48,7 @@
                             <path d="M2.5 3.5h11M2.5 8h7M2.5 12.5h4" fill="none" stroke="currentColor"
                                 stroke-width="1.75" stroke-linecap="round" />
                         </svg>
-                        Count matches by
+                        Count shared passages by
                     </h3>
                     <button type="button" id="metadata-list" :class="{ show: facetsCollapsed }" aria-expanded="false"
                         aria-controls="facet-fields" @click="toggleFacetList()">Show
@@ -165,8 +165,8 @@ function fetchData() {
         .then((response) => {
             loading.value = false;
             if (!response.data.alignments || !response.data.alignments.length) {
-                error.value = "No matches";
-                emitter.emit("announce", "No matches for your query");
+                error.value = "No shared passages";
+                emitter.emit("announce", "No shared passages for your query");
                 return;
             }
             results.value = response.data;
@@ -189,7 +189,7 @@ function fetchData() {
         .catch((err) => {
             loading.value = false;
             error.value = err.toString();
-            emitter.emit("announce", "No matches for your query");
+            emitter.emit("announce", "No shared passages for your query");
             console.log(err);
         });
 }
