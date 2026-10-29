@@ -10,6 +10,14 @@
         <report-switcher></report-switcher>
         <div class="row">
             <div class="col position-relative">
+                <div class="sort-order" role="group" aria-labelledby="sort-order-label">
+                    <span id="sort-order-label" class="sort-order-label">Sort by</span>
+                    <div class="sort-toggle">
+                        <button type="button" v-for="option in sortOptions" :key="option.value" class="sort-button"
+                            :class="{ active: sort == option.value }" :aria-pressed="String(sort == option.value)"
+                            @click="setSort(option.value)">{{ option.label }}</button>
+                    </div>
+                </div>
                 <div class="d-flex justify-content-center position-relative" v-if="loading">
                     <div class="spinner-border"
                         style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px" role="status">
@@ -104,6 +112,13 @@ const maxCount = computed(() => results.value.max_count || 1);
 const pages = computed(() => Math.ceil((results.value.total_count || 0) / (results.value.page_size || 1)));
 let request = 0;
 
+const sortOptions = [
+    { value: "reuse", label: "Most reused" },
+    { value: "earliest", label: "Earliest first" },
+];
+// The order the API applied; a database without years has no earliest first
+const sort = computed(() => results.value.sort || (route.query.sort == "earliest" ? "earliest" : "reuse"));
+
 // What the cards that show where a passage was found again say it was found in, from the later side's fields
 const foundLead = computed(() => {
     const phrases = globalConfig.metadataFields.target
@@ -164,6 +179,16 @@ function fetchData() {
 fetchData();
 watch(() => route.fullPath, fetchData);
 
+// The focus stays on the button; the new order is announced
+function setSort(value) {
+    if (value == sort.value) return;
+    const queryParams = { ...route.query, sort: value };
+    delete queryParams.page;
+    delete queryParams.id_anchor;
+    router.push(`${route.path}?${paramsToUrl(queryParams)}`);
+    emitter.emit("announce", value == "earliest" ? "Earliest first" : "Most reused first");
+}
+
 function goToPage(page) {
     const queryParams = { ...route.query };
     queryParams.page = page;
@@ -197,6 +222,55 @@ function enter(el, complete) {
     color: $muted;
     font-family: $font-ui;
     font-size: 0.85rem;
+}
+
+// Two buttons on a quiet well, the chosen one filled, as in the switcher above
+.sort-order {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    margin: 0 0 1rem;
+    font-family: $font-ui;
+}
+
+.sort-order-label {
+    @include kicker;
+    color: $muted;
+}
+
+.sort-toggle {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 4px;
+    background-color: $well;
+    box-shadow: inset 0 0 0 1px $rule-color;
+}
+
+.sort-button {
+    padding: 0.3rem 0.75rem;
+    border: 0;
+    border-radius: 3px;
+    background-color: transparent;
+    color: $ink-2;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.25;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.sort-button:hover,
+.sort-button:focus {
+    background-color: rgba($link-color, 0.08);
+    color: $source-deep;
+}
+
+.sort-button.active {
+    background-color: $button-color;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 2px rgba(64, 40, 24, 0.12);
+    color: #fff;
 }
 
 // Rank in the left margin, the count large at the top right

@@ -70,6 +70,7 @@ const query = computed(() => {
     const queryParams = { ...route.query };
     delete queryParams.page;
     delete queryParams.id_anchor;
+    delete queryParams.sort;
     queryParams.db_table = globalConfig.databaseName;
     return paramsToUrl(queryParams);
 });
