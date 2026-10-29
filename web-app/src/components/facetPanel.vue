@@ -224,21 +224,15 @@ function filteredSearch(fieldName, value) {
 
 .facet-list {
     padding: 0.75rem 0.5rem 0.25rem;
-    transition: all 0.2s ease-out, visibility 0s;
 }
 
 .facet-list+.facet-list {
     border-top: 1px solid $rule-color;
 }
 
+// Gone at once: shrinking over a fade let the section headings show below the button
 .facet-list.hide {
-    max-height: 0px;
-    opacity: 0;
-    margin: 0 !important;
-    padding: 0;
-    border: 0;
-    visibility: hidden;
-    transition: all 0.2s ease-out, visibility 0s 0.2s;
+    display: none;
 }
 
 // "in" and the label are one flex item; apart, the space after "in" would collapse
