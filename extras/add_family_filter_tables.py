@@ -15,8 +15,10 @@ percent of the alignments table).
 Databases that have the tables from before the sorted results read filters by where a passage was first
 found get only what that needs: each family's anchor document, as two id columns of `_family_rank`
 (add_family_anchors in lib/textpair/web_loader.py), and an index of each documents table by family
-(family_rank_indexes). The anchors are one UPDATE of the family table, seconds per million families,
-during which the sorted view of that database waits for it.
+(family_rank_indexes). The "earliest first" sort needs each family's place by the anchor's year, as
+`chrono_rank` with its index (add_chrono_rank), and the groups table an index in that order
+(groups_year_index). The anchors and the places are one UPDATE each of the family table, seconds per
+million families, during which the sorted view of that database waits for it.
 """
 
 import os
@@ -26,7 +28,13 @@ from argparse import ArgumentParser
 from configparser import ConfigParser
 
 import psycopg2
-from textpair.web_loader import add_family_anchors, family_rank_indexes, load_family_filter_tables
+from textpair.web_loader import (
+    add_chrono_rank,
+    add_family_anchors,
+    family_rank_indexes,
+    groups_year_index,
+    load_family_filter_tables,
+)
 from textpair.web_settings import load_app_config
 
 GLOBAL_CONFIG = ConfigParser()
@@ -63,10 +71,10 @@ def has_anchors(cursor, table):
     return has_columns(cursor, f"{table}_family_rank", ("anchor_s", "anchor_t"))
 
 
-def missing_rank_indexes(cursor, table):
-    """The statements of family_rank_indexes for indexes the database does not have yet."""
+def missing_indexes(cursor, statements):
+    """The statements that create indexes the database does not have yet."""
     missing = []
-    for statement in family_rank_indexes(table):
+    for statement in statements:
         name = statement.split()[5]
         cursor.execute("SELECT to_regclass(%s) IS NULL", (name,))
         if cursor.fetchone()[0]:
@@ -109,21 +117,28 @@ def main():
             print(f"  {table}: no groups table or document ids, skipped")
             continue
         if table_exists(cursor, f"{table}_family_filters") and not args.force:
+            by_year = has_columns(cursor, f"{table}_groups", ("source_year",))  # else no "earliest first" sort
             anchors = has_anchors(cursor, table)
-            indexes = missing_rank_indexes(cursor, table)
-            if anchors and not indexes:
+            chrono = not by_year or has_columns(cursor, f"{table}_family_rank", ("chrono_rank",))
+            statements = family_rank_indexes(table, by_year) + ([groups_year_index(f"{table}_groups")] if by_year else [])
+            indexes = missing_indexes(cursor, statements)
+            if anchors and chrono and not indexes:
                 print(f"  {table}: tables already present")
             elif args.dry_run:
-                print(f"  {table}: would add the anchors and indexes to the family filter tables")
+                print(f"  {table}: would add the anchors, places by year and indexes to the family filter tables")
             else:
-                print(f"  {table}: adding the anchors and indexes...", flush=True)
+                print(f"  {table}: adding the anchors, places by year and indexes...", flush=True)
                 started = time.time()
                 try:
                     done = anchors or add_family_anchors(cursor, table)
-                    for statement in indexes if done else []:
-                        cursor.execute(statement)
-                    for name in ("source_families", "target_families") if indexes else ():
-                        cursor.execute(f"VACUUM (ANALYZE) {table}_{name}")
+                    if not chrono:
+                        add_chrono_rank(cursor, table)
+                    for statement in indexes:
+                        if done or "_families_idx" not in statement:  # those by family are for the anchors
+                            cursor.execute(statement)
+                    for name in ("source_families", "target_families"):
+                        if done and any(f"{name}(" in statement for statement in indexes):
+                            cursor.execute(f"VACUUM (ANALYZE) {table}_{name}")
                 except psycopg2.Error as error:
                     print(f"  {table}: FAILED: {str(error).strip()}", file=sys.stderr)
                     continue
@@ -143,6 +158,8 @@ def main():
         started = time.time()
         try:
             load_family_filter_tables(table, fields, args.workers)
+            if has_columns(cursor, f"{table}_groups", ("source_year",)):
+                cursor.execute(groups_year_index(f"{table}_groups"))
             print(f"  {table}: done in {time.time() - started:.0f} s")
         except psycopg2.Error as error:
             print(f"  {table}: FAILED: {str(error).strip()}", file=sys.stderr)

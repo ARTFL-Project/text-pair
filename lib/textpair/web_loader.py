@@ -864,6 +864,14 @@ def load_db(
     return field_names
 
 
+def groups_year_index(groups_table: str) -> str:
+    """The statement that indexes the groups in the order of the sorted results' "earliest first" sort."""
+    return (
+        f"CREATE INDEX IF NOT EXISTS year_count_group_id_{groups_table}_idx "
+        f'ON {groups_table} USING BTREE(source_year, "count" DESC, group_id)'
+    )
+
+
 def load_groups_file(groups_file: str, alignments_table: str, searchable_fields: list[str], workers: int = 1):
     """Load the groups file into the database."""
     config = read_global_config()
@@ -921,6 +929,8 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
         f'CREATE INDEX count_group_id_{table_name}_idx ON {table_name} USING BTREE("count" DESC, group_id)'
     )
     statements.append(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
+    if "source_year" in field_names:
+        statements.append(groups_year_index(table_name))
 
     database.commit()  # index builds run on their own connections and must see the rows
     create_indexes(statements, database_config, workers)
@@ -991,17 +1001,28 @@ def family_filter_fields(searchable_fields: list[str], fields_in_table: set[str]
     ]
 
 
-def family_rank_indexes(alignments_table: str) -> list[str]:
-    """Statements that index each side's documents by family, as they are otherwise indexed by document only.
+def family_rank_indexes(alignments_table: str, chrono: bool = True) -> list[str]:
+    """Statements that index each side's documents, and the alignments, by family, as they are otherwise indexed by document.
 
-    The sorted results read the documents of given families: of the few that meet an origin filter's
-    earlier-side conditions, and of the 50 of a page, to show where each was found again.
+    The sorted results read the documents and alignments of given families: of the few that meet an origin
+    filter's earlier-side conditions, of the 50 of a page, to show where each was found again, and of those
+    a facet counts. With `chrono`, the families are also indexed in the order of their anchor's year (see
+    add_chrono_rank).
     """
-    return [
+    statements = [
         f"CREATE INDEX IF NOT EXISTS r_{alignments_table}_{side}_families_idx "
         f"ON {alignments_table}_{side}_families(r) INCLUDE ({side[0]})"
         for side in ("source", "target")
     ]
+    statements.append(
+        f"CREATE INDEX IF NOT EXISTS r_{alignments_table}_family_alignments_idx ON {alignments_table}_family_alignments(r)"
+    )
+    if chrono:
+        statements.append(
+            f"CREATE INDEX IF NOT EXISTS chrono_rank_{alignments_table}_family_rank_idx "
+            f"ON {alignments_table}_family_rank(chrono_rank) INCLUDE (rank)"
+        )
+    return statements
 
 
 def add_family_anchors(cursor, alignments_table: str) -> bool:
@@ -1036,6 +1057,38 @@ def add_family_anchors(cursor, alignments_table: str) -> bool:
     return True
 
 
+def add_chrono_rank(cursor, alignments_table: str) -> bool:
+    """Store each family's place in the order of its anchor's year on `_family_rank`, as `chrono_rank`.
+
+    The order is the anchor's year, undated last, then `"count" DESC, group_id`: that of the groups table's
+    year index (groups_year_index). False where the groups have no year. Safe to repeat.
+    """
+    groups = f"{alignments_table}_groups"
+    cursor.execute(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+        "AND table_name = %s AND column_name = 'source_year'",
+        (groups,),
+    )
+    if not cursor.fetchone()[0]:
+        return False
+    rank = f"{alignments_table}_family_rank"
+    cursor.execute("BEGIN")
+    try:
+        cursor.execute(f"ALTER TABLE {rank} ADD COLUMN IF NOT EXISTS chrono_rank int")
+        cursor.execute(
+            f"""UPDATE {rank} f SET chrono_rank = c.place
+            FROM (SELECT group_id, (ROW_NUMBER() OVER (ORDER BY source_year, "count" DESC, group_id))::int AS place
+                  FROM {groups}) c
+            WHERE c.group_id = f.group_id"""
+        )
+        cursor.execute("COMMIT")
+    except psycopg2.Error:
+        cursor.execute("ROLLBACK")
+        raise
+    cursor.execute(f"VACUUM (ANALYZE) {rank}")
+    return True
+
+
 def load_family_filter_tables(alignments_table: str, searchable_fields: list[str], workers: int = 1) -> bool:
     """Tables that pick the passage families a search leaves in the running, in the order of the sorted results.
 
@@ -1044,7 +1097,8 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     puts the families in `"count" DESC, group_id` order, and the other tables hold family ranks:
     `_source_families` and `_target_families` one per family and document, `_family_alignments` one per
     family and alignment, for filters on both sides. `_family_rank` also holds each family's anchor document
-    (see add_family_anchors). `_family_filters` is made last, to mark them complete.
+    (see add_family_anchors) and its place by the anchor's year (add_chrono_rank). `_family_filters` is made
+    last, to mark them complete.
     """
     config = read_global_config()
     database_config = {
@@ -1092,6 +1146,7 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     )
     cursor.execute(f"ANALYZE {alignments_table}_family_rank")
     add_family_anchors(cursor, alignments_table)
+    has_chrono = add_chrono_rank(cursor, alignments_table)
 
     # Documents are told apart by their id and fields together, so this holds even if a field varies within one
     joins = ""
@@ -1141,7 +1196,7 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
             f"CREATE INDEX {column}_{alignments_table}_family_alignments_idx "
             f"ON {alignments_table}_family_alignments({column}, r)"
         )
-    statements.extend(family_rank_indexes(alignments_table))
+    statements.extend(family_rank_indexes(alignments_table, has_chrono))
     for field in alignment_fields:
         if field != "banality":
             statements.append(

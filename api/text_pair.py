@@ -231,6 +231,7 @@ def parse_request(request, conn):
         "centrality",
         "banality",
         "scope",  # in the links of the sorted view's earlier tabs; ignored
+        "sort",
     ]
     for key, value in request.query_params.items():
         if key in other_args_keys:
@@ -943,12 +944,48 @@ def family_filter_columns(cursor, table: str) -> dict[str, set[str]] | None:
     return FAMILY_FILTER_COLUMNS[oid]
 
 
-def family_filter_query(cursor, table: str, conditions: list[Condition]) -> tuple[str, list] | None:
+class RankOrder(NamedTuple):
+    """The order a page of families is picked in, as SQL over the family rank table `f`"""
+
+    sort: str  # reuse or earliest
+    join: str = ""
+    by: str = "f.rank"
+
+
+def rank_order(cursor, table: str, sort: str) -> RankOrder:
+    """The order of a sort: by family rank, or by the anchor's year, from the stored place or else the groups"""
+    if sort == "reuse":
+        return RankOrder(sort)
+    cursor.execute(
+        """SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema()
+        AND table_name = %s AND column_name = 'chrono_rank'""",
+        (f"{table}_family_rank",),
+    )
+    if cursor.fetchone()[0]:
+        return RankOrder(sort, by="f.chrono_rank")
+    groups = quote_ident(f"{table}_groups")
+    by = 'go.source_year, go."count" DESC, go.group_id'
+    return RankOrder(sort, f"JOIN {groups} go ON go.group_id = f.group_id", by)
+
+
+def ranked_tail(table: str, order: RankOrder) -> str:
+    """The end of a statement that makes `c`, family ranks: each rank, how many there are and the best, in page order"""
+    if order.sort == "reuse":
+        return "SELECT r, (SELECT COUNT(*) FROM c), (SELECT MIN(r) FROM c) FROM c ORDER BY r"
+    return (
+        f"SELECT f.rank, (SELECT COUNT(*) FROM c), (SELECT MIN(r) FROM c) FROM c "
+        f"JOIN {quote_ident(f'{table}_family_rank')} f ON f.rank = c.r {order.join} ORDER BY {order.by}"
+    )
+
+
+def family_filter_query(
+    cursor, table: str, conditions: list[Condition], order: RankOrder = RankOrder("reuse")
+) -> tuple[str, list] | None:
     """A statement picking the families with an alignment matching every condition, by rank, or None.
 
     Family rank is the place in `"count" DESC, group_id` order. The statement takes LIMIT and OFFSET
-    as its last two params and returns each family's rank with how many families match and the
-    best rank among them. None when a condition needs the alignments table itself.
+    as its last two params and returns each family's rank, in the order given, with how many families
+    match and the best rank among them. None when a condition needs the alignments table itself.
     """
     columns = family_filter_columns(cursor, table)
     if columns is None:
@@ -981,8 +1018,8 @@ def family_filter_query(cursor, table: str, conditions: list[Condition]) -> tupl
                 SELECT f.rank, (SELECT MAX(rank) FROM {rank_table}) - (SELECT COUNT(*) FROM x),
                     (SELECT g.rank FROM {rank_table} g WHERE NOT EXISTS (SELECT 1 FROM x WHERE x.r = g.rank)
                      ORDER BY g.rank LIMIT 1)
-                FROM {rank_table} f WHERE NOT EXISTS (SELECT 1 FROM x WHERE x.r = f.rank)
-                ORDER BY f.rank LIMIT %s OFFSET %s""",
+                FROM {rank_table} f {order.join} WHERE NOT EXISTS (SELECT 1 FROM x WHERE x.r = f.rank)
+                ORDER BY {order.by} LIMIT %s OFFSET %s""",
                 [[row[0] for row in cursor]],
             )
         cursor.execute(f"SELECT id FROM {meta} WHERE {side_where}", side_params)
@@ -1001,7 +1038,7 @@ def family_filter_query(cursor, table: str, conditions: list[Condition]) -> tupl
         where = " AND ".join(matches)
     return (
         f"""WITH c AS MATERIALIZED (SELECT r FROM {source} WHERE {where} GROUP BY r)
-        SELECT r, (SELECT COUNT(*) FROM c), (SELECT MIN(r) FROM c) FROM c ORDER BY r LIMIT %s OFFSET %s""",
+        {ranked_tail(table, order)} LIMIT %s OFFSET %s""",
         params,
     )
 
@@ -1087,8 +1124,8 @@ def matching_ids(cursor, table: str, side: str, conditions: list[Condition]) -> 
     return [row[0] for row in cursor]
 
 
-def origin_family_query(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
-    """A statement like family_filter_query's, for the families that meet a search read by where they were first found.
+def origin_ranks(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
+    """A WITH clause that makes `c`, the ranks of the families that meet a search read by where they were first found.
 
     The anchor meets the source conditions, and some other document of the family, on either side of the
     alignments, the target conditions. Where an alignment condition is set too, that alignment has the later
@@ -1126,11 +1163,13 @@ def origin_family_query(cursor, table: str, parts: OriginParts) -> tuple[str, li
         params += a_params
     else:
         body = "SELECT r FROM s"
-    return (
-        f"""WITH {prefix}c AS MATERIALIZED ({body})
-        SELECT r, (SELECT COUNT(*) FROM c), (SELECT MIN(r) FROM c) FROM c ORDER BY r LIMIT %s OFFSET %s""",
-        params,
-    )
+    return f"WITH {prefix}c AS MATERIALIZED ({body})", params
+
+
+def origin_family_query(cursor, table: str, parts: OriginParts, order: RankOrder) -> tuple[str, list]:
+    """A statement like family_filter_query's, for the families origin_ranks picks"""
+    ranks, params = origin_ranks(cursor, table, parts)
+    return f"{ranks} {ranked_tail(table, order)} LIMIT %s OFFSET %s", params
 
 
 def found_again(cursor, table: str, parts: OriginParts, ranks: list[int]) -> dict[int, dict]:
@@ -1199,25 +1238,29 @@ class OriginFamilies(NamedTuple):
     selective: bool = False  # whether `where` may leave few of the groups
 
 
-def origin_families(cursor, table: str, conditions: list[Condition], groups_columns) -> OriginFamilies:
+def origin_families(
+    cursor, table: str, conditions: list[Condition], groups_columns, order: RankOrder = RankOrder("reuse")
+) -> OriginFamilies:
     """Pick the families by where they were first found, or by any match if this database's tables cannot say"""
     if where := origin_groups_where(conditions, groups_columns):
         return OriginFamilies("origin", where=where, selective=True)
     if parts := origin_parts(cursor, table, conditions, groups_columns):
         # Parallel plans of these statements sometimes never finish
         cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
-        return OriginFamilies("origin", ranked=origin_family_query(cursor, table, parts), parts=parts)
-    return OriginFamilies("any", ranked=family_filter_query(cursor, table, conditions))
+        return OriginFamilies("origin", ranked=origin_family_query(cursor, table, parts, order), parts=parts)
+    return OriginFamilies("any", ranked=family_filter_query(cursor, table, conditions, order))
 
 
 @app.get("/sorted_results/")
 @app.get("/text-pair-api/sorted_results/")
 def get_sorted_results(request: Request):
-    """One page of passage families, the most reused first.
+    """One page of passage families, the most reused first or, with `sort=earliest`, the earliest first.
 
     The earlier text's fields are read as those of the family's anchor, its first appearance, and the later
     text's as those of another occurrence. A search this database's tables cannot read so is answered by any
-    match of the passage, and the response says so with `scope`.
+    match of the passage, and the response says so with `scope`. Earliest first is by the anchor's year,
+    undated last, then most reused; a sort that is not one of the two is the default, and `sort` says which
+    was applied.
     """
     with pg_connection() as conn:
         conditions, other_args, _ = parse_conditions(request, conn)
@@ -1227,7 +1270,11 @@ def get_sorted_results(request: Request):
         columns = ", ".join(f'g."{column}"' for column in groups_columns if column not in FAMILY_CARD_EXCLUDED)
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        served = origin_families(cursor, table, conditions, groups_columns) if conditions else OriginFamilies("origin")
+        sort = "earliest" if other_args.sort == "earliest" and "source_year" in groups_columns else "reuse"
+        order = rank_order(cursor, table, sort)
+        served = (
+            origin_families(cursor, table, conditions, groups_columns, order) if conditions else OriginFamilies("origin")
+        )
         ranked, where, parts = served.ranked, served.where, served.parts
 
         evidence = {}
@@ -1248,6 +1295,7 @@ def get_sorted_results(request: Request):
                 WHERE f.rank = ANY(%s) ORDER BY f.rank""",
                 (ranks,),
             )
+            place = {rank: place for place, rank in enumerate(ranks)}
         else:
             if where is None:
                 sql_fields, sql_values = join_conditions(conditions)
@@ -1260,25 +1308,28 @@ def get_sorted_results(request: Request):
             start_position = (page - 1) * SORTED_PAGE_SIZE
             # The page is picked from the index alone, so skipping to a deep one reads no rows
             prefix, source = "", f"{groups_table} {where}"
+            by, kept = '"count" DESC, group_id', '"count"'
+            if sort == "earliest":
+                by, kept = f"source_year, {by}", f"{kept}, source_year"
             if served.selective:
-                # The count index is walked until the page is full, which takes the whole table for a rare author
+                # The index is walked until the page is full, which takes the whole table for a rare author
                 cursor.execute("SELECT reltuples::bigint FROM pg_class WHERE oid = %s::regclass", (groups_table,))
                 if (start_position + SORTED_PAGE_SIZE) * cursor.fetchone()[0] > total * total:
-                    prefix, source = f'WITH m AS MATERIALIZED (SELECT group_id, "count" FROM {groups_table} {where}) ', "m"
+                    prefix = f'WITH m AS MATERIALIZED (SELECT group_id, {kept} FROM {groups_table} {where}) '
+                    source = "m"
             cursor.execute(
                 f"""{prefix}SELECT {columns} FROM {groups_table} g
-                JOIN (SELECT group_id FROM {source} ORDER BY "count" DESC, group_id LIMIT %s OFFSET %s) p
-                USING (group_id) ORDER BY g."count" DESC, g.group_id""",
+                JOIN (SELECT group_id FROM {source} ORDER BY {by} LIMIT %s OFFSET %s) p
+                USING (group_id) ORDER BY {", ".join(f"g.{key}" for key in by.split(", "))}""",
                 (*params, SORTED_PAGE_SIZE, start_position),
             )
-        groups = []
-        for row in cursor:
-            group = dict(row)
-            if ranked is not None:
+        groups = [dict(row) for row in cursor]
+        if ranked is not None:
+            groups.sort(key=lambda group: place[group["family_rank"]])  # the earliest first is not in rank order
+            for group in groups:
                 rank = group.pop("family_rank")
                 if rank in evidence:
                     group["found_again"] = evidence[rank]
-            groups.append(group)
         results = {
             "groups": groups,
             "page": page,
@@ -1287,8 +1338,240 @@ def get_sorted_results(request: Request):
             "total_count": total,
             "max_count": max_count or 0,
             "scope": served.applied,
+            "sort": sort,
         }
     return results
+
+
+# The passage length ranges of the pairs' facets: the top of each, and the label of the open one
+LENGTH_RANGES = (
+    (25, "1-25"),
+    (100, "26-100"),
+    (250, "101-250"),
+    (500, "251-500"),
+    (1000, "501-1000"),
+    (3000, "1001-3000"),
+)
+FACET_VALUES = 100  # values a facet returns unless `limit` says otherwise, as many as the panel shows
+
+
+def length_range(column: str) -> str:
+    """SQL that puts a passage length into the ranges of the pairs' facets"""
+    cases = " ".join(f"WHEN {column} <= {top} THEN '{label}'" for top, label in LENGTH_RANGES)
+    return f"CASE {cases} ELSE '3001-' END"
+
+
+def facet_error(facet: str, reason: str) -> HTTPException:
+    return HTTPException(400, f"Passages cannot be counted by {facet}: {reason}")
+
+
+def facet_ranks(cursor, table: str, served: OriginFamilies) -> tuple[str, list]:
+    """CTEs that make `ca`, each family a search leaves in the running with its anchor's document ids.
+
+    None for a search that leaves them all in the running, which the family rank table then stands for.
+    """
+    rank = quote_ident(f"{table}_family_rank")
+    if served.parts is not None:
+        ranks, params = origin_ranks(cursor, table, served.parts)
+        return (
+            f"{ranks.removeprefix('WITH ')}, "
+            f"ca AS MATERIALIZED (SELECT f.rank AS r, f.anchor_s, f.anchor_t FROM c JOIN {rank} f ON f.rank = c.r)",
+            params,
+        )
+    if served.where is None or not served.where[0]:
+        return "", []
+    where, params = served.where
+    groups = quote_ident(f"{table}_groups")
+    return (
+        f"ca AS MATERIALIZED (SELECT f.rank AS r, f.anchor_s, f.anchor_t "
+        f"FROM {groups} g JOIN {rank} f USING (group_id) {where})",
+        params,
+    )
+
+
+def facet_values(table: str, name: str) -> str:
+    """CTEs that number the distinct values of a document field, as arrays by the id of the documents of each side.
+
+    The families are counted by these numbers, which are small integers, and named at the end.
+    """
+    return f"""vals AS MATERIALIZED (SELECT side, id, v, (DENSE_RANK() OVER (ORDER BY v))::int AS vid FROM (
+            SELECT 's' AS side, id, {quote_ident(f"source_{name}")} AS v FROM {quote_ident(f"{table}_source_meta")}
+            UNION ALL SELECT 't', id, {quote_ident(f"target_{name}")} FROM {quote_ident(f"{table}_target_meta")}) d),
+        vs AS MATERIALIZED (SELECT array_agg(vid ORDER BY id) AS a FROM vals WHERE side = 's'),
+        vt AS MATERIALIZED (SELECT array_agg(vid ORDER BY id) AS a FROM vals WHERE side = 't')"""
+
+
+def anchor_facet(table: str, name: str, restrict: bool) -> str:
+    """A statement that counts families by a document field of their anchor, as the family tables hold it.
+
+    An anchor on the source side of the alignments has its field in the source documents, or else in the target ones.
+    """
+    rank = quote_ident(f"{table}_family_rank")
+    source, target = quote_ident(f"source_{name}"), quote_ident(f"target_{name}")
+    return f"""SELECT v, SUM(n)::bigint AS n FROM (
+        SELECT CASE WHEN a.anchor_s IS NOT NULL THEN sm.{source} ELSE tm.{target} END AS v, a.n
+        FROM (SELECT anchor_s, anchor_t, COUNT(*) AS n FROM {"ca" if restrict else rank} GROUP BY 1, 2) a
+        LEFT JOIN {quote_ident(f"{table}_source_meta")} sm ON sm.id = a.anchor_s
+        LEFT JOIN {quote_ident(f"{table}_target_meta")} tm ON tm.id = a.anchor_t) q GROUP BY v"""
+
+
+def found_again_facet(cursor, table: str, parts: OriginParts, name: str, restrict: bool) -> tuple[str, str, list]:
+    """A statement that counts families once for each value of a document field among the documents found again.
+
+    These are the family's documents other than the anchor's, on either side of the alignments, that meet the
+    later-side conditions, and the ones at an end of an alignment meeting the alignment conditions.
+    """
+    rank = quote_ident(f"{table}_family_rank")
+    a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
+    branches, params = [], []
+    for side in ("target", "source"):
+        column = side[0]
+        rows = quote_ident(f"{table}_family_alignments") if parts.aligned else quote_ident(f"{table}_{side}_families")
+        match = f" AND x.{column} = ANY(%s)" if parts.target else ""
+        joined = "ca ON ca.r = x.r" if restrict else f"{rank} ca ON ca.rank = x.r"
+        branches.append(
+            f"SELECT x.r, (SELECT a FROM v{column})[x.{column}] AS vid FROM {rows} x JOIN {joined} "
+            f"WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
+        )
+        if parts.target:
+            params.append(matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target]))
+        params += a_params
+    return (
+        f"{facet_values(table, name)}, p AS ({' UNION ALL '.join(branches)})",
+        """SELECT d.v, g.n FROM (SELECT vid, COUNT(*)::bigint AS n FROM (SELECT DISTINCT r, vid FROM p) q GROUP BY vid) g
+        JOIN (SELECT DISTINCT vid, v FROM vals) d USING (vid)""",
+        params,
+    )
+
+
+def passage_length_facet(cursor, table: str, parts: OriginParts, side: str, restrict: bool) -> tuple[str, str, list]:
+    """A statement that counts families once for each length range of their alignments' passages on a side.
+
+    The alignments are those that meet the alignment conditions, and where there are later-side conditions,
+    those with a document found again at an end, as for the other facets.
+    """
+    a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
+    length = f"x.{side}_passage_length"
+    found, found_params = "TRUE", []
+    if parts.target:
+        found = (
+            "(x.t = ANY(%s) AND x.t IS DISTINCT FROM ca.anchor_t "
+            "OR x.s = ANY(%s) AND x.s IS DISTINCT FROM ca.anchor_s)"
+        )
+        for other in ("target", "source"):
+            found_params.append(matching_ids(cursor, table, other, [on_side(c, other) for c in parts.target]))
+    rank = quote_ident(f"{table}_family_rank")
+    joined = "ca ON ca.r = x.r" if restrict else f"{rank} ca ON ca.rank = x.r"
+    return (
+        "",
+        f"""SELECT v, COUNT(*)::bigint AS n FROM (
+        SELECT DISTINCT x.r, {length_range(length)} AS v FROM {quote_ident(f"{table}_family_alignments")} x
+        {f"JOIN {joined}" if parts.target or restrict else ""}
+        WHERE {length} IS NOT NULL AND {a_where} AND {found}) u GROUP BY v""",
+        [*a_params, *found_params],
+    )
+
+
+# Facets of a search with no filters are the same for every visitor and cost seconds on a large database, so
+# each is kept once it is made, until the family tables are rebuilt. Keyed by the oid of `_family_filters`.
+UNFILTERED_FACETS: dict[tuple, dict] = {}
+
+
+@app.post("/passage_facets/")
+@app.post("/text-pair-api/passage_facets/")
+@app.get("/passage_facets/")
+@app.get("/text-pair-api/passage_facets/")
+def passage_facets(request: Request):
+    """Count passage families by the values of a field, as /facets/ counts alignments, under the sorted view's rule.
+
+    A source_ field is the family's anchor's, where the passage was first found, so each family counts once.
+    A target_ field is that of the documents it was found again in, and a family counts once for each value.
+    The passage length of a side is counted over the family's alignments, in the ranges of the pairs' facets.
+    The text of a passage is not a facet: every passage is its own value. A database whose tables cannot
+    read the later side, or a search they cannot answer, is counted by any match of the passage for the
+    source_ fields (`scope` is "any"), and is an error for the others.
+    """
+    with pg_connection() as conn:
+        conditions, other_args, field_types = parse_conditions(request, conn)
+        table, facet = other_args.db_table, other_args.facet
+        if facet not in field_types:
+            raise HTTPException(400, f"Unknown field {facet}")
+        side, _, name = facet.partition("_")
+        if side not in ("source", "target") or not name:
+            raise facet_error(facet, "it is not a field of the earlier or the later occurrence")
+        if name == "passage":
+            raise facet_error(facet, "each passage is its own value")
+        try:
+            values = min(max(1, int(other_args.limit or FACET_VALUES)), 1000)
+        except ValueError:
+            values = FACET_VALUES
+        groups_columns = get_pg_type(conn, f"{table}_groups")
+        if not groups_columns:
+            raise facet_error(facet, "this database has no passage families")
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute("SELECT to_regclass(%s)::oid", (f"{table}_family_filters",))
+        kept = (table, cursor.fetchone()[0], facet, values) if not conditions else None
+        if kept in UNFILTERED_FACETS:
+            return UNFILTERED_FACETS[kept]
+        served = origin_families(cursor, table, conditions, groups_columns) if conditions else OriginFamilies("origin")
+        columns = family_filter_columns(cursor, table) if has_family_anchors(cursor, table) else None
+        length = name == "passage_length"
+        ranked = columns is not None and served.applied == "origin"
+        if ranked and not length and not all(f"{other}_{name}" in columns[other] for other in ("source", "target")):
+            raise facet_error(facet, "it is not a field of the documents of both sides")
+        if ranked and length and f"{side}_passage_length" not in columns["alignments"]:
+            raise facet_error(facet, "the family tables do not have the lengths of this database's passages")
+
+        if ranked:
+            ranks, params = facet_ranks(cursor, table, served)
+            restrict = bool(ranks)
+            parts = served.parts or OriginParts([], [], [], columns)
+            cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+            cursor.execute("SET LOCAL work_mem = '256MB'")  # the counts are hashed in memory, millions of rows of them
+            if length:
+                ctes, counted, counted_params = passage_length_facet(cursor, table, parts, side, restrict)
+            elif side == "source":
+                ctes, counted, counted_params = "", anchor_facet(table, name, restrict), []
+            else:
+                ctes, counted, counted_params = found_again_facet(cursor, table, parts, name, restrict)
+            families = "ca" if restrict else quote_ident(f"{table}_family_rank")
+            ctes = ", ".join(cte for cte in (ranks, ctes) if cte)
+            statement = f"""{"WITH " + ctes if ctes else ""} SELECT t.families, g.v, g.n, g.total, g.kinds FROM
+                (SELECT COUNT(*)::bigint AS families FROM {families}) t LEFT JOIN
+                (SELECT v, n, (SUM(n) OVER ())::bigint AS total, (COUNT(*) OVER ())::bigint AS kinds
+                 FROM ({counted}) q ORDER BY n DESC, v LIMIT %s) g ON TRUE ORDER BY g.n DESC NULLS LAST, g.v"""
+            cursor.execute(statement, [*params, *counted_params, values])
+            rows = cursor.fetchall()
+            applied = "origin"
+        else:
+            if side == "target" or length or facet not in groups_columns:
+                raise facet_error(facet, "this search or database cannot say where passages were found again")
+            if served.applied == "any":
+                where, params = family_candidates(cursor, table, *join_conditions(conditions))
+            else:
+                where, params = served.where or ("", [])
+            cursor.execute(
+                f"""SELECT SUM(n) OVER ()::bigint, v, n, SUM(n) OVER ()::bigint, COUNT(*) OVER ()::bigint
+                FROM (SELECT {quote_ident(facet)} AS v, COUNT(*)::bigint AS n
+                      FROM {quote_ident(f"{table}_groups")} {where} GROUP BY 1) q
+                ORDER BY n DESC, v LIMIT %s""",
+                [*params, values],
+            )
+            rows = cursor.fetchall()
+            applied = served.applied
+        results = [{"field": row[1], "count": row[2]} for row in rows if row[2] is not None]
+        counted = {
+            "facet": facet,
+            "results": results,
+            "total_count": rows[0][3] or 0 if rows else 0,
+            "families": rows[0][0] or 0 if rows else 0,
+            "values": rows[0][4] or 0 if rows else 0,
+            "counted_once": side == "source" and not length,
+            "scope": applied,
+        }
+        if kept is not None and kept[1] is not None:
+            UNFILTERED_FACETS[kept] = counted
+        return counted
 
 
 def merge_passages(rows: list, direction: str) -> list[dict]:
