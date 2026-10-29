@@ -8,37 +8,7 @@
         <div v-else>
             <strong class="result-count">{{ counts }}</strong> {{ noun }} across all documents
         </div>
-    </div>
-
-    <!-- Sorted by where passages were first found: the search as a sentence about the passages -->
-    <div v-else-if="sentence" id="search-arguments" class="query-summary">
-        <p class="query-sentence">
-            <span v-if="!counts || counts === '...'">
-                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>{{ noun }}
-            </span>
-            <span v-else><strong class="result-count">{{ counts }}</strong> {{ noun }}</span>
-            <template v-for="clause in sentence" :key="clause.lead">
-                <span class="query-lead">{{ " " + clause.lead + " " }}</span>
-                <span class="query-chips" :class="clause.side == 'target' ? 'side-target-color' : 'side-source-color'">
-                    <span class="metadata-args" v-for="metadata in clause.chips" :key="metadata.fieldName">
-                        <span class="metadata-value">{{ metadata.phrase }}</span>
-                        <button type="button" class="remove-metadata"
-                            :aria-label="`Remove ${metadata.sideName} ${metadata.label} ${spokenValue(metadata.value)}`"
-                            @click="removeMetadata(metadata)">&times;</button>
-                    </span>
-                </span>
-            </template>
-        </p>
-        <div class="query-banality" v-if="banality">
-            <div class="metadata-args rounded-pill">
-                <span class="metadata-label"> Banality filter </span>
-                <span class="metadata-value">
-                    {{ banality }}
-                </span>
-                <button type="button" class="remove-metadata" :aria-label="`Remove banality filter ${banality}`"
-                    @click="removeMetadata({ fieldName: 'banality' })">&times;</button>
-            </div>
-        </div>
+        <slot name="note"></slot>
     </div>
 
     <!-- Regular version when search params exist -->
@@ -46,18 +16,23 @@
         <div class="query-count">
             <span v-if="!counts || counts === '...'">
                 <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
-                {{ noun }} for the following query:
+                {{ noun }}{{ queryTail }}
             </span>
             <span v-else>
-                <strong class="result-count">{{ counts }}</strong> {{ noun }} for the following query:
+                <strong class="result-count">{{ counts }}</strong> {{ noun }}{{ queryTail }}
             </span>
+            <slot v-if="origin" name="note"></slot>
         </div>
         <div class="query-sides">
             <div class="search-args-group" v-for="(paramGroup, groupIndex) in searchParams" :key="groupIndex"
                 :class="groupIndex ? 'side-target-color' : 'side-source-color'">
-                <h3 class="query-side">
+                <h3 class="query-side" :class="{ stacked: origin }">
                     <span class="side-mark" :class="groupIndex ? 'target' : 'source'" aria-hidden="true"></span>
-                    <span v-html="paramGroup.direction"></span>&nbsp;Parameters:
+                    <span v-if="origin" class="query-side-text">
+                        <span>{{ foundLeads[groupIndex] }}</span><span class="visually-hidden">, </span>
+                        <span class="query-side-label" v-html="paramGroup.direction"></span>
+                    </span>
+                    <template v-else><span v-html="paramGroup.direction"></span>&nbsp;Parameters:</template>
                 </h3>
                 <ul class="list-unstyled mb-0" v-if="paramGroup.params != null">
                     <li class="metadata-args" v-for="metadata in paramGroup.params" :key="metadata.fieldName">
@@ -72,7 +47,7 @@
                             @click="removeMetadata(metadata)">&times;</button>
                     </li>
                 </ul>
-                <div class="metadata-args none" v-if="paramGroup.params == null">None</div>
+                <div class="metadata-args none" v-if="paramGroup.params == null">{{ origin ? "No filter" : "None" }}</div>
             </div>
             <span class="query-arrow" aria-hidden="true"></span>
         </div>
@@ -80,6 +55,9 @@
             This database cannot read this search by where a passage was first found, so every reused passage that
             appears in a pair of texts meeting these filters is listed, wherever its text falls in the history of the
             passage.
+        </p>
+        <p class="query-note" v-if="origin && hasLength">
+            A passage length is that of the passage in one pair of texts; given on both sides, one pair must meet both.
         </p>
         <div class="query-banality" v-if="banality">
             <div class="metadata-args rounded-pill">
@@ -91,6 +69,7 @@
                     @click="removeMetadata({ fieldName: 'banality' })">&times;</button>
             </div>
         </div>
+        <slot v-if="!origin" name="note"></slot>
     </div>
 </template>
 <script setup>
@@ -98,7 +77,7 @@ import emitter from "tiny-emitter/instance";
 import { computed, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { fieldPhrase, paramsToUrl, plainText, unquote } from "../utils.js";
+import { paramsToUrl, plainText, unquote } from "../utils.js";
 
 // What the view counts: shared passages, the pairs of texts, or reused passages, the families
 const props = defineProps({ unit: { type: String, default: "shared" } });
@@ -141,36 +120,21 @@ const hasNoParams = computed(() => {
     return noSourceParams && noTargetParams && !banality.value;
 });
 
-// The search in sentence form: where the passages were first found, and how they were reused
-const sentence = computed(() => {
-    if (scope.value != "origin") return null;
-    const [source, target] = searchParams.value.map((group) => group.params || []);
-    const lengths = [...source, ...target].filter((metadata) => metadata.fieldName.endsWith("passage_length"));
-    const first = source.filter((metadata) => !lengths.includes(metadata));
-    const later = target.filter((metadata) => !lengths.includes(metadata));
-    const clauses = [];
-    const and = () => (clauses.length ? "and " : "");
-    if (first.length) clauses.push({ lead: "first found in", side: "source", chips: first });
-    if (later.length) clauses.push({ lead: and() + "found again in", side: "target", chips: later });
-    if (lengths.length) clauses.push({ lead: and() + "in a shared passage with", side: "source", chips: lengths });
-    return clauses;
-});
+// A sorted view reads the search by where each passage was first found; scope "any" is the fallback
+const origin = computed(() => scope.value == "origin");
+const queryTail = computed(() => (origin.value ? "" : " for the following query:"));
+const foundLeads = ["First found in", "Found again in"];
+const hasLength = computed(() =>
+    searchParams.value.flatMap((group) => group.params || []).some((metadata) => metadata.fieldName.endsWith("passage_length"))
+);
 
 function processParams(params) {
     const processed = [];
     for (const direction of ["source", "target"]) {
         const paramGroup = [];
-        const sideName = plainText(globalConfig[`${direction}Label`]);
         for (const metadata of globalConfig.metadataFields[direction]) {
             if (metadata.value in params && params[metadata.value].length > 0) {
-                const phrase = fieldPhrase(metadata.label, params[metadata.value]);
-                paramGroup.push({
-                    label: metadata.label,
-                    fieldName: metadata.value,
-                    value: params[metadata.value],
-                    sideName,
-                    phrase: metadata.value.endsWith("passage_length") ? `${phrase} in the ${sideName.toLowerCase()}` : phrase,
-                });
+                paramGroup.push({ label: metadata.label, fieldName: metadata.value, value: params[metadata.value] });
             }
         }
         processed.push({
@@ -228,24 +192,6 @@ function spokenValue(value) {
     margin-bottom: 0.6rem;
 }
 
-// The sorted view's search read as a sentence, the filters as pills in the colors of their sides
-.query-sentence {
-    margin: 0;
-    color: $ink-2;
-    font-size: 1.05rem;
-    line-height: 2.2;
-}
-
-.query-lead {
-    margin: 0 0.15rem;
-}
-
-.query-sentence .metadata-args {
-    margin-bottom: 0;
-    font-size: 0.95rem;
-    vertical-align: baseline;
-}
-
 .query-note {
     margin: 0.6rem 0 0;
     font-size: 0.85rem;
@@ -291,6 +237,29 @@ function spokenValue(value) {
     align-items: center;
     margin: 0 0 0.6rem;
     color: inherit;
+}
+
+// Where the passage was, over the side's own name, as in the facet panel
+.query-side.stacked {
+    align-items: flex-start;
+}
+
+.query-side.stacked .side-mark {
+    margin-top: 0.22rem;
+}
+
+.query-side-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.query-side-label {
+    color: $muted;
+    font-size: 0.75rem;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
 }
 
 .metadata-args {

@@ -3,9 +3,12 @@
         <h2 class="visually-hidden">Reused passages</h2>
         <div class="row" style="padding: 0 0.75rem">
             <div class="m-4" style="font-size: 120%" v-if="error">No reused passages for your query</div>
-            <search-arguments unit="reused"></search-arguments>
-            <p class="passage-note">Each passage is shown from its earliest occurrence in this collection; the passage
-                itself may be older.</p>
+            <search-arguments unit="reused">
+                <template #note>
+                    <p class="passage-note">Each passage is shown from its earliest occurrence in this collection; the
+                        passage itself may be older.</p>
+                </template>
+            </search-arguments>
         </div>
         <div class="row">
             <div class="col-12 col-lg-9">
