@@ -1,6 +1,6 @@
 <template>
     <div class="mt-3">
-        <h2 class="visually-hidden">Passages by frequency of reuse</h2>
+        <h2 class="visually-hidden">Reused passages</h2>
         <div class="row" style="padding: 0 0.75rem">
             <div class="m-4" style="font-size: 120%" v-if="error">No matches for your query</div>
             <search-arguments unit="passage"></search-arguments>

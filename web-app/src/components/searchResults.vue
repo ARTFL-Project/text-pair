@@ -1,6 +1,6 @@
 <template>
     <div class="mt-3">
-        <h2 class="visually-hidden">Passage pairs</h2>
+        <h2 class="visually-hidden">Shared passages</h2>
         <div class="row" style="padding: 0 0.75rem">
             <div class="m-4" style="font-size: 120%" v-if="error">No matches for your query</div>
             <search-arguments></search-arguments>

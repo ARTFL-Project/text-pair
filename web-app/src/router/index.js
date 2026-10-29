@@ -13,11 +13,14 @@ const semanticGraph = () => import("../components/semanticGraph");
 const router = createRouter({
     history: createWebHistory(globalConfig.appPath),
     routes: [
-        { path: "/", name: "home", meta: { title: "Search" }, component: home },
+        // Where passages were grouped into families, the reused passages are the first view
+        globalConfig.hasPassageFamilies
+            ? { path: "/", name: "home", redirect: (to) => ({ name: "sortedResults", query: to.query }) }
+            : { path: "/", name: "home", meta: { title: "Search" }, component: home },
         {
             path: "/search",
             name: "searchResults",
-            meta: { title: "Passage pairs" },
+            meta: { title: "Shared passages" },
             component: searchResults,
         },
         {
@@ -29,7 +32,7 @@ const router = createRouter({
         {
             path: "/sorted-results",
             name: "sortedResults",
-            meta: { title: "Passages by frequency of reuse" },
+            meta: { title: "Reused passages" },
             component: sortedResults,
         },
         {

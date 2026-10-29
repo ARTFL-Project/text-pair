@@ -161,7 +161,8 @@ onUnmounted(() => {
     emitter.off("toggleSearchForm", toggleSearchForm);
 });
 
-if (route.path != "/") {
+// The form stays open on a landing that went on to the first view
+if (route.path != "/" && !route.redirectedFrom) {
     toggleSearchForm();
 }
 
@@ -197,7 +198,8 @@ function search() {
         }
     }
 
-    router.push(`/search?${urlParams.toString()}`).then(() => emitter.emit("focusMain"));
+    const view = globalConfig.hasPassageFamilies ? "/sorted-results" : "/search";
+    router.push(`${view}?${urlParams.toString()}`).then(() => emitter.emit("focusMain"));
 }
 
 function clearForm() {

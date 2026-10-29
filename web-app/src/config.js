@@ -4,6 +4,7 @@ import builtConfig from "../appConfig.json";
 export default {
     showNetworkGraph: true,
     showSemanticGraph: true,
+    hasPassageFamilies: false,
     sourceTextAvailable: true,
     targetTextAvailable: true,
     passageClassification: [],

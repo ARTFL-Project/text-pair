@@ -1,14 +1,15 @@
 <template>
-    <nav class="report-switcher" aria-label="Views of matches">
+    <nav class="report-switcher" aria-label="Views of passages">
         <div class="btn-group segmented">
             <router-link v-for="view in views" :key="view.name" :to="`${view.path}?${query}`"
-                class="btn btn-outline-secondary" :class="{ active: route.name == view.name }"
+                class="btn btn-outline-secondary" :class="{ active: route.name == view.name, hinted: view.hint }"
                 :aria-current="route.name == view.name ? 'page' : undefined">
                 <svg class="view-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                     <path :d="view.icon" fill="none" stroke="currentColor" :stroke-width="view.stroke || 1.5"
                         stroke-linecap="round" stroke-linejoin="round" />
-                </svg><span><span class="view-prefix">{{ view.prefix }}</span><span class="view-name">{{
-                    view.label }}</span></span></router-link>
+                </svg><span class="view-text"><span><span class="view-prefix">{{ view.prefix }}</span><span
+                            class="view-name">{{ view.label }}</span></span><span class="view-hint" v-if="view.hint">{{
+                        view.hint }}</span></span></router-link>
         </div>
     </nav>
 </template>
@@ -20,23 +21,27 @@ import { paramsToUrl } from "../utils.js";
 
 const route = useRoute();
 
-// Icons: two facing columns, bars by length, bars in time, linked nodes, a scatter of points.
+// Icons: bars by length, two facing columns, bars in time, linked nodes, a scatter of points.
 // Narrow screens show the label without its prefix, which stays in the accessible name.
+const reused = {
+    name: "sortedResults",
+    path: "/sorted-results/",
+    prefix: "View all ",
+    label: "reused passages",
+    hint: "One card per passage, with everywhere it appears",
+    icon: "M2 3h12M2 6.5h9M2 10h6M2 13.5h3",
+};
+const shared = {
+    name: "searchResults",
+    path: "/search",
+    prefix: "View all ",
+    label: "shared passages",
+    hint: "One card per pair of texts that share a passage",
+    icon: "M2 3h5M2 6h5M2 9h5M9 3h5M9 6h5M9 9h5M2 12h12",
+};
+// Where passages were grouped into families, the reused passages come first
 const views = [
-    {
-        name: "searchResults",
-        path: "/search",
-        prefix: "View all ",
-        label: "passage pairs",
-        icon: "M2 3h5M2 6h5M2 9h5M9 3h5M9 6h5M9 9h5M2 12h12",
-    },
-    {
-        name: "sortedResults",
-        path: "/sorted-results/",
-        prefix: "View passages by ",
-        label: "frequency of reuse",
-        icon: "M2 3h12M2 6.5h9M2 10h6M2 13.5h3",
-    },
+    ...(globalConfig.hasPassageFamilies ? [reused, shared] : [shared, reused]),
     {
         name: "timeSeries",
         path: "/time/",
@@ -123,6 +128,27 @@ const query = computed(() => {
     color: $muted;
 }
 
+.view-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    text-align: left;
+}
+
+// What sets the first two views apart, under their names
+.view-hint {
+    max-width: 15rem;
+    color: $muted;
+    text-wrap: balance;
+    font-size: 0.72rem;
+    font-weight: 400;
+    line-height: 1.3;
+}
+
+.btn.active .view-hint {
+    color: #fff;
+}
+
 .btn:hover .view-icon {
     color: $button-color;
 }
@@ -141,6 +167,14 @@ const query = computed(() => {
     .segmented > .btn {
         justify-content: flex-start;
         text-align: left;
+    }
+
+    .segmented > .btn.hinted {
+        grid-column: 1 / -1;
+    }
+
+    .view-hint {
+        max-width: none;
     }
 
     .view-prefix {
