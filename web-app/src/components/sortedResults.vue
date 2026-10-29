@@ -9,7 +9,7 @@
         </div>
         <report-switcher></report-switcher>
         <div class="row">
-            <div class="col position-relative">
+            <div class="col-12 col-lg-9 position-relative">
                 <div class="sort-order" role="group" aria-labelledby="sort-order-label">
                     <span id="sort-order-label" class="sort-order-label">Sort by</span>
                     <div class="sort-toggle">
@@ -86,6 +86,7 @@
                     </ul>
                 </nav>
             </div>
+            <facet-panel mode="passages"></facet-panel>
         </div>
     </div>
 </template>
@@ -99,6 +100,7 @@ import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
 import { fieldPhrase, paramsToUrl, prefersReducedMotion } from "../utils.js";
 import citations from "./citations";
+import facetPanel from "./facetPanel";
 import reportSwitcher from "./reportSwitcher";
 import searchArguments from "./searchArguments";
 
