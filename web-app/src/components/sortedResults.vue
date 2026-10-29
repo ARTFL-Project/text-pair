@@ -34,12 +34,12 @@
                         :key="sourcePassage.group_id" v-bind:data-index="index">
                         <div class="family-rank" aria-hidden="true">{{ results.start_position + index + 1 }}</div>
                         <div class="family-body side-source-color">
-                            <div class="family-figure" aria-hidden="true" v-if="sourcePassage.count">
-                                <span class="family-figure-number">{{ sourcePassage.count.toLocaleString() }}</span>
-                                <span class="family-figure-label">{{ sourcePassage.count == 1 ? "document" : "documents"
-                                }}</span>
+                            <div class="family-figure" aria-hidden="true" v-if="reuses(sourcePassage)">
+                                <span class="family-figure-number">{{ reuses(sourcePassage).toLocaleString() }}</span>
+                                <span class="family-figure-label">{{ reuses(sourcePassage) == 1 ? "document reuses it" :
+                                    "documents reuse it" }}</span>
                                 <span class="family-figure-track"><span class="family-figure-bar"
-                                        :style="{ width: `${(100 * sourcePassage.count) / maxCount}%` }"></span></span>
+                                        :style="{ width: `${(100 * reuses(sourcePassage)) / maxReuses}%` }"></span></span>
                             </div>
                             <h3 class="family-citation">
                                 <span class="visually-hidden">{{ results.start_position + index + 1 }}. </span>
@@ -47,9 +47,9 @@
                                 <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"
                                     :link-to-doc="globalConfig.sourceLinkToDocMetadata" tag="span"></citations>
                             </h3>
-                            <span class="family-count" v-if="sourcePassage.count">The following passage appears (in
-                                whole or in part) in <strong>{{ sourcePassage.count.toLocaleString() }}</strong>
-                                {{ sourcePassage.count == 1 ? "document" : "documents" }}:</span>
+                            <span class="family-count" v-if="reuses(sourcePassage)">This passage is reused, in whole or
+                                in part, in <strong>{{ reuses(sourcePassage).toLocaleString() }}</strong> other
+                                {{ reuses(sourcePassage) == 1 ? "document" : "documents" }}:</span>
                             <q class="family-quote passages" :lang="globalConfig.sourceLanguage || undefined">{{
                                 sourcePassage.source_passage }}</q>
                             <p class="family-found" v-if="sourcePassage.found_again">
@@ -113,8 +113,10 @@ const router = useRouter();
 const loading = ref(false);
 const results = ref({ groups: [], start_position: 0 });
 const error = ref(null);
+// The documents that reuse a passage: those of its family but the one it was first found in
+const reuses = (group) => Math.max((group.count || 0) - 1, 0);
 // Most reused passage of the whole result, for the bars of the others
-const maxCount = computed(() => results.value.max_count || 1);
+const maxReuses = computed(() => Math.max((results.value.max_count || 0) - 1, 1));
 const pages = computed(() => Math.ceil((results.value.total_count || 0) / (results.value.page_size || 1)));
 let request = 0;
 
@@ -147,7 +149,7 @@ function foundDocuments(group) {
 }
 
 function foundCount(group) {
-    return `${group.found_again.matching.toLocaleString()} of ${group.count.toLocaleString()} documents`;
+    return `${group.found_again.matching.toLocaleString()} of ${reuses(group).toLocaleString()} documents`;
 }
 
 function fetchData() {
@@ -327,10 +329,14 @@ function enter(el, complete) {
     line-height: 1;
 }
 
+// On two lines beside the number: "documents" over "reuse it"
 .family-figure-label {
+    max-width: 4.6rem;
     color: $muted;
     font-family: $font-ui;
     font-size: 0.8rem;
+    line-height: 1.25;
+    text-wrap: balance;
 }
 
 // The count against the top family's, carried from the earlier text to the later ones
