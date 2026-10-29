@@ -30,7 +30,7 @@
                     <div class="d-flex flex-wrap align-items-center gap-2" ref="filterBar">
                         <span ref="selectionSummary" tabindex="-1">
                             <strong>{{ selectionTotals.selected.toLocaleString() }}</strong>
-                            of {{ selectionTotals.universe.toLocaleString() }} passages
+                            of {{ selectionTotals.universe.toLocaleString() }} shared passages
                             <span class="text-muted" v-if="activeFilters.length">
                                 ({{ Math.round(selectionTotals.share * 100) }}%)
                             </span>
@@ -112,12 +112,12 @@
                                         :class="{ 'theme-legend-item-on': highlightedTheme === t.id }"
                                         :aria-pressed="highlightedTheme === t.id ? 'true' : 'false'"
                                         @click="toggleLegendTheme(t.id)"
-                                        :title="t.label + ' — ' + t.count + ' passages'">
+                                        :title="t.label + ' — ' + t.count + ' shared passages'">
                                         <span class="legend-color-box" aria-hidden="true"
                                             :style="{ backgroundColor: getClusterColor(t.id) }"></span>
                                         <span class="theme-legend-label" :lang="themeLabelLang(t.id)">{{ t.label
                                             }}</span>
-                                        <span class="visually-hidden">, {{ t.count.toLocaleString() }} passages</span>
+                                        <span class="visually-hidden">, {{ t.count.toLocaleString() }} shared passages</span>
                                     </button>
                                 </li>
                             </ul>
@@ -204,7 +204,7 @@
                                                     {{ o.count.toLocaleString() }} &middot;
                                                     {{ Math.round(o.shareOfContext * 100) }}%
                                                 </span>
-                                                <span class="visually-hidden">: {{ o.count.toLocaleString() }} passages,
+                                                <span class="visually-hidden">: {{ o.count.toLocaleString() }} shared passages,
                                                     {{ Math.round(o.shareOfContext * 100) }}% of view,
                                                     {{ Math.round(o.shareOfValue * 100) }}% of its own total</span>
                                             </span>
@@ -227,11 +227,11 @@
             <!-- Text equivalent of the map, and the keyboard route to a pair -->
             <section class="mt-3 mb-4" aria-labelledby="semantic-passages-heading" v-if="rawData.points">
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                    <h3 class="h6 mb-0" id="semantic-passages-heading">Passages</h3>
+                    <h3 class="h6 mb-0" id="semantic-passages-heading">Shared passages</h3>
                     <button type="button" class="btn btn-sm btn-outline-secondary"
                         :aria-expanded="passageListOpen ? 'true' : 'false'" aria-controls="semantic-passage-list"
                         @click="passageListOpen = !passageListOpen">
-                        {{ passageListOpen ? "Hide" : "Show" }} passage table
+                        {{ passageListOpen ? "Hide" : "Show" }} shared passage table
                     </button>
                 </div>
                 <div id="semantic-passage-list" v-show="passageListOpen" ref="passageList">
@@ -239,7 +239,7 @@
                         <table class="table table-sm align-middle caption-top mb-2">
                             <caption>
                                 Showing {{ passageRows.length.toLocaleString() }} of
-                                {{ passageScope.indices.length.toLocaleString() }} passages
+                                {{ passageScope.indices.length.toLocaleString() }} shared passages
                                 <template v-if="passageScope.kind === 'lasso'">selected on the map</template>
                                 <template v-else-if="passageScope.kind === 'theme'">
                                     in the theme <span :lang="themeLabelLang(passageScope.theme)">{{
@@ -282,7 +282,7 @@
                         </table>
                     </div>
                     <button v-if="passageScope.indices.length > passageLimit" type="button"
-                        class="btn btn-sm btn-link text-decoration-none p-0" @click="showMorePassages">show more passages</button>
+                        class="btn btn-sm btn-link text-decoration-none p-0" @click="showMorePassages">show more shared passages</button>
                 </div>
             </section>
 
@@ -560,15 +560,15 @@ const mapLabel = computed(() => {
     if (error.value) return "Semantic map unavailable.";
     if (!rawData.value?.points) return "Semantic map, loading.";
     const totals = selectionTotals.value;
-    let label = `Semantic map of ${totals.universe.toLocaleString()} passages in ${legendThemes.value.length} themes, placed by similarity of content.`;
+    let label = `Semantic map of ${totals.universe.toLocaleString()} shared passages in ${legendThemes.value.length} themes, placed by similarity of content.`;
     if (selectedPoints.value.length > 1) {
-        label += ` ${selectedPoints.value.length.toLocaleString()} passages selected.`;
+        label += ` ${selectedPoints.value.length.toLocaleString()} shared passages selected.`;
     } else if (highlightedTheme.value !== null) {
         label += ` Highlighted theme: ${facetValueName("theme", highlightedTheme.value)}.`;
     } else if (activeFilters.value.length) {
-        label += ` Highlighted: ${totals.selected.toLocaleString()} passages matching the filters.`;
+        label += ` Highlighted: ${totals.selected.toLocaleString()} shared passages matching the filters.`;
     }
-    return label + " The themes list and the passage table give the same information.";
+    return label + " The themes list and the shared passage table give the same information.";
 });
 
 function matchesFacet(pts, f, i) {
@@ -777,7 +777,7 @@ function initializeGraph() {
         if (selectedPoints.value.length === 1) {
             showAlignment(selectedPoints.value[0]);
         } else if (selectedPoints.value.length > 1) {
-            emitter.emit("announce", `${selectedPoints.value.length.toLocaleString()} passages selected on the map.`);
+            emitter.emit("announce", `${selectedPoints.value.length.toLocaleString()} shared passages selected on the map.`);
         }
     });
     scatterplot.subscribe("deselect", () => { selectedPoints.value = []; });
@@ -915,7 +915,7 @@ function clearAllFilters() {
 function announceSelection() {
     const totals = selectionTotals.value;
     emitter.emit("announce",
-        `${totals.selected.toLocaleString()} of ${totals.universe.toLocaleString()} passages in ${visibleClusters.value} themes.`);
+        `${totals.selected.toLocaleString()} of ${totals.universe.toLocaleString()} shared passages in ${visibleClusters.value} themes.`);
 }
 
 function focusLater(target) {
@@ -1078,7 +1078,7 @@ function toggleLegendTheme(id) {
         emitter.emit("announce", "Theme highlight cleared.");
     } else {
         const n = themeIndices(id).length;
-        emitter.emit("announce", `${facetValueName("theme", id)} highlighted: ${n.toLocaleString()} passages.`);
+        emitter.emit("announce", `${facetValueName("theme", id)} highlighted: ${n.toLocaleString()} shared passages.`);
     }
 }
 
