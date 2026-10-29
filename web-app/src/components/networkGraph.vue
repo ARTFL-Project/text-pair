@@ -162,7 +162,7 @@
                                 :href="groupUrl(passage.group_id)" target="_blank">
                                 <div class="edge-passage-text" :lang="sourceLang">{{ passage.source_passage }}</div>
                                 <div class="edge-passage-meta">
-                                    In {{ passage.count }} documents ·
+                                    {{ passageDocuments(passage) }} ·
                                     <span :lang="sourceLang">{{ passage.source_title }}</span>
                                     <template v-if="passage.source_year">{{ ` (${passage.source_year})` }}</template>
                                 </div>
@@ -545,6 +545,13 @@ onUnmounted(() => {
 
 function plural(count, word) {
     return `${count.toLocaleString()} ${word}${count === 1 ? "" : "s"}`;
+}
+
+// The reuse network lists the passages a source has that others reuse, so it counts the documents that reuse them
+function passageDocuments(passage) {
+    return graphType.value === "provenance"
+        ? `Reused in ${plural(passage.count - 1, "other document")}`
+        : `In ${plural(passage.count, "document")}`;
 }
 
 function searchKey(text) {
