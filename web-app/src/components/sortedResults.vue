@@ -12,16 +12,16 @@
                 <report-switcher></report-switcher>
             </div>
         </div>
+        <div class="sort-order" role="group" aria-labelledby="sort-order-label">
+            <span id="sort-order-label" class="sort-order-label">Sort by</span>
+            <div class="sort-toggle">
+                <button type="button" v-for="option in sortOptions" :key="option.value" class="sort-button"
+                    :class="{ active: sort == option.value }" :aria-pressed="String(sort == option.value)"
+                    @click="setSort(option.value)">{{ option.label }}</button>
+            </div>
+        </div>
         <div class="row">
             <div class="col-12 col-lg-9 position-relative">
-                <div class="sort-order" role="group" aria-labelledby="sort-order-label">
-                    <span id="sort-order-label" class="sort-order-label">Sort by</span>
-                    <div class="sort-toggle">
-                        <button type="button" v-for="option in sortOptions" :key="option.value" class="sort-button"
-                            :class="{ active: sort == option.value }" :aria-pressed="String(sort == option.value)"
-                            @click="setSort(option.value)">{{ option.label }}</button>
-                    </div>
-                </div>
                 <div class="d-flex justify-content-center position-relative" v-if="loading">
                     <div class="spinner-border"
                         style="width: 8rem; height: 8rem; position: absolute; z-index: 50; top: 30px" role="status">
