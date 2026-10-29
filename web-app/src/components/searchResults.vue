@@ -5,7 +5,11 @@
             <div class="m-4" style="font-size: 120%" v-if="error">No shared passages for your query</div>
             <search-arguments></search-arguments>
         </div>
-        <report-switcher />
+        <div class="row">
+            <div class="col-12 col-lg-9">
+                <report-switcher />
+            </div>
+        </div>
         <div class="row">
             <div class="col-12 col-lg-9 position-relative">
                 <div class="d-flex justify-content-center position-relative" v-if="loading">

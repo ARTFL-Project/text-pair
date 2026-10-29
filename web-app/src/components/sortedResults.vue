@@ -7,7 +7,11 @@
             <p class="passage-note">Each passage is shown from its earliest occurrence in this collection; the passage
                 itself may be older.</p>
         </div>
-        <report-switcher></report-switcher>
+        <div class="row">
+            <div class="col-12 col-lg-9">
+                <report-switcher></report-switcher>
+            </div>
+        </div>
         <div class="row">
             <div class="col-12 col-lg-9 position-relative">
                 <div class="sort-order" role="group" aria-labelledby="sort-order-label">

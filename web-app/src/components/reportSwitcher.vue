@@ -1,6 +1,6 @@
 <template>
     <nav class="report-switcher" aria-label="Views of passages">
-        <div class="btn-group segmented">
+        <div class="btn-group segmented" :class="{ many: views.length > 3 }">
             <router-link v-for="view in views" :key="view.name" :to="`${view.path}?${query}`"
                 class="btn btn-outline-secondary" :class="{ active: route.name == view.name, hinted: view.hint }"
                 :aria-current="route.name == view.name ? 'page' : undefined">
@@ -84,7 +84,7 @@ const query = computed(() => {
 
 // Segmented control: a quiet well, the current view filled maroon
 .segmented {
-    display: inline-flex;
+    display: flex;
     flex-wrap: wrap;
     gap: 2px;
     padding: 3px;
@@ -97,7 +97,7 @@ const query = computed(() => {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    flex: 0 1 auto;
+    flex: 1 1 9rem;
     margin: 0 !important;
     padding: 0.42rem 0.85rem;
     border: 0;
@@ -107,6 +107,15 @@ const query = computed(() => {
     font-size: 0.82rem;
     font-weight: 600;
     line-height: 1.25;
+}
+
+.segmented > .btn.hinted {
+    flex-basis: 16rem;
+}
+
+// With more views than fit one row, the two kinds of cards take the first row
+.segmented.many > .btn.hinted {
+    flex-basis: calc(50% - 1px);
 }
 
 .segmented > .btn:hover,
@@ -138,7 +147,6 @@ const query = computed(() => {
 
 // What sets the first two views apart, under their names
 .view-hint {
-    max-width: 15rem;
     color: $muted;
     text-wrap: balance;
     font-size: 0.72rem;
