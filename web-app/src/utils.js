@@ -40,3 +40,6 @@ export function fieldPhrase(label, value) {
     const shown = bare == value && /^\d+-\d+$/.test(value) ? value.replace("-", "\u2013") : bare;
     return `${/^[aeiou]/.test(name) ? "an" : "a"} ${name} \u201c${shown}\u201d`;
 }
+
+// What a document is called when its citation fields are all empty.
+export const UNATTRIBUTED = "Unattributed text";

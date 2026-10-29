@@ -166,7 +166,7 @@ import vueScrollTo from "vue-scrollto";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { prefersReducedMotion } from "../utils.js";
+import { prefersReducedMotion, UNATTRIBUTED } from "../utils.js";
 import citations from "./citations.vue";
 import passagePair from "./passagePair.vue";
 
@@ -704,7 +704,9 @@ function buildCitation(metadataFields, side) {
                 labels.push(`<span style="${style}">${metadata[cite.field]}</span>`);
             }
         }
-        citation += labels.join('<span class="separator" aria-hidden="true">&nbsp;&#9679;&nbsp;</span>') + "</li>";
+        citation += (labels.length
+            ? labels.join('<span class="separator" aria-hidden="true">&nbsp;&#9679;&nbsp;</span>')
+            : `<span lang="en">${UNATTRIBUTED}</span>`) + "</li>";
     }
     citation += `</ul><div class="p-2 popover-hint" lang="${pageLanguage}"><b>Click on passage to see reuse.</b></div>`;
     return citation;

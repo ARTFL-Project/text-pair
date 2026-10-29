@@ -98,7 +98,7 @@ import Velocity from "velocity-animate";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { fieldPhrase, paramsToUrl, prefersReducedMotion } from "../utils.js";
+import { fieldPhrase, paramsToUrl, prefersReducedMotion, UNATTRIBUTED } from "../utils.js";
 import citations from "./citations";
 import facetPanel from "./facetPanel";
 import reportSwitcher from "./reportSwitcher";
@@ -134,7 +134,7 @@ function citationText(occurrence) {
     const parts = (globalConfig.targetCitation || [])
         .filter((cite) => occurrence[cite.field])
         .map((cite) => (/year$/.test(cite.field) ? `(${occurrence[cite.field]})` : occurrence[cite.field]));
-    return parts.join(", ").replace(", (", " (");
+    return parts.join(", ").replace(", (", " (") || UNATTRIBUTED;
 }
 
 // The documents the later side's fields found a passage again in, as many as the card has room for
