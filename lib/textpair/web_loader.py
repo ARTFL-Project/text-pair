@@ -1089,6 +1089,181 @@ def add_chrono_rank(cursor, alignments_table: str) -> bool:
     return True
 
 
+# The passage length ranges of the facets: the top of each, and the label of the open one last
+LENGTH_RANGES = (
+    (25, "1-25"),
+    (100, "26-100"),
+    (250, "101-250"),
+    (500, "251-500"),
+    (1000, "501-1000"),
+    (3000, "1001-3000"),
+)
+OPEN_LENGTH_RANGE = "3001-"
+
+# The facet tables, in the order they are made: the last marks them complete
+FACET_TABLES = ("found_again", "facet_years", "facet_values")
+
+
+def length_range_number(column: str) -> str:
+    """SQL that numbers the range of LENGTH_RANGES a passage length is in, from 0"""
+    cases = " ".join(f"WHEN {column} <= {top} THEN {number}" for number, (top, _) in enumerate(LENGTH_RANGES))
+    return f"CASE {cases} ELSE {len(LENGTH_RANGES)} END"
+
+
+def relation_columns(cursor, table: str) -> list[str]:
+    """The columns of a table, in order, or none for a table that does not exist"""
+    cursor.execute(
+        "SELECT attname FROM pg_attribute WHERE attrelid = to_regclass(%s) AND attnum > 0 AND NOT attisdropped "
+        "ORDER BY attnum",
+        (table,),
+    )
+    return [name for (name,) in cursor]
+
+
+def load_facet_tables(cursor, alignments_table: str) -> bool:
+    """Tables that count passage families by where they were found again, for the sorted view's facets.
+
+    `_found_again` has a row per family and document it was found again in: one of its documents other
+    than the anchor's, at either end of its alignments. `u` is the document's id among the source
+    documents, or its negated id among the target ones where no source document has the same id and fields,
+    so a search on the later side matches it once. A row holds the family's anchor year (`source_year`, as
+    the groups table has it), the ids of the document's values (`v_<field>`, numbered in the order of the
+    values) and of the anchor's (`anchor_<field>`), and masks of the length ranges of the alignments it
+    ends (`source_lengths`, `target_lengths`, bit n for range n of LENGTH_RANGES). `_facet_years` counts
+    each facet's values by the anchor year and `_facet_values` over all the families, with a document
+    (`doc`, as `u`) to read each value from: the anchor's for a source_ field, those found again for a
+    target_ one, the alignments' ranges for a passage length. Document 0, with no values, stands for an
+    anchor in neither documents table. False, and nothing made, where `_family_rank` has no anchors
+    (add_family_anchors) or there is nothing to count. Safe to repeat.
+    """
+    table = alignments_table
+    rank, groups, found = f"{table}_family_rank", f"{table}_groups", f"{table}_found_again"
+    for name in reversed(FACET_TABLES):
+        cursor.execute(f"DROP TABLE IF EXISTS {table}_{name}")
+    if not {"anchor_s", "anchor_t"} <= set(relation_columns(cursor, rank)):
+        return False
+    target_columns = set(relation_columns(cursor, f"{table}_target_meta"))
+    names = [
+        column[len("source_") :]
+        for column in relation_columns(cursor, f"{table}_source_meta")
+        if column.startswith("source_") and f"target_{column[len('source_'):]}" in target_columns
+    ]
+    fields = [name for name in names if name != "doc_id"]
+    alignment_columns = relation_columns(cursor, f"{table}_family_alignments")
+    sides = [side for side in ("source", "target") if f"{side}_passage_length" in alignment_columns]
+    by_year = "source_year" in relation_columns(cursor, groups)
+    if not fields and not sides:
+        return False
+
+    # A target document with the same id and fields as a source one is that one, so a search matches both or neither
+    same = "".join(f" AND s.source_{name} IS NOT DISTINCT FROM t.target_{name}" for name in fields)
+    cursor.execute("DROP TABLE IF EXISTS pg_temp.facet_targets, pg_temp.facet_documents, pg_temp.facet_anchors")
+    cursor.execute(
+        f"""CREATE TEMP TABLE facet_targets AS SELECT t.id AS t, COALESCE(s.id, -t.id) AS u
+        FROM {table}_target_meta t LEFT JOIN {table}_source_meta s ON s.source_doc_id = t.target_doc_id{same}"""
+    )
+    cursor.execute("ALTER TABLE pg_temp.facet_targets ADD PRIMARY KEY (t)")
+    numbered = "".join(f", (DENSE_RANK() OVER (ORDER BY {name}))::int AS v_{name}" for name in fields)
+    cursor.execute(
+        f"""CREATE TEMP TABLE facet_documents AS SELECT u{numbered} FROM (
+            SELECT id AS u{"".join(f", source_{name} AS {name}" for name in fields)} FROM {table}_source_meta
+            UNION ALL SELECT ft.u{"".join(f", target_{name}" for name in fields)} FROM {table}_target_meta t
+            JOIN pg_temp.facet_targets ft ON ft.t = t.id WHERE ft.u < 0
+            UNION ALL SELECT 0{", NULL" * len(fields)}) documents"""
+    )
+    cursor.execute("ALTER TABLE pg_temp.facet_documents ADD PRIMARY KEY (u)")
+
+    # The anchor of each family, as `u`
+    cursor.execute(
+        f"""CREATE TEMP TABLE facet_anchors AS SELECT f.rank AS r{", g.source_year" if by_year else ""},
+        COALESCE(f.anchor_s, ft.u, 0) AS u FROM {rank} f LEFT JOIN pg_temp.facet_targets ft ON ft.t = f.anchor_t
+        {f"JOIN {groups} g USING (group_id)" if by_year else ""}"""
+    )
+    cursor.execute("ALTER TABLE pg_temp.facet_anchors ADD PRIMARY KEY (r)")
+
+    masks = "".join(
+        f", (CASE WHEN x.{side}_passage_length IS NULL THEN 0 "
+        f"ELSE 1 << {length_range_number(f'x.{side}_passage_length')} END)::smallint AS {side}_lengths"
+        for side in sides
+    )
+    ends = (
+        f"SELECT x.r, x.s AS u{masks} FROM {table}_family_alignments x JOIN {rank} f ON f.rank = x.r "
+        f"WHERE x.s IS DISTINCT FROM f.anchor_s UNION ALL "
+        f"SELECT x.r, ft.u{masks} FROM {table}_family_alignments x JOIN {rank} f ON f.rank = x.r "
+        f"JOIN pg_temp.facet_targets ft ON ft.t = x.t WHERE x.t IS DISTINCT FROM f.anchor_t"
+    )
+    columns = [
+        "e.r",
+        "e.u",
+        *(["a.source_year"] if by_year else []),
+        *(f"d.v_{name}" for name in fields),
+        *(f"ad.v_{name} AS anchor_{name}" for name in fields),
+        *(f"e.{side}_lengths" for side in sides),
+    ]
+    cursor.execute(
+        f"""CREATE TABLE {found} AS SELECT {", ".join(columns)}
+        FROM (SELECT r, u{"".join(f", bit_or({side}_lengths) AS {side}_lengths" for side in sides)} FROM ({ends}) ends
+              GROUP BY r, u) e
+        JOIN pg_temp.facet_documents d USING (u) JOIN pg_temp.facet_anchors a USING (r)
+        JOIN pg_temp.facet_documents ad ON ad.u = a.u ORDER BY e.r, e.u"""
+    )
+    cursor.execute(f"ALTER TABLE {found} ADD PRIMARY KEY (r, u)")
+    # ANALYZE samples a tenth of the families and documents, so plans would expect too many rows for a few
+    cursor.execute(f"SELECT (SELECT COUNT(DISTINCT r) FROM {found}), (SELECT COUNT(DISTINCT u) FROM {found})")
+    distinct_families, distinct_documents = cursor.fetchone()
+    cursor.execute(
+        f"ALTER TABLE {found} ALTER COLUMN r SET (n_distinct = {max(distinct_families, 1)}), "
+        f"ALTER COLUMN u SET (n_distinct = {max(distinct_documents, 1)})"
+    )
+    # Read by the documents a search on the later side matches, and by the anchor years one on the earlier side does
+    kept = ", ".join(column.split()[-1].split(".")[-1] for column in columns if column not in ("e.u", "a.source_year"))
+    cursor.execute(f"CREATE INDEX u_{found}_idx ON {found}(u{', source_year' if by_year else ''}) INCLUDE ({kept})")
+
+    # The families anchored in a document with each value, found again in one, or with an alignment in each range
+    def counts(year: str) -> str:
+        by = f"{year}, " if year else ""
+        statements = []
+        for name in fields:
+            statements.append(
+                f"SELECT 'source_{name}'::text AS facet, {by}d.v_{name} AS v, COUNT(*)::int AS n "
+                f"FROM pg_temp.facet_anchors a JOIN pg_temp.facet_documents d USING (u) GROUP BY {by}d.v_{name}"
+            )
+            statements.append(
+                f"SELECT 'target_{name}', {by}v_{name}, COUNT(*)::int "
+                f"FROM (SELECT DISTINCT r, {by}v_{name} FROM {found}) p GROUP BY {by}v_{name}"
+            )
+        for side in sides:
+            length = f"{side}_passage_length"
+            joined = " JOIN pg_temp.facet_anchors a USING (r)" if year else ""
+            statements.append(
+                f"SELECT '{length}', {by}l.v, COUNT(*)::int FROM (SELECT DISTINCT r, "
+                f"{length_range_number(length)} AS v FROM {table}_family_alignments WHERE {length} IS NOT NULL) l"
+                f"{joined} GROUP BY {by}l.v"
+            )
+        return " UNION ALL ".join(statements)
+
+    if by_year:
+        years = f"{table}_facet_years"
+        cursor.execute(f"CREATE TABLE {years} AS {counts('source_year')}")
+        cursor.execute(f"CREATE INDEX facet_{years}_idx ON {years}(facet, source_year) INCLUDE (v, n)")
+        cursor.execute(f"VACUUM (ANALYZE) {years}")
+        totals = f"SELECT facet, v, SUM(n)::int AS n FROM {years} GROUP BY facet, v"
+    else:
+        totals = counts("")
+    documents = " UNION ALL ".join(
+        f"SELECT '{side}_{name}' AS facet, v_{name} AS v, MIN(u) AS doc FROM pg_temp.facet_documents GROUP BY v_{name}"
+        for name in fields
+        for side in ("source", "target")
+    )
+    read = f"LEFT JOIN ({documents}) d USING (facet, v)" if fields else "CROSS JOIN (SELECT NULL::int AS doc) d"
+    cursor.execute(f"CREATE TABLE {table}_facet_values AS SELECT c.facet, c.v, c.n, d.doc FROM ({totals}) c {read}")
+    cursor.execute(f"ALTER TABLE {table}_facet_values ADD PRIMARY KEY (facet, v)")
+    cursor.execute(f"VACUUM (ANALYZE) {found}")
+    cursor.execute(f"VACUUM (ANALYZE) {table}_facet_values")
+    cursor.execute("DROP TABLE pg_temp.facet_targets, pg_temp.facet_documents, pg_temp.facet_anchors")
+    return True
+
+
 def load_family_filter_tables(alignments_table: str, searchable_fields: list[str], workers: int = 1) -> bool:
     """Tables that pick the passage families a search leaves in the running, in the order of the sorted results.
 
@@ -1097,8 +1272,9 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     puts the families in `"count" DESC, group_id` order, and the other tables hold family ranks:
     `_source_families` and `_target_families` one per family and document, `_family_alignments` one per
     family and alignment, for filters on both sides. `_family_rank` also holds each family's anchor document
-    (see add_family_anchors) and its place by the anchor's year (add_chrono_rank). `_family_filters` is made
-    last, to mark them complete.
+    (see add_family_anchors) and its place by the anchor's year (add_chrono_rank). The facet tables count the
+    families by where they were found again (load_facet_tables). `_family_filters` is made last, to mark them
+    complete.
     """
     config = read_global_config()
     database_config = {
@@ -1123,7 +1299,7 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     print("Storing family filters for the sorted results...", flush=True)
 
     built = ("family_rank", "source_meta", "target_meta", "family_alignments", "source_families", "target_families")
-    for name in ("family_filters", *built):
+    for name in ("family_filters", *reversed(FACET_TABLES), *built):
         cursor.execute(f"DROP TABLE IF EXISTS {alignments_table}_{name}")
 
     fields = {side: family_filter_fields(searchable_fields, set(columns), side) for side in ("source", "target")}
@@ -1208,6 +1384,7 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     # Index-only scans need the visibility map, which only a vacuum fills in
     for name in built:
         cursor.execute(f"VACUUM (ANALYZE) {alignments_table}_{name}")
+    load_facet_tables(cursor, alignments_table)
     cursor.execute(
         f"CREATE TABLE {alignments_table}_family_filters AS "
         f"SELECT COUNT(*)::int AS families FROM {alignments_table}_family_rank"

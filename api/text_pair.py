@@ -28,6 +28,7 @@ from philologic.runtime.get_text import get_text_obj
 from psycopg2 import sql
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
+from textpair.web_loader import FACET_TABLES, LENGTH_RANGES, OPEN_LENGTH_RANGE, relation_columns
 from textpair.web_settings import SettingsError, load_app_config
 
 app = FastAPI()
@@ -1124,13 +1125,44 @@ def matching_ids(cursor, table: str, side: str, conditions: list[Condition]) -> 
     return [row[0] for row in cursor]
 
 
+def found_again_columns(cursor, table: str) -> set[str]:
+    """The columns of `_found_again`, or none where the facet tables are missing or incomplete (load_facet_tables)"""
+    cursor.execute("SELECT to_regclass(%s) IS NOT NULL", (f"{table}_{FACET_TABLES[-1]}",))
+    return set(relation_columns(cursor, f"{table}_found_again")) if cursor.fetchone()[0] else set()
+
+
+def found_again_rows(cursor, table: str, parts: OriginParts, found: set[str]) -> tuple[str, str, list]:
+    """A CTE, or none, and a FROM clause for `x`, the rows of `_found_again` that meet a search on the later side.
+
+    These are the documents found again that meet the later-side conditions, in the families whose anchor meets
+    the earlier-side ones. Conditions on the anchor's year alone are read from the rows, others from the groups.
+    """
+    rows = quote_ident(f"{table}_found_again")
+    source = matching_ids(cursor, table, "source", [on_side(c, "source") for c in parts.target])
+    ids = source + [-target for target in matching_ids(cursor, table, "target", parts.target)]
+    if not parts.source:
+        return "", f"{rows} x WHERE x.u = ANY(%s)", [ids]
+    where, params = join_conditions(parts.source)
+    if "source_year" in found and all(c.field == "source_year" for c in parts.source):
+        return "", f"{rows} x WHERE x.u = ANY(%s) AND {where}", [ids, *params]
+    groups, rank = quote_ident(f"{table}_groups"), quote_ident(f"{table}_family_rank")
+    return (
+        f"s AS MATERIALIZED (SELECT f.rank AS r FROM {groups} g JOIN {rank} f USING (group_id) WHERE {where})",
+        f"s JOIN {rows} x ON x.r = s.r WHERE x.u = ANY(%s)",
+        [*params, ids],
+    )
+
+
 def origin_ranks(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
     """A WITH clause that makes `c`, the ranks of the families that meet a search read by where they were first found.
 
     The anchor meets the source conditions, and some other document of the family, on either side of the
     alignments, the target conditions. Where an alignment condition is set too, that alignment has the later
-    document at one end.
+    document at one end. Without one, the facet tables answer it where the database has them.
     """
+    if parts.target and not parts.aligned and (found := found_again_columns(cursor, table)):
+        cte, rows, params = found_again_rows(cursor, table, parts, found)
+        return f"WITH {cte + ', ' if cte else ''}c AS MATERIALIZED (SELECT DISTINCT x.r FROM {rows})", params
     rank_table = quote_ident(f"{table}_family_rank")
     alignments = quote_ident(f"{table}_family_alignments")
     a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
@@ -1343,22 +1375,20 @@ def get_sorted_results(request: Request):
     return results
 
 
-# The passage length ranges of the pairs' facets: the top of each, and the label of the open one
-LENGTH_RANGES = (
-    (25, "1-25"),
-    (100, "26-100"),
-    (250, "101-250"),
-    (500, "251-500"),
-    (1000, "501-1000"),
-    (3000, "1001-3000"),
-)
 FACET_VALUES = 100  # values a facet returns unless `limit` says otherwise, as many as the panel shows
+LENGTH_LABELS = [label for _, label in LENGTH_RANGES] + [OPEN_LENGTH_RANGE]  # by range number
 
 
 def length_range(column: str) -> str:
     """SQL that puts a passage length into the ranges of the pairs' facets"""
     cases = " ".join(f"WHEN {column} <= {top} THEN '{label}'" for top, label in LENGTH_RANGES)
-    return f"CASE {cases} ELSE '3001-' END"
+    return f"CASE {cases} ELSE '{OPEN_LENGTH_RANGE}' END"
+
+
+def length_label(number: str) -> str:
+    """SQL that names a range of the pairs' facets by its number"""
+    cases = " ".join(f"WHEN {n} THEN '{label}'" for n, label in enumerate(LENGTH_LABELS))
+    return f"CASE {number} {cases} END"
 
 
 def facet_error(facet: str, reason: str) -> HTTPException:
@@ -1472,9 +1502,68 @@ def passage_length_facet(cursor, table: str, parts: OriginParts, side: str, rest
     )
 
 
-# Facets of a search with no filters are the same for every visitor and cost seconds on a large database, so
-# each is kept once it is made, until the family tables are rebuilt. Keyed by the oid of `_family_filters`.
-UNFILTERED_FACETS: dict[tuple, dict] = {}
+def stored_facet(
+    cursor, table: str, conditions: list[Condition], served: OriginFamilies, facet: str, found: set[str], limit: int
+) -> tuple[str, list] | None:
+    """A statement like passage_facets' that counts from the facet tables (load_facet_tables), or None.
+
+    A search with no filters reads the counts of all the families, and one on the anchor's year alone those by
+    year. One on the later side counts the rows of the documents found again that it matches, which hold their
+    anchor's values too, and another the rows of the families it leaves, for a later-side field.
+    """
+    side, _, name = facet.partition("_")
+    length = name == "passage_length"
+    anchored = side == "source" and not length
+    column = f"{side}_lengths" if length else f"anchor_{name}" if anchored else f"v_{name}"
+    parts = served.parts
+    if column not in found or (parts is not None and (parts.aligned or not parts.target)):
+        return None
+    by_year = served.where is not None and "source_year" in found and all(c.field == "source_year" for c in conditions)
+    values, years = quote_ident(f"{table}_facet_values"), quote_ident(f"{table}_facet_years")
+    named = length_label("v") if length else "v"
+    cte, params, counted_params = "", [], []
+    if served.where is None and parts is None:
+        families = f"SELECT families::bigint FROM {quote_ident(f'{table}_family_filters')}"
+        counted, counted_params = f"SELECT {named} AS v, n::bigint AS n FROM {values} WHERE facet = %s", [facet]
+    elif by_year:
+        where, where_params = join_conditions(conditions)
+        families, params = f"SELECT COUNT(*)::bigint FROM {quote_ident(f'{table}_groups')} WHERE {where}", where_params
+        counted = f"""SELECT {named} AS v, n FROM (SELECT v, SUM(n)::bigint AS n FROM {years}
+            WHERE facet = %s AND {where} GROUP BY v) y"""
+        counted_params = [facet, *where_params]
+    elif parts is not None:
+        cte, rows, params = found_again_rows(cursor, table, parts, found)
+        cte += ", " if cte else ""
+        if length:  # each family once, with the ranges of its alignments that end in a document found again
+            cte += f"p AS MATERIALIZED (SELECT x.r, bit_or(x.{column}) AS m FROM {rows} GROUP BY x.r)"
+            families = "SELECT COUNT(*)::bigint FROM p"
+            ranges = ", ".join(f"({1 << n}, '{label}')" for n, label in enumerate(LENGTH_LABELS))
+            counted = f"""SELECT l.v, COUNT(*)::bigint AS n FROM p
+                JOIN (VALUES {ranges}) l(bit, v) ON p.m & l.bit <> 0 GROUP BY l.v"""
+        else:
+            cte += f"p AS MATERIALIZED (SELECT DISTINCT x.r, x.{column} AS v FROM {rows})"
+            families = "SELECT COUNT(*)::bigint FROM (SELECT DISTINCT r FROM p) q"
+            counted = "SELECT v, COUNT(*)::bigint AS n FROM p GROUP BY v"
+    elif not length and not anchored:
+        cte, params = facet_ranks(cursor, table, served)
+        families = "SELECT COUNT(*)::bigint FROM ca"
+        counted = f"""SELECT v, COUNT(*)::bigint AS n FROM (SELECT DISTINCT x.r, x.{column} AS v
+            FROM ca JOIN {quote_ident(f"{table}_found_again")} x ON x.r = ca.r) q GROUP BY v"""
+    else:
+        return None
+    value, reads, read_params = "g.v", "", []
+    if not length:  # the values are numbered in their order, and read from a document that has them
+        source, target = quote_ident(f"source_{name}"), quote_ident(f"target_{name}")
+        value = f"CASE WHEN fv.doc > 0 THEN sm.{source} ELSE tm.{target} END"
+        reads = f"""LEFT JOIN {values} fv ON fv.facet = %s AND fv.v = g.v
+            LEFT JOIN {quote_ident(f"{table}_source_meta")} sm ON sm.id = fv.doc
+            LEFT JOIN {quote_ident(f"{table}_target_meta")} tm ON tm.id = -fv.doc"""
+        read_params = [facet]
+    statement = f"""{"WITH " + cte if cte else ""} SELECT t.families, {value}, g.n, g.total, g.kinds FROM
+        ({families}) t(families) LEFT JOIN
+        (SELECT v, n, (SUM(n) OVER ())::bigint AS total, (COUNT(*) OVER ())::bigint AS kinds
+         FROM ({counted}) q ORDER BY n DESC, v LIMIT %s) g ON TRUE {reads} ORDER BY g.n DESC NULLS LAST, g.v"""
+    return statement, [*params, *counted_params, limit, *read_params]
 
 
 @app.post("/passage_facets/")
@@ -1509,10 +1598,6 @@ def passage_facets(request: Request):
         if not groups_columns:
             raise facet_error(facet, "this database has no passage families")
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("SELECT to_regclass(%s)::oid", (f"{table}_family_filters",))
-        kept = (table, cursor.fetchone()[0], facet, values) if not conditions else None
-        if kept in UNFILTERED_FACETS:
-            return UNFILTERED_FACETS[kept]
         served = origin_families(cursor, table, conditions, groups_columns) if conditions else OriginFamilies("origin")
         columns = family_filter_columns(cursor, table) if has_family_anchors(cursor, table) else None
         length = name == "passage_length"
@@ -1523,24 +1608,30 @@ def passage_facets(request: Request):
             raise facet_error(facet, "the family tables do not have the lengths of this database's passages")
 
         if ranked:
-            ranks, params = facet_ranks(cursor, table, served)
-            restrict = bool(ranks)
-            parts = served.parts or OriginParts([], [], [], columns)
             cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
             cursor.execute("SET LOCAL work_mem = '256MB'")  # the counts are hashed in memory, millions of rows of them
-            if length:
-                ctes, counted, counted_params = passage_length_facet(cursor, table, parts, side, restrict)
-            elif side == "source":
-                ctes, counted, counted_params = "", anchor_facet(table, name, restrict), []
+            found = found_again_columns(cursor, table)
+            stored = stored_facet(cursor, table, conditions, served, facet, found, values)
+            if stored is not None:
+                statement, params = stored
             else:
-                ctes, counted, counted_params = found_again_facet(cursor, table, parts, name, restrict)
-            families = "ca" if restrict else quote_ident(f"{table}_family_rank")
-            ctes = ", ".join(cte for cte in (ranks, ctes) if cte)
-            statement = f"""{"WITH " + ctes if ctes else ""} SELECT t.families, g.v, g.n, g.total, g.kinds FROM
-                (SELECT COUNT(*)::bigint AS families FROM {families}) t LEFT JOIN
-                (SELECT v, n, (SUM(n) OVER ())::bigint AS total, (COUNT(*) OVER ())::bigint AS kinds
-                 FROM ({counted}) q ORDER BY n DESC, v LIMIT %s) g ON TRUE ORDER BY g.n DESC NULLS LAST, g.v"""
-            cursor.execute(statement, [*params, *counted_params, values])
+                ranks, params = facet_ranks(cursor, table, served)
+                restrict = bool(ranks)
+                parts = served.parts or OriginParts([], [], [], columns)
+                if length:
+                    ctes, counted, counted_params = passage_length_facet(cursor, table, parts, side, restrict)
+                elif side == "source":
+                    ctes, counted, counted_params = "", anchor_facet(table, name, restrict), []
+                else:
+                    ctes, counted, counted_params = found_again_facet(cursor, table, parts, name, restrict)
+                families = "ca" if restrict else quote_ident(f"{table}_family_rank")
+                ctes = ", ".join(cte for cte in (ranks, ctes) if cte)
+                statement = f"""{"WITH " + ctes if ctes else ""} SELECT t.families, g.v, g.n, g.total, g.kinds FROM
+                    (SELECT COUNT(*)::bigint AS families FROM {families}) t LEFT JOIN
+                    (SELECT v, n, (SUM(n) OVER ())::bigint AS total, (COUNT(*) OVER ())::bigint AS kinds
+                     FROM ({counted}) q ORDER BY n DESC, v LIMIT %s) g ON TRUE ORDER BY g.n DESC NULLS LAST, g.v"""
+                params = [*params, *counted_params, values]
+            cursor.execute(statement, params)
             rows = cursor.fetchall()
             applied = "origin"
         else:
@@ -1560,7 +1651,7 @@ def passage_facets(request: Request):
             rows = cursor.fetchall()
             applied = served.applied
         results = [{"field": row[1], "count": row[2]} for row in rows if row[2] is not None]
-        counted = {
+        return {
             "facet": facet,
             "results": results,
             "total_count": rows[0][3] or 0 if rows else 0,
@@ -1569,9 +1660,6 @@ def passage_facets(request: Request):
             "counted_once": side == "source" and not length,
             "scope": applied,
         }
-        if kept is not None and kept[1] is not None:
-            UNFILTERED_FACETS[kept] = counted
-        return counted
 
 
 def merge_passages(rows: list, direction: str) -> list[dict]:

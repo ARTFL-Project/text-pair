@@ -18,7 +18,9 @@ found get only what that needs: each family's anchor document, as two id columns
 (family_rank_indexes). The "earliest first" sort needs each family's place by the anchor's year, as
 `chrono_rank` with its index (add_chrono_rank), and the groups table an index in that order
 (groups_year_index). The anchors and the places are one UPDATE each of the family table, seconds per
-million families, during which the sorted view of that database waits for it.
+million families, during which the sorted view of that database waits for it. The sorted view's facets
+count from tables of the documents each family was found again in (load_facet_tables), which are new
+tables, so the API counts as before until they are complete.
 """
 
 import os
@@ -29,11 +31,14 @@ from configparser import ConfigParser
 
 import psycopg2
 from textpair.web_loader import (
+    FACET_TABLES,
     add_chrono_rank,
     add_family_anchors,
     family_rank_indexes,
     groups_year_index,
+    load_facet_tables,
     load_family_filter_tables,
+    tune_load_session,
 )
 from textpair.web_settings import load_app_config
 
@@ -106,6 +111,8 @@ def main():
     )
     connection.autocommit = True
     cursor = connection.cursor()
+    tune_load_session(cursor)
+    cursor.execute("SET work_mem = '1GB'")  # the facet tables are counted from millions of rows
 
     tables = args.tables or groups_tables(cursor)
     print(f"{len(tables)} table(s) to consider\n")
@@ -122,12 +129,23 @@ def main():
             chrono = not by_year or has_columns(cursor, f"{table}_family_rank", ("chrono_rank",))
             statements = family_rank_indexes(table, by_year) + ([groups_year_index(f"{table}_groups")] if by_year else [])
             indexes = missing_indexes(cursor, statements)
-            if anchors and chrono and not indexes:
+            facets = table_exists(cursor, f"{table}_{FACET_TABLES[-1]}")
+            missing = [
+                what
+                for what, present in (
+                    ("the anchors", anchors),
+                    ("places by year", chrono),
+                    ("indexes", not indexes),
+                    ("facet tables", facets),
+                )
+                if not present
+            ]
+            if not missing:
                 print(f"  {table}: tables already present")
             elif args.dry_run:
-                print(f"  {table}: would add the anchors, places by year and indexes to the family filter tables")
+                print(f"  {table}: would add {', '.join(missing)} to the family filter tables")
             else:
-                print(f"  {table}: adding the anchors, places by year and indexes...", flush=True)
+                print(f"  {table}: adding {', '.join(missing)}...", flush=True)
                 started = time.time()
                 try:
                     done = anchors or add_family_anchors(cursor, table)
@@ -139,13 +157,15 @@ def main():
                     for name in ("source_families", "target_families"):
                         if done and any(f"{name}(" in statement for statement in indexes):
                             cursor.execute(f"VACUUM (ANALYZE) {table}_{name}")
+                    if done and not facets:
+                        load_facet_tables(cursor, table)
                 except psycopg2.Error as error:
                     print(f"  {table}: FAILED: {str(error).strip()}", file=sys.stderr)
                     continue
                 if done:
                     print(f"  {table}: done in {time.time() - started:.1f} s")
                 else:
-                    print(f"  {table}: a document has several ids, anchors not stored")
+                    print(f"  {table}: a document has several ids, anchors and facet tables not stored")
             continue
         fields = searchable_fields(table)
         if fields is None:
