@@ -10,7 +10,7 @@
                 </li>
                 <li v-if="stats.group_count != null">
                     <span class="figure">{{ stats.group_count.toLocaleString() }}</span>
-                    <span class="figure-caption">source passages they were generated from</span>
+                    <span class="figure-caption">reused passages they form</span>
                 </li>
                 <li v-if="stats.group_count != null && stats.author_group_count != null">
                     <span class="figure">{{ stats.author_group_count.toLocaleString() }}</span>
