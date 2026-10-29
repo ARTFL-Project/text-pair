@@ -75,7 +75,7 @@ router.beforeEach((to) => {
         (to.name === "networkGraph" && !globalConfig.showNetworkGraph) ||
         (to.name === "semanticGraph" && !globalConfig.showSemanticGraph);
     if (hidden) {
-        return { name: "searchResults", query: to.query };
+        return { name: globalConfig.hasPassageFamilies ? "sortedResults" : "searchResults", query: to.query };
     }
 });
 export default router;
