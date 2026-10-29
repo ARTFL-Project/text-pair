@@ -23,7 +23,7 @@
                     <span class="metadata-args" v-for="metadata in clause.chips" :key="metadata.fieldName">
                         <span class="metadata-value">{{ metadata.phrase }}</span>
                         <button type="button" class="remove-metadata"
-                            :aria-label="`Remove ${metadata.sideName} ${metadata.label} ${checkValue(metadata.value)}`"
+                            :aria-label="`Remove ${metadata.sideName} ${metadata.label} ${spokenValue(metadata.value)}`"
                             @click="removeMetadata(metadata)">&times;</button>
                     </span>
                 </span>
@@ -65,10 +65,10 @@
                             {{ metadata.label }}
                         </span>
                         <span class="metadata-value">
-                            {{ checkValue(metadata.value) }}
+                            {{ shownValue(metadata.value) }}
                         </span>
                         <button type="button" class="remove-metadata"
-                            :aria-label="`Remove ${plainText(paramGroup.direction)} ${metadata.label} ${checkValue(metadata.value)}`"
+                            :aria-label="`Remove ${plainText(paramGroup.direction)} ${metadata.label} ${spokenValue(metadata.value)}`"
                             @click="removeMetadata(metadata)">&times;</button>
                     </li>
                 </ul>
@@ -98,7 +98,7 @@ import emitter from "tiny-emitter/instance";
 import { computed, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { fieldPhrase, paramsToUrl, plainText } from "../utils.js";
+import { fieldPhrase, paramsToUrl, plainText, unquote } from "../utils.js";
 
 // What the view counts: shared passages, the pairs of texts, or reused passages, the families
 const props = defineProps({ unit: { type: String, default: "shared" } });
@@ -191,8 +191,16 @@ function removeMetadata(metadata) {
     router.push(`${route.path}?${paramsToUrl(queryParams)}`).then(() => emitter.emit("focusMain"));
 }
 
-function checkValue(value) {
-    return value == '""' ? "N/A" : value;
+// The value on a chip: N/A for none, curly quotes for an exact match, as typed otherwise
+function shownValue(value) {
+    if (value == '""') return "N/A";
+    const bare = unquote(value);
+    return bare == value ? value : `\u201c${bare}\u201d`;
+}
+
+// ... and as it is read out
+function spokenValue(value) {
+    return value == '""' ? "N/A" : unquote(value);
 }
 </script>
 <style lang="scss" scoped>
