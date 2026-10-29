@@ -8,8 +8,8 @@
                     <path :d="view.icon" fill="none" stroke="currentColor" :stroke-width="view.stroke || 1.5"
                         stroke-linecap="round" stroke-linejoin="round" />
                 </svg><span class="view-text"><span><span class="view-prefix">{{ view.prefix }}</span><span
-                            class="view-name">{{ view.label }}</span></span><span class="view-hint" v-if="view.hint">{{
-                        view.hint }}</span></span></router-link>
+                            class="view-name">{{ view.label }}</span></span><span class="view-hint" v-if="view.hint"><span
+                            class="visually-hidden">. </span>{{ view.hint }}</span></span></router-link>
         </div>
     </nav>
 </template>
