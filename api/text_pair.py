@@ -2067,7 +2067,8 @@ def index(db_path: str):
         config = load_app_config(db_dir)
     except SettingsError as error:
         return HTMLResponse(f"<p>The settings of this database have a mistake: {html.escape(str(error))}</p>", 500)
-    config["showNetworkGraph"] = config["showNetworkGraph"] and has_passage_families(config["databaseName"])
+    config["hasPassageFamilies"] = has_passage_families(config["databaseName"])
+    config["showNetworkGraph"] = config["showNetworkGraph"] and config["hasPassageFamilies"]
     for direction in ("source", "target"):
         config[f"{direction}TextAvailable"] = text_data_path(db_dir, config, direction) is not None
     config_script = orjson.dumps(config).decode().replace("</", "<\\/")
