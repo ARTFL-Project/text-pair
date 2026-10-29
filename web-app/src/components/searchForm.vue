@@ -161,8 +161,7 @@ onUnmounted(() => {
     emitter.off("toggleSearchForm", toggleSearchForm);
 });
 
-// The form stays open on a landing that went on to the first view
-if (route.path != "/" && !route.redirectedFrom) {
+if (route.path != "/") {
     toggleSearchForm();
 }
 
