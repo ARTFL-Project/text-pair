@@ -58,7 +58,8 @@ BLOCKS = [
         ],
     ),
     (
-        'Fields of the "Count matches by" panel, in the same format as those of the search form.',
+        'Fields of the "Count shared passages by" and "Count reused passages by" panels, '
+        "in the search form's format.",
         [
             Option("source_facets", ("facetsFields", "source"), [], FIELD),
             Option("target_facets", ("facetsFields", "target"), [], FIELD),
