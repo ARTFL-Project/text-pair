@@ -382,10 +382,7 @@ function updateBanalityValue() {
 }
 
 #show-form.hide {
-    position: absolute;
-    min-height: 0;
-    height: 0;
-    overflow: hidden;
+    display: none;
 }
 
 #show-form svg {
