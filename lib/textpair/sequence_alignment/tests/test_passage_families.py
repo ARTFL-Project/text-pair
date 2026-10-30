@@ -5,14 +5,15 @@
 
 Each case is a handful of synthetic alignments between synthetic documents, laid out
 so that one rule decides the outcome: overlapping windows of one passage merging, a
-window running past two passages not fusing them (even when each has only one window), the
-floor on fragments, sliding windows over a long copy staying bounded, a passage aligned only
-with a member joining its family, a passage that most of its partners put in one family not
-being taken into another by a longer window, a family whose earliest occurrence is only ever a
-target, and a group's passage moved back up to five words to start its sentence -- never past a
-comma or the like, though an apostrophe does not stop it, and on a word, not an opening quote --
-unless that would make it another group's passage exactly. Serial and parallel runs must then
-write the same files.
+window running past two passages not fusing them (even when each has only one window) nor
+anchoring a family of its own, a passage quoted inside another's quotation going to its own
+family, the floor on fragments, sliding windows over a long copy staying bounded, a passage
+aligned only with a member joining its family, a passage that most of its partners put in one
+family not being taken into another by a longer window, a family whose earliest occurrence is
+only ever a target, and a group's passage moved back up to five words to start its sentence --
+never past a comma or the like, though an apostrophe does not stop it, and on a word, not an
+opening quote -- unless that would make it another group's passage exactly. Serial and
+parallel runs must then write the same files.
 """
 import os
 import shutil
@@ -90,7 +91,9 @@ def build(root):
                        ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700), ("Q", 1700), ("Y2", 1600), ("Y3", 1600),
                        ("FB", 1700), ("FC", 1600), ("FD", 1650), ("FE", 1650),
                        ("DD", 1600), ("P1", 1700), ("P2", 1700), ("P3", 1700), ("P4", 1700), ("P5", 1700),
-                       ("GG", 1750), ("BR", 1800)):
+                       ("GG", 1750), ("BR", 1800),
+                       ("RR", 1600), ("RA1", 1700), ("RA2", 1700), ("RB1", 1700), ("RB2", 1700), ("RS", 1750),
+                       ("NR", 1600), ("NA1", 1700), ("NA2", 1700), ("NB1", 1700), ("NB2", 1700), ("NT", 1700)):
         c.doc(name, year)
     # one passage in A, reached through three windows of different extents
     c.align("A", 100, 400, "B", 0, 300)
@@ -132,6 +135,7 @@ def build(root):
     c.align("Y2", 150, 199, "Z", 500, 549)
     c.align("Y2", 151, 200, "Z", 600, 649)
     c.align("Y2", 0, 200, "Q", 600, 800)
+    c.align("Y2", 0, 140, "Q", 1300, 1440)  # so the window is a passage of its own, not one running on
     # in Y3 a comma, then an apostrophe, between a passage and its sentence's start, and a
     # sentence opening on a quote
     tokens = [(0, "Or"), (10, ","), (20, "le")] + [(b, "w") for b in range(30, 200, 10)]
@@ -159,6 +163,23 @@ def build(root):
     c.align("DD", 172, 265, "P5", 0, 93)
     c.align("DD", 172, 730, "GG", 323, 417)
     c.align("DD", 235, 447, "BR", 0, 212)
+    # RR has two passages with text between them. RS skips that text, so its one window over both
+    # runs on in RR, and RS's own copy is aligned with the second passage's reusers too
+    c.align("RR", 0, 300, "RA1", 0, 300)
+    c.align("RR", 10, 290, "RA2", 0, 280)
+    c.align("RR", 600, 900, "RB1", 0, 300)
+    c.align("RR", 610, 890, "RB2", 0, 280)
+    c.align("RR", 0, 900, "RS", 0, 400)
+    c.align("RB1", 0, 300, "RS", 200, 400)
+    c.align("RB2", 0, 280, "RS", 200, 400)
+    # NT quotes NR's second passage inside its quotation of the first, which NR's window encloses
+    c.align("NR", 0, 300, "NA1", 0, 300)
+    c.align("NR", 5, 295, "NA2", 0, 290)
+    c.align("NR", 10, 290, "NT", 0, 500)
+    c.align("NR", 600, 900, "NB1", 0, 300)
+    c.align("NR", 605, 895, "NB2", 0, 290)
+    c.align("NR", 610, 890, "NT", 150, 350)
+    c.align("NB1", 0, 300, "NT", 150, 350)
     # S is the earliest occurrence but only ever a target
     c.align("T", 0, 200, "S", 0, 200)
     c.align("T", 0, 200, "U", 0, 200)
@@ -204,7 +225,20 @@ def main():
         check("two neighbouring passages stay apart", not first & second)
         run_on = families_of("E", 0, 700)
         check("the window across both is listed under each", first <= run_on and second <= run_on)
-        check("... and still has a family of its own", len(run_on - first - second) == 1)
+        check("... and has no family of its own", run_on == first | second)
+
+        ra, rb = families_of("RR", 0, 300), families_of("RR", 600, 900)
+        check("a window running on over two passages and the text between them anchors no family",
+              families_of("RR", 0, 900) == ra | rb and not [r for r in row_at("RR") if r["source_end_byte"] == 900
+                                                           and r["source_start_byte"] < 600])
+        check("... its document counts under each passage",
+              rows[next(iter(ra))]["count"] == 4 and rows[next(iter(rb))]["count"] == 4)
+        check("... and the second passage keeps its reuses", families_of("RB1", 0, 300) == rb)
+
+        na, nb = families_of("NR", 0, 300), families_of("NR", 600, 900)
+        check("a passage quoted inside another's quotation goes to its own family",
+              families_of("NR", 610, 890) == nb and families_of("NB1", 0, 300) == nb)
+        check("... which leaves the other's count", rows[next(iter(na))]["count"] == 4)
 
         fb_a, fb_b, across = families_of("FB", 0, 50), families_of("FB", 100, 174), families_of("FB", 0, 365)
         check("passages with one window each are not fused by a window over both", not fb_a & fb_b)

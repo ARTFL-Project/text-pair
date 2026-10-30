@@ -3,7 +3,8 @@
 Every alignment has two ends, spans of text in two documents. At each place in a
 document, the ends that overlap are carved into sites, each built around the passage
 most of them cover. A family is then the earliest site of a passage together with the
-sites aligned directly with it.
+sites aligned directly with it. A window running on over several passages counts under
+each of them, and anchors no family of its own.
 """
 
 import contextlib
@@ -364,10 +365,13 @@ def _carve(starts, ends, bounds, inside, floor, contain):
 
 
 @njit(nogil=True, cache=True)
-def _anchor(order, offsets, partners, adopt):
+def _anchor(order, offsets, partners, adopt, run_on, list_offsets, listing, core_s, core_e):
     """Families over sites taken in `order`: a site joins the family most of its placed
     partners are in, or else anchors a new one and takes its unplaced partners, except
-    those that most of their own partners have already placed elsewhere."""
+    those that most of their own partners have already placed elsewhere.
+
+    A run-on site -- only windows listed under other sites -- joins the family of the
+    listing site it overlaps most, and is never taken as a partner."""
     family = np.full(order.shape[0], -1, np.int64)
     anchors = np.empty(order.shape[0], np.int64)
     placed = np.empty(max(partners.shape[0], 1), np.int64)
@@ -375,6 +379,18 @@ def _anchor(order, offsets, partners, adopt):
     for sid in order:
         if family[sid] >= 0:
             continue
+        if run_on[sid]:
+            best, best_overlap = -1, _NONE
+            for j in range(list_offsets[sid], list_offsets[sid + 1]):
+                x = listing[j]
+                if family[x] < 0:
+                    continue
+                overlap = min(core_e[x], core_e[sid]) - max(core_s[x], core_s[sid])
+                if overlap > best_overlap or (overlap == best_overlap and x < best):
+                    best, best_overlap = x, overlap
+            if best >= 0:
+                family[sid] = family[best]
+                continue
         p0, p1 = offsets[sid], offsets[sid + 1]
         n_placed = 0
         for j in range(p0, p1):
@@ -394,7 +410,7 @@ def _anchor(order, offsets, partners, adopt):
         anchors[n_families] = sid
         for j in range(p0, p1):
             q = partners[j]
-            if family[q] >= 0:
+            if family[q] >= 0 or run_on[q]:
                 continue
             elsewhere = 0  # a partner mostly placed in other families is left to join them
             for x in range(offsets[q], offsets[q + 1]):
@@ -405,6 +421,79 @@ def _anchor(order, offsets, partners, adopt):
             family[q] = n_families
         n_families += 1
     return family, anchors[:n_families].copy()
+
+
+@njit(nogil=True, cache=True)
+def _refereed(window_of, wf, site_of, family, is_anchor, run_on, anchor_file, anchor_s, anchor_e):
+    """What each family's anchor document says of the windows of its other sites.
+
+    Returns whether each window is aligned there with its own family, and the (window,
+    family) pairs where it is aligned there with another family anchored there, apart
+    from its own -- once per alignment. A run-on window there, listed under several
+    passages, says neither."""
+    home = np.zeros(wf.shape[0], np.bool_)
+    away_w = np.empty(0, np.int64)
+    away_g = np.empty(0, np.int64)
+    n = 0
+    for step in range(2):  # count, then fill
+        if step:
+            away_w = np.empty(n, np.int64)
+            away_g = np.empty(n, np.int64)
+            n = 0
+        for e in range(window_of.shape[0]):
+            w, p = window_of[e], window_of[e ^ 1]
+            s = site_of[w]
+            if is_anchor[s]:
+                continue
+            f = family[s]
+            if wf[p] != anchor_file[f] or run_on[site_of[p]]:
+                continue
+            g = family[site_of[p]]
+            if g == f:
+                home[w] = True
+            elif (anchor_file[g] == anchor_file[f]
+                  and min(anchor_e[g], anchor_e[f]) <= max(anchor_s[g], anchor_s[f])):
+                if step:
+                    away_w[n], away_g[n] = w, g
+                n += 1
+    return home, away_w, away_g
+
+
+def _refer(window_of, wf, site_of, family, anchors, run_on, site_file, core_s, core_e):
+    """Families after the anchors' documents have refereed: a member window aligned with its
+    family's anchor document only at another family's passage there goes to that family.
+    A site with no window at home goes whole; otherwise those windows leave it, each a site
+    of its own. Returns the families, one per site, and changes `site_of` in place."""
+    n_sites, n_families = family.shape[0], anchors.shape[0]
+    is_anchor = np.zeros(n_sites, np.bool_)
+    is_anchor[anchors] = True
+    home, away_w, away_g = _refereed(window_of, wf, site_of, family, is_anchor, run_on,
+                                     site_file[anchors], core_s[anchors], core_e[anchors])
+    keep = ~home[away_w]
+    if not keep.any():
+        return family
+    # each window goes where most of its alignments there lead, to the earliest family on a tie
+    keys, counts = np.unique(away_w[keep] * n_families + away_g[keep], return_counts=True)
+    w, g = keys // n_families, keys % n_families
+    pick = np.lexsort((g, -counts, w))
+    w, g = w[pick], g[pick]
+    first_of = np.concatenate(([True], w[1:] != w[:-1]))
+    w, g = w[first_of], g[first_of]
+    at_home = np.zeros(n_sites, np.bool_)
+    at_home[site_of[np.flatnonzero(home)]] = True
+    whole = ~at_home[site_of[w]]
+    family = family.copy()
+    if whole.any():
+        # a site goes whole where most of its windows go, to the earliest family on a tie
+        keys, counts = np.unique(site_of[w[whole]] * n_families + g[whole], return_counts=True)
+        s, t = keys // n_families, keys % n_families
+        pick = np.lexsort((t, -counts, s))
+        s, t = s[pick], t[pick]
+        first_of = np.concatenate(([True], s[1:] != s[:-1]))
+        family[s[first_of]] = t[first_of]
+    leaving = ~whole
+    site_of[w[leaving]] = n_sites + np.arange(int(leaving.sum()))
+    return np.concatenate((family, g[leaving]))
 
 
 @njit(nogil=True, cache=True)
@@ -492,8 +581,13 @@ def group_passages(corpus: list, run_dir: str = "", workers: int = 1) -> _Famili
     del keys
     rank = np.empty(n_files, np.int64)
     rank[sorted(range(n_files), key=names.__getitem__)] = np.arange(n_files)
-    visit = np.lexsort((np.arange(n_sites), core_s, rank[site_file], years[site_file]))
-    family, anchors = _anchor(visit, offsets, partners, _ADOPT)
+    # a run-on site comes after the other sites of its document, so the passages it runs over are placed
+    run_on = np.bincount(site_of[np.unique(held_window)], minlength=n_sites) == np.bincount(site_of, minlength=n_sites)
+    pairs = np.unique(site_of[held_window] * n_sites + held_site) if held_site.size else np.empty(0, np.int64)
+    list_offsets = np.concatenate(([0], np.cumsum(np.bincount(pairs // n_sites, minlength=n_sites)))).astype(np.int64)
+    visit = np.lexsort((np.arange(n_sites), core_s, run_on, rank[site_file], years[site_file]))
+    family, anchors = _anchor(visit, offsets, partners, _ADOPT, run_on, list_offsets, pairs % n_sites, core_s, core_e)
+    del pairs, list_offsets
     # two families anchored on the very same passage are one family
     keys = np.stack((site_file[anchors], core_s[anchors], core_e[anchors]), axis=1)
     _, first_of, inverse = np.unique(keys, axis=0, return_index=True, return_inverse=True)
@@ -502,6 +596,8 @@ def group_passages(corpus: list, run_dir: str = "", workers: int = 1) -> _Famili
         family = np.searchsorted(kept, first_of[inverse.ravel()])[family]
         anchors = anchors[kept]
     n_families = anchors.shape[0]
+    family = _refer(window_of, wf, site_of, family, anchors, run_on, site_file, core_s, core_e)
+    del run_on
     # a family's passage is shown from the first word of its sentence, or the first after the
     # punctuation nearest before it, when that is only a few words back and no two families
     # then show the same passage
