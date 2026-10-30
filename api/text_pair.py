@@ -21,7 +21,7 @@ import orjson
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pgvector.psycopg2 import register_vector
 from philologic.runtime.DB import DB
 from philologic.runtime.get_text import get_text_obj
@@ -165,10 +165,14 @@ def side_of(direction) -> str:
 
 
 def web_app_file(db_path: str, folder: str, resource: str) -> str:
-    """The path of a file served from a web app's dist folder, or a 404 for a name outside it."""
+    """The path of a file served from a web app's dist folder, or a 404 for a name outside it or a file not there,
+    such as an old bundle asked for by a page loaded before a rebuild."""
     if resource in ("", ".", "..") or "/" in resource or "\0" in resource:
         raise HTTPException(404, "No such file")
-    return os.path.join(db_directory(db_path), "dist", folder, resource)
+    path = os.path.join(db_directory(db_path), "dist", folder, resource)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "No such file")
+    return path
 
 
 def has_passage_families(table) -> bool:
@@ -441,6 +445,7 @@ def check_access_control(request: Request):
 
 @app.get("/")
 @app.get("/text-pair")
+@app.get("/text-pair/")
 def list_dir():
     """List Text-PAIR databases"""
     textpair_dbs = sorted(Path(APP_PATH).iterdir(), key=os.path.getmtime, reverse=True)
@@ -457,39 +462,29 @@ def list_dir():
 @app.get("/text-pair/{db_path}/css/{resource}")
 def get_css_resource(db_path: str, resource: str):
     """Retrieve CSS resources"""
-    with open(web_app_file(db_path, "css", resource)) as resource_file:
-        resource = resource_file.read()
-    return Response(resource, media_type="text/css")
+    return FileResponse(web_app_file(db_path, "css", resource), media_type="text/css")
 
 
 @app.get("/{db_path}/js/{resource}")
 @app.get("/text-pair/{db_path}/js/{resource}")
 def get_js_resource(db_path: str, resource: str):
     """Retrieve JS resources"""
-    with open(web_app_file(db_path, "js", resource), encoding="utf8") as resource_file:
-        resource = resource_file.read()
-    return Response(resource, media_type="application/javascript")
+    return FileResponse(web_app_file(db_path, "js", resource), media_type="application/javascript")
 
 
 @app.get("/{db_path}/assets/{resource}")
 @app.get("/text-pair/{db_path}/assets/{resource}")
 def get_ressource(db_path: str, resource: str):
-    """Retrieve JS resources"""
-    with open(web_app_file(db_path, "assets", resource), encoding="utf8") as resource_file:
-        resource_content = resource_file.read()
-    if resource.endswith(".js"):
-        return Response(resource_content, media_type="application/javascript")
-    elif resource.endswith(".css"):
-        return Response(resource_content, media_type="text/css")
+    """Retrieve built assets: scripts, styles, and any other file typed by its extension"""
+    media_type = "application/javascript" if resource.endswith(".js") else None
+    return FileResponse(web_app_file(db_path, "assets", resource), media_type=media_type)
 
 
 @app.get("/{db_path}/favicon.ico")
 @app.get("/text-pair/{db_path}/favicon.ico")
 def get_favicon(db_path: str):
     """Retrieve favicon"""
-    with open(os.path.join(db_directory(db_path), "dist/favicon.ico"), "rb") as resource_file:
-        resource_content = resource_file.read()
-    return Response(resource_content, media_type="image/x-icon")
+    return FileResponse(web_app_file(db_path, "", "favicon.ico"), media_type="image/x-icon")
 
 
 def group_counts(cursor, groups_table: str, group_ids) -> dict[int, int]:
@@ -2417,22 +2412,39 @@ def get_semantic_graph_data(request: Request):
     }
 
 
+# Each page with and without a trailing slash: behind a proxy, Starlette's redirect between them names the API's address
 @app.get("/{db_path}/search")
+@app.get("/{db_path}/search/")
 @app.get("/text-pair/{db_path}/search")
+@app.get("/text-pair/{db_path}/search/")
 @app.get("/{db_path}/time")
+@app.get("/{db_path}/time/")
 @app.get("/text-pair/{db_path}/time")
+@app.get("/text-pair/{db_path}/time/")
 @app.get("/{db_path}")
+@app.get("/{db_path}/")
 @app.get("/text-pair/{db_path}")
+@app.get("/text-pair/{db_path}/")
 @app.get("/text-pair/{db_path}/group/{id}")
+@app.get("/text-pair/{db_path}/group/{id}/")
 @app.get("/{db_path}/group/{id}")
+@app.get("/{db_path}/group/{id}/")
 @app.get("/text-pair/{db_path}/sorted-results")
+@app.get("/text-pair/{db_path}/sorted-results/")
 @app.get("/{db_path}/sorted-results")
+@app.get("/{db_path}/sorted-results/")
 @app.get("/text-pair/{db_path}/text-view")
+@app.get("/text-pair/{db_path}/text-view/")
 @app.get("/{db_path}/text-view")
+@app.get("/{db_path}/text-view/")
 @app.get("/text-pair/{db_path}/network")
+@app.get("/text-pair/{db_path}/network/")
 @app.get("/{db_path}/network")
+@app.get("/{db_path}/network/")
 @app.get("/text-pair/{db_path}/semantic")
+@app.get("/text-pair/{db_path}/semantic/")
 @app.get("/{db_path}/semantic")
+@app.get("/{db_path}/semantic/")
 def index(db_path: str):
     """Return index.html, carrying the database's current app config"""
     db_dir = db_directory(db_path)
