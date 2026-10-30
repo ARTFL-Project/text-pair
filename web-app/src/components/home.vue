@@ -1,24 +1,39 @@
 <template>
     <section class="card mt-4 shadow-1 stats" v-if="stats !== false" aria-labelledby="stats-title">
         <div class="card-body">
-            <h2 id="stats-title" class="stats-title">Some basic statistics on current alignment:</h2>
+            <h2 id="stats-title" class="stats-title">In this collection</h2>
             <p class="stats-counting" v-if="stats === null">Counting...</p>
-            <ul class="stats-figures" v-else-if="stats">
+            <template v-else-if="families">
+                <ul class="stats-figures">
+                    <li>
+                        <router-link class="figure" :to="views.reused"
+                            aria-describedby="stats-reused">{{ stats.group_count.toLocaleString() }}</router-link>
+                        <span class="figure-caption" id="stats-reused">reused passages found in two or more documents</span>
+                    </li>
+                    <li v-if="stats.group_count_3plus != null">
+                        <span class="figure">{{ stats.group_count_3plus.toLocaleString() }}</span>
+                        <span class="figure-caption">of them found in three or more documents</span>
+                    </li>
+                    <li v-if="stats.document_count != null">
+                        <span class="figure">{{ stats.document_count.toLocaleString() }}</span>
+                        <span class="figure-caption">documents share at least one passage</span>
+                    </li>
+                    <li v-if="stats.author_count != null">
+                        <span class="figure">{{ stats.author_count.toLocaleString() }}</span>
+                        <span class="figure-caption">authors wrote these documents</span>
+                    </li>
+                </ul>
+                <p class="stats-source">
+                    Built from
+                    <router-link :to="views.shared">{{ stats.pairs_count.toLocaleString() }} shared passages</router-link>:
+                    pairs of documents with a passage in common.
+                </p>
+            </template>
+            <ul class="stats-figures" v-else>
                 <li>
-                    <span class="figure">{{ stats.pairs_count.toLocaleString() }}</span>
-                    <span class="figure-caption">shared passages in this database</span>
-                </li>
-                <li v-if="stats.group_count != null">
-                    <span class="figure">{{ stats.group_count.toLocaleString() }}</span>
-                    <span class="figure-caption">reused passages they form</span>
-                </li>
-                <li v-if="stats.group_count != null && stats.author_group_count != null">
-                    <span class="figure">{{ stats.author_group_count.toLocaleString() }}</span>
-                    <span class="figure-caption">authors these passages are borrowed from</span>
-                </li>
-                <li v-if="stats.group_count != null && stats.title_group_count != null">
-                    <span class="figure">{{ stats.title_group_count.toLocaleString() }}</span>
-                    <span class="figure-caption">titles they come from</span>
+                    <router-link class="figure" :to="views.shared"
+                        aria-describedby="stats-shared">{{ stats.pairs_count.toLocaleString() }}</router-link>
+                    <span class="figure-caption" id="stats-shared">shared passages in this database</span>
                 </li>
             </ul>
         </div>
@@ -26,10 +41,16 @@
 </template>
 <script setup>
 import axios from "axios";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import globalConfig from "../config.js";
+import { paramsToUrl } from "../utils.js";
 
 const stats = ref(null);
+// Where alignments form passage families, the figures are about the reused passages
+const families = computed(() => globalConfig.hasPassageFamilies && stats.value?.group_count != null);
+// As the report switcher links to the two views
+const query = paramsToUrl({ db_table: globalConfig.databaseName });
+const views = { reused: `/sorted-results/?${query}`, shared: `/search?${query}` };
 
 axios
     .get(`${globalConfig.apiServer}/database_stats/`, {
@@ -112,6 +133,12 @@ axios
     line-height: 1.1;
 }
 
+// A figure that opens its view, the link's tint around the number only
+a.figure {
+    display: inline-block;
+    padding: 0 0.35rem;
+}
+
 .figure-caption {
     display: block;
     margin-top: 0.25rem;
@@ -120,6 +147,21 @@ axios
     font-size: 0.95rem;
     font-style: italic;
     line-height: 1.3;
+}
+
+// What the figures are made from, its link set apart by weight as well as color
+.stats-source {
+    margin: 1.25rem 0 0;
+    color: $ink-2;
+    font-family: $font-text;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.stats-source a {
+    color: $link-color;
+    font-weight: 600;
 }
 
 @media (max-width: 767.98px) {

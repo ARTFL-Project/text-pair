@@ -1393,6 +1393,39 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     return True
 
 
+def load_collection_counts(alignments_table: str):
+    """The landing page's counts of the documents at either end of the alignments, and of their authors.
+
+    Documents are told apart by file, as a family's `count` tells them. Authors are counted when both sides
+    have an author field, blank ones left out, and are NULL otherwise. Counting them scans the alignments, so
+    they are stored, as one row made by one statement: the API finds it complete or not at all.
+    """
+    config = read_global_config()
+    database = psycopg2.connect(
+        user=config["DATABASE"]["database_user"],
+        password=config["DATABASE"]["database_password"],
+        database=config["DATABASE"]["database_name"],
+    )
+    database.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = database.cursor()
+    tune_load_session(cursor)
+    cursor.execute("SET work_mem = '256MB'")
+    print("Counting documents and authors for the landing page...", flush=True)
+    ends = ["('file', source_filename)", "('file', target_filename)"]
+    by_author = {"source_author", "target_author"} <= set(relation_columns(cursor, alignments_table))
+    if by_author:
+        ends += ["('author', source_author)", "('author', target_author)"]
+    authors = "(COUNT(*) FILTER (WHERE kind = 'author'))::int" if by_author else "NULL::int"
+    cursor.execute(f"DROP TABLE IF EXISTS {alignments_table}_collection_counts")
+    cursor.execute(
+        f"""CREATE TABLE {alignments_table}_collection_counts AS
+        SELECT (COUNT(*) FILTER (WHERE kind = 'file'))::int AS documents, {authors} AS authors
+        FROM (SELECT DISTINCT kind, name FROM {alignments_table},
+              LATERAL (VALUES {", ".join(ends)}) ends(kind, name) WHERE btrim(name) <> '') names"""
+    )
+    database.close()
+
+
 def set_up_app(web_config, db_path):
     """Copy and build web application with correct configuration"""
     os.system(f"rm -rf {db_path}")
@@ -1482,6 +1515,7 @@ def create_web_app(
             load_workers(textpair_params),
         )
         load_family_filter_tables(table, web_config.searchable_fields(), load_workers(textpair_params))
+        load_collection_counts(table)
 
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)

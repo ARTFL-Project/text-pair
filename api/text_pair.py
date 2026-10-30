@@ -721,34 +721,41 @@ def count_results(request: Request):
     return result_object
 
 
-# Landing page counts, by table and oid: loading a database again recreates its tables
+# Shared passages counted, by table and oid: loading a database again recreates its table
 DATABASE_STATS = {}
 
 
 @app.get("/database_stats/")
 @app.get("/text-pair-api/database_stats/")
 def database_stats(request: Request):
-    """Counts of passage pairs, and of the passage families they form, for the landing page"""
+    """The landing page's figures: the shared passages, and where they form passage families, the reused
+    passages, those found in three documents or more, and the documents and authors the alignments span"""
     with pg_connection() as conn:
         table = str(request.query_params.get("db_table", ""))
-        if not get_pg_type(conn, table):  # the landing page of a database without tables reads the error
+        field_types = get_pg_type(conn, table)
+        if not field_types:  # the landing page of a database without tables reads the error
             return {"error": f"No table {table}"}
         cursor = conn.cursor()
-        cursor.execute("SELECT to_regclass(%s)::oid, to_regclass(%s)::oid", (table, f"{table}_groups"))
-        key = (table, *cursor.fetchone())
+        cursor.execute("SELECT to_regclass(%s)::oid", (table,))
+        key = (table, cursor.fetchone()[0])
         if key not in DATABASE_STATS:
             cursor.execute(f"SELECT count(*) FROM {quote_ident(table)}")
-            stats = {"pairs_count": cursor.fetchone()[0]}
-            if key[2] is not None:
-                group_types = get_pg_type(conn, f"{table}_groups")
-                fields = [field for field in ("author", "title") if f"source_{field}" in group_types]
-                counts = ", ".join(["count(*)", *(f"count(DISTINCT source_{field})" for field in fields)])
-                cursor.execute(f"SELECT {counts} FROM {quote_ident(f'{table}_groups')}")
-                group_count, *field_counts = cursor.fetchone()
-                stats["group_count"] = group_count
-                stats.update({f"{field}_group_count": count for field, count in zip(fields, field_counts)})
-            DATABASE_STATS[key] = stats
-    return DATABASE_STATS[key]
+            DATABASE_STATS[key] = cursor.fetchone()[0]
+        stats = {"pairs_count": DATABASE_STATS[key]}
+        groups = f"{table}_groups"
+        if field_types.get("group_id") != "ARRAY" or not get_pg_type(conn, groups):
+            return stats
+        # From the groups' count index
+        cursor.execute(f'SELECT count(*), count(*) FILTER (WHERE "count" >= 3) FROM {quote_ident(groups)}')
+        stats["group_count"], stats["group_count_3plus"] = cursor.fetchone()
+        # Stored at load, as counting them scans the alignments; extras/add_collection_counts.py for older databases
+        counts = f"{table}_collection_counts"
+        if get_pg_type(conn, counts):
+            cursor.execute(f"SELECT documents, authors FROM {quote_ident(counts)}")
+            stats["document_count"], authors = cursor.fetchone()
+            if authors is not None:
+                stats["author_count"] = authors
+    return stats
 
 
 @app.post("/generate_time_series/")
