@@ -521,7 +521,9 @@ def occurrences(rows, group: dict) -> list[dict]:
 
     Both sides of every alignment count, except the anchor's own document. Overlapping
     spans in one document are one place; its alignment is the one tied most closely to
-    the group's passage, which is what the page diffs the reuse against.
+    the group's passage, which is what the page diffs the reuse against: one with the
+    passage itself, else one with another document reusing it, else one with another
+    passage of the anchor's document.
     """
     anchor_doc = group["source_doc_id"]
     start, end = group["source_start_byte"], group["source_end_byte"]
@@ -532,7 +534,7 @@ def occurrences(rows, group: dict) -> list[dict]:
                 continue
             if row[f"{other}_doc_id"] == anchor_doc:
                 tie = min(row[f"{other}_end_byte"], end) - max(row[f"{other}_start_byte"], start)
-                rank = (0, -tie)
+                rank = (0, -tie) if tie > 0 else (2, -tie)
             else:
                 rank = (1, 0)
             by_file[row[f"{side}_filename"]].append(
