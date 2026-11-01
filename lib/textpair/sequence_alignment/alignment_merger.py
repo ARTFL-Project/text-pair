@@ -147,6 +147,26 @@ def _windows(files, starts, ends, order):
     return window_of, wf, ws, we, first_end
 
 
+def _window_weights(window_of, files, n_windows):
+    """Each window's documents: the distinct files at the other ends of the alignments it is
+    an end of. Identical spans are one window, so this is what it stands for."""
+    partner = files[np.arange(files.shape[0]) ^ 1].astype(np.int64)
+    pairs = np.unique(window_of.astype(np.int64) * (int(files.max()) + 1 if files.size else 1) + partner)
+    return np.bincount(pairs // (int(files.max()) + 1 if files.size else 1), minlength=n_windows).astype(np.int64)
+
+
+@njit(nogil=True, cache=True)
+def _weighted_at(values, weights, need, descending):
+    """The value at which the running weight of values, in order, first reaches `need`."""
+    order = np.argsort(-values if descending else values, kind="mergesort")
+    total = 0
+    for j in order:
+        total += weights[j]
+        if total >= need:
+            return values[j]
+    return values[order[-1]]
+
+
 @njit(nogil=True, cache=True)
 def _clusters(wf, ws, we):
     """Where each run of windows joined by overlap begins, plus the end of the last."""
@@ -248,14 +268,15 @@ def _chained_without_longest(starts, ends, members):
 
 
 @njit(nogil=True, cache=True)
-def _carve(starts, ends, bounds, inside, floor, contain):
+def _carve(starts, ends, weights, bounds, inside, floor, contain):
     """Sites for every cluster of windows. Returns each window's site, each site's core and
     first member, and the (site, window) pairs of longer windows listed under a site.
 
-    A site is built at the point most live windows cover: its core is where at least
-    half of those overlap, and it takes the windows lying mostly inside the core. With an
-    even number of windows that core spans the two middle ones; if that lets a long window
-    hold separate passages together, the core is where more than half of them overlap.
+    A window counts for the documents it stands for (`weights`). A site is built at the
+    point most of them cover: its core is where at least half of those overlap, and it
+    takes the windows lying mostly inside the core. With an even count that core spans the
+    two middle ones; if that lets a long window hold separate passages together, the core
+    is where more than half of them overlap.
     """
     site_of = np.full(starts.shape[0], -1, np.int64)
     core_s = np.empty(starts.shape[0], np.int64)
@@ -267,7 +288,7 @@ def _carve(starts, ends, bounds, inside, floor, contain):
     for c in range(bounds.shape[0] - 1):
         c0, c1 = bounds[c], bounds[c + 1]
         k = c1 - c0
-        s, e = starts[c0:c1], ends[c0:c1]
+        s, e, wt = starts[c0:c1], ends[c0:c1], weights[c0:c1]
         xs = np.unique(np.concatenate((s, e)))
         n_seg = max(xs.shape[0] - 1, 1)
         size = 1
@@ -289,7 +310,7 @@ def _carve(starts, ends, bounds, inside, floor, contain):
         alive = 0
         for i in range(k):
             if e[i] > s[i]:
-                _depth_add(mx, add, size, lo[i], hi[i], 1)
+                _depth_add(mx, add, size, lo[i], hi[i], wt[i])
                 tree[esize + i] = e[i]
                 alive += 1
             else:  # an empty span covers nothing: a site of its own
@@ -304,11 +325,12 @@ def _carve(starts, ends, bounds, inside, floor, contain):
             point = xs[_deepest(mx, add, size)]
             g = _ending_past(tree, esize, np.searchsorted(s, point, side="right"), point, out, stack)
             cover = out[:g].copy()
-            need = (g + 1) // 2
+            weight = wt[cover].sum()
+            need = (weight + 1) // 2
             held_start = n_held
             while True:
-                cs = np.sort(s[cover])[need - 1]
-                ce = np.sort(e[cover])[g - need]
+                cs = _weighted_at(s[cover], wt[cover], need, False)
+                ce = _weighted_at(e[cover], wt[cover], need, True)
                 core = ce - cs
                 m = _ending_past(tree, esize, np.searchsorted(s, ce, side="left"), cs, out, stack)
                 n_members = 0
@@ -329,7 +351,7 @@ def _carve(starts, ends, bounds, inside, floor, contain):
                         held_site[n_held], held_window[n_held] = n_sites, c0 + i
                         n_held += 1
                 # only the longest window links these members: retry on a strict majority
-                if need * 2 == g and n_members > 2 and not _chained_without_longest(s, e, out[:n_members]):
+                if need * 2 == weight and n_members > 2 and not _chained_without_longest(s, e, out[:n_members]):
                     need += 1
                     continue
                 break
@@ -339,7 +361,7 @@ def _carve(starts, ends, bounds, inside, floor, contain):
             for j in range(n_members):
                 i = out[j]
                 site_of[c0 + i] = n_sites
-                _depth_add(mx, add, size, lo[i], hi[i], -1)
+                _depth_add(mx, add, size, lo[i], hi[i], -wt[i])
                 _end_set(tree, esize, i, _NONE)
                 alive -= 1
             core_s[n_sites], core_e[n_sites], first[n_sites] = cs, ce, c0 + out[0]
@@ -548,9 +570,10 @@ def group_passages(corpus: list) -> _Families:
     _status(_label(2))
     order = np.lexsort((ends, starts, files))
     window_of, wf, ws, we, first_end = _windows(files, starts, ends, order)
+    weights = _window_weights(window_of, files, wf.shape[0])
     del order, files, starts, ends
     site_of, core_s, core_e, first, held_site, held_window = _carve(
-        ws, we, _clusters(wf, ws, we), _INSIDE, _FLOOR, _CONTAIN)
+        ws, we, weights, _clusters(wf, ws, we), _INSIDE, _FLOOR, _CONTAIN)
     site_file = wf[first]
     n_sites, n_files = core_s.shape[0], len(names)
 

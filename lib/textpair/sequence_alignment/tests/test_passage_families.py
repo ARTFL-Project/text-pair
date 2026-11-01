@@ -10,9 +10,10 @@ anchoring a family of its own, a passage quoted inside another's quotation going
 family, the floor on fragments, sliding windows over a long copy staying bounded, a passage
 aligned only with a member joining its family, a passage that most of its partners put in one
 family not being taken into another by a longer window, a family whose earliest occurrence is
-only ever a target, and a group's passage being its anchor's, from where one of its reuses
-starts when that is up to five words before. Serial and parallel runs must then write the same
-files.
+only ever a target, a window counting for every document behind it (six identical quotations
+of a passage outweighing two of part of it), and a group's passage being its anchor's, from
+where one of its reuses starts when that is up to five words before. Serial and parallel runs
+must then write the same files.
 """
 import os
 import shutil
@@ -73,7 +74,8 @@ def build(root):
                        ("E", 1600), ("F", 1700), ("G", 1700), ("H", 1700), ("I", 1700), ("J", 1700),
                        ("K", 1600), ("L", 1700), ("M", 1700), ("N", 1700), ("O", 1700),
                        ("P", 1600), ("R", 1700), ("S", 1600), ("T", 1700), ("U", 1800),
-                       ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700), ("YA", 1600), ("YB", 1600), ("ZA", 1700),
+                       ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700), ("YA", 1600), ("YB", 1600), ("ZA", 1700), ("RO", 1600), ("R1", 1700), ("R2", 1700),
+                       ("R3", 1700), ("R4", 1700), ("R5", 1700), ("R6", 1700), ("R7", 1700), ("R8", 1700),
                        ("FB", 1700), ("FC", 1600), ("FD", 1650), ("FE", 1650),
                        ("DD", 1600), ("P1", 1700), ("P2", 1700), ("P3", 1700), ("P4", 1700), ("P5", 1700),
                        ("GG", 1750), ("BR", 1800),
@@ -103,6 +105,12 @@ def build(root):
     c.align("W", 0, 200, "X", 0, 200)
     # a passage that starts some words into its sentence in Y
     c.align("Y", 170, 380, "Z", 0, 210)
+    # RO's sentence, 0-176, quoted alone by two documents in two windows, and with its
+    # continuation, 0-515, by six whose spans are all the same window
+    c.align("RO", 0, 176, "R1", 0, 176)
+    c.align("RO", 3, 130, "R2", 0, 127)
+    for other in ("R3", "R4", "R5", "R6", "R7", "R8"):
+        c.align("RO", 0, 515, other, 0, 515)
     # passages of YA and YB whose cores two reuses share, and a third reuse starting three words
     # earlier in YA and eight in YB (the texts have a word every 27 bytes)
     c.align("YA", 300, 600, "ZA", 0, 300)
@@ -229,6 +237,9 @@ def main():
         check("... whose metadata is taken from the target side it appears on",
               s_rows and s_rows[0]["source_doc_id"] == "S" and s_rows[0]["source_title"] == "title S")
         y = {r["source_end_byte"]: r["source_start_byte"] for r in row_at("Y")}
+        ro = row_at("RO")
+        check("a window counts for every document behind it: six quoting the whole outweigh two quoting part",
+              len(ro) == 1 and (ro[0]["source_start_byte"], ro[0]["source_end_byte"], ro[0]["count"]) == (0, 515, 9))
         check("a group's passage starts where its anchor's does",
               y.get(380) == 170)
         check("... or where a reuse of it starts, a few words before",
