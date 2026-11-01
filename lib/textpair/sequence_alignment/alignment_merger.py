@@ -9,6 +9,7 @@ each of them, and anchors no family of its own.
 
 import contextlib
 import os
+import re
 import sys
 from array import array
 from typing import Union
@@ -52,6 +53,9 @@ _INSIDE = 0.5    # a window joins a site when at least this much of it lies in t
 _FLOOR = 0.1     # ... and it is at least this long next to the core
 _CONTAIN = 0.8   # a window holding this much of a core, but too long to join, is listed under it
 _ADOPT = 0.5     # a site joins the family holding most of its partners once this share are placed
+_LEAD_WORDS = 5  # words a family's passage may start before its core, where one of its reuses starts
+_LEAD_BYTES = 4096  # ... read back no further than this
+_WORD = re.compile(r"\w+")
 _UNDATED = 9999
 _NONE = -(1 << 62)
 
@@ -521,7 +525,7 @@ def _group_lists(window_of, site_of, family, listed_offsets, listed):
 class _Families:
     """What the two output steps need from the grouping."""
 
-    __slots__ = ("names", "site_file", "core_s", "core_e", "anchors", "documents",
+    __slots__ = ("names", "site_file", "core_s", "core_e", "anchors", "shown_s", "documents",
                  "rep_passage", "rep_family", "rep_side", "list_offsets", "list_members")
 
     def group_ids(self, passage_id: int) -> bytes:
@@ -578,6 +582,11 @@ def group_passages(corpus: list) -> _Families:
     n_families = anchors.shape[0]
     family = _refer(window_of, wf, site_of, family, anchors, run_on, site_file, core_s, core_e)
     del run_on
+    # a family's passage starts where the earliest of its reuses does, when that is a few words
+    # before its core -- words fewer than half of them share -- and no two families then show
+    # the same passage
+    head_file, head_s, head_e = site_file[anchors], core_s[anchors], core_e[anchors]
+    shown_s = _kept_apart(head_file, head_s, head_e, _lead_starts(names, head_file, head_s, anchors, site_of, ws))
     listed_family = family[held_site]
     pairs = np.unique(held_window * n_families + listed_family) if held_site.size else np.empty(0, np.int64)
     listed_offsets = np.concatenate(([0], np.cumsum(np.bincount(pairs // n_families, minlength=wf.shape[0])))).astype(np.int64)
@@ -594,7 +603,7 @@ def group_passages(corpus: list) -> _Families:
     result = _Families()
     result.names = names
     result.site_file, result.core_s, result.core_e = site_file, core_s, core_e
-    result.anchors, result.documents = anchors, documents
+    result.anchors, result.shown_s, result.documents = anchors, shown_s, documents
     rep_end = first_end[first[anchors]]  # a family's row comes from its anchor's first window
     by_passage = np.argsort(rep_end // 2, kind="stable")
     result.rep_passage = (rep_end // 2)[by_passage]
@@ -602,6 +611,69 @@ def group_passages(corpus: list) -> _Families:
     result.rep_side = (rep_end % 2)[by_passage]
     result.list_offsets, result.list_members = list_offsets, list_members
     return result
+
+
+def _lead_starts(names, head_file, head_s, anchors, site_of, ws) -> np.ndarray:
+    """Each family's passage start: the earliest start of a window of its anchor site that
+    is at most _LEAD_WORDS words before the site's core, or the core's own."""
+    shown = head_s.copy()
+    family_of = np.full(int(site_of.max()) + 1 if site_of.size else 0, -1, np.int64)
+    family_of[anchors] = np.arange(anchors.shape[0])
+    owner = family_of[site_of]
+    lead = np.flatnonzero(owner >= 0)
+    lead = lead[(ws[lead] < head_s[owner[lead]]) & (ws[lead] >= head_s[owner[lead]] - _LEAD_BYTES)]
+    if not lead.size:
+        return shown
+    lead = lead[np.lexsort((ws[lead], owner[lead], head_file[owner[lead]]))]
+    name, handle = None, None
+    try:
+        k = 0
+        while k < lead.shape[0]:
+            f = owner[lead[k]]
+            m = k
+            while m < lead.shape[0] and owner[lead[m]] == f:
+                m += 1
+            if names[head_file[f]] != name:
+                if handle is not None:
+                    handle.close()
+                name = names[head_file[f]]
+                handle = open(name, "rb")
+            starts = ws[lead[k:m]]
+            handle.seek(int(starts[0]))
+            raw = handle.read(int(head_s[f] - starts[0]))
+            for start in starts:  # earliest first
+                if len(_WORD.findall(clean_passage(raw[int(start - starts[0]):]))) <= _LEAD_WORDS:
+                    shown[f] = start
+                    break
+            k = m
+    except OSError:
+        pass
+    finally:
+        if handle is not None:
+            handle.close()
+    return shown
+
+
+def _kept_apart(files, starts, ends, shown) -> np.ndarray:
+    """`shown`, except that no two families show the very same passage.
+
+    Where moves would make them, the family whose own passage starts earliest keeps its
+    move and the others keep their own start -- again until none do, since a start kept
+    can meet another family's move.
+    """
+    shown = shown.copy()
+    while True:
+        _, inverse, counts = np.unique(np.stack((files, shown, ends), axis=1), axis=0,
+                                       return_inverse=True, return_counts=True)
+        inverse = inverse.ravel()
+        crowded = np.flatnonzero(counts[inverse] > 1)
+        if not crowded.size:
+            return shown
+        order = crowded[np.lexsort((starts[crowded], inverse[crowded]))]
+        later = np.ones(order.shape[0], bool)
+        later[0] = False
+        later[1:] = inverse[order][1:] == inverse[order][:-1]
+        shown[order[later]] = starts[order[later]]
 
 
 class _SourceText:
@@ -840,8 +912,9 @@ def rewrite_results(results_file: str, target: str, group_lists: _Families,
 
 def write_group_sources(results_file: str, groups_file: str, families: _Families,
                         segments: list[tuple[int, int]], bases: dict[int, int]) -> int:
-    """Write one row per family: its anchor's passage, with the metadata of the record that
-    first has it, and `count`, the documents its alignments span. Returns the rows written.
+    """Write one row per family: its anchor's passage, from the earliest of its reuses when
+    that is a few words before, with the metadata of the record that first has it, and
+    `count`, the documents its alignments span. Returns the rows written.
 
     Rows come out in the order their records appear; the database load keys on group_id.
     """
@@ -892,7 +965,7 @@ def _group_source_records(input_file, output_file, families: _Families, passage_
                     side = int(families.rep_side[j])
                     site = families.anchors[family]
                     filename = families.names[families.site_file[site]]
-                    start_byte, end_byte = int(families.core_s[site]), int(families.core_e[site])
+                    start_byte, end_byte = int(families.shown_s[family]), int(families.core_e[site])
                     records.append(
                         orjson.dumps(
                             {

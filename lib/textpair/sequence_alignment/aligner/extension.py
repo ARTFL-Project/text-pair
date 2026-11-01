@@ -17,8 +17,10 @@ import numpy as np
 import regex
 from numba import njit
 
-MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND = 1, -1, 2, 1
-X_DROP = 15
+# a letter gapped costs half a mismatch, so a short word one side drops costs less than
+# the shared words past it earn
+MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND = 2, -2, 4, 1
+X_DROP = 30
 WINDOW = 1024  # bytes read past an end, grown while an extension runs to the window's end
 MAX_WINDOW = 1 << 20
 ALIKE = 0.6  # share of their letters two last words need in common for an extension to end on them

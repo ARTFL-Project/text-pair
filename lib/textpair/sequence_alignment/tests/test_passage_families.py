@@ -10,8 +10,9 @@ anchoring a family of its own, a passage quoted inside another's quotation going
 family, the floor on fragments, sliding windows over a long copy staying bounded, a passage
 aligned only with a member joining its family, a passage that most of its partners put in one
 family not being taken into another by a longer window, a family whose earliest occurrence is
-only ever a target, and a group's passage being its anchor's as aligned. Serial and parallel
-runs must then write the same files.
+only ever a target, and a group's passage being its anchor's, from where one of its reuses
+starts when that is up to five words before. Serial and parallel runs must then write the same
+files.
 """
 import os
 import shutil
@@ -72,7 +73,7 @@ def build(root):
                        ("E", 1600), ("F", 1700), ("G", 1700), ("H", 1700), ("I", 1700), ("J", 1700),
                        ("K", 1600), ("L", 1700), ("M", 1700), ("N", 1700), ("O", 1700),
                        ("P", 1600), ("R", 1700), ("S", 1600), ("T", 1700), ("U", 1800),
-                       ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700),
+                       ("V", 1600), ("W", 1700), ("X", 1800), ("Y", 1600), ("Z", 1700), ("YA", 1600), ("YB", 1600), ("ZA", 1700),
                        ("FB", 1700), ("FC", 1600), ("FD", 1650), ("FE", 1650),
                        ("DD", 1600), ("P1", 1700), ("P2", 1700), ("P3", 1700), ("P4", 1700), ("P5", 1700),
                        ("GG", 1750), ("BR", 1800),
@@ -102,6 +103,14 @@ def build(root):
     c.align("W", 0, 200, "X", 0, 200)
     # a passage that starts some words into its sentence in Y
     c.align("Y", 170, 380, "Z", 0, 210)
+    # passages of YA and YB whose cores two reuses share, and a third reuse starting three words
+    # earlier in YA and eight in YB (the texts have a word every 27 bytes)
+    c.align("YA", 300, 600, "ZA", 0, 300)
+    c.align("YA", 302, 600, "ZA", 400, 698)
+    c.align("YA", 250, 600, "ZA", 800, 1150)
+    c.align("YB", 300, 600, "ZA", 1300, 1600)
+    c.align("YB", 302, 600, "ZA", 1700, 1998)
+    c.align("YB", 100, 600, "ZA", 2100, 2600)
     # two passages in FB with a window each, and a longer window over both: it must not fuse them
     c.align("FB", 0, 50, "FC", 0, 50)
     c.align("FB", 100, 174, "FD", 0, 74)
@@ -220,8 +229,12 @@ def main():
         check("... whose metadata is taken from the target side it appears on",
               s_rows and s_rows[0]["source_doc_id"] == "S" and s_rows[0]["source_title"] == "title S")
         y = {r["source_end_byte"]: r["source_start_byte"] for r in row_at("Y")}
-        check("a group's passage starts where its anchor's does: the aligner has extended it already",
+        check("a group's passage starts where its anchor's does",
               y.get(380) == 170)
+        check("... or where a reuse of it starts, a few words before",
+              {r["source_end_byte"]: r["source_start_byte"] for r in row_at("YA")}.get(600) == 250)
+        check("... but not many words before",
+              {r["source_end_byte"]: r["source_start_byte"] for r in row_at("YB")}.get(600) == 300)
         check("every alignment is in a family", all(r["group_id"] for r in results))
         check("every row has the same fields in the same order", len({tuple(r) for r in rows.values()}) == 1)
 
