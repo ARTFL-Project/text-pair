@@ -67,7 +67,6 @@
                                     <span class="toggle-chevron" aria-hidden="true"></span>
                                 </button>
                             </h4>
-                            <p class="compared-with" v-if="comparedWith(reuse)">{{ comparedWith(reuse) }}</p>
                             <div class="timeline-text-content m-0" :class="{ show: isOpen(index, reuseIndex) }"
                                 :id="`reuse-${index}-${reuseIndex}`">
                                 <p class="text-content m-0"
@@ -114,7 +113,7 @@ import { Modal } from "bootstrap";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import globalConfig from "../config.js";
-import { paramsToUrl, UNATTRIBUTED } from "../utils.js";
+import { paramsToUrl } from "../utils.js";
 import citations from "./citations.vue";
 import passagePair from "./passagePair.vue";
 
@@ -362,25 +361,15 @@ function togglePassage(index, reuseIndex) {
     openPassages.value[key] = !openPassages.value[key];
 }
 
-// Who a reuse is shown against when it is not aligned with the passage itself: another
-// document reusing it, or another passage of the original's
-function comparedWith(reuse) {
+// Whether a reuse is aligned with something other than the passage itself: another document
+// reusing it, or another passage of the original's
+function alignedElsewhere(reuse) {
     const original = sourcePassage.value;
-    const name = shortName(reuse);
-    if (reuse.source_doc_id != original.source_doc_id) return `Compared with ${name}`;
-    if (reuse.source_end_byte <= original.source_start_byte || reuse.source_start_byte >= original.source_end_byte)
-        return `Compared with another passage of ${name}`;
-    return "";
-}
-
-// The first field of a document's citation, an author's surname only, and its year
-function shortName(reuse) {
-    const fields = (globalConfig.sourceCitation || []).map((cite) => cite.field);
-    const field = fields.find((name) => String(reuse[name] ?? "").trim()) || "";
-    let name = field ? String(reuse[field]).trim() : UNATTRIBUTED;
-    if (field.endsWith("_author")) name = name.split(",")[0];
-    const year = parseInt(reuse.source_year);
-    return isNaN(year) || field.endsWith("_year") ? name : `${name} (${year})`;
+    return (
+        reuse.source_doc_id != original.source_doc_id ||
+        reuse.source_end_byte <= original.source_start_byte ||
+        reuse.source_start_byte >= original.source_end_byte
+    );
 }
 
 function swapSides(alignment) {
@@ -395,7 +384,7 @@ function swapSides(alignment) {
 function showDifferences(reuse) {
     modalOpener = document.activeElement;
     showPair.value = false;
-    if (comparedWith(reuse)) {
+    if (alignedElsewhere(reuse)) {
         // the alignment itself, the earlier document first
         const later = parseInt(reuse.source_year) > parseInt(reuse.target_year);
         localAlignment.value = { ...(later ? swapSides(reuse) : reuse), count: 1 };
@@ -826,14 +815,6 @@ function showDifferences(reuse) {
     margin-top: 0.75rem;
 }
 
-.compared-with {
-    margin: -0.5rem 0 0;
-    padding: 0 3rem 0.6rem 1rem;
-    color: $muted;
-    font-family: $font-ui;
-    font-size: 0.8rem;
-}
-
 @media (max-width: 767.98px) {
     .epigraph {
         padding: 0 0.25rem;
@@ -859,10 +840,6 @@ function showDifferences(reuse) {
 
     .year-gap {
         font-size: 0.65rem;
-    }
-
-    .compared-with {
-        padding: 0 2rem 0.5rem 0.75rem;
     }
 
     .reuse-toggle {
