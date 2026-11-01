@@ -26,10 +26,13 @@ from pgvector.psycopg2 import register_vector
 from philologic.runtime.DB import DB
 from philologic.runtime.get_text import get_text_obj
 from psycopg2 import sql
+from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 from textpair.web_loader import FACET_TABLES, LENGTH_RANGES, OPEN_LENGTH_RANGE, relation_columns
 from textpair.web_settings import SettingsError, load_app_config
+
+from shared_text import differences, reuse_depth
 
 app = FastAPI()
 app.add_middleware(
@@ -885,6 +888,7 @@ def get_passage_group(request: Request, group_id: int):
         rows = cursor.fetchall()
 
     reuses = occurrences(rows, original_passage)
+    coverage = reuse_depth(original_passage["source_passage"], rows, anchor_doc)
     passage_list = []
     results = defaultdict(list)
     for passage in reuses:
@@ -893,8 +897,20 @@ def get_passage_group(request: Request, group_id: int):
         value.sort(key=lambda x: (x["target_title"], x["target_start_byte"]), reverse=True)
         passage_list.append({"year": key, "result": value})
     passage_list.sort(key=lambda x: x["year"] or 9999)
-    full_results = {"passageList": passage_list, "original_passage": original_passage}
+    full_results = {"passageList": passage_list, "original_passage": original_passage, "coverage": coverage}
     return full_results
+
+
+class PassagePair(BaseModel):
+    source: str
+    target: str
+
+
+@app.post("/passage_differences/")
+@app.post("/text-pair-api/passage_differences/")
+def passage_differences(pair: PassagePair):
+    """Two passages cut into what they share and what each has alone, as "Show differences" marks them."""
+    return differences(pair.source, pair.target)
 
 
 # As many passage families to a page as alignments to a page of search results

@@ -3,13 +3,27 @@
         <h2 class="group-heading">Reuses of a passage</h2>
         <figure class="epigraph side-source-color" v-if="sourcePassage.source_passage">
             <blockquote class="epigraph-text" :lang="globalConfig.sourceLanguage || undefined">
-                <p>{{ sourcePassage.source_passage }}</p>
+                <p v-if="shading"><span v-for="(piece, index) in shading.pieces" :key="index"
+                        :style="piece.style">{{ piece.text }}</span></p>
+                <p v-else>{{ sourcePassage.source_passage }}</p>
             </blockquote>
             <figcaption class="epigraph-source">
                 <span class="epigraph-dash" aria-hidden="true">&mdash;</span>
                 <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage" tag="span"></citations>
             </figcaption>
         </figure>
+        <p class="reuse-key" v-if="shading">
+            <span aria-hidden="true">
+                <span class="key-sample key-unreused" :style="shadeStyle(null)" v-if="shading.unreused">not reused</span>
+                <template v-if="shading.top > 1">1<span class="key-bar" :style="{ background: keyGradient }"></span>{{
+                    shading.top.toLocaleString() }} of the {{ shading.documents.toLocaleString() }} other
+                    documents</template>
+                <template v-else><span class="key-sample" :style="shadeStyle(0)">reused</span> in {{ shading.documents
+                    == 1 ? "the other document" : `1 of the ${shading.documents.toLocaleString()} other documents`
+                    }}</template>
+            </span>
+            <span class="visually-hidden">{{ shading.summary }}</span>
+        </p>
         <!-- Overview of the reuses along time, the list below gives the same dates -->
         <div class="lineage-strip" v-if="strip" aria-hidden="true">
             <span class="strip-end start">{{ strip.from }}</span>
@@ -86,8 +100,7 @@
                     </div>
                     <div class="modal-body">
                         <passage-pair v-if="showPair" :alignment="localAlignment" :diffed="true" :index="0"
-                            :heading-level="3" :startByteIndex="startByteIndex" :endByteIndex="endByteIndex"
-                            :key="render"></passage-pair>
+                            :heading-level="3" :key="render"></passage-pair>
                     </div>
                 </div>
             </div>
@@ -108,11 +121,10 @@ import passagePair from "./passagePair.vue";
 const route = useRoute();
 const timeline = ref({});
 const sourcePassage = ref({});
+const coverage = ref(null);
 const openPassages = ref({});
 const showPair = ref(false);
 const localAlignment = ref({});
-const startByteIndex = ref(0);
-const endByteIndex = ref(0);
 const render = ref(0); // used to force re-rendering of passagePair
 const modalElement = ref(null);
 let modal = null;
@@ -189,6 +201,126 @@ const strip = computed(() => {
     return { from, to, ticks };
 });
 
+// The passage in red where other documents reuse it, deeper and bolder the more of them do
+const SHADE_LIGHT = [0.42, 0.14, 30]; // oklch of a letter one document reuses
+const SHADE_DEEP = [0.28, 0.115, 22]; // ... and of the most reused
+const SHADE_WEIGHT = [360, 700];
+const SHADE_CURVE = 1.6; // most of the passage stays light, the most reused part goes deep
+const SHADE_SPREAD = 2; // letters a shade blends over
+const SHADE_WINDOW = 6; // letters on each side a shade is taken from
+const UNREUSED_RUN = 12; // letters no one reuses, in a row, before they show in black
+const LETTER = /[\p{L}\p{N}]/u;
+
+// Each letter's shade from 0 to 1, or null where it shows in black
+function shadeTones(depth, top) {
+    const n = depth.length;
+    const blank = new Array(n).fill(false);
+    for (let k = 0; k < n; ) {
+        if (depth[k]) {
+            k += 1;
+            continue;
+        }
+        let end = k;
+        while (end < n && !depth[end]) end += 1;
+        if (end - k >= UNREUSED_RUN || k == 0 || end == n) blank.fill(true, k, end);
+        k = end;
+    }
+    // letters changed inside a reused stretch take the lower count of the letters around them
+    const filled = depth.slice();
+    for (let i = 0; i < n; i++) {
+        if (filled[i] || blank[i]) continue;
+        let right = i;
+        while (!depth[right]) right += 1;
+        const count = Math.min(depth[i - 1], depth[right]);
+        filled.fill(count, i, right);
+        i = right;
+    }
+    return filled.map((_, i) => {
+        if (blank[i]) return null;
+        let weights = 0;
+        let sum = 0;
+        for (let j = Math.max(0, i - SHADE_WINDOW); j < Math.min(n, i + SHADE_WINDOW + 1); j++) {
+            if (blank[j]) continue;
+            const weight = Math.exp(-((i - j) ** 2) / (2 * SHADE_SPREAD ** 2));
+            weights += weight;
+            sum += weight * filled[j];
+        }
+        return top > 1 ? Math.max(0, (sum / weights - 1) / (top - 1)) ** SHADE_CURVE : 0;
+    });
+}
+
+function shadeStyle(tone) {
+    if (tone === null) return { fontWeight: SHADE_WEIGHT[0] };
+    const [l, c, h] = SHADE_LIGHT.map((light, i) => light + (SHADE_DEEP[i] - light) * tone);
+    return {
+        color: `oklch(${l.toFixed(3)} ${c.toFixed(3)} ${h.toFixed(1)})`,
+        fontWeight: Math.round(SHADE_WEIGHT[0] + (SHADE_WEIGHT[1] - SHADE_WEIGHT[0]) * tone),
+    };
+}
+
+// What the shades show, said in words: the passage's longest run of its most reused letters
+function shadingSummary(chars, counts, letters, top, documents) {
+    const most = (k) => counts[letters[k]] >= 0.8 * top;
+    let best = [0, 0];
+    let start = null;
+    letters.forEach((_, k) => {
+        if (most(k) && start === null) start = k;
+        const ends = start !== null && (k == letters.length - 1 || !most(k + 1));
+        if (ends && k + 1 - start > best[1] - best[0]) best = [start, k + 1];
+        if (ends) start = null;
+    });
+    const words = chars.slice(letters[best[0]], letters[best[1] - 1] + 1).join("").split(/\s+/);
+    const text = words.length > 12 ? `${words.slice(0, 12).join(" ")} …` : words.join(" ");
+    if (documents == 1) return `Reused in the other document: “${text}”.`;
+    const reused = letters.slice(best[0], best[1]).map((i) => counts[i]);
+    const [low, high] = [Math.min(...reused), Math.max(...reused)];
+    const range = low == high ? `${high.toLocaleString()}` : `${low.toLocaleString()} to ${high.toLocaleString()}`;
+    return `Most reused: “${text}”, in ${range} of the ${documents.toLocaleString()} other documents.`;
+}
+
+const shading = computed(() => {
+    const pieces = coverage.value && coverage.value.pieces;
+    if (!pieces || !pieces.length) return null;
+    const chars = [];
+    const counts = [];
+    for (const [text, count] of pieces) {
+        for (const char of text) {
+            chars.push(char);
+            counts.push(count);
+        }
+    }
+    const letters = [];
+    chars.forEach((char, i) => {
+        if (LETTER.test(char)) letters.push(i);
+    });
+    const top = letters.reduce((most, i) => Math.max(most, counts[i]), 0);
+    if (!top) return null;
+    const tones = shadeTones(letters.map((i) => counts[i]), top);
+    // what lies between letters takes the shade of the letter before it, and letters of one shade go together
+    const shaded = [];
+    let tone = null;
+    let next = 0;
+    chars.forEach((char, i) => {
+        if (letters[next] === i) tone = tones[next++];
+        const key = tone === null ? -1 : Math.round(tone * 100);
+        const last = shaded[shaded.length - 1];
+        if (last && last.key === key) last.text += char;
+        else shaded.push({ text: char, key, style: shadeStyle(key < 0 ? null : key / 100) });
+    });
+    return {
+        pieces: shaded,
+        top,
+        documents: coverage.value.documents,
+        unreused: tones.includes(null),
+        summary: shadingSummary(chars, counts, letters, top, coverage.value.documents),
+    };
+});
+
+// The key's bar, from one document to the most, along the shades' curve
+const keyGradient = `linear-gradient(to right, ${[0, 0.25, 0.5, 0.75, 1]
+    .map((share) => shadeStyle(share ** SHADE_CURVE).color)
+    .join(", ")})`;
+
 function returnFocus() {
     if (modalOpener) modalOpener.focus();
 }
@@ -212,6 +344,7 @@ function fetchData() {
         .then((response) => {
             timeline.value = response.data.passageList;
             sourcePassage.value = response.data.original_passage;
+            coverage.value = response.data.coverage || null;
         })
         .catch((error) => {
             console.log(error);
@@ -263,34 +396,20 @@ function showDifferences(reuse) {
     modalOpener = document.activeElement;
     showPair.value = false;
     if (comparedWith(reuse)) {
-        // the alignment itself, both sides whole, the earlier document first
+        // the alignment itself, the earlier document first
         const later = parseInt(reuse.source_year) > parseInt(reuse.target_year);
         localAlignment.value = { ...(later ? swapSides(reuse) : reuse), count: 1 };
-        startByteIndex.value = 0;
-        endByteIndex.value = localAlignment.value.source_passage.length;
-        render.value += 1;
-        showPair.value = true;
-        modal.show();
-        return;
-    }
-    localAlignment.value = { ...sourcePassage.value };
-    // The reuse's own side only: it holds both sides of its alignment
-    const side = `${reuse.direction}_`;
-    for (const key in reuse) {
-        if (key.startsWith(side)) {
-            localAlignment.value[`target_${key.slice(side.length)}`] = reuse[key];
+    } else {
+        localAlignment.value = { ...sourcePassage.value };
+        // The reuse's own side only: it holds both sides of its alignment
+        const side = `${reuse.direction}_`;
+        for (const key in reuse) {
+            if (key.startsWith(side)) {
+                localAlignment.value[`target_${key.slice(side.length)}`] = reuse[key];
+            }
         }
+        localAlignment.value.count = 1;
     }
-    localAlignment.value.count = 1;
-    reuse.source_passage = reuse.source_passage.replace(/\s\s+/g, " ");
-    sourcePassage.value.source_passage = sourcePassage.value.source_passage.replace(/\s\s+/g, " ");
-    startByteIndex.value = sourcePassage.value.source_passage.indexOf(reuse.source_passage);
-    let remove = reuse.source_passage.length;
-    while (startByteIndex.value == -1) { // if the passage is not found, remove one character from the end and try again
-        startByteIndex.value = sourcePassage.value.source_passage.indexOf(reuse.source_passage.slice(0, remove));
-        remove -= 1;
-    }
-    endByteIndex.value = startByteIndex.value + reuse.source_passage.length;
     render.value += 1;
     showPair.value = true;
     modal.show();
@@ -397,6 +516,36 @@ function showDifferences(reuse) {
     color: $ink;
     font-variant-caps: small-caps;
     letter-spacing: 0.03em;
+}
+
+// What the passage's shades stand for, under its source
+.reuse-key {
+    max-width: 48rem;
+    margin: 0.5rem auto 0;
+    padding: 0 1.5rem;
+    color: $muted;
+    font-family: $font-ui;
+    font-size: 0.8rem;
+    text-align: right;
+}
+
+.key-sample {
+    color: $ink;
+    font-family: $font-text;
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
+.key-unreused {
+    margin-right: 0.9rem;
+}
+
+.key-bar {
+    display: inline-block;
+    width: 4.5rem;
+    height: 0.55rem;
+    margin: 0 0.4rem;
+    border-radius: 0.3rem;
 }
 
 .epigraph-source :deep([data-field="year"]) {

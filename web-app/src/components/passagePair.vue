@@ -123,6 +123,8 @@
                 <span class="diff-key" v-if="showingDiff && globalConfig.matchingAlgorithm == 'sa'" aria-hidden="true">
                     <del class="removed">removed</del>
                     <ins class="added">added</ins>
+                    <span class="respelt" v-if="diffKinds.includes('respelt')">respelt</span>
+                    <span class="moved" v-if="diffKinds.includes('moved')">moved</span>
                 </span>
             </div>
         </div>
@@ -130,13 +132,13 @@
 </template>
 
 <script setup>
+import axios from "axios";
 import emitter from "tiny-emitter/instance";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import globalConfig from "../config.js";
 import { plainText } from "../utils.js";
 import citations from "./citations";
-import Worker from "./diffStrings?worker";
 
 const props = defineProps({
     alignment: Object,
@@ -144,8 +146,6 @@ const props = defineProps({
     number: Number,
     diffed: Boolean,
     headingLevel: { type: Number, default: 4 },
-    startByteIndex: Number,
-    endByteIndex: Number,
 });
 
 const router = useRouter();
@@ -156,7 +156,8 @@ const sourceHtml = ref(null);
 const targetHtml = ref(null);
 const showingDiff = ref(false);
 const diffLoading = ref(false);
-let worker = null;
+const diffKinds = ref([]); // the marks besides removed and added the passages show, for the key
+let request = null;
 
 // Years from the earlier text to the later one, when both are dated
 const yearGap = computed(() => {
@@ -173,10 +174,10 @@ onMounted(() => {
     }
 });
 
-function stopWorker() {
-    if (worker) {
-        worker.terminate();
-        worker = null;
+function stopRequest() {
+    if (request) {
+        request.cancel();
+        request = null;
     }
 }
 
@@ -184,7 +185,7 @@ function stopWorker() {
 watch(
     () => props.alignment,
     () => {
-        stopWorker();
+        stopRequest();
         sourceHtml.value = null;
         targetHtml.value = null;
         showingDiff.value = false;
@@ -194,10 +195,25 @@ watch(
         }
     }
 );
-onUnmounted(stopWorker);
+onUnmounted(stopRequest);
 
 function escapeHtml(text) {
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// How each side marks what it alone has, and what both have spelt otherwise or in another order
+const MARKS = {
+    source: { different: ["del", "removed"], respelt: ["span", "respelt"], moved: ["span", "moved"] },
+    target: { different: ["ins", "added"], respelt: ["span", "respelt"], moved: ["span", "moved"] },
+};
+
+function markUp(pieces, side) {
+    return pieces
+        .map(([text, kind]) => {
+            const mark = MARKS[side][kind];
+            return mark ? `<${mark[0]} class="${mark[1]}">${escapeHtml(text)}</${mark[0]}>` : escapeHtml(text);
+        })
+        .join("");
 }
 
 function showDifferences() {
@@ -208,48 +224,35 @@ function showDifferences() {
         emitter.emit("announce", "Differences hidden");
         return;
     }
-    const sourceText = props.alignment.source_passage.replace(/\s\s+/g, " ");
-    const targetText = props.alignment.target_passage.replace(/\s\s+/g, " ");
-    if (props.alignment.source_passage_length > 10000 || props.alignment.target_passage.length > 10000) {
-        alert("Passage of 10000 words or more may take up a long time to compare");
-    }
     diffLoading.value = true;
-    stopWorker();
-    const current = new Worker();
-    worker = current;
-    const startByteIndex = props.startByteIndex;
-    const endByteIndex = props.endByteIndex;
-    // works around issue with diff-match-patch where no matches are found if the match is far after the beginning of the string
-    const slicing = startByteIndex != undefined && startByteIndex > 0;
-    if (slicing) {
-        current.postMessage([sourceText.slice(startByteIndex, endByteIndex), targetText]);
-    } else {
-        current.postMessage([sourceText, targetText]);
-    }
-    current.onmessage = (response) => {
-        if (current !== worker) return;
-        let newSourceString = "";
-        let newTargetString = "";
-        for (const [diffCode, text] of response.data) {
-            if (diffCode === 0) {
-                newSourceString += escapeHtml(text);
-                newTargetString += escapeHtml(text);
-            } else if (diffCode === -1) {
-                newSourceString += `<del class="removed">${escapeHtml(text)}</del>`;
-            } else if (diffCode === 1) {
-                newTargetString += `<ins class="added">${escapeHtml(text)}</ins>`;
-            }
-        }
-        if (slicing) {
-            newSourceString = `<del class="removed">${escapeHtml(sourceText.slice(0, startByteIndex))}</del>${newSourceString}<del class="removed">${escapeHtml(sourceText.slice(endByteIndex))}</del>`;
-        }
-        sourceHtml.value = newSourceString;
-        targetHtml.value = newTargetString;
-        showingDiff.value = true;
-        diffLoading.value = false;
-        stopWorker();
-        emitter.emit("announce", "Differences shown");
+    stopRequest();
+    const current = axios.CancelToken.source();
+    request = current;
+    const passages = {
+        source: props.alignment.source_passage.replace(/\s\s+/g, " "),
+        target: props.alignment.target_passage.replace(/\s\s+/g, " "),
     };
+    axios
+        .post(`${globalConfig.apiServer}/passage_differences/`, passages, { cancelToken: current.token })
+        .then((response) => {
+            if (current !== request) return;
+            const { source, target } = response.data;
+            sourceHtml.value = markUp(source, "source");
+            targetHtml.value = markUp(target, "target");
+            diffKinds.value = ["respelt", "moved"].filter((kind) =>
+                source.concat(target).some((piece) => piece[1] == kind)
+            );
+            showingDiff.value = true;
+            diffLoading.value = false;
+            request = null;
+            emitter.emit("announce", "Differences shown");
+        })
+        .catch((error) => {
+            if (current !== request) return;
+            diffLoading.value = false;
+            request = null;
+            console.log(error);
+        });
 }
 
 function stanceClass(stance) {
@@ -562,6 +565,28 @@ function goToContext(alignment, direction) {
     color: $removed-color;
     background-color: $removed-tint;
     text-decoration-line: line-through;
+}
+
+// Shared, but spelt otherwise: a colour and a dotted underline
+:deep(.respelt) {
+    color: $respelt-color;
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.2em;
+}
+
+// Shared, but in another order: a tint and a dashed underline
+:deep(.moved) {
+    padding: 0 0.12em;
+    border-radius: 2px;
+    background-color: $moved-tint;
+    text-decoration-line: underline;
+    text-decoration-style: dashed;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.25em;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
 }
 
 :deep(.token-match) {
