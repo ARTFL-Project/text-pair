@@ -15,7 +15,7 @@ import numpy as np
 import regex
 from diff_match_patch import diff_match_patch
 
-# A word, or a single character of the scripts written without spaces
+# A word, or a single character of the scripts written without spaces, as split_words finds them
 REUSE_WORD = regex.compile(
     r"[\p{Han}\p{Hiragana}\p{Katakana}]|[[\p{L}\p{N}]--[\p{Han}\p{Hiragana}\p{Katakana}]]+", regex.V1)
 REUSE_GAP = 4  # words two shared runs may be apart, on both sides, and still be one chain
@@ -51,19 +51,66 @@ class FoldTable(dict):
 FOLD = FoldTable()
 
 
-def fold(text: str) -> str:
-    """The text with each character folded: the same length."""
-    return text.translate(FOLD)
-
-
 def codes(text: str) -> np.ndarray:
-    return np.frombuffer(text.encode("utf-32-le"), np.uint32)
+    return np.frombuffer(text.encode("utf-32-le", "surrogatepass"), np.uint32)
 
 
-def tiles(words: list[str], pairs: dict, other: list[str]) -> list[tuple[int, int, int]]:
-    """Shared runs of two words or more as (i, j, size), tiled longest first, no word on either side in two."""
+ALONE = regex.compile(r"[\p{Han}\p{Hiragana}\p{Katakana}]")
+IN_WORD = regex.compile(r"[\p{L}\p{N}]")
+# by code point, filled in as characters are met: each one folded, and its part in
+# REUSE_WORD's words (2 a word by itself, 1 in a run, 0 none)
+FOLDED = np.arange(0x110000, dtype=np.uint32)
+KIND = np.zeros(0x110000, np.uint8)
+KNOWN = np.zeros(0x110000, np.bool_)
+
+
+def read(text: str) -> tuple[np.ndarray, np.ndarray]:
+    """A text's characters as folded code points, and their kinds."""
+    points = codes(text)
+    for code in np.unique(points[~KNOWN[points]]).tolist():
+        c = chr(code)
+        FOLDED[code] = ord(FOLD[code])
+        KIND[code] = 2 if ALONE.match(c) else 1 if IN_WORD.match(c) else 0
+        KNOWN[code] = True
+    return FOLDED[points], KIND[points]
+
+
+HASH_BASE = np.uint64(0x100000001B3)
+HASH_MIX = np.uint64(0x9E3779B97F4A7C15)
+
+
+def split_words(text: str) -> tuple[str, list[int], list[int], np.ndarray]:
+    """A text folded, where REUSE_WORD's words start and end in it, and a number for each word as folded."""
+    if not text:
+        return "", [], [], np.zeros(0, np.uint64)
+    points, kinds = read(text)
+    folded = points.tobytes().decode("utf-32-le", "surrogatepass")
+    run, alone = kinds == 1, kinds == 2
+    starts = np.flatnonzero((run & ~np.concatenate(([False], run[:-1]))) | alone)
+    ends = np.flatnonzero((run & ~np.concatenate((run[1:], [False]))) | alone) + 1
+    if not len(starts):
+        return folded, [], [], np.zeros(0, np.uint64)
+    # each letter weighted by a power of HASH_BASE from its word's start, summed by word
+    begun = np.zeros(len(text), np.int64)
+    begun[starts] = 1
+    offset = np.arange(len(text)) - starts[np.maximum(np.cumsum(begun) - 1, 0)]
+    lengths = ends - starts
+    powers = np.cumprod(np.concatenate(([1], np.full(lengths.max() - 1, HASH_BASE))).astype(np.uint64))
+    letters = points.astype(np.uint64) + np.uint64(1)
+    weighted = np.where(run | alone, letters * powers[np.minimum(offset, len(powers) - 1)], np.uint64(0))
+    keys = np.add.reduceat(weighted, starts) * HASH_MIX + lengths.astype(np.uint64)
+    return folded, starts.tolist(), ends.tolist(), keys
+
+
+def pair_keys(keys: np.ndarray) -> np.ndarray:
+    return keys[:-1] * HASH_MIX + keys[1:]
+
+
+def tiles(words: list[int], pairs: dict, other: list[int], js=None) -> list[tuple[int, int, int]]:
+    """Shared runs of two words or more as (i, j, size), tiled longest first, no word on either
+    side in two; `js` are where in `other` the word pairs the runs may start with are, if known."""
     runs = []
-    for j in range(len(other) - 1):
+    for j in range(len(other) - 1) if js is None else js:
         for i in pairs.get((other[j], other[j + 1]), ()):
             if i and j and words[i - 1] == other[j - 1]:
                 continue  # inside a longer run
@@ -100,14 +147,15 @@ def pair_index(words: list[str]) -> dict:
     return pairs
 
 
-def split_tiles(words: list[str], other: list[str], pairs: dict | None = None) -> list[tuple[int, int, int]]:
+def split_tiles(words: list[int], other: list[int], pairs: dict | None = None, js=None) -> list[tuple[int, int, int]]:
     """tiles(), but where two long texts share frequent word pairs, which would start too many
     runs, they are first cut at words each uses once, kept in an order both share."""
     pairs = pairs if pairs is not None else pair_index(words)
     budget = SEED_BUDGET * (len(words) + len(other))
     most = max(map(len, pairs.values()), default=0)
-    if len(other) * most <= budget or sum(len(pairs.get(pair, ())) for pair in zip(other, other[1:])) <= budget:
-        return tiles(words, pairs, other)
+    starting = zip(other, other[1:]) if js is None else ((other[j], other[j + 1]) for j in js)
+    if len(other) * most <= budget or sum(len(pairs.get(pair, ())) for pair in starting) <= budget:
+        return tiles(words, pairs, other, js)
     count, count_other = Counter(words), Counter(other)
     where = {w: j for j, w in enumerate(other) if count_other[w] == 1}
     anchors = [(i, where[w]) for i, w in enumerate(words) if count[w] == 1 and w in where]
@@ -191,7 +239,8 @@ def out_of_order(found: list) -> set[int]:
     return set(range(len(found))) - keep
 
 
-def matched_words(a: list[str], b: list[str]) -> list[tuple[int, int, int]]:
+@lru_cache(maxsize=1 << 16)
+def matched_words(a: tuple, b: tuple) -> list[tuple[int, int, int]]:
     """Blocks (i, j, size) of the words two short lists share, in order."""
     ids = {}
     sa = "".join(chr(0xE000 + ids.setdefault(w, len(ids))) for w in a)
@@ -207,6 +256,7 @@ def matched_words(a: list[str], b: list[str]) -> list[tuple[int, int, int]]:
     return blocks
 
 
+@lru_cache(maxsize=1 << 16)
 def matched_letters(a: str, b: str, open_start: bool = False, open_end: bool = False) -> list[tuple[int, int, int]]:
     """Blocks (i, j, size) of the letters two short stretches share, as the app's diff cleans
     them up; at an open end, as the cleanup does inside, a match no longer than the edits next to it is dropped."""
@@ -249,20 +299,22 @@ class Passage:
 
     def __init__(self, text: str):
         self.text = text or ""
-        self.folded = fold(self.text)
-        self.spans = [(m.start(), m.end()) for m in REUSE_WORD.finditer(self.text)]
-        self.words = [reuse_key(self.text[s:e]) for s, e in self.spans]
+        self.folded, starts, ends, keys = split_words(self.text)
+        self.spans = list(zip(starts, ends))
+        self.words = keys.tolist()
         # characters of a script without spaces are more often shared by chance than words
-        unspaced = sum(len(word) == 1 and not word.isascii() for word in self.words) * 2 > len(self.words)
+        unspaced = sum(e - s == 1 and not self.folded[s].isascii() for s, e in self.spans) * 2 > len(self.words)
         self.alone, self.chained = (4, 6) if unspaced else (3, 4)
         self.pairs = pair_index(self.words)
+        self.pair_keys = np.unique(pair_keys(keys))
 
     def compare(self, other_text: str, detail: bool = False) -> Shared:
         other_text = other_text or ""
         found = Shared(len(self.text), len(other_text), detail)
-        spans = [(m.start(), m.end()) for m in REUSE_WORD.finditer(other_text)]
-        other = [reuse_key(other_text[s:e]) for s, e in spans]
-        joined = stretches(split_tiles(self.words, other, self.pairs), self.alone, self.chained)
+        folded, starts, ends, keys = split_words(other_text)
+        other = keys.tolist()
+        js = np.flatnonzero(np.isin(pair_keys(keys), self.pair_keys)).tolist() if len(keys) > 1 else []
+        joined = stretches(split_tiles(self.words, other, self.pairs, js), self.alone, self.chained)
         moved = out_of_order(joined) if detail and len(joined) > 1 else set()
         ma, mb = found.shared
 
@@ -282,7 +334,7 @@ class Passage:
         def compare(a0, a1, b0, b1, move, open_start=False, open_end=False):
             if a0 >= a1 or b0 >= b1:
                 return
-            fa, fb = self.folded[a0:a1], fold(other_text[b0:b1])
+            fa, fb = self.folded[a0:a1], folded[b0:b1]
             if fa == fb:
                 mark(a0, b0, a1 - a0, self.text[a0:a1] != other_text[b0:b1], move)
                 return
@@ -325,24 +377,25 @@ class Passage:
             blocks = list(stretch)
             for (x0, x1), (y0, y1) in gaps:
                 if x0 < x1 and y0 < y1:
-                    blocks += [(x0 + i, y0 + j, size) for i, j, size in matched_words(self.words[x0:x1], other[y0:y1])]
+                    blocks += [(x0 + i, y0 + j, size)
+                               for i, j, size in matched_words(tuple(self.words[x0:x1]), tuple(other[y0:y1]))]
             blocks.sort()
-            a_at, b_at = self.spans[w0][0], spans[v0][0]
+            a_at, b_at = self.spans[w0][0], starts[v0]
             for n, (i, j, size) in enumerate(blocks):
-                compare(a_at, self.spans[i][0], b_at, spans[j][0], move, open_start=not n)  # what lies since the last block
+                compare(a_at, self.spans[i][0], b_at, starts[j], move, open_start=not n)  # what lies since the last block
                 a0, a1 = self.spans[i][0], self.spans[i + size - 1][1]
-                b0, b1 = spans[j][0], spans[j + size - 1][1]
-                if self.folded[a0:a1] == fold(other_text[b0:b1]):
+                b0, b1 = starts[j], ends[j + size - 1]
+                if self.folded[a0:a1] == folded[b0:b1]:
                     mark(a0, b0, a1 - a0, self.text[a0:a1] != other_text[b0:b1], move)
                 else:  # word by word, and what lies between them
                     for t in range(size):
-                        (s, e), (u, v) = self.spans[i + t], spans[j + t]
+                        (s, e), u, v = self.spans[i + t], starts[j + t], ends[j + t]
                         if t:
-                            compare(self.spans[i + t - 1][1], s, spans[j + t - 1][1], u, move)
+                            compare(self.spans[i + t - 1][1], s, ends[j + t - 1], u, move)
                         compare(s, e, u, v, move)
                         word(s, e, u, v, move)
                 a_at, b_at = a1, b1
-            compare(a_at, self.spans[w1 - 1][1], b_at, spans[v1 - 1][1], move, open_end=True)
+            compare(a_at, self.spans[w1 - 1][1], b_at, ends[v1 - 1], move, open_end=True)
         return found
 
 
