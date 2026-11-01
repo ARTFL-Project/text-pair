@@ -8,18 +8,15 @@ each of them, and anchors no family of its own.
 """
 
 import contextlib
-import multiprocessing as mp
 import os
 import sys
 from array import array
-from bisect import bisect_left
 from typing import Union
 
 import lz4.frame
 import msgspec
 import numpy as np
 import orjson
-import regex
 from numba import njit
 from tqdm import tqdm
 
@@ -55,10 +52,6 @@ _INSIDE = 0.5    # a window joins a site when at least this much of it lies in t
 _FLOOR = 0.1     # ... and it is at least this long next to the core
 _CONTAIN = 0.8   # a window holding this much of a core, but too long to join, is listed under it
 _ADOPT = 0.5     # a site joins the family holding most of its partners once this share are placed
-_SENTENCE_WORDS = 5  # words a group's passage may move back to start its sentence: never a passage
-# punctuation a group's passage never moves back past: what Unicode says ends a clause or
-# sentence, in any script -- not apostrophes, hyphens, quotes or brackets
-_STOPS = regex.compile(r"\p{Terminal_Punctuation}")
 _UNDATED = 9999
 _NONE = -(1 << 62)
 
@@ -74,18 +67,9 @@ class _Ends(msgspec.Struct):
     target_end_byte: int
     source_year: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
     target_year: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
-    # where each document's words_and_philo_ids dump is; read once per document
-    source_parsed_filename: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
-    target_parsed_filename: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
-    source_doc_id: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
-    target_doc_id: Union[msgspec.Raw, msgspec.UnsetType] = msgspec.UNSET
 
 
 _DECODE_ENDS = msgspec.json.Decoder(_Ends).decode
-
-
-def _value(raw):
-    return None if raw is msgspec.UNSET else orjson.loads(bytes(raw))
 
 
 def _year(raw) -> int:
@@ -101,13 +85,11 @@ def _year(raw) -> int:
 def read_ends(results_file: str, count: int):
     """Every alignment's two spans: end 2k is record k's source, end 2k + 1 its target.
 
-    Returns the file names, each file's year and (words dump, doc id), and each end's
-    file, start and end.
+    Returns the file names, each file's year, and each end's file, start and end.
     """
     names: list[str] = []
     ids: dict[str, int] = {}
     years: list[int] = []
-    dumps: list[tuple] = []
     files, starts, ends = array("i"), array("q"), array("q")
     with lz4.frame.open(results_file) as input_file:
         progress = tqdm(total=count, desc=_label(1), leave=False)
@@ -119,22 +101,20 @@ def read_ends(results_file: str, count: int):
                     source = ids[r.source_filename] = len(names)
                     names.append(r.source_filename)
                     years.append(_year(r.source_year))
-                    dumps.append((_value(r.source_parsed_filename), _value(r.source_doc_id)))
                 target = ids.get(r.target_filename)
                 if target is None:
                     target = ids[r.target_filename] = len(names)
                     names.append(r.target_filename)
                     years.append(_year(r.target_year))
-                    dumps.append((_value(r.target_parsed_filename), _value(r.target_doc_id)))
                 files.extend((source, target))
                 starts.extend((r.source_start_byte, r.target_start_byte))
                 ends.extend((r.source_end_byte, r.target_end_byte))
             progress.update(len(batch))
         progress.close()
     if not files:
-        return [names, np.empty(0, np.int64), dumps, np.empty(0, np.int32), np.empty(0, np.int64), np.empty(0, np.int64)]
+        return [names, np.empty(0, np.int64), np.empty(0, np.int32), np.empty(0, np.int64), np.empty(0, np.int64)]
     # a list, so the grouping can take the spans over and free them once it has the windows
-    return [names, np.array(years, np.int64), dumps, np.frombuffer(files, np.int32),
+    return [names, np.array(years, np.int64), np.frombuffer(files, np.int32),
             np.frombuffer(starts, np.int64), np.frombuffer(ends, np.int64)]
 
 
@@ -541,7 +521,7 @@ def _group_lists(window_of, site_of, family, listed_offsets, listed):
 class _Families:
     """What the two output steps need from the grouping."""
 
-    __slots__ = ("names", "site_file", "core_s", "core_e", "anchors", "shown_s", "documents",
+    __slots__ = ("names", "site_file", "core_s", "core_e", "anchors", "documents",
                  "rep_passage", "rep_family", "rep_side", "list_offsets", "list_members")
 
     def group_ids(self, passage_id: int) -> bytes:
@@ -553,13 +533,13 @@ class _Families:
     __getitem__ = group_ids
 
 
-def group_passages(corpus: list, run_dir: str = "", workers: int = 1) -> _Families:
+def group_passages(corpus: list) -> _Families:
     """Sites, then families, then what each alignment and each family row gets.
 
     Takes `corpus` from `read_ends` and empties it: the per-end spans are the largest
     thing held, and nothing needs them once the windows are built.
     """
-    names, years, dumps, files, starts, ends = corpus
+    names, years, files, starts, ends = corpus
     corpus.clear()
     _status(_label(2))
     order = np.lexsort((ends, starts, files))
@@ -598,13 +578,6 @@ def group_passages(corpus: list, run_dir: str = "", workers: int = 1) -> _Famili
     n_families = anchors.shape[0]
     family = _refer(window_of, wf, site_of, family, anchors, run_on, site_file, core_s, core_e)
     del run_on
-    # a family's passage is shown from the first word of its sentence, or the first after the
-    # punctuation nearest before it, when that is only a few words back and no two families
-    # then show the same passage
-    head_file, head_s, head_e = site_file[anchors], core_s[anchors], core_e[anchors]
-    shown_s = _sentence_starts_for(names, dumps, run_dir, head_file, head_s, workers)
-    shown_s = _kept_apart(head_file, head_s, head_e, shown_s)
-
     listed_family = family[held_site]
     pairs = np.unique(held_window * n_families + listed_family) if held_site.size else np.empty(0, np.int64)
     listed_offsets = np.concatenate(([0], np.cumsum(np.bincount(pairs // n_families, minlength=wf.shape[0])))).astype(np.int64)
@@ -621,7 +594,7 @@ def group_passages(corpus: list, run_dir: str = "", workers: int = 1) -> _Famili
     result = _Families()
     result.names = names
     result.site_file, result.core_s, result.core_e = site_file, core_s, core_e
-    result.anchors, result.shown_s, result.documents = anchors, shown_s, documents
+    result.anchors, result.documents = anchors, documents
     rep_end = first_end[first[anchors]]  # a family's row comes from its anchor's first window
     by_passage = np.argsort(rep_end // 2, kind="stable")
     result.rep_passage = (rep_end // 2)[by_passage]
@@ -660,124 +633,6 @@ class _SourceText:
             self.handle.close()
         self.handle = None
         self.name = None
-
-
-class _Token(msgspec.Struct):
-    """A word or punctuation mark in a words_and_philo_ids dump."""
-
-    position: str  # doc div1 div2 div3 para sent word ...
-    start_byte: int
-    token: str = ""
-    philo_type: str = "word"
-
-
-_DECODE_TOKEN = msgspec.json.Decoder(_Token).decode
-
-
-def _sentence_starts(path: str, upto: int):
-    """Each token's start; the first of the words leading up to it, back to its sentence's start
-    or the last mark that separates clauses; and how many words that is, as far as `upto`."""
-    starts, firsts, before = array("q"), array("q"), array("q")
-    current, first, words = None, None, 0
-    try:
-        with lz4.frame.open(path) as handle:
-            for batch in read_line_batches(handle):
-                for line in batch:
-                    token = _DECODE_TOKEN(line)
-                    sentence = token.position.split(" ", 6)[:6]
-                    if sentence != current:
-                        current, first, words = sentence, None, 0
-                    starts.append(token.start_byte)
-                    if token.philo_type == "punct" and _STOPS.search(token.token):
-                        firsts.append(token.start_byte)  # a passage starting here stays put
-                        before.append(0)
-                        first, words = None, 0
-                        continue
-                    if first is None and token.philo_type == "word":
-                        first = token.start_byte
-                    firsts.append(token.start_byte if first is None else first)
-                    before.append(words)
-                    words += token.philo_type == "word"
-                if starts and starts[-1] > upto:
-                    break
-    except (OSError, ValueError, msgspec.DecodeError):
-        return array("q"), array("q"), array("q")
-    return starts, firsts, before
-
-
-def _words_dump(filename: str, parsed, doc_id, run_dir: str) -> str | None:
-    """A document's words_and_philo_ids dump: the path its records name, or the one beside its TEI."""
-    candidates = [parsed if os.path.isabs(parsed) else os.path.join(run_dir, parsed)] if parsed else []
-    candidates.append(os.path.join(os.path.dirname(os.path.dirname(filename)), "words_and_philo_ids", f"{doc_id}.lz4"))
-    return next((path for path in candidates if os.path.exists(path)), None)
-
-
-def _sentence_starts_in(task: tuple) -> list[int]:
-    """The first of the words leading up to the first token at or after each byte -- the first
-    word of its sentence, or the first after a mark that separates clauses -- if only a few
-    words back; otherwise the byte itself."""
-    path, wanted = task
-    starts, firsts, before = _sentence_starts(path, wanted[-1])
-    found = []
-    for byte in wanted:
-        j = bisect_left(starts, byte)
-        near = j < len(starts) and before[j] <= _SENTENCE_WORDS and firsts[j] <= byte
-        found.append(firsts[j] if near else byte)
-    return found
-
-
-def _kept_apart(files, starts, ends, shown) -> np.ndarray:
-    """`shown`, except that no two families show the very same passage.
-
-    Where moves would make them, the family whose own passage starts earliest keeps its
-    move and the others keep their own start -- again until none do, since a start kept
-    can meet another family's move.
-    """
-    shown = shown.copy()
-    while True:
-        _, inverse, counts = np.unique(np.stack((files, shown, ends), axis=1), axis=0,
-                                       return_inverse=True, return_counts=True)
-        inverse = inverse.ravel()
-        crowded = np.flatnonzero(counts[inverse] > 1)
-        if not crowded.size:
-            return shown
-        order = crowded[np.lexsort((starts[crowded], inverse[crowded]))]
-        later = np.ones(order.shape[0], bool)
-        later[0] = False
-        later[1:] = inverse[order][1:] == inverse[order][:-1]
-        shown[order[later]] = starts[order[later]]
-
-
-def _sentence_starts_for(names, dumps, run_dir, site_file, byte, workers: int) -> np.ndarray:
-    """`byte` moved back to the start of its sentence or clause, where the document's dump says so."""
-    moved = byte.copy()
-    order = np.lexsort((byte, site_file))
-    tasks, positions = [], []
-    lo = 0
-    while lo < order.shape[0]:
-        f = site_file[order[lo]]
-        hi = lo
-        while hi < order.shape[0] and site_file[order[hi]] == f:
-            hi += 1
-        path = _words_dump(names[f], *dumps[f], run_dir)
-        if path is not None:
-            tasks.append((path, byte[order[lo:hi]].tolist()))
-            positions.append(order[lo:hi])
-        lo = hi
-    if not tasks:
-        return moved
-    bar = tqdm(total=len(tasks), desc=_label(3, "finding sentence starts"), leave=False)
-    if workers > 1 and len(tasks) > 1:
-        with mp.get_context("fork").Pool(min(workers, len(tasks))) as pool:
-            for where, found in zip(positions, pool.imap(_sentence_starts_in, tasks)):
-                moved[where] = found
-                bar.update()
-    else:
-        for where, task in zip(positions, tasks):
-            moved[where] = _sentence_starts_in(task)
-            bar.update()
-    bar.close()
-    return moved
 
 
 class _GroupFields(msgspec.Struct):
@@ -903,9 +758,7 @@ def merge_alignments(results_file: str, count: int, workers: int = 1):
         _status()
         print("  No passage groups found.")
         return None
-    # a relative words_and_philo_ids path in the records is rooted in the run's directory
-    run_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(results_file))))
-    families = group_passages(corpus, run_dir, workers)
+    families = group_passages(corpus)
 
     # Both output steps read the records back, so they share one split of the file
     _status(_label(4))
@@ -987,9 +840,8 @@ def rewrite_results(results_file: str, target: str, group_lists: _Families,
 
 def write_group_sources(results_file: str, groups_file: str, families: _Families,
                         segments: list[tuple[int, int]], bases: dict[int, int]) -> int:
-    """Write one row per family: its anchor's passage, from its sentence's start when that is
-    a few words back, with the metadata of the record that first has it, and `count`, the
-    documents its alignments span. Returns the rows written.
+    """Write one row per family: its anchor's passage, with the metadata of the record that
+    first has it, and `count`, the documents its alignments span. Returns the rows written.
 
     Rows come out in the order their records appear; the database load keys on group_id.
     """
@@ -1040,7 +892,7 @@ def _group_source_records(input_file, output_file, families: _Families, passage_
                     side = int(families.rep_side[j])
                     site = families.anchors[family]
                     filename = families.names[families.site_file[site]]
-                    start_byte, end_byte = int(families.shown_s[family]), int(families.core_e[site])
+                    start_byte, end_byte = int(families.core_s[site]), int(families.core_e[site])
                     records.append(
                         orjson.dumps(
                             {
