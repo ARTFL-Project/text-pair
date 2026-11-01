@@ -1,7 +1,8 @@
 """Output phase of the sequence aligner.
 
 Two halves. `passage text` turns a byte range of a document into the passage and its
-surrounding context, stripping markup and resolving entities. The rest writes the
+surrounding context, stripping markup and resolving entities, once `extension` has
+extended the range past its first and last matching ngrams. The rest writes the
 artifacts: the alignment chunks, count.txt, duplicate_files.csv and
 alignment_config.ini. Chunk files are named
 {sourceDocID}-{firstTargetDocID}-{lastTargetDocID}.lz4 under <output_path>/result_batches,
@@ -23,6 +24,8 @@ from html.entities import html5 as _HTML5
 import lz4.frame
 import orjson
 from tqdm import tqdm
+
+from . import extension
 
 DUP_HEADER = ("source_title", "source_author", "source_filename", "source_philo_id",
               "source_byte_offsets", "target_title", "target_author", "target_filename",
@@ -341,6 +344,13 @@ class ChunkWriter:
         self._buf[slot] = buf
         return buf
 
+    def _limits(self, slot, buf):
+        """The first and last bytes of a document's text: a passage is never extended past them."""
+        meta = self.metas[slot]
+        start = _atoi(meta.get("start_byte"))
+        end = _atoi(meta.get("end_byte")) or len(buf)
+        return max(0, start), min(len(buf), end) if end > start else len(buf)
+
     def _map(self, slot):
         with open(self.metas[slot]["filename"], "rb") as handle:
             return mmap.mmap(handle.fileno(), 0, prot=mmap.PROT_READ)
@@ -389,6 +399,7 @@ class ChunkWriter:
             source_meta = self.metas[slot]
             source_fields = self._prefixed(self._src, slot, "source_")
             source_buf = self._text(slot) if hi > lo else None
+            source_limits = self._limits(slot, source_buf) if source_buf is not None else None
             i = lo
             while i < hi:
                 target_slot = int(rows[i, 1])
@@ -401,11 +412,13 @@ class ChunkWriter:
                 record["source_doc_id"] = source_doc
                 record["target_doc_id"] = docs[target_slot]
                 target_buf = self._text(target_slot, slot)
-                for k in range(i, j):
-                    source_start_byte = int(rows[k, 2])
-                    source_end_byte = int(rows[k, 3])
-                    target_start_byte = int(rows[k, 6])
-                    target_end_byte = int(rows[k, 7])
+                target_limits = self._limits(target_slot, target_buf)
+                spans = extension.merged([
+                    extension.extend(source_buf, source_limits, target_buf, target_limits,
+                                     int(rows[k, 2]), int(rows[k, 3]), int(rows[k, 6]),
+                                     int(rows[k, 7]))
+                    for k in range(i, j)])
+                for source_start_byte, source_end_byte, target_start_byte, target_end_byte in spans:
                     key = (slot, source_start_byte, source_end_byte)
                     source_text = cached(key)
                     if source_text is None:

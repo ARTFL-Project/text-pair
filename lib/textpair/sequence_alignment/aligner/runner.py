@@ -373,7 +373,6 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                              docs, metas, chunk_dir, params["context_size"],
                              level=params["lz4_level"],
                              active=params["output_workers"])
-    count = 0
     duplicate_rows = []
     try:
         key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes, end_bytes = \
@@ -385,8 +384,6 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
         gc.collect()
 
         def on_result(rows, dups, percents, _stats):
-            nonlocal count
-            count += rows.shape[0]
             if rows.shape[0] or dups.shape[0]:
                 pool.submit(np.ascontiguousarray(rows),
                             _jobs(rows, dups, docs, n_targets, target_base, threads,
@@ -433,7 +430,9 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                 document_rank)
             print(f"{written} pair(s) written.", flush=True)
     finally:
-        pool.close()
+        stats = pool.close()
+    # what the writers wrote: passages that overlap once extended are written as one
+    count = sum(stat["n_rec"] for stat in stats)
     # Workers complete in a non-reproducible order;
     # sort by document slot so the file is.
     duplicate_rows.sort()

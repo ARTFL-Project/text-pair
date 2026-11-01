@@ -176,8 +176,15 @@ def build_repeated_phrase(root):
                 [position, position * 10, position * 10 + 8]]
         with open(os.path.join(root, "ngrams", f"{doc_id}.json"), "wb") as handle:
             handle.write(orjson.dumps(index))
-        with open(os.path.join(root, "text", f"{doc_id}.txt"), "w", encoding="utf8") as h:
-            h.write("x" * (REPEATS * 5000 * 10 + 200000))
+        # Each ngram's bytes hold an eight-letter word: the phrase's alike in both documents,
+        # every other one the document's own, so no passage extends past its phrase.
+        text = bytearray((("q" if doc_id == "1" else "z") * 8 + "  ").encode() * (REPEATS * 5000 + 20000))
+        for occurrence in range(occurrences):
+            for offset in range(len(phrase)):
+                at = (occurrence * 5000 + offset) * 10
+                text[at:at + 8] = f"phrase{offset:02d}".encode()
+        with open(os.path.join(root, "text", f"{doc_id}.txt"), "wb") as h:
+            h.write(bytes(text))
         metadata[doc_id] = {"filename": f"text/{doc_id}.txt", "year": str(1800 + int(doc_id)),
                             "title": f"doc {doc_id}", "author": "", "start_byte": "0",
                             "end_byte": str(REPEATS * 5000 * 10 + 200000)}
