@@ -97,7 +97,7 @@ def split_words(text: str) -> tuple[str, list[int], list[int], np.ndarray]:
     lengths = ends - starts
     powers = np.cumprod(np.concatenate(([1], np.full(lengths.max() - 1, HASH_BASE))).astype(np.uint64))
     letters = points.astype(np.uint64) + np.uint64(1)
-    weighted = np.where(run | alone, letters * powers[np.minimum(offset, len(powers) - 1)], np.uint64(0))
+    weighted = np.where(run | alone, letters * powers[np.clip(offset, 0, len(powers) - 1)], np.uint64(0))
     keys = np.add.reduceat(weighted, starts) * HASH_MIX + lengths.astype(np.uint64)
     return folded, starts.tolist(), ends.tolist(), keys
 

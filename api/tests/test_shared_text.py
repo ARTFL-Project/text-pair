@@ -116,6 +116,8 @@ def main():
     longer = "Il est temps que le roi parle enfin. " * 30 + reuse + ". Les jours passent et rien ne vient. " * 30
     check("a passage inside a much longer text is found",
           marks(reuse, differences(reuse, longer)["source"]) == "les peuples ests lass des vengeances")
+    check("a text opening on more marks than its longest word has letters is read",
+          marks("...... « ... » a b c d", differences("...... « ... » a b c d", "x a b c d y")["source"]).endswith("as bs cs ds"))
     check("unrelated passages share nothing",
           {kind for _, kind in differences("le peuple est las de vengeance", "the quality of mercy is not strained")["source"]}
           == {"different"})
