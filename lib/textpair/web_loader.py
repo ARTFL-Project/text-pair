@@ -939,6 +939,34 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
     database.close()
 
 
+PLACE_COLUMNS = (("group_id", "INTEGER"), ("filename", "TEXT"), ("start_byte", "BIGINT"), ("end_byte", "BIGINT"),
+                 ("passage_start_byte", "BIGINT"), ("passage_end_byte", "BIGINT"), ("shared", "REAL"),
+                 ("context_before", "TEXT"), ("passage", "TEXT"), ("context_after", "TEXT"))
+
+
+def load_places_table(places_file: str, alignments_table: str):
+    """One row per place reusing a family's passage, with the passage as it projects there
+    (family_places): what the group page shows of each reuse."""
+    config = read_global_config()
+    table_name = f"{alignments_table}_family_places"
+    database = psycopg2.connect(user=config["DATABASE"]["database_user"],
+                                password=config["DATABASE"]["database_password"],
+                                database=config["DATABASE"]["database_name"])
+    cursor = database.cursor()
+    tune_load_session(cursor)
+    cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+    cursor.execute(f"CREATE TABLE {table_name} ({', '.join(f'{name} {kind}' for name, kind in PLACE_COLUMNS)})")
+    print("Storing each family's passage as its reuses have it...", flush=True)
+    names = [name for name, _ in PLACE_COLUMNS]
+    with open(places_file, "rb") as input_file:
+        copy_into(cursor, table_name, names, ([row[name] for name in names] for row in map(orjson.loads, input_file)))
+    cursor.execute(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING BTREE(group_id)")
+    database.commit()
+    database.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor.execute(f"ANALYZE {table_name}")
+    database.close()
+
+
 def network_fields(searchable_fields: list[str], fields_in_table: list[str]) -> list[str]:
     """Metadata fields the network view can aggregate by: present on both sides, not passage or year."""
     fields = []
@@ -1516,6 +1544,9 @@ def create_web_app(
         )
         load_family_filter_tables(table, web_config.searchable_fields(), load_workers(textpair_params))
         load_collection_counts(table)
+        places_file = os.path.join(os.path.dirname(groups_file), "passage_group_places.jsonl")
+        if os.path.exists(places_file):
+            load_places_table(places_file, table)
 
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)

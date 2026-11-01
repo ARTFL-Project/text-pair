@@ -6,7 +6,8 @@
 Each case is a few alignments around a group anchored in document A at bytes 100-400:
 spans overlapping in one document making one place, the anchor's own document left out,
 an alignment with the passage itself preferred, then one with another reusing document,
-and last one with another passage of the anchor's document.
+and last one with another passage of the anchor's document; and a place the build projected
+the passage onto shown as it has the passage, facing the passage itself.
 """
 import os
 import sys
@@ -24,7 +25,7 @@ def check(label, ok):
         FAILURES.append(label)
 
 
-GROUP = {"source_doc_id": "A", "source_start_byte": 100, "source_end_byte": 400}
+GROUP = {"source_doc_id": "A", "source_start_byte": 100, "source_end_byte": 400, "source_passage": "the passage"}
 
 
 def align(rowid, source, s0, s1, target, t0, t1):
@@ -57,6 +58,19 @@ def main():
     found = places([align(2, "A", 400, 500, "E", 0, 100), align(4, "A", 900, 950, "E", 20, 80)])
     check("... the nearest of them first, a span ending where the passage starts counting as apart",
           found[("E", 0)] == (2, "A"))
+
+    rows = [align(1, "A", 100, 400, "B", 0, 300), align(2, "B", 250, 600, "C", 0, 350), align(3, "C", 0, 350, "D", 0, 350)]
+    projected = {("C.xml", 0, 350): {"passage_start_byte": 20, "passage_end_byte": 200, "shared": 0.8, "passage": "its part",
+                                     "context_before": "before", "context_after": "after"},
+                 ("D.xml", 0, 350): {"passage_start_byte": 0, "passage_end_byte": 350, "shared": 0.0, "passage": "",
+                                     "context_before": "", "context_after": ""}}
+    found = {p["target_doc_id"]: p for p in occurrences(rows, GROUP, projected)}
+    c = found["C"]
+    check("a place the passage was projected onto shows the passage as it has it",
+          (c["target_start_byte"], c["target_end_byte"], c["target_passage"], c["shared"]) == (20, 200, "its part", 0.8))
+    check("... facing the group's passage itself", c["source_doc_id"] == "A" and c["source_passage"] == "the passage")
+    check("... and a place sharing none of it in order keeps its alignment",
+          found["D"]["rowid"] == 3 and found["D"]["source_doc_id"] == "C" and "shared" not in found["D"])
 
     if FAILURES:
         print(f"{len(FAILURES)} check(s) failed: {', '.join(FAILURES)}")

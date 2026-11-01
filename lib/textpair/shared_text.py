@@ -1,4 +1,5 @@
-"""Which characters two texts share: seed, chain, align.
+"""Which characters two texts share: seed, chain, align. The group page's shading and "Show
+differences" use it, and the build, to project a family's passage onto its reuses.
 
 Seeds are the runs of words both texts share, tiled longest first and found in any order.
 Runs that follow each other in both texts make a chain, and chains close to each other make
@@ -407,11 +408,12 @@ def runs(text: str, values: np.ndarray) -> list[list]:
     return [[text[s:e], int(values[s])] for s, e in zip(cuts, cuts[1:])]
 
 
-def reuse_depth(passage: str, rows, anchor_doc) -> dict:
+def reuse_depth(passage: str, rows, anchor_doc, places: dict | None = None) -> dict:
     """How many documents other than the anchor's share each character of a group's passage.
 
-    Every span of a document in the group's alignments is compared with the passage.
-    `pieces` are the passage cut where that count changes, each with its count.
+    Every span of a document in the group's alignments is compared with the passage, or,
+    for a document in `places` ({filename: [passage as it projects there]}), each of its
+    places. `pieces` are the passage cut where that count changes, each with its count.
     """
     passage = passage or ""
     spans = defaultdict(dict)
@@ -420,6 +422,9 @@ def reuse_depth(passage: str, rows, anchor_doc) -> dict:
             if row[f"{side}_doc_id"] != anchor_doc:
                 span = (row[f"{side}_start_byte"], row[f"{side}_end_byte"])
                 spans[row[f"{side}_filename"]][span] = row[f"{side}_passage"]
+    for filename, texts in (places or {}).items():
+        if filename in spans:
+            spans[filename] = dict(enumerate(texts))
     found = Passage(passage)
     depth = np.zeros(len(passage), np.int32)
     for texts in spans.values():

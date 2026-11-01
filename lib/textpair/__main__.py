@@ -396,7 +396,7 @@ async def run_alignment(params):
 
     # Passage merger
     print("Grouping passages by source...")
-    groups_file = merge_alignments(results_file, count, params.workers)
+    groups_file = merge_alignments(results_file, count, params.workers, params.matching_params.get("context_size", 300))
 
     if params.web_app_config["skip_web_app"] is False:
         if params.graph_params.get("build_graph"):
@@ -525,7 +525,7 @@ async def main():
         groups_file = None
         if params.matching_params["matching_algorithm"] == "sa":  # we merge alignments prior to loading
             print("Grouping passages by source...")
-            groups_file = merge_alignments(params.file, count, params.workers)
+            groups_file = merge_alignments(params.file, count, params.workers, params.matching_params.get("context_size", 300))
         create_web_app(
             params.file,
             params.paths["source"]["metadata_path"],
@@ -570,7 +570,7 @@ async def main():
         groups_file = None
         if params.matching_params["matching_algorithm"] == "sa":  # we merge alignments prior to loading
             print("Grouping passages by source...")
-            groups_file = merge_alignments(params.file, count, params.workers)
+            groups_file = merge_alignments(params.file, count, params.workers, params.matching_params.get("context_size", 300))
         create_web_app(
             params.file,
             params.paths["source"]["metadata_path"],

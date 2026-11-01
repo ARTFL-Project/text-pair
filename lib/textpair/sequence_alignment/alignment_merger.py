@@ -823,8 +823,9 @@ def _segment_plan(results_file: str, count: int, workers: int):
     return segments, _segment_bases(results_file, segments, count)
 
 
-def merge_alignments(results_file: str, count: int, workers: int = 1):
-    """Group alignments into passage families and write the group file"""
+def merge_alignments(results_file: str, count: int, workers: int = 1, context_size: int = 300):
+    """Group alignments into passage families, write the group file, and project each
+    family's passage onto the places that reuse it (family_places)."""
     corpus = read_ends(results_file, count)
     if not corpus[3].shape[0]:
         _status()
@@ -846,6 +847,8 @@ def merge_alignments(results_file: str, count: int, workers: int = 1):
 
     _status()
     print(f"  {groups:,} passage groups, written to {os.path.basename(groups_file)}")
+    from .family_places import project_places  # it needs the group ids just written into the results
+    project_places(results_file, groups_file, workers, context_size)
     return groups_file
 
 

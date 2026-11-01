@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared_text import REUSE_WORD, differences, reuse_depth  # noqa: E402
+from textpair.shared_text import REUSE_WORD, differences, reuse_depth  # noqa: E402
 
 FAILURES = []
 

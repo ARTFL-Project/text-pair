@@ -52,6 +52,7 @@ CHECKS = (
     ("writer_descriptors", "test_writer_descriptors.py", (), False),
     ("passage_extension", "test_passage_extension.py", (), False),
     ("passage_families", "test_passage_families.py", (), False),
+    ("family_places", "test_family_places.py", (), False),
     ("matcher_symmetry", "test_matcher_symmetry.py", (), True),
     ("reference_output", "check_reference_output.py", ("--fixtures",), False),
     # Needs a corpus: there is no fixture-scale binary index to compare against.

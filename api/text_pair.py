@@ -32,7 +32,7 @@ from starlette.responses import Response
 from textpair.web_loader import FACET_TABLES, LENGTH_RANGES, OPEN_LENGTH_RANGE, relation_columns
 from textpair.web_settings import SettingsError, load_app_config
 
-from shared_text import differences, reuse_depth
+from textpair.shared_text import differences, reuse_depth
 
 app = FastAPI()
 app.add_middleware(
@@ -498,6 +498,15 @@ def group_counts(cursor, groups_table: str, group_ids) -> dict[int, int]:
     return {row[0]: row[1] for row in cursor}
 
 
+def as_projected(reuse: dict, place: dict, group: dict) -> dict:
+    """A reuse as its place has the group's passage, facing the group's passage itself."""
+    projected = {**reuse, **{key: value for key, value in group.items() if key.startswith("source_")}}
+    projected.update(target_start_byte=place["passage_start_byte"], target_end_byte=place["passage_end_byte"],
+                     target_context_before=place["context_before"], target_passage=place["passage"],
+                     target_context_after=place["context_after"], shared=place["shared"])
+    return projected
+
+
 def facing(row, side: str) -> dict:
     """An alignment with `side` presented as its target, source and target fields swapped if need be."""
     if side == "target":
@@ -514,14 +523,16 @@ def facing(row, side: str) -> dict:
     return flipped
 
 
-def occurrences(rows, group: dict) -> list[dict]:
+def occurrences(rows, group: dict, places: dict | None = None) -> list[dict]:
     """Every place the group's passage is reused, once each, as an alignment facing it.
 
     Both sides of every alignment count, except the anchor's own document. Overlapping
     spans in one document are one place; its alignment is the one tied most closely to
     the group's passage, which is what the page diffs the reuse against: one with the
     passage itself, else one with another document reusing it, else one with another
-    passage of the anchor's document.
+    passage of the anchor's document. Where the build projected the passage onto the
+    place (`places`: {(filename, start, end): row}), the reuse is the passage as the place
+    has it, facing the group's passage itself.
     """
     anchor_doc = group["source_doc_id"]
     start, end = group["source_start_byte"], group["source_end_byte"]
@@ -544,7 +555,9 @@ def occurrences(rows, group: dict) -> list[dict]:
         for item in spans + [None]:
             if place and (item is None or item[0] >= reach):
                 best = min(place, key=lambda candidate: candidate[2])
-                found.append(facing(best[3], best[4]))
+                reuse = facing(best[3], best[4])
+                projected = (places or {}).get((reuse["target_filename"], place[0][0], reach))
+                found.append(as_projected(reuse, projected, group) if projected and projected["shared"] > 0 else reuse)
                 place, reach = [], -1
             if item is not None:
                 place.append(item)
@@ -868,6 +881,7 @@ def get_passage_group(request: Request, group_id: int):
             raise HTTPException(404, "No such database")
         group_id_type = field_types.get("group_id", "INTEGER").upper()
         groups_table = quote_ident(f"{alignment_table}_groups")
+        places_table = f"{alignment_table}_family_places"
         alignment_table = quote_ident(alignment_table)
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -886,9 +900,18 @@ def get_passage_group(request: Request, group_id: int):
             query = f"SELECT * FROM {alignment_table} WHERE group_id=%s"
         cursor.execute(query, (group_id,))
         rows = cursor.fetchall()
+        # each reuse as the build projected the group's passage onto it, where it did
+        cursor.execute("SELECT to_regclass(%s) IS NOT NULL AS found", (places_table,))
+        places = {}
+        if cursor.fetchone()["found"]:
+            cursor.execute(f"SELECT * FROM {quote_ident(places_table)} WHERE group_id = %s", (group_id,))
+            places = {(p["filename"], p["start_byte"], p["end_byte"]): p for p in cursor.fetchall()}
 
-    reuses = occurrences(rows, original_passage)
-    coverage = reuse_depth(original_passage["source_passage"], rows, anchor_doc)
+    reuses = occurrences(rows, original_passage, places)
+    projected = defaultdict(list)
+    for place in places.values():
+        projected[place["filename"]].append(place["passage"])
+    coverage = reuse_depth(original_passage["source_passage"], rows, anchor_doc, projected)
     passage_list = []
     results = defaultdict(list)
     for passage in reuses:
