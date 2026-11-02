@@ -6,7 +6,7 @@
             <search-arguments></search-arguments>
         </div>
         <div class="row">
-            <div class="col-12 col-lg-9">
+            <div class="col-12">
                 <report-switcher />
             </div>
         </div>

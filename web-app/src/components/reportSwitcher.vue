@@ -1,8 +1,8 @@
 <template>
     <nav class="report-switcher" aria-label="Views of passages">
-        <div class="btn-group segmented" :class="{ many: views.length > 3 }">
+        <div class="btn-group segmented">
             <router-link v-for="view in views" :key="view.name" :to="`${view.path}?${query}`"
-                class="btn btn-outline-secondary" :class="{ active: route.name == view.name, hinted: view.hint, list: view.list }"
+                class="btn btn-outline-secondary" :class="{ active: route.name == view.name, hinted: view.hint }"
                 :aria-current="route.name == view.name ? 'page' : undefined">
                 <svg class="view-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                     <path :d="view.icon" fill="none" stroke="currentColor" :stroke-width="view.stroke || 1.5"
@@ -29,7 +29,6 @@ const reused = {
     prefix: "View all ",
     label: "reused passages",
     hint: "Each reused passage, as it first appears",
-    list: true,
     icon: "M2 3h12M2 6.5h9M2 10h6M2 13.5h3",
 };
 const shared = {
@@ -38,7 +37,6 @@ const shared = {
     prefix: "View all ",
     label: "passage pairs",
     hint: "Each match between two texts, side by side",
-    list: true,
     icon: "M2 3h5M2 6h5M2 9h5M9 3h5M9 6h5M9 9h5M2 12h12",
 };
 // Where passages were grouped into families, the reused passages come first
@@ -100,7 +98,8 @@ const query = computed(() => {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    flex: 1 1 9rem;
+    flex: 1 1 0;
+    min-width: 9rem;
     margin: 0 !important;
     padding: 0.42rem 0.85rem;
     border: 0;
@@ -112,13 +111,9 @@ const query = computed(() => {
     line-height: 1.25;
 }
 
+// Equal widths, on one row while they fit; the views with a line under their names need more room
 .segmented > .btn.hinted {
-    flex-basis: 16rem;
-}
-
-// With more views than fit one row, the two lists of passages take the first row
-.segmented.many > .btn.list {
-    flex-basis: calc(50% - 1px);
+    min-width: 12rem;
 }
 
 .segmented > .btn:hover,
