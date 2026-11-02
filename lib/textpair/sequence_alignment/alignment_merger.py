@@ -6,7 +6,8 @@ most of them cover. A family is then the earliest site of a passage together wit
 sites aligned directly with it. A window running on over several passages counts under
 each of them, and anchors no family of its own. A document in a family only through its
 partners, not aligned with the family's passage itself, stays in it if it holds at least
-half of that passage (family_places).
+half of that passage (family_places); and one an alignment with the passages themselves puts
+in several families stays only in those it holds half the passage of, or the one it holds most of.
 """
 
 import contextlib
@@ -58,7 +59,7 @@ _CONTAIN = 0.8   # a window holding this much of a core, but too long to join, i
 _ADOPT = 0.5     # a site joins the family holding most of its partners once this share are placed
 _LEAD_WORDS = 5  # words a family's passage may start before its core, where one of its reuses starts
 _LEAD_BYTES = 4096  # ... read back no further than this
-_HOLDS = 0.5     # a document not aligned with a family's passage stays when it holds this much of it
+_HOLDS = 0.5     # a document not aligned with a family's passage, or put in several by one alignment with them, stays when it holds this much
 _WORD = re.compile(r"\w+")
 _UNDATED = 9999
 _NONE = -(1 << 62)
@@ -883,6 +884,35 @@ def _place_keys(window_of, list_offsets, list_members, wf, anchor_file, n_window
 
 
 @njit(nogil=True, cache=True)
+def _outheld(keys, place_of, share, n_windows, window_of, list_offsets, list_members, wf, ws, we,
+             p_file, p_start, p_end, holds):
+    """Whether each (family, window) is one an alignment with the family's passage, in its anchor's document, puts
+    the window's document in with other families, while its place there holds less than `holds` of the passage and
+    less than its place in one of the others. Leaving the family takes no other document out of it."""
+    out = np.zeros(keys.shape[0], np.bool_)
+    for k in range(list_offsets.shape[0] - 1):
+        lo, hi = list_offsets[k], list_offsets[k + 1]
+        if hi - lo < 2:
+            continue
+        for e in range(2):
+            w, other = window_of[2 * k + e], window_of[2 * k + 1 - e]
+            best = -1.0
+            for j in range(lo, hi):
+                key = list_members[j] * n_windows + w
+                at = np.searchsorted(keys, key)
+                if at < keys.shape[0] and keys[at] == key:
+                    best = max(best, share[place_of[at]])
+            for j in range(lo, hi):
+                g = list_members[j]
+                key = g * n_windows + w
+                at = np.searchsorted(keys, key)
+                if at < keys.shape[0] and keys[at] == key and share[place_of[at]] < min(holds, best) and \
+                        wf[other] == p_file[g] and ws[other] < p_end[g] and we[other] > p_start[g]:
+                    out[at] = True
+    return out
+
+
+@njit(nogil=True, cache=True)
 def _direct(keys, n_windows, window_of, list_offsets, list_members, wf, ws, we, p_file, p_start, p_end):
     """Whether each (family, window) is aligned with the family's passage itself: an
     alignment of that family has the window at one end and, at the other, the passage
@@ -1018,7 +1048,8 @@ def _homes(f: _Families, orphans, places, alive, passages, workers):
 def settle_families(families: _Families, places_file: str, workers: int = 1, context_size: int = 300) -> dict:
     """Project each family's passage onto its places, and keep in a family only the documents
     aligned with its passage itself or holding at least half of it: an alignment that brought in
-    one that is neither leaves the family. An alignment that leaves every family it had goes to one
+    one that is neither leaves the family. An alignment with the passages themselves in several
+    families leaves those of them its other document holds less than half of, and less of than of another. An alignment that leaves every family it had goes to one
     whose passage both its ends hold, or else is grouped with the others left over into families
     of their own; a family no alignment is left in goes. Writes the places' rows; returns counts."""
     f = families
@@ -1038,11 +1069,13 @@ def settle_families(families: _Families, places_file: str, workers: int = 1, con
     held[place_of[_direct(keys, n_windows, f.window_of, f.list_offsets, f.list_members,
                           f.wf, f.ws, f.we, *passages())]] = True
     gone = ~held & (shown[2] < _HOLDS)
+    outheld = _outheld(keys, place_of, shown[2], n_windows, f.window_of, f.list_offsets, f.list_members,
+                       f.wf, f.ws, f.we, *passages(), _HOLDS)
+    gone_keys = np.union1d(keys[gone[place_of]], keys[outheld])
     counts = dict(left=0, went=0, orphans=0, homed=0, founded=0, joined=0)
-    if gone.any():
+    if gone_keys.size:
         n_families = f.anchors.shape[0]
-        list_offsets, list_members = _without(f.window_of, f.list_offsets, f.list_members,
-                                              keys[gone[place_of]], n_windows)
+        list_offsets, list_members = _without(f.window_of, f.list_offsets, f.list_members, gone_keys, n_windows)
         orphans = np.flatnonzero(np.diff(list_offsets) == 0)
         if orphans.size:
             homes = _homes(f, orphans, (pg, pf, ps, pe), ~gone, passages(), workers)

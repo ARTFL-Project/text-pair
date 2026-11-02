@@ -14,9 +14,10 @@ only ever a target, a window counting for every document behind it (six identica
 of a passage outweighing two of part of it), a group's passage being its anchor's, from
 where one of its reuses starts when that is up to five words before, a document in a
 family only through a partner staying there only if it holds half its passage or more --
-as must one drawn in through partners whose own site the family took -- and an alignment
-that leaves every family it had joining one whose passage both its ends hold, or else
-forming a family of its own. Serial and parallel runs must then write the same files.
+as must one drawn in through partners whose own site the family took, and one an alignment
+with the passages puts in several families, of each but the one it holds most of -- and an alignment that
+leaves every family it had joining one whose passage both its ends hold, or else forming
+a family of its own. Serial and parallel runs must then write the same files.
 """
 import os
 import random
@@ -88,6 +89,9 @@ HALF = P1.index(" ", 100) + 1
 # phrase with DM's quotation and the words before it, as Boissy's "le bon sens ... autre chose"
 # shares with Mornet's quotation of Descartes' "le bon sens est la chose du monde"
 DP, DZ = prose(200, 11), prose(60, 12)
+# WA's two passages, one after the other, and WJ, which quotes the first alone in a window over both
+W1, W2 = prose(200, 15), prose(200, 16)
+DDT = prose(1000, 21)
 # a phrase inside two passages, one in each of two families, the M ones with a family of its own too
 T, X, Y = prose(120, 5), prose(140, 6), prose(140, 7)
 X, Y = f"{X} {T} {prose(140, 8)}", f"{Y} {T} {prose(140, 9)}"
@@ -106,6 +110,13 @@ def build(root):
     texts.update({"DA": DP + " " + FILLER, "DM": DZ + " " + DP + " " + FILLER,
                   "DB": prose(80, 13) + " " + FILLER, "DC": prose(80, 14) + " " + FILLER})
     texts.update({name: DP + " " + FILLER for name in ("D1", "D2", "D3")})
+    # DD's opening, quoted alone by P1 to P5 and GG, and a stretch of the long window over it that BR quotes
+    texts.update({"DD": DDT, "BR": DDT[235:447] + " " + FILLER, "P5": DDT[172:265] + " " + FILLER,
+                  "GG": prose(323, 22) + DDT[172:221] + " " + prose(300, 23)})
+    texts.update({name: DDT[172:221] + " " + FILLER for name in ("P1", "P2", "P3", "P4")})
+    texts.update({"WA": W1 + " " + W2 + " " + FILLER, "WJ": W1 + " " + prose(120, 17) + " " + FILLER})
+    texts.update({name: W1 + " " + FILLER for name in ("WB1", "WB2")})
+    texts.update({name: W2 + " " + FILLER for name in ("WC1", "WC2")})
     for name, year in (("A", 1600), ("B", 1650), ("C", 1700), ("D", 1750),
                        ("E", 1600), ("F", 1700), ("G", 1700), ("H", 1700), ("I", 1700), ("J", 1700),
                        ("K", 1600), ("L", 1700), ("M", 1700), ("N", 1700), ("O", 1700),
@@ -122,7 +133,8 @@ def build(root):
                        ("LF", 1700), ("MA", 1550), ("MG", 1700), ("MH", 1700), ("MX", 1600), ("MB", 1700),
                        ("MC", 1700), ("MD", 1650), ("ME", 1700), ("MF", 1700),
                        ("DA", 1600), ("DB", 1700), ("DC", 1750), ("DM", 1900), ("D1", 1950),
-                       ("D2", 1950), ("D3", 1950)):
+                       ("D2", 1950), ("D3", 1950), ("WA", 1600), ("WB1", 1700), ("WB2", 1700),
+                       ("WC1", 1700), ("WC2", 1700), ("WJ", 1750)):
         c.doc(name, year, text=texts.get(name))
     # one passage in A, reached through three windows of different extents
     c.align("A", 100, 400, "B", 0, 300)
@@ -227,6 +239,13 @@ def build(root):
     for other in ("DB", "DC"):
         c.align(other, 0, 80, "DM", z - 20, z + 60)
     c.align("DB", 0, 80, "DC", 0, 80)
+    # WA's passages, each quoted by two documents, and WJ's quotation of the first, aligned over both
+    w1, w2 = len(W1), len(W2)
+    for other in ("WB1", "WB2"):
+        c.align("WA", 0, w1, other, 0, w1)
+    for other in ("WC1", "WC2"):
+        c.align("WA", w1 + 1, w1 + 1 + w2, other, 0, w2)
+    c.align("WA", 0, w1 + 1 + w2, "WJ", 0, w1 + 60)
     # S is the earliest occurrence but only ever a target
     c.align("T", 0, 200, "S", 0, 200)
     c.align("T", 0, 200, "U", 0, 200)
@@ -347,6 +366,10 @@ def main():
               "holding none of it, leaves it", len(dd) == 1 and not dd & db_ and rows[next(iter(dd))]["count"] == 5)
         check("... and the alignments that drew it in form a family of their own",
               len(db_) == 1 and families_of("DC", 0, 80) == db_ and rows[next(iter(db_))]["source_filename"] == path["DB"])
+        w_first, w_second = families_of("WA", 0, len(W1)), families_of("WA", len(W1) + 1, len(W1) + 1 + len(W2))
+        check("a document an alignment puts in several families stays only in the one whose passage it holds",
+              families_of("WA", 0, len(W1) + 1 + len(W2)) == w_first and len(w_first) == 1 and not w_first & w_second
+              and rows[next(iter(w_first))]["count"] == 4 and rows[next(iter(w_second))]["count"] == 3)
         check("every alignment is in a family", all(r["group_id"] for r in results))
         check("every row has the same fields in the same order", len({tuple(r) for r in rows.values()}) == 1)
 
