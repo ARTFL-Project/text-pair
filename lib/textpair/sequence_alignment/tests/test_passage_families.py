@@ -262,7 +262,7 @@ def run(corpus, root, workers):
     os.makedirs(work)
     path = os.path.join(work, "alignments.jsonl.lz4")
     corpus.write(path)
-    groups_file = am.merge_alignments(path, len(corpus.records), workers)
+    groups_file = am.merge_alignments(path, len(corpus.records), workers, "300")  # as a config gives it
     with lz4.frame.open(path) as handle:
         results = [orjson.loads(line) for line in handle]
     with open(groups_file, "rb") as handle:

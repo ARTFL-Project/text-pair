@@ -1148,6 +1148,7 @@ def settle_families(families: _Families, places_file: str, workers: int = 1, con
 def merge_alignments(results_file: str, count: int, workers: int = 1, context_size: int = 300):
     """Group alignments into passage families, settle them on the places that reuse their
     passages (family_places), and write the group and places files."""
+    context_size = int(context_size)  # a config gives it as text
     corpus = read_ends(results_file, count)
     if not corpus[3].shape[0]:
         _status()
