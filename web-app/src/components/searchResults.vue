@@ -1,8 +1,8 @@
 <template>
     <div class="mt-3">
-        <h2 class="visually-hidden">Shared passages</h2>
+        <h2 class="visually-hidden">Passage pairs</h2>
         <div class="row" style="padding: 0 0.75rem">
-            <div class="m-4" style="font-size: 120%" v-if="error">No shared passages for your query</div>
+            <div class="m-4" style="font-size: 120%" v-if="error">No passage pairs for your query</div>
             <search-arguments></search-arguments>
         </div>
         <div class="row">
@@ -22,12 +22,12 @@
                     v-on:before-enter="beforeEnter" v-on:enter="enter">
                     <li class="card pair-card mb-3 shadow-1" v-for="(alignment, index) in results.alignments"
                         :key="results.start_position + index + 1" v-bind:data-index="index">
-                        <h3 class="visually-hidden">Shared passage {{ results.start_position + index + 1 }}</h3>
+                        <h3 class="visually-hidden">Passage pair {{ results.start_position + index + 1 }}</h3>
                         <passage-pair :alignment="alignment" :index="index" :diffed="false"
                             :number="results.start_position + index + 1"></passage-pair>
                     </li>
                 </transition-group>
-                <nav aria-label="Pages of shared passages" v-if="done">
+                <nav aria-label="Pages of passage pairs" v-if="done">
                     <ul class="pagination justify-content-center mb-4">
                         <li class="page-item" v-if="results.page > 1">
                             <button type="button" class="page-link" @click="previousPage()" aria-label="Previous page">
@@ -86,8 +86,8 @@ function fetchData() {
         .then((response) => {
             loading.value = false;
             if (!response.data.alignments || !response.data.alignments.length) {
-                error.value = "No shared passages";
-                emitter.emit("announce", "No shared passages for your query");
+                error.value = "No passage pairs";
+                emitter.emit("announce", "No passage pairs for your query");
                 return;
             }
             results.value = response.data;
@@ -109,7 +109,7 @@ function fetchData() {
         .catch((err) => {
             loading.value = false;
             error.value = err.toString();
-            emitter.emit("announce", "No shared passages for your query");
+            emitter.emit("announce", "No passage pairs for your query");
             console.log(err);
         });
 }

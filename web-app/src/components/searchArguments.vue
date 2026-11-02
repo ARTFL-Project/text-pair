@@ -81,14 +81,14 @@ import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
 import { paramsToUrl, plainText, unquote } from "../utils.js";
 
-// What the view counts: shared passages, the pairs of texts, or reused passages, the families
+// What the view counts: passage pairs, or reused passages, the families
 const props = defineProps({ unit: { type: String, default: "shared" } });
 
 const route = useRoute();
 const router = useRouter();
 const counts = ref("...");
 const single = ref(false);
-const nouns = { shared: ["shared passage", "shared passages"], reused: ["reused passage", "reused passages"] };
+const nouns = { shared: ["passage pair", "passage pairs"], reused: ["reused passage", "reused passages"] };
 const noun = computed(() => nouns[props.unit][single.value ? 0 : 1]);
 // How many reuses of the reused passages the search counts, as the timeline and the facets count them
 const reuses = ref("");

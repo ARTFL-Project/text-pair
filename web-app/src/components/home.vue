@@ -25,7 +25,7 @@
                 </ul>
                 <p class="stats-source">
                     Built from
-                    <router-link :to="views.shared">{{ stats.pairs_count.toLocaleString() }} shared passages</router-link>:
+                    <router-link :to="views.shared">{{ stats.pairs_count.toLocaleString() }} passage pairs</router-link>:
                     pairs of documents with a passage in common.
                 </p>
             </template>
@@ -33,7 +33,7 @@
                 <li>
                     <router-link class="figure" :to="views.shared"
                         aria-describedby="stats-shared">{{ stats.pairs_count.toLocaleString() }}</router-link>
-                    <span class="figure-caption" id="stats-shared">shared passages in this database</span>
+                    <span class="figure-caption" id="stats-shared">passage pairs in this database</span>
                 </li>
             </ul>
         </div>

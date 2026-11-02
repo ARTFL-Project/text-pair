@@ -8,7 +8,7 @@
         <report-switcher></report-switcher>
         <div class="card time-card shadow-1">
             <div id="time-series-options">
-                <span id="time-interval-label">{{ families ? "Group by" : "Group shared passages by" }}</span>
+                <span id="time-interval-label">{{ families ? "Group by" : "Group passage pairs by" }}</span>
                 <div class="interval-dropdown" @focusout="onDropdownFocusout" @keydown.esc="closeDropdown">
                     <button type="button" id="time-interval-toggle" ref="intervalToggle"
                         class="btn btn-sm btn-light rounded-0" aria-labelledby="time-interval-label time-interval-toggle"
@@ -177,7 +177,7 @@ const router = useRouter();
 // Where passages form families, the timeline counts them: each once by when it was first written, and its
 // reuses, each reusing text once, by when they were made. Otherwise it counts the pairs of texts.
 const families = globalConfig.hasPassageFamilies;
-const unitPlural = families ? "reused passages" : "shared passages";
+const unitPlural = families ? "reused passages" : "passage pairs";
 const sideNouns = (label) => [`${plainText(label)} passage`, `${plainText(label)} passages`];
 const panels = reactive(
     families

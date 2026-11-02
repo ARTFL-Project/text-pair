@@ -80,7 +80,7 @@ import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
 import { paramsToUrl } from "../utils.js";
 
-// The counts of shared passages (pairs of texts), or of reused passages (families, as first found or found again)
+// The counts of passage pairs, or of reused passages (families, as first found or found again)
 const props = defineProps({ mode: { type: String, default: "pairs" } });
 
 const route = useRoute();

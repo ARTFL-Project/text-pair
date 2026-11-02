@@ -144,7 +144,7 @@
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h2 class="modal-title fs-5" id="passage-pairs-title">Shared passages</h2>
+                        <h2 class="modal-title fs-5" id="passage-pairs-title">Passage pairs</h2>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <ul class="list-group">
@@ -730,7 +730,7 @@ function getAlignments(passage) {
         .then((response) => {
             if (!modalElement.value) return;
             passagePairs.value = response.data.passages;
-            emitter.emit("announce", `Showing ${plural(passagePairs.value.length, "shared passage")}`);
+            emitter.emit("announce", `Showing ${plural(passagePairs.value.length, "passage pair")}`);
             modal = Modal.getOrCreateInstance(modalElement.value);
             modal.show();
         })
