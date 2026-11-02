@@ -8,7 +8,7 @@ which `tests/check_tracing.py` checks by comparing the alignments they produce.
 
 One file per traced pair lands in `<output_path>/debug_output`, named
 `<source_doc_id>_<target_doc_id>`, holding a block per kept or rejected passage and
-closing lines when merging or coalescing removed passages. `ngram_index` resolves an
+closing lines when re-seeding, merging or coalescing changed passages. `ngram_index` resolves an
 ngram's int32 key to its text; without it the keys cannot be named and the ngram lines
 come out empty.
 
@@ -90,13 +90,27 @@ class Corpus:
     """The loaded ngram arrays, with the lookups the trace needs off the hot path."""
 
     def __init__(self, key_offsets, ngram_keys, position_offsets, ngram_indices,
-                 start_bytes, end_bytes):
+                 start_bytes, end_bytes, words=None):
         self.key_offsets = key_offsets
         self.ngram_keys = ngram_keys
         self.position_offsets = position_offsets
         self.ngram_indices = ngram_indices
         self.start_bytes = start_bytes
         self.end_bytes = end_bytes
+        empty = np.empty(0, np.int32)
+        self.words = words or (np.zeros(key_offsets.shape[0], np.int64), empty, empty)
+
+    def reseeding(self, source, target):
+        """matching.align_pair's re-seeding arguments for the pair."""
+        word_offsets, word_keys, index_at = self.words
+
+        def at(doc):
+            lo = self.position_offsets[self.key_offsets[doc] + doc]
+            hi = self.position_offsets[self.key_offsets[doc + 1] + doc]
+            return index_at[lo:hi]
+        return (word_keys[word_offsets[source]:word_offsets[source + 1]],
+                word_keys[word_offsets[target]:word_offsets[target + 1]],
+                at(source), at(target), self.start_bytes, self.end_bytes)
 
     def keys(self, doc):
         return self.ngram_keys[self.key_offsets[doc]:self.key_offsets[doc + 1]]
@@ -320,19 +334,20 @@ def _walk(match, n, params, floor, source_first=True):
     return rows, blocks, hidden, longest
 
 
-def pair_rows(match, n, params, floor, source_first=True):
-    """Mirror of matching.align_pair: the chains and both anchored scans, each merged,
-    then coalesced.
+def pair_rows(match, n, params, floor, source_first=True, reseeding=None):
+    """Mirror of matching.align_pair: the chains and both anchored scans, each re-seeded
+    (with `reseeding`, Corpus.reseeding's arguments) and merged, then coalesced.
 
-    Returns (rows, blocks, hidden, merged_away, coalesced), the last two counting the
-    passages merging and coalescing folded into others.
+    Returns (rows, blocks, hidden, merged_away, coalesced, reseeded), merged_away and
+    coalesced counting the passages merging and coalescing folded into others, reseeded
+    those re-seeding moved an end of.
     """
     (source_indices, source_start_bytes, source_end_bytes,
      target_indices, target_start_bytes, target_end_bytes, match_keys) = match
     rows, blocks, hidden, longest = _walk(match, n, params, floor, source_first)
     if (longest < params["minimum_matching_ngrams"]
             and longest < params["minimum_matching_ngrams_in_window"]):
-        return [], blocks, hidden, 0, 0
+        return [], blocks, hidden, 0, 0, 0
     sets = [rows]
     for mirrored in (False, True):
         runs = []
@@ -346,7 +361,22 @@ def pair_rows(match, n, params, floor, source_first=True):
                          len(members)))
             blocks.append((True,) + runs[-1][:8] + ([match_keys[i] for i in members],
                           ANCHORED_TARGET if mirrored else ANCHORED_SOURCE))
-        sets.append(sorted(runs, key=lambda row: (row[2], row[6])))
+        sets.append(runs)
+    reseeded = 0
+    every = [row for rows in sets for row in rows]
+    if reseeding is not None and every and reseeding[0].shape[0] and reseeding[1].shape[0]:
+        neighbours = np.array(every, np.int32)
+        for k, rows in enumerate(sets):
+            if not rows:
+                continue
+            moved = np.array(rows, np.int32)
+            matching.reseed(moved, len(rows), neighbours, len(every), *reseeding,
+                            params["max_gap"], params["minimum_matching_ngrams"], source_first)
+            moved = [tuple(int(v) for v in row) for row in moved]
+            reseeded += sum(a != b for a, b in zip(moved, rows))
+            sets[k] = moved
+    # in the order _merged sorts them, which a moved start can change
+    sets = [sorted(rows, key=lambda row: (row[2], row[6])) for rows in sets]
     merged_away = 0
     if (params["merge_passages_on_byte_distance"]
             or params["merge_passages_on_ngram_distance"]):
@@ -362,7 +392,7 @@ def pair_rows(match, n, params, floor, source_first=True):
             sets[k] = [tuple(int(v) for v in merged[i]) for i in range(after)]
     combined = [row for rows in sets for row in rows]
     rows = _coalesce(combined)
-    return rows, blocks, hidden, merged_away, len(combined) - len(rows)
+    return rows, blocks, hidden, merged_away, len(combined) - len(rows), reseeded
 
 
 def _anchored_scan(source_indices, target_indices, n, params, mirrored):
@@ -529,9 +559,11 @@ def write_traces(output_path, docs, corpus, params, same_doc, n_sources, ngram_i
             continue
         source_first = (document_rank is None
                         or document_rank[source] < document_rank[target])
-        _rows, blocks, hidden, merged_away, coalesced = pair_rows(match, n, params, floor,
-                                                                  source_first)
+        _rows, blocks, hidden, merged_away, coalesced, reseeded = pair_rows(
+            match, n, params, floor, source_first, corpus.reseeding(source, target))
         parts = [_render(block, ngram_index) for block in blocks]
+        if reseeded:
+            parts.append(f"\n\n{reseeded} passage(s) extended by ngrams skipping a word beside them")
         if merged_away:
             parts.append(f"\n\n{merged_away} passage(s) merged with previous passage")
         if coalesced:

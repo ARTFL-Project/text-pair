@@ -377,6 +377,11 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
     try:
         key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes, end_bytes = \
             ngram_loader.load_corpus(paths, threads, show_progress=True)
+        word_offsets, word_keys = ngram_loader.load_words(paths, key_offsets, position_offsets,
+                                                          threads)
+        index_at = (ngram_loader.index_positions(key_offsets, position_offsets, ngram_indices)
+                    if word_keys.shape[0] else np.empty(0, np.int32))
+        words = (word_offsets, word_keys, index_at)
         posting_keys, posting_slots, bucket_starts = inverted_index.build_postings(ngram_keys, threads)
         posting_docs, sweep_starts, per_source = inverted_index.index_postings(
             posting_keys, posting_slots, bucket_starts, key_offsets, n_sources, same_doc, threads)
@@ -411,7 +416,7 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
                                per_source, same_doc, position_offsets, ngram_indices,
                                start_bytes, end_bytes,
                                params["match_threads"], params, on_result, progress,
-                               document_rank)
+                               document_rank, words)
         # Matching is done, so the threads it held are idle: give the writers the whole
         # budget for whatever they still have queued.
         pool.expand()
@@ -425,7 +430,7 @@ def _run_combination(params, source_docs, target_docs, source_metadata, target_m
             written = tracing.write_traces(
                 trace["output_path"], docs,
                 tracing.Corpus(key_offsets, ngram_keys, position_offsets,
-                                    ngram_indices, start_bytes, end_bytes),
+                                    ngram_indices, start_bytes, end_bytes, words),
                 params, same_doc, n_sources, trace["ngram_index"], trace["pairs"],
                 document_rank)
             print(f"{written} pair(s) written.", flush=True)

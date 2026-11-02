@@ -320,10 +320,11 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
                   position_offsets, ngram_indices, start_bytes, end_bytes,
                   min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
                   min_matching, min_in_window, merge_byte, merge_ngram, multiplier,
-                  document_rank):
+                  document_rank, word_offsets, word_keys, index_at):
     """Match source `s` against target slots [t_lo, t_hi) of the CSR `sweep_source` built:
     apply the two filters, then expand each surviving pair's matches and hand them to
-    matching.align_pair.
+    matching.align_pair, with the two documents' words to re-seed from
+    (ngram_loader.load_words and index_positions; empty for none).
 
     Targets are independent, so a source's targets can be cut into contiguous ranges and
     run on separate threads; concatenating the ranges in ascending t reproduces the
@@ -371,6 +372,9 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
     stats = np.zeros(6, np.int64)
 
     ns = key_offsets[s + 1] - key_offsets[s]   # sourceFile.NgramLength (distinct keys)
+    source_words = word_keys[word_offsets[s]:word_offsets[s + 1]]
+    source_at = index_at[position_offsets[key_offsets[s] + s]:
+                         position_offsets[key_offsets[s + 1] + s]]
     for t in range(t_lo, t_hi):
         q = target_offsets[t]
         r = target_offsets[t + 1]
@@ -477,6 +481,9 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
             start_bytes, end_bytes,
             window_size, max_gap, flex_gap, min_matching, min_in_window,
             merge_byte, merge_ngram, multiplier, document_rank[s] < document_rank[t],
+            source_words, word_keys[word_offsets[t]:word_offsets[t + 1]], source_at,
+            index_at[position_offsets[key_offsets[t] + t]:position_offsets[key_offsets[t + 1] + t]],
+            start_bytes, end_bytes,
             chain_best, chain_parent, chain_used, chain_members, chain_key,
             chain_order, chain_spans, chain_out)
         if n_alignments > 0:
@@ -501,7 +508,7 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
                  position_offsets, ngram_indices, start_bytes, end_bytes,
                  min_in_docs, dup_threshold, window_size, max_gap, flex_gap,
                  min_matching, min_in_window, merge_byte, merge_ngram, multiplier,
-                 document_rank):
+                 document_rank, word_offsets, word_keys, index_at):
     """Own one source document end to end: sweep it, then match every one of its targets.
 
     run_match cuts the second half into target ranges for the few sources big enough to
@@ -515,7 +522,7 @@ def align_source(s, exclude_slot, ngram_keys, key_offsets, sweep_starts, posting
                          target_slots, position_offsets, ngram_indices, start_bytes,
                          end_bytes, min_in_docs, dup_threshold, window_size, max_gap,
                          flex_gap, min_matching, min_in_window, merge_byte, merge_ngram,
-                         multiplier, document_rank)
+                         multiplier, document_rank, word_offsets, word_keys, index_at)
 
 
 # ------------------------------------------------------- threaded phase drivers
@@ -650,7 +657,7 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
               posting_docs, per_source,
               same_doc, position_offsets, ngram_indices, start_bytes, end_bytes,
               threads, params, on_result,
-              progress=None, document_rank=None):
+              progress=None, document_rank=None, words=None):
     """Compare every source document with the documents it is paired with, longest first.
 
     One source per task: its emissions are built, grouped and matched inside the task, so
@@ -668,11 +675,14 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
     what makes its ETA usable, since sources run longest-first.
 
     `document_rank` orders the documents by identity rather than by slot, for the
-    kernels' tie-breaks; slot order when not given.
+    kernels' tie-breaks; slot order when not given. `words` is (word_offsets, word_keys,
+    index_at) to re-seed passages from; none when not given.
     """
     n_docs = key_offsets.shape[0] - 1
     if document_rank is None:
         document_rank = np.arange(n_docs, dtype=np.int32)
+    if words is None:
+        words = (np.zeros(n_docs + 1, np.int64), np.empty(0, np.int32), np.empty(0, np.int32))
     live = np.nonzero(per_source > 0)[0]
     order = live[np.argsort(-per_source[live], kind="stable")]
     min_in_docs = params["minimum_matching_ngrams_in_docs"]
@@ -682,7 +692,7 @@ def run_match(ngram_keys, key_offsets, sweep_starts, posting_keys, posting_slots
             params["minimum_matching_ngrams"], params["minimum_matching_ngrams_in_window"],
             params["merge_passages_on_byte_distance"],
             params["merge_passages_on_ngram_distance"],
-            params["passage_distance_multiplier"], document_rank)
+            params["passage_distance_multiplier"], document_rank, *words)
     local = threading.local()
     n_tasks = order.shape[0]
     done = 0
@@ -861,11 +871,13 @@ def warmup():
                         posting_slots, posting_docs,
                         counts, offsets, cursors,
                         one, one, positions, ones, ones, ones,
-                        1, 200.0, 30, 15, False, 1, 1, True, True, 0.5, ranks)
+                        1, 200.0, 30, 15, False, 1, 1, True, True, 0.5, ranks,
+                        np.zeros(3, np.int64), np.empty(0, np.int32), np.empty(0, np.int32))
     # run_match calls these two directly, so each needs its own entry point compiled.
     sweep_source(0, -1, keys, key_offsets, sweep_starts, posting_keys, posting_slots,
                  posting_docs, counts, offsets, cursors, one, one)
     target_work(0, 0, 2, key_offsets, offsets, one, one, positions, 1, 200.0,
                 np.zeros(2, np.int64))
     align_targets(0, 0, 2, key_offsets, offsets, one, one, positions, ones, ones, ones,
-                  1, 200.0, 30, 15, False, 1, 1, True, True, 0.5, ranks)
+                  1, 200.0, 30, 15, False, 1, 1, True, True, 0.5, ranks,
+                  np.zeros(3, np.int64), np.empty(0, np.int32), np.empty(0, np.int32))

@@ -56,6 +56,9 @@ class PreprocessConfig:
     # the reader interned its tokens, keys are hashed from the forms directly
     # and no n-gram string is ever built.
     keep_ngram_text: bool = True
+    # Whether each word's key is kept as well, for the matcher to re-seed from. Only
+    # contiguous n-grams in document order have word i as the first of n-gram i.
+    keep_word_keys: bool = False
     ngram_gap: int = 0
     ngram_word_order: bool = True
 

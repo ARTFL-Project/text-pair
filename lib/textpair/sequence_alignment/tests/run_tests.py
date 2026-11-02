@@ -51,6 +51,7 @@ CHECKS = (
     ("banality_parallel", "test_banality_parallel.py", (), False),
     ("writer_descriptors", "test_writer_descriptors.py", (), False),
     ("passage_extension", "test_passage_extension.py", (), False),
+    ("reseeding", "test_reseeding.py", (), False),
     ("passage_families", "test_passage_families.py", (), False),
     ("family_places", "test_family_places.py", (), False),
     ("matcher_symmetry", "test_matcher_symmetry.py", (), True),

@@ -13,6 +13,10 @@ them. Generation collects a document's ngrams in order and both writers sort key
 stably, so that order is ascending by ngram index. `inverted_index.align_source` depends on it
 to order a pair's matches without sorting them, and `tests/test_match_order.py` asserts
 it.
+
+`load_words` reads the words beside each ngram file (`words/` next to `ngrams/`), which
+the matcher re-seeds passages from, and `index_positions` maps each document's ngram
+indices to their positions in those arrays.
 """
 import math
 import mmap
@@ -266,6 +270,65 @@ def load_corpus(paths, threads, show_progress=False):
             bar.update(1)
     bar.close()
     return key_offsets, ngram_keys, position_offsets, ngram_indices, start_bytes, end_bytes
+
+
+def word_path(path):
+    """A document's words file: the same name in `words/`, beside its ngram file's directory."""
+    directory, name = os.path.split(path)
+    return os.path.join(os.path.dirname(directory), "words", name)
+
+
+def load_words(paths, key_offsets, position_offsets, threads):
+    """Each document's word keys, concatenated: (word_offsets int64[N+1], word_keys int32[W]).
+
+    A document without a words file, or whose file does not hold two words more than it
+    has ngrams, has no words, and is not re-seeded.
+    """
+    n = len(paths)
+    counts = np.zeros(n, np.int64)
+
+    def size(i):
+        if not is_binary(paths[i]):
+            return
+        try:
+            with open(word_path(paths[i]), "rb") as handle:
+                count = ngram_binary.words_count(handle.read(ngram_binary.ORDER_HEADER_SIZE))
+        except OSError:
+            return
+        ngrams = position_offsets[key_offsets[i + 1] + i] - position_offsets[key_offsets[i] + i]
+        if ngrams and count == ngrams + 2:
+            counts[i] = count
+
+    with ThreadPoolExecutor(threads) as pool:
+        list(pool.map(size, range(n)))
+    word_offsets = np.zeros(n + 1, np.int64)
+    np.cumsum(counts, out=word_offsets[1:])
+    word_keys = np.empty(int(word_offsets[-1]), np.int32)
+
+    def read(i):
+        if counts[i]:
+            with open(word_path(paths[i]), "rb") as handle:
+                word_keys[word_offsets[i]:word_offsets[i + 1]] = ngram_binary.word_keys(
+                    handle.read(), paths[i])
+
+    with ThreadPoolExecutor(threads) as pool:
+        list(pool.map(read, range(n)))
+    return word_offsets, word_keys
+
+
+@njit(nogil=True, cache=True)
+def index_positions(key_offsets, position_offsets, ngram_indices):
+    """For each document's ngram index, at the document's first position plus the index,
+    the position holding it in ngram_indices, start_bytes and end_bytes; -1 if none does."""
+    out = np.full(ngram_indices.shape[0], -1, np.int32)
+    for d in range(key_offsets.shape[0] - 1):
+        base = position_offsets[key_offsets[d] + d]
+        end = position_offsets[key_offsets[d + 1] + d]
+        for p in range(base, end):
+            index = ngram_indices[p]
+            if 0 <= index < end - base:
+                out[base + index] = p
+    return out
 
 
 def warmup():

@@ -13,8 +13,11 @@ index. Both are checked here directly rather than against the old output.
 import sys
 from itertools import combinations
 
+import numpy as np
+from mmh3 import hash64
+
 from textpair.preprocessing import ngrams
-from textpair.preprocessing.tokens import TextObject
+from textpair.preprocessing.tokens import FormTable, TextObject
 
 FAILURES = []
 
@@ -137,6 +140,27 @@ def test_duplicate_forms_in_window_collapse():
        f"{[r for r in emitted if emitted.count(r) > 1]}")
     ok("the repeated form appears once", [f for f, _, _ in emitted].count("ou_le_son") == 1,
        f"{[f for f, _, _ in emitted]}")
+
+
+def test_word_keys_are_each_words_hash():
+    """Asked for, word keys are what a one-word n-gram's key would be, word i the first
+    of n-gram i, whether the n-gram strings are built or only their keys."""
+    text_object = TextObject(forms=["a", "", "b", "c", "b"], start_bytes=[0, 10, 20, 30, 40],
+                             end_bytes=[5, 15, 25, 35, 45], metadata={})
+    want = [hash64(form)[0] for form in ("a", "b", "c", "b")]
+    result = ngrams.generate(text_object, size=3, window=3, word_order=True, want_words=True)
+    check("word keys over the surviving tokens", list(result.word_keys), want)
+    interned = words(4)
+    interned.forms = ["a", "b", "c", "b"]
+    interned.form_table = FormTable.build(["a", "b", "c"])
+    interned.form_ids = np.array([0, 1, 2, 1], dtype=np.int32)
+    result = ngrams.generate(interned, size=3, window=3, word_order=True, want_text=False,
+                             want_words=True)
+    check("... and from interned forms", list(result.word_keys), want)
+    check("not asked for, none", ngrams.generate(words(4), size=3, window=3,
+                                                 word_order=True).word_keys, None)
+    check("nor for skipgrams", ngrams.generate(words(6), size=3, window=4, word_order=True,
+                                               want_words=True).word_keys, None)
 
 
 def main():

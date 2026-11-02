@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Binary columnar per-document files: the n-gram index, and n-grams in order.
+"""Binary columnar per-document files: the n-gram index, n-grams in order, and words.
 
 Both replace a JSON file so a reader can mmap instead of parse. Little-endian
 throughout.
@@ -22,6 +22,16 @@ filter reads by byte range:
     n        int64
     keys     int64[n]           ngram hashes, in ngram-index order
     sb       int32[n]           start byte, ascending
+
+`words/{doc_id}.bin` -- the words the n-grams are made of, word i being the first of
+n-gram i, which the matcher re-seeds from near a passage's ends:
+
+    magic    8 bytes            b"TPWD0001"
+    n        int64
+    keys     int32[n]           the low 32 bits of each normalized word's hash
+
+Words are only compared with words a few apart in another document, so 32 bits are
+plenty.
 
 Headers are 24 and 16 bytes, both multiples of 8, and the int64 keys column comes first
 in each, so every column starts on its own alignment in a page-aligned mmap and
@@ -55,6 +65,7 @@ LEGACY_MAGIC = b"TPNG0001"          # same layout, int32 keys
 HEADER_SIZE = 24
 ORDER_MAGIC = b"TPIO0001"
 ORDER_HEADER_SIZE = 16
+WORDS_MAGIC = b"TPWD0001"
 _I4 = np.dtype("<i4")
 _I8 = np.dtype("<i8")
 _HEADER = struct.Struct("<8sqq")
@@ -205,6 +216,39 @@ def order_columns(buffer, path=""):
     keys = np.frombuffer(buffer, _I8, count, ORDER_HEADER_SIZE)
     start_bytes = np.frombuffer(buffer, _I4, count, ORDER_HEADER_SIZE + 8 * count)
     return keys, start_bytes
+
+
+# ------------------------------------------------------------------ words
+
+
+def dumps_words(keys):
+    """Serialize a document's word keys, in order."""
+    keys = np.asarray(keys, np.int64).astype(_I4)  # wraps to the low 32 bits
+    return _ORDER_HEADER.pack(WORDS_MAGIC, keys.shape[0]) + keys.tobytes()
+
+
+def write_words(path, keys):
+    """Write one document's word keys to `path`."""
+    with open(path, "wb") as binary_file:
+        binary_file.write(dumps_words(keys))
+
+
+def words_count(head):
+    """The number of words a words file's header gives, or -1 if it is not one."""
+    if len(head) < ORDER_HEADER_SIZE:
+        return -1
+    magic, count = _ORDER_HEADER.unpack_from(head, 0)
+    return count if magic == WORDS_MAGIC else -1
+
+
+def word_keys(buffer, path=""):
+    """A words file's keys, as a zero-copy view into an mmap or bytes buffer."""
+    if len(buffer) < ORDER_HEADER_SIZE:
+        raise ValueError(f"truncated words file: {path or '<buffer>'}")
+    magic, count = _ORDER_HEADER.unpack_from(buffer, 0)
+    if magic != WORDS_MAGIC or count < 0 or len(buffer) < ORDER_HEADER_SIZE + 4 * count:
+        raise ValueError(f"{path or '<buffer>'} is not a words file")
+    return np.frombuffer(buffer, _I4, count, ORDER_HEADER_SIZE)
 
 
 def convert_file(json_path, binary_path):

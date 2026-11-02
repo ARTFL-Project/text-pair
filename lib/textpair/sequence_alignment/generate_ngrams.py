@@ -111,6 +111,7 @@ class Ngrams:
         # shell break (dangerously, for rm -rf) on paths containing spaces.
         shutil.rmtree(os.path.join(output_path, "ngrams"), ignore_errors=True)
         shutil.rmtree(os.path.join(output_path, "ngrams_in_order"), ignore_errors=True)
+        shutil.rmtree(os.path.join(output_path, "words"), ignore_errors=True)
         os.makedirs(os.path.join(output_path, "ngrams"), exist_ok=True)
         if self.debug:
             os.makedirs(os.path.join(output_path, "debug"), exist_ok=True)
@@ -118,6 +119,10 @@ class Ngrams:
         os.makedirs(os.path.join(output_path, "index"), exist_ok=True)
         os.makedirs(os.path.join(output_path, "config"), exist_ok=True)
         os.makedirs(os.path.join(output_path, "ngrams_in_order"), exist_ok=True)
+        # word i is the first of n-gram i only for contiguous n-grams in document order
+        keep_words = self.config["gap"] == 0 and bool(self.config["word_order"])
+        if keep_words:
+            os.makedirs(os.path.join(output_path, "words"), exist_ok=True)
         # temp/ holds the n-gram text, which only index.tab needs, which in turn
         # only the aligner's --debug tracer reads. Writing it means a sort of
         # every document's n-grams; skip it when nothing will read it.
@@ -152,6 +157,7 @@ class Ngrams:
             # aligner's --debug tracer reads; without it the keys are hashed
             # from the normalized forms and no n-gram string is built.
             keep_ngram_text=self.debug,
+            keep_word_keys=keep_words,
             post_processing_function=self.text_to_ngram,
         )
         philo_type_count = self.count_texts(files[0])
@@ -229,6 +235,9 @@ class Ngrams:
             hashes,
             start_bytes,
         )
+        if text_object.word_keys is not None:
+            ngram_binary.write_words(f"{self.output_path}/words/{text_object_id}.bin",
+                                     text_object.word_keys)
         return metadata
 
     def count_texts(self, text: str) -> int:

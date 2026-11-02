@@ -5,6 +5,12 @@ An alignment row is int32[9]: source start byte, source end byte, source first i
 source last index, target start byte, target end byte, target first index,
 target last index, total matching ngrams.
 
+Each passage's ends are then re-seeded: beside them, within max_gap words, ngrams are
+looked for with a word skipped in either document, which an inserted, dropped or changed
+word ("Le suffrage par le sort, dit Montesquieu, est de la nature...") leaves the two
+documents no ngram to share otherwise. Chained onto the passage, as many of them as a
+passage needs ngrams, less one, move its end.
+
 Every kernel is symmetric: comparing a pair of documents the other way round gives the
 mirrored passages. `MATCHER_SYMMETRY.md` measures the asymmetric matcher the chains
 replaced, which agreed with itself on 52% of frantext passages when the document order
@@ -556,6 +562,149 @@ def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, u
 
 
 @njit(nogil=True, cache=True)
+def _skip(c):
+    """The other two words of the c-th way of keeping three of four words, the first kept."""
+    if c == 0:
+        return 1, 2
+    if c == 1:
+        return 1, 3
+    return 2, 3
+
+
+@njit(nogil=True, cache=True)
+def _local_matches(source_words, s_lo, s_hi, s_end, target_words, t_lo, t_hi, t_end, out):
+    """The ngrams the two documents share with a word skipped in either or neither, by the
+    (first, last) word of each: first words in [s_lo, s_hi) and [t_lo, t_hi), last words
+    before s_end and t_end. Returns (out, count), out grown as needed."""
+    n = 0
+    for p in range(s_lo, s_hi):
+        for q in range(t_lo, t_hi):
+            if source_words[p] != target_words[q]:
+                continue
+            for c in range(3):
+                i, j = _skip(c)
+                if p + j >= s_end:
+                    continue
+                for d in range(3):
+                    k, l = _skip(d)
+                    if q + l >= t_end:
+                        continue
+                    if source_words[p + i] == target_words[q + k] and \
+                            source_words[p + j] == target_words[q + l]:
+                        if n == out.shape[0]:
+                            grown = np.empty((2 * n, 4), np.int64)
+                            grown[:n] = out
+                            out = grown
+                        out[n, 0], out[n, 1], out[n, 2], out[n, 3] = p, p + j, q, q + l
+                        n += 1
+    return out, n
+
+
+@njit(nogil=True, cache=True)
+def _farthest(found, n, a, b, gap, before, source_first):
+    """Of the matches a chain reaches from word a and word b, in steps of 1 to gap words in
+    both documents, the one at the end of the longest chain, then the farthest, then the
+    farthest in the document first by identity: (its first and last words in each, the
+    chain's length). Matches at the same first words are one, as far as either reaches."""
+    keys = (found[:n, 0] << 32) | found[:n, 2]
+    order = np.argsort(keys)
+    m = np.empty((n, 4), np.int64)
+    k = 0
+    for o in order:
+        if k and m[k - 1, 0] == found[o, 0] and m[k - 1, 2] == found[o, 2]:
+            m[k - 1, 1] = max(m[k - 1, 1], found[o, 1])
+            m[k - 1, 3] = max(m[k - 1, 3], found[o, 3])
+        else:
+            m[k] = found[o]
+            k += 1
+    length = np.zeros(k, np.int64)
+    best = -1
+    for step in range(k):
+        # nearest the passage first, so a match's chain onward is known when it is reached
+        i = k - 1 - step if before else step
+        p, q = m[i, 0], m[i, 2]
+        dp, dq = (a - p, b - q) if before else (p - a, q - b)
+        here = 1 if 0 < dp <= gap and 0 < dq <= gap else 0
+        for back in range(step):
+            j = k - 1 - back if before else back
+            if length[j] == 0:
+                continue
+            dp, dq = (m[j, 0] - p, m[j, 2] - q) if before else (p - m[j, 0], q - m[j, 2])
+            if 0 < dp <= gap and 0 < dq <= gap and length[j] + 1 > here:
+                here = length[j] + 1
+        length[i] = here
+        if here == 0:
+            continue
+        if best < 0 or here > length[best]:
+            best = i
+            continue
+        if here < length[best]:
+            continue
+        far, best_far = p + q, m[best, 0] + m[best, 2]
+        first, best_first = (p, m[best, 0]) if source_first else (q, m[best, 2])
+        if before and (far < best_far or far == best_far and first < best_first) or \
+                not before and (far > best_far or far == best_far and first > best_first):
+            best = i
+    if best < 0:
+        return 0, 0, 0, 0, 0
+    return m[best, 0], m[best, 1], m[best, 2], m[best, 3], length[best]
+
+
+@njit(nogil=True, cache=True)
+def reseed(rows, n, neighbours, n_neighbours, source_words, target_words, source_at,
+           target_at, start_bytes, end_bytes, max_gap, min_matching, source_first):
+    """Each passage's ends moved to the farthest of the ngrams beside them, within max_gap
+    words, that the two documents share once a word is skipped in either, when a chain of
+    min_matching - 1 of them reaches it; in place. An end one of `neighbours` (the pair's
+    passages, rows too) lies within twice max_gap words of, in either document, is left
+    alone, so no two moved ends meet: whether two passages so near are one is merging's to say.
+
+    `*_words` are each document's word keys, word i being the first of ngram i; `*_at` give
+    each ngram index's position in start_bytes and end_bytes. A document without words is
+    not re-seeded.
+    """
+    ns, nt = source_words.shape[0], target_words.shape[0]
+    need = max(min_matching - 1, 1)
+    if ns == 0 or nt == 0 or n == 0:
+        return
+    # every passage's first and last words, before any is moved
+    others = neighbours[:n_neighbours]
+    source_firsts, target_firsts = np.sort(others[:, 2]), np.sort(others[:, 6])
+    source_lasts, target_lasts = np.sort(others[:, 3] + 2), np.sort(others[:, 7] + 2)
+    found = np.empty((64, 4), np.int64)
+    reach = 2 * max_gap
+    for r in range(n):
+        a, b = rows[r, 2], rows[r, 6]
+        a_end, b_end = rows[r, 3] + 2, rows[r, 7] + 2
+        # the nearest passage ending before this one, and starting after it, in each document
+        k, j = np.searchsorted(source_lasts, a) - 1, np.searchsorted(target_lasts, b) - 1
+        near = k >= 0 and source_lasts[k] >= a - reach or j >= 0 and target_lasts[j] >= b - reach
+        k = np.searchsorted(source_firsts, a_end, side="right")
+        j = np.searchsorted(target_firsts, b_end, side="right")
+        near_end = k < n_neighbours and source_firsts[k] <= a_end + reach or \
+            j < n_neighbours and target_firsts[j] <= b_end + reach
+        found, m = (found, 0) if near else _local_matches(
+            source_words, max(a - max_gap, 0), a, min(a + 3, ns),
+            target_words, max(b - max_gap, 0), b, min(b + 3, nt), found)
+        if m:
+            p, _, q, _, chained = _farthest(found, m, a, b, max_gap, True, source_first)
+            if chained >= need and source_at[p] >= 0 and target_at[q] >= 0:
+                rows[r, 0], rows[r, 2] = start_bytes[source_at[p]], p
+                rows[r, 4], rows[r, 6] = start_bytes[target_at[q]], q
+                rows[r, 8] += chained
+        a, b = rows[r, 3], rows[r, 7]
+        found, m = (found, 0) if near_end else _local_matches(
+            source_words, a + 1, min(a + max_gap + 1, ns), min(a_end + max_gap + 1, ns),
+            target_words, b + 1, min(b + max_gap + 1, nt), min(b_end + max_gap + 1, nt), found)
+        if m:
+            _, p, _, q, chained = _farthest(found, m, a, b, max_gap, False, source_first)
+            if chained >= need and source_at[p - 2] >= 0 and target_at[q - 2] >= 0:
+                rows[r, 1], rows[r, 3] = end_bytes[source_at[p - 2]], p - 2
+                rows[r, 5], rows[r, 7] = end_bytes[target_at[q - 2]], q - 2
+                rows[r, 8] += chained
+
+
+@njit(nogil=True, cache=True)
 def _coalesce(out, n):
     """Passages overlapping in both documents become one passage spanning them all."""
     out, n = _sort_rows(out, n)
@@ -843,17 +992,19 @@ def _merged(rows, n, merging, merge_byte, merge_ngram, window_size, multiplier):
 def align_pair(packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
                window_size, max_gap, flex_gap, min_matching, min_in_window,
                merge_byte, merge_ngram, multiplier, source_first,
-               best, parent, used, chain, key, order, spans, out):
+               source_words, target_words, source_at, target_at, at_start_bytes,
+               at_end_bytes, best, parent, used, chain, key, order, spans, out):
     """One pair's passages: the chains, and the anchored scan walking each document,
-    each set merged on its own and then coalesced.
+    each set re-seeded and merged on its own and then coalesced.
 
     The chains alone lose some of what the Go aligner found: a chain longest under the
     loose link can be cut into pieces too short to keep, and on repeated material the
     cover pairs occurrences differently. Merging each set before coalescing keeps every
     passage the chains give inside one of the results.
 
-    Buffers are match_passage's. Returns (rows, n_rows, spans, out), spans and out being
-    the grown buffers to hand the next pair.
+    `source_words` to `at_end_bytes` are reseed's. Buffers are match_passage's. Returns
+    (rows, n_rows, spans, out), spans and out being the grown buffers to hand the next
+    pair.
     """
     out, n_chains, spans, longest = match_passage(
         packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
@@ -863,22 +1014,33 @@ def align_pair(packed_indices, packed_positions, n, n_blocks, start_bytes, end_b
     # min_in_window matches linked normally, so below both nothing here can pass.
     if longest < min_matching and longest < min_in_window:
         return out[:0], 0, spans, out
-    merging = merge_byte or merge_ngram
-    chains, n_chains = _merged(out, n_chains, merging, merge_byte, merge_ngram,
-                               window_size, multiplier)
     forward = np.empty((64, NCOL), np.int32)
     forward, n_forward = _anchored_scan(
         packed_indices, packed_positions, n, order, False, best, used, key, start_bytes,
         end_bytes,
         window_size, max_gap, flex_gap, min_matching, min_in_window, forward, 0)
-    forward, n_forward = _merged(forward, n_forward, merging, merge_byte, merge_ngram,
-                                 window_size, multiplier)
     by_target = _order_by_target(packed_indices, n, order, chain, parent)
     backward = np.empty((64, NCOL), np.int32)
     backward, n_backward = _anchored_scan(
         packed_indices, packed_positions, n, by_target, True, best, used, key,
         start_bytes, end_bytes,
         window_size, max_gap, flex_gap, min_matching, min_in_window, backward, 0)
+    if source_words.shape[0] and target_words.shape[0]:
+        # every passage of the pair, whichever set found it, is one an end may come near
+        found = n_chains + n_forward + n_backward
+        every = np.empty((found, NCOL), np.int32)
+        every[:n_chains] = out[:n_chains]
+        every[n_chains:n_chains + n_forward] = forward[:n_forward]
+        every[n_chains + n_forward:found] = backward[:n_backward]
+        for rows, count in ((out, n_chains), (forward, n_forward), (backward, n_backward)):
+            reseed(rows, count, every, found, source_words, target_words, source_at,
+                   target_at, at_start_bytes, at_end_bytes, max_gap, min_matching,
+                   source_first)
+    merging = merge_byte or merge_ngram
+    chains, n_chains = _merged(out, n_chains, merging, merge_byte, merge_ngram,
+                               window_size, multiplier)
+    forward, n_forward = _merged(forward, n_forward, merging, merge_byte, merge_ngram,
+                                 window_size, multiplier)
     backward, n_backward = _merged(backward, n_backward, merging, merge_byte, merge_ngram,
                                    window_size, multiplier)
     total = n_chains + n_forward + n_backward

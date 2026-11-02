@@ -10,6 +10,7 @@ from __future__ import annotations
 from itertools import combinations
 
 import numpy as np
+from mmh3 import hash64
 
 from .ngram_kernels import contiguous_keys
 from .tokens import TextObject
@@ -43,15 +44,32 @@ def generate_keys(text_object: TextObject, size: int, window: int,
     return out
 
 
+def word_keys(text_object: TextObject) -> np.ndarray:
+    """Each token's key, as a one-word n-gram's would be: from the interned forms when
+    the reader kept them, else hashing each distinct form once."""
+    table = text_object.form_table
+    ids = text_object.form_ids
+    if table is not None and ids is not None and ids.size == len(text_object.forms):
+        out = np.zeros(ids.size, dtype=np.int64)
+        if ids.size:
+            scratch = np.zeros(table.longest + 17, dtype=np.uint8)
+            contiguous_keys(table.data, table.offsets, ids, 1, scratch, out)
+        return out
+    seen: dict[str, int] = {}
+    return np.array([seen[form] if form in seen else seen.setdefault(form, hash64(form)[0])
+                     for form in text_object.forms], dtype=np.int64)
+
+
 def generate(text_object: TextObject, size: int, window: int, word_order: bool,
-             want_text: bool = True) -> TextObject:
+             want_text: bool = True, want_words: bool = False) -> TextObject:
     """Build n-grams over the object's non-empty tokens.
 
     `window` is size + gap: with a gap, every combination of `size` tokens drawn
     from each window of `window` tokens is emitted, once.
 
     With `want_text` off the result may carry `keys` and no `forms`: the caller
-    only wanted the hashes, so the strings were never built.
+    only wanted the hashes, so the strings were never built. With `want_words`,
+    contiguous n-grams in document order also carry `word_keys`.
     """
     text_object.purge()
     forms = text_object.forms
@@ -69,6 +87,7 @@ def generate(text_object: TextObject, size: int, window: int, word_order: bool,
     if window <= size:
         # Contiguous n-grams: the common case, and worth not routing through
         # combinations() for a single answer per position.
+        words = word_keys(text_object) if want_words and word_order else None
         keys = None if want_text else generate_keys(text_object, size, window, word_order)
         ngram_starts = start_bytes[: count - size + 1]
         ngram_ends = end_bytes[size - 1 :]
@@ -76,11 +95,14 @@ def generate(text_object: TextObject, size: int, window: int, word_order: bool,
             # The strings were never built; the caller wants the keys.
             result = TextObject([], ngram_starts, ngram_ends, metadata=text_object.metadata)
             result.keys = keys
+            result.word_keys = words
             return result
         for index in range(count - size + 1):
             group = forms[index : index + size]
             ngram_forms.append("_".join(group if word_order else sorted(group)))
-        return TextObject(ngram_forms, ngram_starts, ngram_ends, metadata=text_object.metadata)
+        result = TextObject(ngram_forms, ngram_starts, ngram_ends, metadata=text_object.metadata)
+        result.word_keys = words
+        return result
 
     # Skipgrams, anchored on the leading token so the sliding window emits each
     # combination once. `seen` is still needed: a form repeating inside a window

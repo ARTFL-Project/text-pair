@@ -49,7 +49,14 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
     from textpair.sequence_alignment.aligner.documents import load_metadata
     docs = documents.get_files(source_files, load_metadata(source_metadata),
                               params["sort_by"])
-    corpus = tracing.Corpus(*ngram_loader.load_corpus([path for _, path in docs], threads))
+    paths = [path for _, path in docs]
+    arrays = ngram_loader.load_corpus(paths, threads)
+    key_offsets, _keys, position_offsets, ngram_indices, _sb, _eb = arrays
+    word_offsets, word_keys = ngram_loader.load_words(paths, key_offsets, position_offsets,
+                                                      threads)
+    index_at = (ngram_loader.index_positions(key_offsets, position_offsets, ngram_indices)
+                if word_keys.shape[0] else np.empty(0, np.int32))
+    corpus = tracing.Corpus(*arrays, (word_offsets, word_keys, index_at))
     names = [doc for doc, _ in docs]
     pairs = mismatches = truncated = 0
     for source, target in tracing._pairs(names, len(names), np.empty(0, np.int32), None):
@@ -62,8 +69,9 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
         source_first = (source + target) % 2 == 0
         chains, _blocks, _hidden, _longest = tracing._walk(
             match, n, params, params["debug_minimum_ngrams"], source_first)
-        rows, _blocks, _hidden, _merged, _coalesced = tracing.pair_rows(
-            match, n, params, params["debug_minimum_ngrams"], source_first)
+        reseeding = corpus.reseeding(source, target)
+        rows, _blocks, _hidden, _merged, _coalesced, _reseeded = tracing.pair_rows(
+            match, n, params, params["debug_minimum_ngrams"], source_first, reseeding)
         # The kernel takes the packed layout: indices together in one int64 and byte
         # offsets reached through positions. Lay the pair's offsets out so position k is
         # its source and position n + k its target.
@@ -91,7 +99,7 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
             pair, pos, n, n_blocks, start_bytes, end_bytes, *common,
             params["merge_passages_on_byte_distance"],
             params["merge_passages_on_ngram_distance"],
-            params["passage_distance_multiplier"], source_first, *buffers())
+            params["passage_distance_multiplier"], source_first, *reseeding, *buffers())
         def as_tuples(array, count):
             return [tuple(int(v) for v in row) for row in array[:count]]
         if as_tuples(out, cnt) != [tuple(r) for r in chains] or \

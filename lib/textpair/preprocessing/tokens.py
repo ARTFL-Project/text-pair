@@ -81,6 +81,8 @@ class TextObject:
     form_table: Any = None
     # n-gram keys, when they were computed without building the n-gram strings.
     keys: Any = None
+    # Each word's key, word i being the first of n-gram i, when they were asked for.
+    word_keys: Any = None
     # Whether the reader already applied purge's rule, so purge has nothing to
     # find and need not walk every form looking.
     prefiltered: bool = False
