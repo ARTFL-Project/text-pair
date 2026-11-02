@@ -1705,6 +1705,94 @@ def passage_facets(request: Request):
         }
 
 
+@app.post("/family_time_series/")
+@app.post("/text-pair-api/family_time_series/")
+@app.get("/family_time_series/")
+@app.get("/text-pair-api/family_time_series/")
+def family_time_series(request: Request):
+    """Count passage families along time, as /generate_time_series/ counts alignments, under the sorted view's rule.
+
+    The source side counts each family once, by its anchor's year, when the passage was first written; the target
+    side counts its reuses, each document it was found again in once, by that document's year, the documents
+    meeting the later-side conditions as for the facets. A database whose tables cannot read the later side, or a
+    search they cannot answer, is counted by any match of the passage for the source side (`scope` is "any"), and
+    is an error for the target side. `families` is how many families the search leaves, dated or not.
+    """
+    with pg_connection() as conn:
+        conditions, other_args, _ = parse_conditions(request, conn)
+        table, step = other_args.db_table, max(1, int(other_args.timeSeriesInterval))
+        side = side_of(other_args.directionSelected)
+        groups_columns = get_pg_type(conn, f"{table}_groups")
+        if "source_year" not in groups_columns:
+            raise HTTPException(400, "This database has no dated passage families")
+        cursor = conn.cursor()
+        served = origin_families(cursor, table, conditions, groups_columns) if conditions else OriginFamilies("origin")
+        columns = family_filter_columns(cursor, table) if has_family_anchors(cursor, table) else None
+        ranked = columns is not None and served.applied == "origin"
+        groups, rank = quote_ident(f"{table}_groups"), quote_ident(f"{table}_family_rank")
+        if ranked:
+            cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+            cursor.execute("SET LOCAL work_mem = '256MB'")
+            ranks, params = facet_ranks(cursor, table, served)
+            families = "ca" if ranks else f"{rank} ca"
+            cursor.execute(f"{'WITH ' + ranks if ranks else ''} SELECT COUNT(*) FROM {families}", params)
+            total = cursor.fetchone()[0]
+            if side == "source":
+                picked = f"ca JOIN {rank} f ON f.rank = ca.r" if ranks else f"{rank} f"
+                statement = f"""{"WITH " + ranks if ranks else ""} SELECT floor(g.source_year / %s) * %s AS year, COUNT(*)
+                    FROM {picked} JOIN {groups} g ON g.group_id = f.group_id GROUP BY 1 ORDER BY 1"""
+            else:
+                if not all(f"{other}_year" in columns[other] for other in ("source", "target")):
+                    raise HTTPException(400, "The family tables do not have the years of this database's documents")
+                parts = served.parts or OriginParts([], [], [], columns)
+                a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
+                branches = []
+                for other in ("target", "source"):
+                    column = other[0]
+                    rows = quote_ident(f"{table}_family_alignments" if parts.aligned else f"{table}_{other}_families")
+                    match = f" AND x.{column} = ANY(%s)" if parts.target else ""
+                    joined = "ca ON ca.r = x.r" if ranks else f"{rank} ca ON ca.rank = x.r"
+                    branches.append(
+                        f"SELECT x.r, m.{quote_ident(f'{other}_doc_id')} AS d, m.{quote_ident(f'{other}_year')} AS y "
+                        f"FROM {rows} x JOIN {joined} JOIN {quote_ident(f'{table}_{other}_meta')} m ON m.id = x.{column} "
+                        f"WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
+                    )
+                    if parts.target:
+                        params.append(matching_ids(cursor, table, other, [on_side(c, other) for c in parts.target]))
+                    params += a_params
+                # a document on both sides of a family's alignments is found again once
+                statement = f"""WITH {ranks + ", " if ranks else ""}p AS ({" UNION ALL ".join(branches)})
+                    SELECT floor(y / %s) * %s AS year, COUNT(*) FROM (SELECT r, d, MIN(y) AS y FROM p GROUP BY r, d) q
+                    GROUP BY 1 ORDER BY 1"""
+            params = [*params, step, step]
+            applied = "origin"
+        else:
+            if side == "target":
+                raise HTTPException(400, "This search or database cannot say where passages were found again")
+            if served.applied == "any":
+                where, params = family_candidates(cursor, table, *join_conditions(conditions))
+            else:
+                where, params = served.where or ("", [])
+            cursor.execute(f"SELECT COUNT(*) FROM {groups} {where}", params)
+            total = cursor.fetchone()[0]
+            statement = f"SELECT floor(source_year / %s) * %s AS year, COUNT(*) FROM {groups} {where} GROUP BY 1 ORDER BY 1"
+            params = [step, step, *params]
+            applied = served.applied
+        cursor.execute(statement, params)
+        results, counted, next_year = [], 0, None
+        for year, count in cursor:
+            if year is None:
+                continue
+            year = int(year)
+            while next_year is not None and year > next_year:  # the empty periods between, as /generate_time_series/
+                results.append({"year": next_year, "count": 0})
+                next_year += step
+            results.append({"year": year, "count": count})
+            next_year = year + step
+            counted += count
+    return {"counts": counted, "results": results, "families": total, "scope": applied}
+
+
 def merge_passages(rows: list, direction: str) -> list[dict]:
     """The passages of a document on one side of its alignments, overlapping ones merged."""
     merged = []

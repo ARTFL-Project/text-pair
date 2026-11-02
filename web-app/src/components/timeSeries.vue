@@ -2,13 +2,13 @@
     <div id="time-series-chart" class="mt-3">
         <h2 class="visually-hidden">Passages in timeline</h2>
         <div class="row" style="padding: 0 0.75rem">
-            <div class="m-4" style="font-size: 120%;" v-if="error">No shared passages for your query</div>
-            <search-arguments></search-arguments>
+            <div class="m-4" style="font-size: 120%;" v-if="error">No {{ unitPlural }} for your query</div>
+            <search-arguments :unit="families ? 'reused' : 'shared'"></search-arguments>
         </div>
         <report-switcher></report-switcher>
         <div class="card time-card shadow-1">
             <div id="time-series-options">
-                <span id="time-interval-label">Group shared passages by</span>
+                <span id="time-interval-label">{{ families ? "Group by" : "Group shared passages by" }}</span>
                 <div class="interval-dropdown" @focusout="onDropdownFocusout" @keydown.esc="closeDropdown">
                     <button type="button" id="time-interval-toggle" ref="intervalToggle"
                         class="btn btn-sm btn-light rounded-0" aria-labelledby="time-interval-label time-interval-toggle"
@@ -42,14 +42,14 @@
                 Not shown:
                 <span v-for="(hidden, i) in hiddenCounts" :key="hidden.direction">{{ i ? " and " : "" }}{{
                     hidden.count.toLocaleString() }} <span v-html="hidden.label"></span></span>
-                passages dated outside {{ shownRange }}.
+                {{ families ? "" : "passages " }}dated outside {{ shownRange }}.
             </div>
             <div class="d-flex justify-content-center" v-if="loading && !bins.length">
                 <div class="spinner-border" style="width: 8rem; height: 8rem; margin-top: 30px" role="status">
                     <span class="visually-hidden">Loading...</span>
                 </div>
             </div>
-            <p class="mt-3 mb-0" v-if="!loading && !error && !bins.length">No dated passages for your query.</p>
+            <p class="mt-3 mb-0" v-if="!loading && !error && !bins.length">No dated {{ unitPlural }} for your query.</p>
             <div class="chart-area" ref="chartArea" :class="{ refreshing: loading }"
                 :aria-busy="loading ? 'true' : 'false'">
                 <template v-if="bins.length">
@@ -57,12 +57,12 @@
                         Each bar links to the passages of its period. Use the left and right arrow keys to move
                         between periods, Home and End for the first and last.
                     </p>
-                    <div class="time-panel" :class="`side-${panel.direction}-color`" v-for="panel in panels"
+                    <div class="time-panel" :class="`side-${panel.direction}-color`" v-for="panel in shownPanels"
                         :key="panel.direction">
                         <h3 class="panel-title">
                             <span class="side-mark" :class="panel.direction" aria-hidden="true"></span>
                             <span v-html="panel.label"></span> <span class="panel-total">{{
-                                panel.total.toLocaleString() }} dated passages</span>
+                                panel.total.toLocaleString() }} dated {{ panel.nouns[1] }}</span>
                         </h3>
                         <svg :width="width" :height="panelHeight(panel.direction)" class="time-svg" role="group"
                             :aria-label="chartLabel(panel)" aria-describedby="time-chart-help"
@@ -110,34 +110,36 @@
                     :class="{ clickable: activeBin[active.direction] }" :style="tooltipStyle" aria-hidden="true"
                     @mouseleave="onTooltipLeave" @click="onTooltipClick">
                     <div class="tooltip-period">{{ periodLabel(activeBin.year) }}</div>
-                    <div v-for="panel in panels" :key="panel.direction" class="tooltip-row">
+                    <div v-for="panel in shownPanels" :key="panel.direction" class="tooltip-row">
                         <span class="side-mark" :class="[panel.direction, `side-${panel.direction}-color`]"></span>
                         <strong>{{ activeBin[panel.direction].toLocaleString() }}</strong>
-                        <span v-html="panel.label" class="ms-1"></span>
+                        <span v-html="families ? panel.short : panel.label" class="ms-1"></span>
                     </div>
                     <div class="tooltip-hint" v-if="activeBin[active.direction]">
                         <template v-if="active.keyboard">
-                            Press Enter to see these <span v-html="activeLabel"></span> passages; arrow keys move
+                            Press Enter to see these <span v-html="activeLabel"></span>; arrow keys move
                             between periods
                         </template>
-                        <template v-else>Click to see these <span v-html="activeLabel"></span> passages</template>
+                        <template v-else>Click to see these <span v-html="activeLabel"></span></template>
                     </div>
                 </div>
             </div>
             <details class="mt-3" v-if="visibleBins.length">
                 <summary>Data table</summary>
                 <table class="table table-sm time-table mt-2">
-                    <caption class="visually-hidden">Dated passages by {{ intervalName }}, {{ shownRange }}</caption>
+                    <caption class="visually-hidden">Dated {{ families ? "reused passages and reuses" : "passages" }} by {{
+                        intervalName }}, {{ shownRange }}</caption>
                     <thead>
                         <tr>
                             <th scope="col">Period</th>
-                            <th scope="col" v-for="panel in panels" :key="panel.direction" v-html="panel.label"></th>
+                            <th scope="col" v-for="panel in shownPanels" :key="panel.direction"
+                                v-html="families ? panel.short : panel.label"></th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr v-for="bin in visibleBins.filter((b) => b.source || b.target)" :key="bin.year">
                             <th scope="row" class="fw-normal">{{ periodLabel(bin.year) }}</th>
-                            <td v-for="panel in panels" :key="panel.direction">
+                            <td v-for="panel in shownPanels" :key="panel.direction">
                                 <a v-if="bin[panel.direction]" :href="hrefs[`${panel.direction}:${bin.year}`]"
                                     @click="openPassages($event, panel.direction, bin.year)">{{
                                         bin[panel.direction].toLocaleString() }}</a>
@@ -172,11 +174,32 @@ const MIN_LABEL_SPACING = 64;
 
 const route = useRoute();
 const router = useRouter();
-const panels = reactive([
-    { direction: "source", label: globalConfig.sourceLabel, total: 0 },
-    { direction: "target", label: globalConfig.targetLabel, total: 0 },
-]);
-const labelText = { source: plainText(globalConfig.sourceLabel), target: plainText(globalConfig.targetLabel) };
+// Where passages form families, the timeline counts them: each once by when it was first written, and its
+// reuses, each reusing text once, by when they were made. Otherwise it counts the pairs of texts.
+const families = globalConfig.hasPassageFamilies;
+const unitPlural = families ? "reused passages" : "shared passages";
+const sideNouns = (label) => [`${plainText(label)} passage`, `${plainText(label)} passages`];
+const panels = reactive(
+    families
+        ? [
+              { direction: "source", label: "Reused passages, by the year they were first written", short: "Reused passages",
+                nouns: ["reused passage", "reused passages"], total: 0, unavailable: false },
+              { direction: "target", label: "Reuses, by the year of the reusing text", short: "Reuses",
+                nouns: ["reuse", "reuses"], total: 0, unavailable: false },
+          ]
+        : [
+              { direction: "source", label: globalConfig.sourceLabel, nouns: ["passage", "passages"], total: 0, unavailable: false },
+              { direction: "target", label: globalConfig.targetLabel, nouns: ["passage", "passages"], total: 0, unavailable: false },
+          ]
+);
+const shownPanels = computed(() => panels.filter((panel) => !panel.unavailable));
+// How a count of a panel reads, as "12 reuses" or "12 Earlier occurrence passages"
+const countNouns = families
+    ? { source: panels[0].nouns, target: panels[1].nouns }
+    : { source: sideNouns(globalConfig.sourceLabel), target: sideNouns(globalConfig.targetLabel) };
+function counted(count, direction) {
+    return `${count.toLocaleString()} ${countNouns[direction][count === 1 ? 0 : 1]}`;
+}
 const bins = ref([]);
 const customRange = ref(null);
 const rangeError = ref("");
@@ -242,10 +265,11 @@ const shownRange = computed(() => {
 });
 const hiddenCounts = computed(() => {
     const hidden = [];
-    for (const panel of panels) {
+    for (const panel of shownPanels.value) {
         const shown = visibleBins.value.reduce((sum, bin) => sum + bin[panel.direction], 0);
         if (panel.total > shown) {
-            hidden.push({ direction: panel.direction, label: panel.label, count: panel.total - shown });
+            const count = panel.total - shown;
+            hidden.push({ direction: panel.direction, label: families ? panel.nouns[count === 1 ? 0 : 1] : panel.label, count });
         }
     }
     return hidden;
@@ -253,7 +277,7 @@ const hiddenCounts = computed(() => {
 // Each panel scales to its own peak so a scattered series isn't flattened by a concentrated one
 const yTicks = computed(() => {
     const ticks = {};
-    for (const panel of panels) {
+    for (const panel of shownPanels.value) {
         const max = visibleBins.value.reduce((top, bin) => Math.max(top, bin[panel.direction]), 1);
         const raw = max / 4;
         const magnitude = 10 ** Math.floor(Math.log10(raw));
@@ -292,9 +316,9 @@ const xTicks = computed(() => {
 const hrefs = computed(() => {
     const links = {};
     for (const bin of visibleBins.value) {
-        for (const panel of panels) {
+        for (const panel of shownPanels.value) {
             if (bin[panel.direction]) {
-                const path = `/search?${paramsToUrl(passageParams(panel.direction, bin.year))}`;
+                const path = `${passagesView}?${paramsToUrl(passageParams(panel.direction, bin.year))}`;
                 links[`${panel.direction}:${bin.year}`] = router.resolve(path).href;
             }
         }
@@ -312,7 +336,10 @@ const cursorIndex = computed(() => {
 });
 const active = computed(() => pointer.value || focused.value);
 const activeBin = computed(() => (active.value ? visibleBins.value[active.value.index] : null));
-const activeLabel = computed(() => panels.find((panel) => panel.direction === active.value.direction).label);
+// What a bar opens: the reused passages of its period, or its period's pairs of texts on that side
+const activeLabel = computed(() =>
+    families ? "reused passages" : `${panels.find((panel) => panel.direction === active.value.direction).label} passages`
+);
 // Under the pointer's column so the pointer can move onto it; beside a focused bar; inside the chart
 const tooltipStyle = computed(() => {
     const { x, y, keyboard, bandLeft, bandRight } = active.value;
@@ -351,45 +378,53 @@ function fetchData() {
     pointer.value = null;
     focused.value = null;
     const api = globalConfig.apiServer;
-    emitter.emit("searchArgsUpdate", { counts: "", searchParams: params });
-    axios
-        .get(`${api}/count_results/?${paramsToUrl(params)}`)
-        .then((response) => {
-            if (id === requestId) {
-                emitter.emit("searchArgsUpdate", { counts: response.data.counts, searchParams: params });
-            }
-        })
-        .catch((err) => console.log(err));
-    Promise.all(
+    emitter.emit("searchArgsUpdate", { counts: "", searchParams: params, scope: families ? "origin" : undefined });
+    if (!families) {
+        axios
+            .get(`${api}/count_results/?${paramsToUrl(params)}`)
+            .then((response) => {
+                if (id === requestId) {
+                    emitter.emit("searchArgsUpdate", { counts: response.data.counts, searchParams: params });
+                }
+            })
+            .catch((err) => console.log(err));
+    }
+    const series = families ? "family_time_series" : "generate_time_series";
+    // The reuses need family tables an older database may not have: their panel is then left out
+    Promise.allSettled(
         panels.map((panel) =>
-            axios.post(
-                `${api}/generate_time_series/?${paramsToUrl({ ...params, directionSelected: panel.direction })}`,
-                { metadata: globalConfig.metadataTypes }
-            )
+            axios.post(`${api}/${series}/?${paramsToUrl({ ...params, directionSelected: panel.direction })}`, {
+                metadata: globalConfig.metadataTypes,
+            })
         )
-    )
-        .then((responses) => {
-            if (id === requestId) {
-                setBins(responses.map((response) => response.data));
-                loading.value = false;
-                announceChart();
-            }
-        })
-        .catch((err) => {
-            if (id === requestId) {
-                loading.value = false;
-                error.value = err.toString();
-                emitter.emit("announce", "No shared passages for your query");
-            }
-            console.log(err);
+    ).then((outcomes) => {
+        if (id !== requestId) return;
+        const failed = outcomes.find((outcome) => outcome.status === "rejected");
+        if (outcomes[0].status === "rejected" || (!families && failed)) {
+            loading.value = false;
+            error.value = failed.reason.toString();
+            emitter.emit("announce", `No ${unitPlural} for your query`);
+            console.log(failed.reason);
+            return;
+        }
+        panels.forEach((panel, index) => {
+            panel.unavailable = outcomes[index].status === "rejected";
         });
+        const data = outcomes.map((outcome) => (outcome.status === "fulfilled" ? outcome.value.data : null));
+        if (families) {
+            emitter.emit("searchArgsUpdate", { counts: data[0].families, searchParams: params, scope: data[0].scope });
+        }
+        setBins(data);
+        loading.value = false;
+        announceChart();
+    });
 }
 
 function setBins(seriesData) {
     const counts = new Map();
     panels.forEach((panel, index) => {
-        panel.total = seriesData[index].counts;
-        for (const { year, count } of seriesData[index].results) {
+        panel.total = seriesData[index] ? seriesData[index].counts : 0;
+        for (const { year, count } of seriesData[index] ? seriesData[index].results : []) {
             counts.set(`${panel.direction}:${Number(year)}`, count);
         }
     });
@@ -410,11 +445,11 @@ function setBins(seriesData) {
 
 function announceChart() {
     if (!bins.value.length) {
-        emitter.emit("announce", "No dated passages for your query");
+        emitter.emit("announce", `No dated ${unitPlural} for your query`);
         return;
     }
-    const totals = panels.map((panel) => `${panel.total.toLocaleString()} ${labelText[panel.direction]}`);
-    emitter.emit("announce", `Timeline by ${intervalName.value}, ${shownRange.value}: ${totals.join(" and ")} dated passages`);
+    const totals = shownPanels.value.map((panel) => counted(panel.total, panel.direction));
+    emitter.emit("announce", `Timeline by ${intervalName.value}, ${shownRange.value}: dated, ${totals.join(" and ")}`);
 }
 
 function announceRange() {
@@ -502,13 +537,12 @@ function periodLabel(year) {
 }
 
 function chartLabel(panel) {
-    const name = `${labelText[panel.direction]} passages by ${intervalName.value}, ${shownRange.value}`;
+    const name = `${countNouns[panel.direction][1]} by ${intervalName.value}, ${shownRange.value}`;
     return cursorIndex.value[panel.direction] < 0 ? `${name}: none in this range` : name;
 }
 
 function barLabel(bin, direction) {
-    const count = bin[direction];
-    return `${periodLabel(bin.year)}: ${count.toLocaleString()} ${labelText[direction]} passage${count === 1 ? "" : "s"}`;
+    return `${periodLabel(bin.year)}: ${counted(bin[direction], direction)}`;
 }
 
 function hoverBin(index, direction, event) {
@@ -595,6 +629,9 @@ function onWindowKeydown(event) {
     }
 }
 
+// The reused passages first written, or found again, in the period; or its pairs of texts
+const passagesView = families ? "/sorted-results" : "/search";
+
 function passageParams(direction, year) {
     const params = { ...route.query };
     params[`${direction}_year`] = interval.value === 1 ? `${year}` : `${year}-${year + interval.value - 1}`;
@@ -613,7 +650,7 @@ function openPassages(event, direction, year) {
 function showPassages(direction, year) {
     const params = passageParams(direction, year);
     emitter.emit("urlUpdate", params);
-    router.push(`/search?${paramsToUrl(params)}`);
+    router.push(`${passagesView}?${paramsToUrl(params)}`);
 }
 
 function selectInterval(option) {
