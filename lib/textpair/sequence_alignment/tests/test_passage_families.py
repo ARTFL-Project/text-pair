@@ -30,6 +30,7 @@ import orjson
 
 from textpair.sequence_alignment import alignment_merger as am
 from textpair.sequence_alignment import banality_finder as bf
+from textpair.sequence_alignment.aligner.output import alignment_to_text
 
 FAILURES = []
 
@@ -58,11 +59,15 @@ class Corpus:
     def align(self, source, s0, s1, target, t0, t1):
         sp, sy, st = self.docs[source]
         tp, ty, tt = self.docs[target]
+        sb, _, sa = alignment_to_text(st.encode(), s0, s1, 300)
+        tb, _, ta = alignment_to_text(tt.encode(), t0, t1, 300)
         self.records.append({
             "source_doc_id": source, "source_filename": sp, "source_start_byte": s0, "source_end_byte": s1,
-            "source_title": f"title {source}", "source_year": str(sy), "source_passage": st[s0:s1],
+            "source_title": f"title {source}", "source_year": str(sy), "source_context_before": sb,
+            "source_passage": st[s0:s1], "source_context_after": sa,
             "target_doc_id": target, "target_filename": tp, "target_start_byte": t0, "target_end_byte": t1,
-            "target_title": f"title {target}", "target_year": str(ty), "target_passage": tt[t0:t1],
+            "target_title": f"title {target}", "target_year": str(ty), "target_context_before": tb,
+            "target_passage": tt[t0:t1], "target_context_after": ta,
         })
 
     def write(self, path, per_frame=3):
@@ -371,6 +376,10 @@ def main():
               families_of("WA", 0, len(W1) + 1 + len(W2)) == w_first and len(w_first) == 1 and not w_first & w_second
               and rows[next(iter(w_first))]["count"] == 4 and rows[next(iter(w_second))]["count"] == 3)
         check("every alignment is in a family", all(r["group_id"] for r in results))
+        texts = {p: text.encode() for p, _, text in corpus.docs.values()}
+        check("a group's row has the text around its own passage, not its record's",
+              all(alignment_to_text(texts[r["source_filename"]], r["source_start_byte"], r["source_end_byte"], 300)[::2]
+                  == (r["source_context_before"], r["source_context_after"]) for r in rows.values()))
         check("every row has the same fields in the same order", len({tuple(r) for r in rows.values()}) == 1)
 
         bf._PARALLEL_FLOOR = 0  # the file is tiny: make the output steps split it anyway

@@ -27,6 +27,7 @@ from tqdm import tqdm
 from textpair.utils import clean_passage
 
 from . import family_places
+from .aligner.output import alignment_to_text
 from .banality_finder import (
     _bump,
     _concatenate,
@@ -733,15 +734,27 @@ class _SourceText:
         self.name: str | None = None
         self.handle = None
 
-    def read(self, start_byte: int, end_byte: int, filename: str) -> str:
+    def _open(self, filename: str) -> None:
         if filename != self.name:
             self.close()
             self.handle = open(filename, "rb")
             self.name = filename
+
+    def read(self, start_byte: int, end_byte: int, filename: str) -> str:
+        self._open(filename)
         if start_byte < 0:
             start_byte = 0
         self.handle.seek(start_byte)
         return clean_passage(self.handle.read(end_byte - start_byte))
+
+    def around(self, start_byte: int, end_byte: int, filename: str, size: int) -> tuple[str, str]:
+        """The text before and after a passage, as records have theirs."""
+        self._open(filename)
+        base = max(0, start_byte - size)
+        self.handle.seek(base)
+        before, _, after = alignment_to_text(self.handle.read(end_byte + size - base), start_byte - base,
+                                             end_byte - base, size)
+        return before, after
 
     def close(self) -> None:
         if self.handle is not None:
@@ -1149,7 +1162,7 @@ def merge_alignments(results_file: str, count: int, workers: int = 1, context_si
     segments, bases = _segment_plan(results_file, count, workers)
 
     groups_file = os.path.join(os.path.dirname(results_file), "passage_group_source.jsonl")
-    groups = write_group_sources(results_file, groups_file, families, segments, bases)
+    groups = write_group_sources(results_file, groups_file, families, segments, bases, context_size)
 
     temp_results_file = f"{results_file}.temp_final.lz4"
     rewrite_results(results_file, temp_results_file, families, count, segments, bases)
@@ -1228,10 +1241,10 @@ def rewrite_results(results_file: str, target: str, group_lists: _Families,
 
 
 def write_group_sources(results_file: str, groups_file: str, families: _Families,
-                        segments: list[tuple[int, int]], bases: dict[int, int]) -> int:
+                        segments: list[tuple[int, int]], bases: dict[int, int], context_size: int = 300) -> int:
     """Write one row per family: its anchor's passage, from the earliest of its reuses when
-    that is a few words before, with the metadata of the record that first has it, and
-    `count`, the documents its alignments span. Returns the rows written.
+    that is a few words before, with the text around it, the metadata of the record that
+    first has it, and `count`, the documents its alignments span. Returns the rows written.
 
     Rows come out in the order their records appear; the database load keys on group_id.
     """
@@ -1241,14 +1254,14 @@ def write_group_sources(results_file: str, groups_file: str, families: _Families
             input_file = stack.enter_context(lz4.frame.open(results_file))
             output_file = stack.enter_context(open(groups_file, "wb"))
             bar = stack.enter_context(tqdm(total=total, desc=_label(5), leave=False))
-            _group_source_records(input_file, output_file, families, 0, bar=bar)
+            _group_source_records(input_file, output_file, families, 0, context_size, bar=bar)
         return total
 
-    _SHARED.update(bases=bases, families=families)
+    _SHARED.update(bases=bases, families=families, context_size=context_size)
     try:
         parts = _run_segments(_group_source_segment, results_file, segments, total, _label(5))
     finally:
-        for key in ("bases", "families"):
+        for key in ("bases", "families", "context_size"):
             _SHARED.pop(key, None)
     # Plain jsonl, not lz4, so the parts join as they are.
     _status(_label(5))
@@ -1264,7 +1277,7 @@ def _as_source(fields: dict, side: int) -> dict:
             for k, v in fields.items() if not k.startswith("target_")}
 
 
-def _group_source_records(input_file, output_file, families: _Families, passage_id: int,
+def _group_source_records(input_file, output_file, families: _Families, passage_id: int, context_size: int,
                           progress=None, bar=None) -> None:
     """Write the row of every family whose record is in this range."""
     reps = families.rep_passage
@@ -1283,12 +1296,16 @@ def _group_source_records(input_file, output_file, families: _Families, passage_
                     site = families.anchors[family]
                     filename = families.names[families.site_file[site]]
                     start_byte, end_byte = int(families.shown_s[family]), int(families.core_e[site])
+                    # the record's own text around it borders its span, not always the family's
+                    before, after = source_text.around(start_byte, end_byte, filename, context_size)
                     records.append(
                         orjson.dumps(
                             {
                                 **_as_source(fields, side),
                                 "source_filename": filename,
+                                "source_context_before": before,
                                 "source_passage": source_text.read(start_byte, end_byte, filename),
+                                "source_context_after": after,
                                 "group_id": family,
                                 "source_start_byte": start_byte,
                                 "source_end_byte": end_byte,
@@ -1316,7 +1333,7 @@ def _group_source_segment(job: tuple[str, int, int, str]) -> str:
         input_file = stack.enter_context(_lz4_window(path, offset, size))
         output_file = stack.enter_context(open(part, "wb"))
         _group_source_records(input_file, output_file, _SHARED["families"],
-                              _SHARED["bases"][offset], _SHARED["progress"])
+                              _SHARED["bases"][offset], _SHARED["context_size"], _SHARED["progress"])
     return part
 
 
