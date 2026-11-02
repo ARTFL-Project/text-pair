@@ -6,16 +6,15 @@ counts them. Those ends come from alignments with the passage itself or with ano
 so they may hold more than the passage, or less. Each place's text, with text around it, is
 compared with the family's passage letter by letter (textpair.shared_text, the group page's
 comparison), and the place's passage becomes what it shares with the family's in the same
-order, in whole words, with its context as the alignments have it.
+order, in whole words, with its context as the alignments have it. What it shares wholly
+outside the place is no evidence of it: such a place shares nothing.
+
+The grouper (alignment_merger) builds the places, settles families on what they hold, and
+has the rows written.
 """
 import mmap
 import multiprocessing as mp
-import os
-from array import array
-from typing import Union
 
-import lz4.frame
-import msgspec
 import numpy as np
 import orjson
 from numba import njit
@@ -28,36 +27,18 @@ from .aligner.output import alignment_to_text
 
 MARGIN = 600  # bytes read on each side of a place, at least: as far as its passage may grow
 CHUNK = 500  # families a worker projects at a time
+ROWS = 5000  # places a worker writes at a time
 _MAPS = 256  # documents a worker keeps mapped
-_READ_SIZE = 1 << 24
-
-
-class _Record(msgspec.Struct):
-    group_id: list[int] = []
-    source_filename: str = ""
-    source_doc_id: Union[str, int, None] = None
-    source_start_byte: int = 0
-    source_end_byte: int = 0
-    target_filename: str = ""
-    target_doc_id: Union[str, int, None] = None
-    target_start_byte: int = 0
-    target_end_byte: int = 0
-
-
-class _Group(msgspec.Struct):
-    group_id: int
-    source_filename: str
-    source_doc_id: Union[str, int, None] = None
-    source_start_byte: int = 0
-    source_end_byte: int = 0
 
 
 @njit(cache=True)
-def _places(groups, files, starts, ends):
-    """Ends sorted by family, file and start, overlapping ones of a family in a file taken together."""
+def places(groups, files, starts, ends):
+    """Ends sorted by family, file and start, overlapping ones of a family in a file taken
+    together: the places' families, files, starts and ends, and each end's place."""
     n = groups.shape[0]
-    pg, pf = np.empty(n, np.int64), np.empty(n, np.int32)
+    pg, pf = np.empty(n, np.int64), np.empty(n, np.int64)
     ps, pe = np.empty(n, np.int64), np.empty(n, np.int64)
+    of = np.empty(n, np.int64)
     k = -1
     for i in range(n):
         if k >= 0 and groups[i] == pg[k] and files[i] == pf[k] and starts[i] < pe[k]:
@@ -65,51 +46,22 @@ def _places(groups, files, starts, ends):
         else:
             k += 1
             pg[k], pf[k], ps[k], pe[k] = groups[i], files[i], starts[i], ends[i]
-    return pg[:k + 1], pf[:k + 1], ps[:k + 1], pe[:k + 1]
+        of[i] = k
+    return pg[:k + 1], pf[:k + 1], ps[:k + 1], pe[:k + 1], of
 
 
-def _lines(path):
-    with lz4.frame.open(path) as handle:
-        remainder = b""
-        while True:
-            chunk = handle.read(_READ_SIZE)
-            if not chunk:
-                break
-            lines = (remainder + chunk).split(b"\n")
-            remainder = lines.pop()
-            yield from lines
-        if remainder:
-            yield remainder
-
-
-def _read_places(results_file, families):
-    """Every family's places: (family, file, start, end) arrays, and the file names."""
-    names, ids = [], {}
-    groups, files, starts, ends = array("q"), array("i"), array("q"), array("q")
-    decode = msgspec.json.Decoder(_Record).decode
-    for line in _lines(results_file):
-        if not line:
-            continue
-        r = decode(line)
-        for side in ((r.source_filename, r.source_doc_id, r.source_start_byte, r.source_end_byte),
-                     (r.target_filename, r.target_doc_id, r.target_start_byte, r.target_end_byte)):
-            name, doc, start, end = side
-            for family in r.group_id:
-                anchor = families.get(family)
-                if anchor is None or str(doc) == anchor:
-                    continue  # the anchor's own document holds the passage, not a reuse of it
-                f = ids.get(name)
-                if f is None:
-                    f = ids[name] = len(names)
-                    names.append(name)
-                groups.append(family)
-                files.append(f)
-                starts.append(start)
-                ends.append(end)
-    groups, files = np.frombuffer(groups, np.int64), np.frombuffer(files, np.int32)
-    starts, ends = np.frombuffer(starts, np.int64), np.frombuffer(ends, np.int64)
-    order = np.lexsort((starts, files, groups))
-    return _places(groups[order], files[order], starts[order], ends[order]), names
+@njit(cache=True)
+def same_places(pg, pf, ps, pe, qg, qf, qs, qe):
+    """For each place q, the place p with the very same span, or -1; both sorted as `places` leaves them."""
+    out = np.full(qg.shape[0], -1, np.int64)
+    i = 0
+    for j in range(qg.shape[0]):
+        while i < pg.shape[0] and (pg[i] < qg[j] or pg[i] == qg[j] and (
+                pf[i] < qf[j] or pf[i] == qf[j] and ps[i] < qs[j])):
+            i += 1
+        if i < pg.shape[0] and pg[i] == qg[j] and pf[i] == qf[j] and ps[i] == qs[j] and pe[i] == qe[j]:
+            out[j] = i
+    return out
 
 
 def _whole_words(kinds, shared, first, last):
@@ -168,21 +120,17 @@ _STATE = {}
 
 
 def _project(task):
-    """One chunk of families' places, projected: JSON lines."""
-    names, context = _STATE["names"], _STATE["context"]
+    """One chunk of families' places, projected: (place, start, end, shared) each."""
     read = _STATE.setdefault("reader", _Reader())
     out = []
-    for family, anchor_name, anchor_start, anchor_end, places in task:
-        anchor = read(anchor_name)
-        text, _, _, _ = _text(anchor, anchor_start, anchor_end, cut=False)
+    for anchor_name, anchor_start, anchor_end, family_places in task:
+        text, _, _, _ = _text(read(anchor_name), anchor_start, anchor_end, cut=False)
         passage = Passage(text)
         letters = np.array([c.isalnum() for c in text], np.bool_)
         margin = max(MARGIN, anchor_end - anchor_start)
-        found_here = []
-        for f, start, end in places:
-            name = names[f]
-            buf = read(name)
+        for i, name, start, end in family_places:
             shown, shared = (start, end), 0.0
+            buf = read(name)
             if buf:
                 lo, hi = max(0, start - margin), min(len(buf), end + margin)
                 other, kinds, starts, ends = _text(buf, lo, hi)
@@ -191,67 +139,80 @@ def _project(task):
                     found = passage.compare(other, detail=True)
                     ours = found.shared[0] & ~found.moved[0]
                     theirs = found.shared[1] & ~found.moved[1]
-                    shared = float(ours[letters].mean()) if letters.any() else 0.0
                     on = np.flatnonzero(theirs & (kinds > 0))
                     if on.size:
                         first, last = _whole_words(kinds, theirs, int(on[0]), int(on[-1]) + 1)
-                        if first < last:
+                        if first < last and starts[first] < end and ends[last - 1] > start:
                             shown = (int(starts[first]), int(ends[last - 1]))
-            found_here.append([f, start, end, shown, shared, buf])
-        # a projection off its own place may not land on another of the family's places in that
-        # document, nor on what another projection took: that place keeps its span
-        for k, (f, start, end, shown, shared, buf) in enumerate(found_here):
-            if shown[1] <= start or shown[0] >= end:
-                taken = any(other[0] == f and m != k and (other[1] < shown[1] and other[2] > shown[0]
-                                                          or other[3][0] < shown[1] and other[3][1] > shown[0] and m < k)
-                            for m, other in enumerate(found_here))
-                if taken:
-                    found_here[k][3], found_here[k][4] = (start, end), 0.0
-        for f, start, end, shown, shared, buf in found_here:
-            before, passage_text, after = alignment_to_text(buf, shown[0], shown[1], context) if buf else ("", "", "")
-            out.append(orjson.dumps({
-                "group_id": family, "filename": names[f], "start_byte": start, "end_byte": end,
-                "passage_start_byte": shown[0], "passage_end_byte": shown[1], "shared": round(shared, 3),
-                "context_before": before, "passage": passage_text, "context_after": after,
-            }))
+                            shared = float(ours[letters].mean()) if letters.any() else 0.0
+            out.append((i, shown[0], shown[1], shared))
     return out
 
 
-def project_places(results_file: str, groups_file: str, workers: int = 1, context_size: int = 300) -> str:
-    """Write passage_group_places.jsonl beside the group file: one row per family place."""
-    families, spans = {}, {}
-    decode = msgspec.json.Decoder(_Group).decode
-    with open(groups_file, "rb") as handle:
-        for line in handle:
-            if line.strip():
-                g = decode(line)
-                families[g.group_id] = str(g.source_doc_id)
-                spans[g.group_id] = (g.source_filename, g.source_start_byte, g.source_end_byte)
-    (pg, pf, ps, pe), names = _read_places(results_file, families)
-    bounds = np.flatnonzero(np.diff(pg)) + 1 if pg.size else np.empty(0, np.int64)
+def _rows(task):
+    """One chunk of places as JSON lines, each with its passage and the text around it."""
+    read, context = _STATE.setdefault("reader", _Reader()), _STATE["context"]
+    out = []
+    for family, name, start, end, shown_s, shown_e, shared in task:
+        buf = read(name)
+        before, passage, after = alignment_to_text(buf, shown_s, shown_e, context) if buf else ("", "", "")
+        out.append(orjson.dumps({
+            "group_id": family, "filename": name, "start_byte": start, "end_byte": end,
+            "passage_start_byte": shown_s, "passage_end_byte": shown_e, "shared": round(shared, 3),
+            "context_before": before, "passage": passage, "context_after": after,
+        }))
+    return out
+
+
+def _run(work, tasks, workers, total, desc):
+    """Each task's results, in order, from a pool when there are workers and tasks to share."""
+    bar = tqdm(total=total, desc=desc, unit=" place", leave=False)
+    try:
+        if workers > 1 and len(tasks) > 1:
+            with mp.get_context("fork").Pool(min(workers, len(tasks))) as pool:
+                for done in pool.imap(work, tasks):
+                    bar.update(len(done))
+                    yield done
+        else:
+            for task in tasks:
+                done = work(task)
+                bar.update(len(done))
+                yield done
+    finally:
+        bar.close()
+        _STATE.clear()
+
+
+def project(names, passages, pg, pf, ps, pe, workers=1, desc="Projecting family passages onto their reuses"):
+    """Each place's passage, its family's projected onto it: start, end, and the share of the
+    family's passage it holds. `passages` gives each family's (file, start, end); files are
+    indices into `names`."""
+    shown_s, shown_e, shared = ps.copy(), pe.copy(), np.zeros(pg.shape[0])
+    p_file, p_start, p_end = passages
+    bounds = np.flatnonzero(np.diff(pg)) + 1
     by_family = []
     for lo, hi in zip(np.concatenate(([0], bounds)), np.concatenate((bounds, [pg.size]))):
         if hi > lo:
-            family = int(pg[lo])
-            name, start, end = spans[family]
-            by_family.append((family, name, start, end, list(zip(pf[lo:hi].tolist(), ps[lo:hi].tolist(), pe[lo:hi].tolist()))))
-    by_family.sort(key=lambda item: (item[1], item[2]))  # anchors file by file, so workers keep their maps
+            g = int(pg[lo])
+            by_family.append((names[p_file[g]], int(p_start[g]), int(p_end[g]),
+                              [(i, names[pf[i]], int(ps[i]), int(pe[i])) for i in range(lo, hi)]))
+    by_family.sort(key=lambda item: (item[0], item[1]))  # anchors file by file, so workers keep their maps
     tasks = [by_family[k:k + CHUNK] for k in range(0, len(by_family), CHUNK)]
-    places_file = os.path.join(os.path.dirname(groups_file), "passage_group_places.jsonl")
-    _STATE.update(names=names, context=int(context_size))
-    bar = tqdm(total=int(pg.size), desc="Projecting family passages onto their reuses", unit=" place", leave=False)
+    for done in _run(_project, tasks, workers, int(pg.size), desc):
+        for i, start, end, share in done:
+            shown_s[i], shown_e[i], shared[i] = start, end, share
+    return shown_s, shown_e, shared
+
+
+def write_places(places_file, names, pg, pf, ps, pe, shown, workers=1, context_size=300,
+                 desc="Writing family places"):
+    """One JSON row per place: its span, its passage (`shown`, from `project`) and the text around it."""
+    shown_s, shown_e, shared = shown
+    rows = [(int(pg[i]), names[pf[i]], int(ps[i]), int(pe[i]), int(shown_s[i]), int(shown_e[i]), float(shared[i]))
+            for i in range(pg.shape[0])]
+    tasks = [rows[k:k + ROWS] for k in range(0, len(rows), ROWS)]
+    _STATE["context"] = int(context_size)
     with open(places_file, "wb") as output:
-        if workers > 1 and len(tasks) > 1:
-            with mp.get_context("fork").Pool(min(workers, len(tasks))) as pool:
-                for lines in pool.imap(_project, tasks):
-                    output.writelines(line + b"\n" for line in lines)
-                    bar.update(len(lines))
-        else:
-            for task in tasks:
-                lines = _project(task)
-                output.writelines(line + b"\n" for line in lines)
-                bar.update(len(lines))
-    bar.close()
-    _STATE.clear()
-    print(f"  {int(pg.size):,} places reusing them, written to {os.path.basename(places_file)}", flush=True)
-    return places_file
+        for lines in _run(_rows, tasks, workers, len(rows), desc):
+            output.writelines(line + b"\n" for line in lines)
+    return len(rows)

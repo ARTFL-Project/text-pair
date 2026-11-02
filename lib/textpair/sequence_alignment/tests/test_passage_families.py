@@ -11,11 +11,14 @@ family, the floor on fragments, sliding windows over a long copy staying bounded
 aligned only with a member joining its family, a passage that most of its partners put in one
 family not being taken into another by a longer window, a family whose earliest occurrence is
 only ever a target, a window counting for every document behind it (six identical quotations
-of a passage outweighing two of part of it), and a group's passage being its anchor's, from
-where one of its reuses starts when that is up to five words before. Serial and parallel runs
-must then write the same files.
+of a passage outweighing two of part of it), a group's passage being its anchor's, from
+where one of its reuses starts when that is up to five words before, a document in a
+family only through a partner staying there only if it holds half its passage or more, and
+an alignment that leaves every family it had joining one whose passage both its ends hold,
+or else forming a family of its own. Serial and parallel runs must then write the same files.
 """
 import os
+import random
 import shutil
 import sys
 import tempfile
@@ -43,9 +46,9 @@ class Corpus:
         self.docs = {}
         self.records = []
 
-    def doc(self, name, year, size=4000):
+    def doc(self, name, year, size=4000, text=None):
         path = os.path.join(self.root, f"{name}.txt")
-        text = "".join("abcdefghijklmnopqrstuvwxyz "[(i * 7 + len(self.docs) * 3) % 27] for i in range(size))
+        text = text or "".join("abcdefghijklmnopqrstuvwxyz "[(i * 7 + len(self.docs) * 3) % 27] for i in range(size))
         with open(path, "w") as handle:
             handle.write(text)
         self.docs[name] = (path, year, text)
@@ -68,8 +71,33 @@ class Corpus:
                 handle.write(lz4.frame.compress(chunk))
 
 
+def prose(size, seed):
+    """Words that differ, for the cases where what a text holds is compared."""
+    rng = random.Random(seed)
+    words = []
+    while sum(len(w) + 1 for w in words) < size:
+        words.append("".join(rng.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(rng.randint(3, 9))))
+    return " ".join(words)[:size]
+
+
+# QA's two passages; QT quotes the first with the second inside it, as Taine quotes Rousseau
+P1, P2, FILLER = prose(200, 1), prose(200, 2), prose(300, 3)
+HALF = P1.index(" ", 100) + 1
+# a phrase inside two passages, one in each of two families, the M ones with a family of its own too
+T, X, Y = prose(120, 5), prose(140, 6), prose(140, 7)
+X, Y = f"{X} {T} {prose(140, 8)}", f"{Y} {T} {prose(140, 9)}"
+
+
 def build(root):
     c = Corpus(root)
+    fb = prose(4000, 4)
+    texts = {"FB": fb, "FC": fb, "FD": fb[100:], "FE": fb,
+             "QA": P1 + FILLER + P2 + FILLER, "QT": P1[:HALF] + P2 + P1[HALF:] + FILLER,
+             "QM1": P1 + FILLER, "QM2": P1 + FILLER, "QS": P1 + P2 + FILLER, "QB1": P2 + FILLER, "QB2": P2 + FILLER}
+    for prefix in "LM":
+        texts.update({prefix + name: text + " " + FILLER for name, text in
+                      (("X", X), ("B", X), ("C", X), ("D", Y), ("E", Y), ("F", Y))})
+    texts.update({name: T + " " + FILLER for name in ("MA", "MG", "MH")})
     for name, year in (("A", 1600), ("B", 1650), ("C", 1700), ("D", 1750),
                        ("E", 1600), ("F", 1700), ("G", 1700), ("H", 1700), ("I", 1700), ("J", 1700),
                        ("K", 1600), ("L", 1700), ("M", 1700), ("N", 1700), ("O", 1700),
@@ -80,8 +108,12 @@ def build(root):
                        ("DD", 1600), ("P1", 1700), ("P2", 1700), ("P3", 1700), ("P4", 1700), ("P5", 1700),
                        ("GG", 1750), ("BR", 1800),
                        ("RR", 1600), ("RA1", 1700), ("RA2", 1700), ("RB1", 1700), ("RB2", 1700), ("RS", 1750),
-                       ("NR", 1600), ("NA1", 1700), ("NA2", 1700), ("NB1", 1700), ("NB2", 1700), ("NT", 1700)):
-        c.doc(name, year)
+                       ("NR", 1600), ("NA1", 1700), ("NA2", 1700), ("NB1", 1700), ("NB2", 1700), ("NT", 1700),
+                       ("QA", 1600), ("QT", 1700), ("QM1", 1700), ("QM2", 1700), ("QS", 1700), ("QB1", 1700),
+                       ("QB2", 1700), ("LX", 1600), ("LB", 1700), ("LC", 1700), ("LD", 1650), ("LE", 1700),
+                       ("LF", 1700), ("MA", 1550), ("MG", 1700), ("MH", 1700), ("MX", 1600), ("MB", 1700),
+                       ("MC", 1700), ("MD", 1650), ("ME", 1700), ("MF", 1700)):
+        c.doc(name, year, text=texts.get(name))
     # one passage in A, reached through three windows of different extents
     c.align("A", 100, 400, "B", 0, 300)
     c.align("A", 120, 380, "C", 0, 260)
@@ -149,6 +181,32 @@ def build(root):
     c.align("NR", 605, 895, "NB2", 0, 290)
     c.align("NR", 610, 890, "NT", 150, 350)
     c.align("NB1", 0, 300, "NT", 150, 350)
+    # QA's two passages, each with its reuses; QT's quotation, the second inside the first, is aligned
+    # with QA at the second only, and as a whole with QM1 and QM2, which hold the first, and QS, both
+    n1, n2, q2 = len(P1), len(P2), len(P1) + len(FILLER)
+    for other in ("QM1", "QM2", "QS"):
+        c.align("QA", 0, n1, other, 0, n1)
+    c.align("QA", q2, q2 + n2, "QT", HALF, HALF + n2)
+    for other in ("QB1", "QB2"):
+        c.align("QA", q2, q2 + n2, other, 0, n2)
+    for other in ("QM1", "QM2"):
+        c.align(other, 0, n1, "QT", 0, n1 + n2)
+    c.align("QS", 0, n1 + n2, "QT", 0, n1 + n2)
+    # B and E reuse two families' passages, both holding one phrase, and are aligned at that phrase
+    # alone; in the M documents the phrase has a family of its own, which B is in through G
+    x, y, t = len(X), len(Y), len(T)
+    tx, ty = X.index(T), Y.index(T)
+    for prefix in "LM":
+        for other in "BC":
+            c.align(prefix + "X", 0, x, prefix + other, 0, x)
+        for other in "EF":
+            c.align(prefix + "D", 0, y, prefix + other, 0, y)
+        c.align(prefix + "B", 0, x, prefix + "C", 0, x)
+        c.align(prefix + "E", 0, y, prefix + "F", 0, y)
+        c.align(prefix + "B", tx, tx + t, prefix + "E", ty, ty + t)
+    for other in ("MG", "MH"):
+        c.align("MA", 0, t, other, 0, t)
+    c.align("MG", 0, t, "MB", tx, tx + t)
     # S is the earliest occurrence but only ever a target
     c.align("T", 0, 200, "S", 0, 200)
     c.align("T", 0, 200, "U", 0, 200)
@@ -166,7 +224,9 @@ def run(corpus, root, workers):
     with open(groups_file, "rb") as handle:
         groups_raw = handle.read()
     rows = {r["group_id"]: r for r in map(orjson.loads, groups_raw.splitlines())}
-    return results, rows, groups_raw
+    with open(os.path.join(work, "passage_group_places.jsonl"), "rb") as handle:
+        places = [orjson.loads(line) for line in handle]
+    return results, rows, groups_raw, places
 
 
 def main():
@@ -174,7 +234,7 @@ def main():
     saved_floor = bf._PARALLEL_FLOOR
     try:
         corpus = build(root)
-        results, rows, serial_groups = run(corpus, root, 1)
+        results, rows, serial_groups, places = run(corpus, root, 1)
         path = {name: p for name, (p, _, _) in corpus.docs.items()}
 
         def families_of(source, s0, s1):
@@ -246,13 +306,30 @@ def main():
               {r["source_end_byte"]: r["source_start_byte"] for r in row_at("YA")}.get(600) == 250)
         check("... but not many words before",
               {r["source_end_byte"]: r["source_start_byte"] for r in row_at("YB")}.get(600) == 300)
+        first, second = families_of("QA", 0, len(P1)), families_of("QA", len(P1) + len(FILLER), len(P1) + len(FILLER) + len(P2))
+        check("a document in a family only through a partner, holding none of its passage, leaves it",
+              families_of("QM1", 0, len(P1)) == first and len(first) == 1 and not first & second)
+        check("... one holding it stays", families_of("QS", 0, len(P1) + len(P2)) == first | second)
+        check("... and the family counts the documents left",
+              rows[next(iter(second))]["count"] == 5 and rows[next(iter(first))]["count"] == 5)
+        held = {os.path.basename(p["filename"]) for p in places if p["group_id"] == next(iter(second))}
+        check("... and has a place for each, the anchor's document apart", held == {"QT.txt", "QS.txt", "QB1.txt", "QB2.txt"})
+        lx, ld, lt = families_of("LX", 0, len(X)), families_of("LD", 0, len(Y)), families_of("LB", X.index(T), X.index(T) + len(T))
+        check("an alignment no family of its ends fits forms a family of its own",
+              len(lt) == 1 and not lt & (lx | ld) and rows[next(iter(lt))]["count"] == 2
+              and rows[next(iter(lt))]["source_filename"] == path["LB"])
+        check("... which leaves the others their own documents",
+              rows[next(iter(lx))]["count"] == 3 and rows[next(iter(ld))]["count"] == 3)
+        mz, mt = families_of("MA", 0, len(T)), families_of("MB", X.index(T), X.index(T) + len(T))
+        check("... or joins a family whose passage both its ends hold", mt == mz and rows[next(iter(mz))]["count"] == 5)
         check("every alignment is in a family", all(r["group_id"] for r in results))
         check("every row has the same fields in the same order", len({tuple(r) for r in rows.values()}) == 1)
 
         bf._PARALLEL_FLOOR = 0  # the file is tiny: make the output steps split it anyway
-        parallel_results, _, parallel_groups = run(corpus, root, 4)
+        parallel_results, _, parallel_groups, parallel_places = run(corpus, root, 4)
         check("parallel output matches serial",
-              parallel_results == results and sorted(parallel_groups.splitlines()) == sorted(serial_groups.splitlines()))
+              parallel_results == results and sorted(parallel_groups.splitlines()) == sorted(serial_groups.splitlines())
+              and parallel_places == places)
     finally:
         bf._PARALLEL_FLOOR = saved_floor
         shutil.rmtree(root, ignore_errors=True)

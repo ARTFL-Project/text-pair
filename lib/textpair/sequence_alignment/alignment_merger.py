@@ -4,7 +4,8 @@ Every alignment has two ends, spans of text in two documents. At each place in a
 document, the ends that overlap are carved into sites, each built around the passage
 most of them cover. A family is then the earliest site of a passage together with the
 sites aligned directly with it. A window running on over several passages counts under
-each of them, and anchors no family of its own.
+each of them, and anchors no family of its own. A document in a family only through its
+partners stays in it if it holds at least half of the family's passage (family_places).
 """
 
 import contextlib
@@ -23,6 +24,7 @@ from tqdm import tqdm
 
 from textpair.utils import clean_passage
 
+from . import family_places
 from .banality_finder import (
     _bump,
     _concatenate,
@@ -35,7 +37,7 @@ from .banality_finder import (
 
 
 _STEPS = ("reading alignments", "finding passages", "forming families",
-          "writing group sources", "rewriting results")
+          "projecting passages onto their reuses", "writing group sources", "rewriting results")
 
 
 def _label(step: int, doing: str | None = None) -> str:
@@ -55,6 +57,7 @@ _CONTAIN = 0.8   # a window holding this much of a core, but too long to join, i
 _ADOPT = 0.5     # a site joins the family holding most of its partners once this share are placed
 _LEAD_WORDS = 5  # words a family's passage may start before its core, where one of its reuses starts
 _LEAD_BYTES = 4096  # ... read back no further than this
+_HOLDS = 0.5     # a document in a family only through its partners stays when it holds this much of its passage
 _WORD = re.compile(r"\w+")
 _UNDATED = 9999
 _NONE = -(1 << 62)
@@ -545,10 +548,11 @@ def _group_lists(window_of, site_of, family, listed_offsets, listed):
 
 
 class _Families:
-    """What the two output steps need from the grouping."""
+    """What the output steps need from the grouping, and what settling families on their places needs."""
 
-    __slots__ = ("names", "site_file", "core_s", "core_e", "anchors", "shown_s", "documents",
-                 "rep_passage", "rep_family", "rep_side", "list_offsets", "list_members")
+    __slots__ = ("names", "years", "site_file", "core_s", "core_e", "anchors", "shown_s", "documents", "rep_end",
+                 "rep_passage", "rep_family", "rep_side", "list_offsets", "list_members",
+                 "window_of", "wf", "ws", "we", "window_family", "listed_offsets", "listed")
 
     def group_ids(self, passage_id: int) -> bytes:
         o = self.list_offsets
@@ -557,6 +561,28 @@ class _Families:
         return orjson.dumps(self.list_members[o[passage_id]:o[passage_id + 1]], option=orjson.OPT_SERIALIZE_NUMPY)
 
     __getitem__ = group_ids
+
+
+def _document_keys(list_offsets, list_members, window_of, wf, n_files):
+    """(family, file) keys of a family's documents: those of both ends of the alignments
+    carrying or listing it, its anchor's too."""
+    per_alignment = np.repeat(np.arange(list_offsets.shape[0] - 1), np.diff(list_offsets))
+    return np.unique(np.concatenate((list_members * n_files + wf[window_of[2 * per_alignment]],
+                                     list_members * n_files + wf[window_of[2 * per_alignment + 1]])))
+
+
+def _documents(list_offsets, list_members, window_of, wf, n_files, n_families):
+    """Each family's document count."""
+    keys = _document_keys(list_offsets, list_members, window_of, wf, n_files)
+    return np.bincount(keys // n_files, minlength=n_families)
+
+
+def _order_rows(result: _Families) -> None:
+    """Families in the order of the records their rows come from."""
+    by_passage = np.argsort(result.rep_end // 2, kind="stable")
+    result.rep_passage = (result.rep_end // 2)[by_passage]
+    result.rep_family = by_passage
+    result.rep_side = (result.rep_end % 2)[by_passage]
 
 
 def group_passages(corpus: list) -> _Families:
@@ -613,26 +639,19 @@ def group_passages(corpus: list) -> _Families:
     listed_family = family[held_site]
     pairs = np.unique(held_window * n_families + listed_family) if held_site.size else np.empty(0, np.int64)
     listed_offsets = np.concatenate(([0], np.cumsum(np.bincount(pairs // n_families, minlength=wf.shape[0])))).astype(np.int64)
-    list_offsets, list_members = _group_lists(window_of, site_of, family, listed_offsets, pairs % n_families)
-
-    # a family's documents: those of both ends of the alignments carrying or listing it, its anchor's too
-    per_alignment = np.repeat(np.arange(list_offsets.shape[0] - 1), np.diff(list_offsets))
-    doc_keys = np.unique(np.concatenate((list_members * n_files + wf[window_of[2 * per_alignment]],
-                                         list_members * n_files + wf[window_of[2 * per_alignment + 1]])))
-    del per_alignment
-    documents = np.bincount(doc_keys // n_files, minlength=n_families)
-    del doc_keys
+    listed = pairs % n_families
+    list_offsets, list_members = _group_lists(window_of, site_of, family, listed_offsets, listed)
 
     result = _Families()
-    result.names = names
+    result.names, result.years = names, years
     result.site_file, result.core_s, result.core_e = site_file, core_s, core_e
-    result.anchors, result.shown_s, result.documents = anchors, shown_s, documents
-    rep_end = first_end[first[anchors]]  # a family's row comes from its anchor's first window
-    by_passage = np.argsort(rep_end // 2, kind="stable")
-    result.rep_passage = (rep_end // 2)[by_passage]
-    result.rep_family = by_passage
-    result.rep_side = (rep_end % 2)[by_passage]
+    result.anchors, result.shown_s = anchors, shown_s
+    result.documents = _documents(list_offsets, list_members, window_of, wf, n_files, n_families)
+    result.rep_end = first_end[first[anchors]]  # a family's row comes from its anchor's first window
+    _order_rows(result)
     result.list_offsets, result.list_members = list_offsets, list_members
+    result.window_of, result.wf, result.ws, result.we = window_of, wf, ws, we
+    result.window_family, result.listed_offsets, result.listed = family[site_of], listed_offsets, listed
     return result
 
 
@@ -829,7 +848,7 @@ def _count_segment(job: tuple[str, int, int, str]) -> int:
 
 def _segment_bases(path: str, segments: list[tuple[int, int]], count: int) -> dict[int, int]:
     """The passage id each segment starts at, keyed by offset: frames don't record it."""
-    counts = _run_segments(_count_segment, path, segments, count, _label(4, "locating records"))
+    counts = _run_segments(_count_segment, path, segments, count, _label(5, "locating records"))
     bases = {}
     running = 0
     for (offset, _size), found in zip(segments, counts):
@@ -846,18 +865,243 @@ def _segment_plan(results_file: str, count: int, workers: int):
     return segments, _segment_bases(results_file, segments, count)
 
 
+@njit(nogil=True, cache=True)
+def _place_keys(window_of, list_offsets, list_members, wf, anchor_file, n_windows):
+    """(family, window) keys of the ends of every family's alignments outside its anchor's
+    document, sorted: by family, then file and start, the order windows are numbered in."""
+    keys = np.empty(2 * list_members.shape[0], np.int64)
+    m = 0
+    for k in range(list_offsets.shape[0] - 1):
+        for j in range(list_offsets[k], list_offsets[k + 1]):
+            g = list_members[j]
+            for e in (2 * k, 2 * k + 1):
+                w = window_of[e]
+                if wf[w] != anchor_file[g]:
+                    keys[m] = g * n_windows + w
+                    m += 1
+    return np.unique(keys[:m])
+
+
+@njit(nogil=True, cache=True)
+def _native(keys, n_windows, window_family, listed_offsets, listed):
+    """Whether each (family, window) is in that family of itself: its site's, or one listing it."""
+    out = np.empty(keys.shape[0], np.bool_)
+    for i in range(keys.shape[0]):
+        g, w = keys[i] // n_windows, keys[i] % n_windows
+        found = window_family[w] == g
+        for j in range(listed_offsets[w], listed_offsets[w + 1]):
+            found = found or listed[j] == g
+        out[i] = found
+    return out
+
+
+@njit(nogil=True, cache=True)
+def _without(window_of, list_offsets, list_members, gone, n_windows):
+    """Each alignment's families, less those an end of it is gone from (`gone`: sorted
+    (family, window) keys)."""
+    offsets = np.zeros_like(list_offsets)
+    members = np.empty_like(list_members)
+    m = 0
+    for k in range(list_offsets.shape[0] - 1):
+        a, b = window_of[2 * k], window_of[2 * k + 1]
+        for j in range(list_offsets[k], list_offsets[k + 1]):
+            g = list_members[j]
+            ka, kb = g * n_windows + a, g * n_windows + b
+            ia, ib = np.searchsorted(gone, ka), np.searchsorted(gone, kb)
+            if not (ia < gone.shape[0] and gone[ia] == ka or ib < gone.shape[0] and gone[ib] == kb):
+                members[m] = g
+                m += 1
+        offsets[k + 1] = m
+    return offsets, members[:m].copy()
+
+
+@njit(nogil=True, cache=True)
+def _overlaps(qf, qs, qe, tf, ts, te):
+    """(query, target) pairs overlapping by half the shorter of the two or more; targets
+    sorted by file and start."""
+    qi, ti = np.empty(0, np.int64), np.empty(0, np.int64)
+    n = 0
+    for step in range(2):  # count, then fill
+        if step:
+            qi, ti = np.empty(n, np.int64), np.empty(n, np.int64)
+            n = 0
+        for q in range(qf.shape[0]):
+            j = np.searchsorted(tf, qf[q])
+            while j < tf.shape[0] and tf[j] == qf[q] and ts[j] < qe[q]:
+                overlap = min(te[j], qe[q]) - max(ts[j], qs[q])
+                if overlap > 0 and 2 * overlap >= min(te[j] - ts[j], qe[q] - qs[q]):
+                    if step:
+                        qi[n], ti[n] = q, j
+                    n += 1
+                j += 1
+    return qi, ti
+
+
+@njit(nogil=True, cache=True)
+def _relisted(list_offsets, list_members, which, offsets, members):
+    """Each alignment's families, those of `which` (sorted) replaced by `offsets`/`members`."""
+    out_offsets = np.zeros_like(list_offsets)
+    out = np.empty(list_members.shape[0] + members.shape[0], np.int64)
+    m = j = 0
+    for k in range(list_offsets.shape[0] - 1):
+        if j < which.shape[0] and which[j] == k:
+            lo, hi, source = offsets[j], offsets[j + 1], members
+            j += 1
+        else:
+            lo, hi, source = list_offsets[k], list_offsets[k + 1], list_members
+        for x in range(lo, hi):
+            out[m] = source[x]
+            m += 1
+        out_offsets[k + 1] = m
+    return out_offsets, out[:m].copy()
+
+
+def _homes(f: _Families, orphans, places, alive, passages, workers):
+    """For alignments no family of theirs fits, the family both their ends hold at least half
+    the passage of, among those whose places or passage overlap them; -1 where there is none.
+    In its anchor's document, an end holds a passage it overlaps half of."""
+    pg, pf, ps, pe = places
+    anchor_file, p_start, p_end = passages
+    n_families = anchor_file.shape[0]
+    w = f.window_of[np.stack((2 * orphans, 2 * orphans + 1), axis=1).ravel()]
+    qf, qs, qe = f.wf[w].astype(np.int64), f.ws[w], f.we[w]
+    live = np.flatnonzero(alive)
+    tg = np.concatenate((pg[live], np.arange(n_families)))
+    tf = np.concatenate((pf[live], anchor_file)).astype(np.int64)
+    ts, te = np.concatenate((ps[live], p_start)), np.concatenate((pe[live], p_end))
+    order = np.lexsort((ts, tf))
+    qi, ti = _overlaps(qf, qs, qe, tf[order], ts[order], te[order])
+    found = np.unique(qi // 2 * n_families + tg[order][ti])
+    lo, lm = f.list_offsets, f.list_members  # the families they had, already found wanting
+    rows = np.repeat(np.arange(orphans.shape[0]), lo[orphans + 1] - lo[orphans])
+    had = rows * n_families + lm[np.concatenate([np.arange(lo[k], lo[k + 1]) for k in orphans])]
+    found = np.setdiff1d(found, had)
+    homes = np.full(orphans.shape[0], -1, np.int64)
+    if not found.size:
+        return homes
+    o, h = found // n_families, found % n_families
+    share = np.zeros((found.shape[0], 2))
+    elsewhere = []
+    for side in range(2):
+        e = 2 * o + side
+        in_anchor = qf[e] == anchor_file[h]
+        overlap = np.minimum(qe[e], p_end[h]) - np.maximum(qs[e], p_start[h])
+        share[in_anchor, side] = (np.maximum(overlap, 0) / np.maximum(p_end[h] - p_start[h], 1))[in_anchor]
+        elsewhere.append((np.flatnonzero(~in_anchor), side, qf[e][~in_anchor], qs[e][~in_anchor], qe[e][~in_anchor]))
+    rows = np.concatenate([x[0] for x in elsewhere])
+    sides = np.concatenate([np.full(x[0].shape[0], x[1]) for x in elsewhere])
+    rf, rs, re_ = (np.concatenate([x[k] for x in elsewhere]) for k in (2, 3, 4))
+    if rows.size:
+        by = np.lexsort((re_, rs, rf, h[rows]))
+        g_, f_, s_, e_, of = family_places.places(h[rows][by], rf[by], rs[by], re_[by])
+        held = family_places.project(f.names, passages, g_, f_, s_, e_, workers,
+                                     _label(4, "projecting passages onto alignments no family fits"))[2]
+        share[rows[by], sides[by]] = held[of]
+    score = share.min(axis=1)
+    fits = np.flatnonzero(score >= _HOLDS)
+    best = fits[np.lexsort((h[fits], -score[fits], o[fits]))]  # by orphan, best first, earliest family on a tie
+    first = best[np.concatenate(([True], o[best][1:] != o[best][:-1]))] if best.size else best
+    homes[o[first]] = h[first]
+    return homes
+
+
+def settle_families(families: _Families, places_file: str, workers: int = 1, context_size: int = 300) -> dict:
+    """Project each family's passage onto its places, and keep in a family only the documents
+    in it of themselves or holding at least half its passage: an alignment that brought in one
+    that does not leaves the family. An alignment that leaves every family it had goes to one
+    whose passage both its ends hold, or else is grouped with the others left over into families
+    of their own; a family no alignment is left in goes. Writes the places' rows; returns counts."""
+    f = families
+    n_windows = f.wf.shape[0]
+
+    def passages():
+        return f.site_file[f.anchors], f.shown_s, f.core_e[f.anchors]
+
+    def placed(list_offsets, list_members):
+        keys = _place_keys(f.window_of, list_offsets, list_members, f.wf, f.site_file[f.anchors], n_windows)
+        w = keys % n_windows
+        return keys, family_places.places(keys // n_windows, f.wf[w], f.ws[w], f.we[w])
+
+    keys, (pg, pf, ps, pe, place_of) = placed(f.list_offsets, f.list_members)
+    shown = family_places.project(f.names, passages(), pg, pf, ps, pe, workers, _label(4))
+    held = np.zeros(pg.shape[0], np.bool_)
+    held[place_of[_native(keys, n_windows, f.window_family, f.listed_offsets, f.listed)]] = True
+    gone = ~held & (shown[2] < _HOLDS)
+    counts = dict(left=0, went=0, orphans=0, homed=0, founded=0, joined=0)
+    if gone.any():
+        n_families = f.anchors.shape[0]
+        list_offsets, list_members = _without(f.window_of, f.list_offsets, f.list_members,
+                                              keys[gone[place_of]], n_windows)
+        orphans = np.flatnonzero(np.diff(list_offsets) == 0)
+        if orphans.size:
+            homes = _homes(f, orphans, (pg, pf, ps, pe), ~gone, passages(), workers)
+            lists = [np.array([h]) for h in homes]
+            rest = orphans[homes < 0]
+            if rest.size:
+                ends = np.stack((2 * rest, 2 * rest + 1), axis=1).ravel()
+                w = f.window_of[ends]
+                sub = group_passages([f.names, f.years, f.wf[w], f.ws[w], f.we[w]])
+                n_sites = f.site_file.shape[0]
+                f.site_file = np.concatenate((f.site_file, sub.site_file))
+                f.core_s, f.core_e = np.concatenate((f.core_s, sub.core_s)), np.concatenate((f.core_e, sub.core_e))
+                f.anchors = np.concatenate((f.anchors, sub.anchors + n_sites))
+                f.shown_s = np.concatenate((f.shown_s, sub.shown_s))
+                f.rep_end = np.concatenate((f.rep_end, 2 * rest[sub.rep_end // 2] + sub.rep_end % 2))
+                # a new family anchored on the very passage of another is that family
+                anchor_keys = np.stack((f.site_file[f.anchors], f.core_s[f.anchors], f.core_e[f.anchors]), axis=1)
+                _, first_of, inverse = np.unique(anchor_keys, axis=0, return_index=True, return_inverse=True)
+                alias = first_of[inverse.ravel()]
+                for i, j in enumerate(np.flatnonzero(homes < 0)):
+                    lists[j] = alias[sub.list_members[sub.list_offsets[i]:sub.list_offsets[i + 1]] + n_families]
+            offsets = np.concatenate(([0], np.cumsum([x.shape[0] for x in lists]))).astype(np.int64)
+            list_offsets, list_members = _relisted(list_offsets, list_members, orphans, offsets,
+                                                   np.concatenate(lists).astype(np.int64))
+            counts.update(orphans=int(orphans.size), homed=int((homes >= 0).sum()))
+        # the places left, as projected where they are unchanged
+        _, (qg, qf, qs, qe, _) = placed(list_offsets, list_members)
+        same = family_places.same_places(pg, pf, ps, pe, qg, qf, qs, qe)
+        shown = [values[np.maximum(same, 0)] for values in shown]
+        new = same < 0
+        if new.any():
+            fresh = family_places.project(f.names, passages(), qg[new], qf[new], qs[new], qe[new], workers,
+                                          _label(4, "projecting the places that changed"))
+            for values, update in zip(shown, fresh):
+                values[new] = update
+        n_all, n_files = f.anchors.shape[0], len(f.names)
+        before = _document_keys(f.list_offsets, f.list_members, f.window_of, f.wf, n_files)
+        after = _document_keys(list_offsets, list_members, f.window_of, f.wf, n_files)
+        documents = np.bincount(after // n_files, minlength=n_all)
+        kept = documents > 0
+        counts.update(left=int(np.setdiff1d(before, after).size), went=int((~kept[:n_families]).sum()),
+                      founded=int(kept[n_families:].sum()), joined=int(np.setdiff1d(after[after // n_files < n_families], before).size))
+        renumber = np.cumsum(kept) - 1
+        pg, pf, ps, pe = renumber[qg], qf, qs, qe
+        f.anchors, f.shown_s, f.rep_end = f.anchors[kept], f.shown_s[kept], f.rep_end[kept]
+        f.list_offsets, f.list_members = list_offsets, renumber[list_members]
+        f.documents = documents[kept]
+        # no two families show the same passage, the new ones' included
+        f.shown_s = _kept_apart(f.site_file[f.anchors], f.core_s[f.anchors], f.core_e[f.anchors], f.shown_s)
+        _order_rows(f)
+    counts["places"] = family_places.write_places(places_file, f.names, pg, pf, ps, pe, shown, workers,
+                                                  context_size, _label(4, "writing places"))
+    f.window_of = f.wf = f.ws = f.we = f.window_family = f.listed_offsets = f.listed = None
+    return counts
+
+
 def merge_alignments(results_file: str, count: int, workers: int = 1, context_size: int = 300):
-    """Group alignments into passage families, write the group file, and project each
-    family's passage onto the places that reuse it (family_places)."""
+    """Group alignments into passage families, settle them on the places that reuse their
+    passages (family_places), and write the group and places files."""
     corpus = read_ends(results_file, count)
     if not corpus[3].shape[0]:
         _status()
         print("  No passage groups found.")
         return None
     families = group_passages(corpus)
+    places_file = os.path.join(os.path.dirname(results_file), "passage_group_places.jsonl")
+    settled = settle_families(families, places_file, workers, context_size)
 
     # Both output steps read the records back, so they share one split of the file
-    _status(_label(4))
+    _status(_label(5))
     segments, bases = _segment_plan(results_file, count, workers)
 
     groups_file = os.path.join(os.path.dirname(results_file), "passage_group_source.jsonl")
@@ -870,8 +1114,11 @@ def merge_alignments(results_file: str, count: int, workers: int = 1, context_si
 
     _status()
     print(f"  {groups:,} passage groups, written to {os.path.basename(groups_file)}")
-    from .family_places import project_places  # it needs the group ids just written into the results
-    project_places(results_file, groups_file, workers, context_size)
+    print(f"  {settled['places']:,} places reusing them, written to {os.path.basename(places_file)}")
+    print(f"  {settled['left']:,} documents left a family they were in only through a partner, and "
+          f"{settled['went']:,} families with them; of the {settled['orphans']:,} alignments then in none, "
+          f"{settled['homed']:,} joined a family whose passage both their ends hold, bringing "
+          f"{settled['joined']:,} documents, and the rest formed {settled['founded']:,} families of their own", flush=True)
     return groups_file
 
 
@@ -920,19 +1167,19 @@ def rewrite_results(results_file: str, target: str, group_lists: _Families,
         with contextlib.ExitStack() as stack:
             input_file = stack.enter_context(lz4.frame.open(results_file))
             output_file = stack.enter_context(_Framer(stack.enter_context(open(target, "wb"))))
-            bar = stack.enter_context(tqdm(total=count, desc=_label(5), leave=False))
+            bar = stack.enter_context(tqdm(total=count, desc=_label(6), leave=False))
             _rewrite_records(input_file, output_file, group_lists, 0, bar=bar)
         return
 
     _SHARED.update(bases=bases, group_lists=group_lists)
     try:
-        parts = _run_segments(_rewrite_segment, results_file, segments, count, _label(5))
+        parts = _run_segments(_rewrite_segment, results_file, segments, count, _label(6))
     finally:
         # A module global, so a failed pass would otherwise leave the lists
         # pinned for the rest of the run.
         for key in ("bases", "group_lists"):
             _SHARED.pop(key, None)
-    _status(_label(5))
+    _status(_label(6))
     _join_parts(parts, target)
 
 
@@ -949,18 +1196,18 @@ def write_group_sources(results_file: str, groups_file: str, families: _Families
         with contextlib.ExitStack() as stack:
             input_file = stack.enter_context(lz4.frame.open(results_file))
             output_file = stack.enter_context(open(groups_file, "wb"))
-            bar = stack.enter_context(tqdm(total=total, desc=_label(4), leave=False))
+            bar = stack.enter_context(tqdm(total=total, desc=_label(5), leave=False))
             _group_source_records(input_file, output_file, families, 0, bar=bar)
         return total
 
     _SHARED.update(bases=bases, families=families)
     try:
-        parts = _run_segments(_group_source_segment, results_file, segments, total, _label(4))
+        parts = _run_segments(_group_source_segment, results_file, segments, total, _label(5))
     finally:
         for key in ("bases", "families"):
             _SHARED.pop(key, None)
     # Plain jsonl, not lz4, so the parts join as they are.
-    _status(_label(4))
+    _status(_label(5))
     _join_parts(parts, groups_file)
     return total
 
