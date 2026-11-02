@@ -5,8 +5,9 @@
 
 Each case is two small documents and a passage the matcher could have found in them: the
 words its ngrams leave out at either end are taken, the extension stops where the texts
-part, a last word the two do not share is left out, markup is stepped over, a document's
-limits are kept to, and comparing the pair the other way round extends it the same way.
+part, a last word the two do not share is left out, as are words only one side has there,
+markup is stepped over, a document's limits are kept to, and comparing the pair the other
+way round extends it the same way.
 Passages of one pair that overlap by half in both documents once extended become one.
 """
 import random
@@ -70,6 +71,18 @@ def main():
     codes_d, kinds_d = word_codes("Act. 4. 28")
     i, j = extension._trim(codes_c, kinds_c, len(codes_c), codes_d, kinds_d, len(codes_d))
     check("... a last word that is not, cut back to the one before", (i, j) == (6, 6))
+    codes_e, kinds_e = word_codes("le peuple est las et")
+    codes_f, kinds_f = word_codes("le peuple est las de")
+    i, j = extension._trim(codes_e, kinds_e, len(codes_e), codes_f, kinds_f, len(codes_f) - 1)
+    check("... a last word one side alone has, and one the extension stops inside, left out",
+          (i, j) == (len("le peuple est las"), len("le peuple est las")))
+
+    a, b, _, _ = extended("lui procurez les bénédictions du ciel. C'est ce que je vous souhaite au nom du Père et du Fils",
+                          "souhaite au nom du Père et du Fils",
+                          "l'éternelle jouissance. C'est, mes frères, ce que je vous souhaite, au nom du père, et du fils",
+                          "souhaite, au nom du père, et du fils")
+    check("words one side alone has where the texts part do not lose the shared ones before them",
+          a.startswith("ce que je vous souhaite") and b.startswith("ce que je vous souhaite"))
 
     a, b, _, _ = extended("<p>dit-il: <hi>le</hi> peuple est las de vengeance</hi>, et rien</p>", "peuple est las de vengeance",
                           "<l>Il le dit:</l> <l>le peuple est las de vengeance, et rien de plus</l>", "peuple est las de vengeance")

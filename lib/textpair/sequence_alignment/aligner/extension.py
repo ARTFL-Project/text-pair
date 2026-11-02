@@ -258,17 +258,17 @@ def _last_word(kinds, end):
 
 
 @njit(cache=True)
-def _alike(a, s1, e1, b, s2, e2):
-    """Two words with at least ALIKE of their letters in common, in order; past LONG_WORD
-    letters, which no word of a language has, only the same letters."""
+def _common(a, s1, e1, b, s2, e2):
+    """The letters two words have in common, in order; past LONG_WORD letters, which no word
+    of a language has, all of them if they are the same letters and none otherwise."""
     n, m = e1 - s1, e2 - s2
     if n > LONG_WORD or m > LONG_WORD:
         if n != m:
-            return False
+            return 0
         for k in range(n):
             if a[s1 + k] != b[s2 + k]:
-                return False
-        return True
+                return 0
+        return n
     row = np.zeros(m + 1, np.int64)
     for i in range(n):
         diagonal = 0
@@ -276,25 +276,49 @@ def _alike(a, s1, e1, b, s2, e2):
             above = row[j + 1]
             row[j + 1] = diagonal + 1 if a[s1 + i] == b[s2 + j] else max(above, row[j])
             diagonal = above
-    return 2 * row[m] >= ALIKE * (n + m)
+    return row[m]
+
+
+@njit(cache=True)
+def _words_before(kinds, end):
+    """(starts, ends) of the words before `end`, last first."""
+    starts = np.empty(end, np.int64)
+    ends = np.empty(end, np.int64)
+    n = 0
+    while True:
+        s, e = _last_word(kinds, end)
+        if s < 0:
+            return starts[:n], ends[:n]
+        starts[n], ends[n] = s, e
+        n += 1
+        end = s
 
 
 @njit(cache=True)
 def _trim(a, ka, i, b, kb, j):
-    """i and j cut back to the ends of the last two words that are alike: a word the
-    extension stops inside does not count, nor what follows the last word."""
+    """i and j cut back to the ends of the nearest two words that are alike, by the words
+    left out on both sides, as many on each and the most alike first: a word the extension
+    stops inside does not count, nor what follows the last word."""
     if 0 < i < len(a) and ka[i - 1] == 1 and ka[i] == 1:
         i = _last_word(ka, i)[0]
     if 0 < j < len(b) and kb[j - 1] == 1 and kb[j] == 1:
         j = _last_word(kb, j)[0]
-    while True:
-        s1, e1 = _last_word(ka, i)
-        s2, e2 = _last_word(kb, j)
-        if s1 < 0 or s2 < 0:
-            return 0, 0
-        if _alike(a, s1, e1, b, s2, e2):
-            return e1, e2
-        i, j = s1, s2
+    sa, ea = _words_before(ka, i)
+    sb, eb = _words_before(kb, j)
+    na, nb = sa.shape[0], sb.shape[0]
+    for left_out in range(na + nb - 1):
+        found, uneven, common, letters = -1, 0, 0, 1
+        for da in range(max(0, left_out - nb + 1), min(left_out, na - 1) + 1):
+            db = left_out - da
+            if found >= 0 and abs(da - db) > uneven:
+                continue
+            c = _common(a, sa[da], ea[da], b, sb[db], eb[db])
+            n = ea[da] - sa[da] + eb[db] - sb[db]
+            if 2 * c >= ALIKE * n and (found < 0 or abs(da - db) < uneven or c * letters > common * n):
+                found, uneven, common, letters = da, abs(da - db), c, n
+        if found >= 0:
+            return ea[found], eb[left_out - found]
+    return 0, 0
 
 
 def _side(buf, at, limit, window, before):
