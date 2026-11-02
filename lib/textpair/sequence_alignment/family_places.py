@@ -6,8 +6,12 @@ counts them. Those ends come from alignments with the passage itself or with ano
 so they may hold more than the passage, or less. Each place's text, with text around it, is
 compared with the family's passage letter by letter (textpair.shared_text, the group page's
 comparison), and the place's passage becomes what it shares with the family's in the same
-order, in whole words, with its context as the alignments have it. What it shares wholly
-outside the place is no evidence of it: such a place shares nothing.
+order, in whole words, with its context as the alignments have it. Only the stretches of
+shared text the place reaches count, those overlapping it or as near it, or each other, as
+shared_text joins stretches, or as the passage has words, if more: what it shares further
+off, as when a phrase of a short passage recurs a paragraph away, is no evidence of it, and
+is compared no more, so that it takes none of the passage's words from the place. A place
+sharing nothing else shares nothing.
 
 The grouper (alignment_merger) builds the places, settles families on what they hold, and
 has the rows written.
@@ -20,7 +24,7 @@ import orjson
 from numba import njit
 from tqdm import tqdm
 
-from textpair.shared_text import Passage
+from textpair.shared_text import BRIDGE, Passage
 
 from .aligner import extension
 from .aligner.output import alignment_to_text
@@ -116,6 +120,56 @@ def _text(buf, start, end, cut=True):
     return folded, kinds, starts + start, ends + start
 
 
+def _reached(found, word_at, p0, p1, reach):
+    """Of the stretches `found` has, those the characters p0 to p1 reach through gaps of
+    `reach` words of the other text or fewer, each one reached reaching on: their (start, end)
+    characters in the passage and the other text, the extent of the other's they and the place
+    cover, and whether any was left out."""
+    r0, r1 = p0, p1
+    kept, left = [], list(found.stretches)
+    while True:
+        reached = []
+        for stretch in left:
+            b0, b1 = stretch[2], stretch[3]
+            if b1 <= r0:
+                gap = word_at[r0 - 1] - word_at[b1 - 1]
+            elif b0 >= r1:
+                gap = word_at[b0 - 1] - word_at[r1 - 1]
+            else:
+                gap = 0
+            if gap <= reach:
+                reached.append(stretch)
+                r0, r1 = min(r0, b0), max(r1, b1)
+        if not reached:
+            return kept, (r0, r1), bool(left)
+        kept += reached
+        left = [stretch for stretch in left if stretch not in reached]
+
+
+def _shared(passage, length, other, kinds, starts, ends, start, end):
+    """What the place (bytes start to end of `other`) shares with the passage in its order, in
+    the stretches it reaches: (the passage's characters, the other's)."""
+    words = (kinds > 0) & np.concatenate(([True], kinds[:-1] == 0)) | (kinds == 2)
+    word_at = np.cumsum(words)
+    p0 = int(np.searchsorted(ends, start, side="right"))
+    p1 = max(int(np.searchsorted(starts, end)), p0 + 1)
+    reach = max(BRIDGE, len(passage.words))
+    found = passage.compare(other, detail=True)
+    kept, (r0, r1), dropped = _reached(found, word_at, p0, p1, reach)
+    c0 = 0
+    if dropped and kept:
+        # compared again on what the place reaches alone, give or take as many words
+        c0 = int(np.searchsorted(word_at, max(word_at[r0] - reach, 1)))
+        c1 = int(np.searchsorted(word_at, word_at[r1 - 1] + reach + 1))
+        found = passage.compare(other[c0:c1], detail=True)
+        kept, _, _ = _reached(found, word_at[c0:c1] - (word_at[c0 - 1] if c0 else 0), p0 - c0, p1 - c0, reach)
+    ours, theirs = np.zeros(length, np.bool_), np.zeros(len(other), np.bool_)
+    for a0, a1, b0, b1 in kept:
+        ours[a0:a1] = found.shared[0][a0:a1] & ~found.moved[0][a0:a1]
+        theirs[c0 + b0:c0 + b1] = found.shared[1][b0:b1] & ~found.moved[1][b0:b1]
+    return ours, theirs
+
+
 _STATE = {}
 
 
@@ -136,9 +190,7 @@ def _project(task):
                 other, kinds, starts, ends = _text(buf, lo, hi)
                 if other:
                     # what the place shares with the passage in the passage's own order
-                    found = passage.compare(other, detail=True)
-                    ours = found.shared[0] & ~found.moved[0]
-                    theirs = found.shared[1] & ~found.moved[1]
+                    ours, theirs = _shared(passage, len(text), other, kinds, starts, ends, start, end)
                     on = np.flatnonzero(theirs & (kinds > 0))
                     if on.size:
                         first, last = _whole_words(kinds, theirs, int(on[0]), int(on[-1]) + 1)

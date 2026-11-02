@@ -286,13 +286,15 @@ def matched_letters(a: str, b: str, open_start: bool = False, open_end: bool = F
 
 class Shared:
     """What two texts share: shared[side] by character, with detail, respelt[side] (shared
-    but spelt otherwise) and moved[side] (shared in another order)."""
+    but spelt otherwise), moved[side] (shared in another order) and stretches, each one's
+    (start, end) characters in the one text and the other."""
 
     def __init__(self, la: int, lb: int, detail: bool):
         self.shared = (np.zeros(la, np.bool_), np.zeros(lb, np.bool_))
         if detail:
             self.respelt = (np.zeros(la, np.bool_), np.zeros(lb, np.bool_))
             self.moved = (np.zeros(la, np.bool_), np.zeros(lb, np.bool_))
+            self.stretches = []
 
 
 class Passage:
@@ -371,6 +373,8 @@ class Passage:
             i1, j1 = stretch[-1][0] + stretch[-1][2], stretch[-1][1] + stretch[-1][2]
             w0, v0 = margin(tiled, i0, -1, 0), margin(tiled_other, j0, -1, 0)
             w1, v1 = margin(tiled, i1, 1, len(self.words)), margin(tiled_other, j1, 1, len(other))
+            if detail:
+                found.stretches.append((self.spans[w0][0], self.spans[w1 - 1][1], starts[v0], ends[v1 - 1]))
             # the tiles, and the words of what lies around and between them both share
             gaps = [((w0, i0), (v0, j0))]
             gaps += [((p[0] + p[2], t[0]), (p[1] + p[2], t[1])) for p, t in zip(stretch, stretch[1:])]

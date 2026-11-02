@@ -5,9 +5,10 @@
 
 One family, its passage in document A, and the places its alignments give in other
 documents: one running on past the passage is cut to it, one holding only part of it is
-grown to the whole of what it shares, overlapping spans in a document are one place, and a
-place that shares nothing with the passage in its order keeps its span, shared 0 -- as does
-one whose shared text lies wholly outside it, where another place of its document has it.
+grown to the whole of what it shares, overlapping spans in a document are one place, words
+of the passage a paragraph away from a place are not its passage, and a place that shares
+nothing with the passage in its order keeps its span, shared 0 -- as does one whose shared
+text lies wholly outside it, where another place of its document has it.
 """
 import os
 import shutil
@@ -28,6 +29,12 @@ TEXTS = {
     "C": f"Taine le cite : {PASSAGE.replace('il y a donc ', '')}. Puis il passe aux jacobins et à leur catéchisme.",
     "E": f"Sorel reprend : {PASSAGE}. Le reste du chapitre parle de diplomatie.",
     "F": "Un tout autre livre, sur la marine et le commerce des Indes, qui cite la commune de Paris et les clubs.",
+    # the passage's first words in a sentence of Gide's own, a paragraph before he quotes it with a
+    # word of his own after them
+    "G": "Il y a donc des questions que je me pose depuis longtemps. Elles touchent aux rapports de "
+         "l'Église avec les gouvernements, aux querelles des parlements et des évêques, à tout ce que le "
+         "siècle a connu de disputes et de libelles. Rousseau écrit qu'il y a donc, dit-il, "
+         f"{PASSAGE.replace('il y a donc ', '')}. Fin.",
 }
 
 
@@ -67,6 +74,7 @@ def main():
         record("A", "une profession de foi purement", "E", "une profession de foi purement")
         record("A", "foi purement civile dont il appartient", "E", "foi purement civile dont il appartient")
         record("B", "la commune de Paris", "F", "la commune de Paris")
+        record("A", "une profession de foi purement civile", "G", "une profession de foi purement civile")
         g, f, s, e = (np.array(column, np.int64) for column in zip(*sorted(ends)))
         pg, pf, ps, pe, of = family_places.places(g, f, s, e)
         passages = tuple(np.array([0] * 7 + [value]) for value in (names.index(path["A"]),) + span("A", PASSAGE))
@@ -80,7 +88,8 @@ def main():
         rows = projected()
         by_doc = {os.path.basename(r["filename"])[0]: r for r in sorted(rows, key=lambda r: -r["start_byte"])}
         check("every document with an end has a place, and each end its own",
-              sorted(by_doc) == ["B", "C", "E", "F"] and len(rows) == 5 and of.tolist() == [0, 0, 1, 2, 3, 3, 4])
+              sorted(by_doc) == ["B", "C", "E", "F", "G"] and len(rows) == 6
+              and of.tolist() == [0, 0, 1, 2, 3, 3, 4, 5])
         b = sorted((r for r in rows if r["filename"] == path["B"]), key=lambda r: r["start_byte"])
         check("a place whose shared text lies wholly outside it keeps its span, sharing nothing",
               (b[1]["passage_start_byte"], b[1]["passage_end_byte"]) == (b[1]["start_byte"], b[1]["end_byte"])
@@ -91,6 +100,9 @@ def main():
               by_doc["C"]["passage"] == PASSAGE.replace("il y a donc ", ""))
         check("overlapping spans in one document are one place, its passage the whole",
               by_doc["E"]["passage"] == PASSAGE and by_doc["E"]["shared"] == 1.0)
+        check("words of the passage a paragraph away from a place are not its passage",
+              by_doc["G"]["passage"] == "il y a donc, dit-il, " + PASSAGE.replace("il y a donc ", "")
+              and by_doc["G"]["shared"] == 1.0)
         f = by_doc["F"]
         check("a place sharing nothing with the passage keeps its span",
               (f["passage_start_byte"], f["passage_end_byte"]) == (f["start_byte"], f["end_byte"]) and f["shared"] == 0.0)
