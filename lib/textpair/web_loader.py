@@ -1156,11 +1156,13 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
     documents, or its negated id among the target ones where no source document has the same id and fields,
     so a search on the later side matches it once. A row holds the family's anchor year (`source_year`, as
     the groups table has it), the ids of the document's values (`v_<field>`, numbered in the order of the
-    values) and of the anchor's (`anchor_<field>`), and masks of the length ranges of the alignments it
-    ends (`source_lengths`, `target_lengths`, bit n for range n of LENGTH_RANGES). `_facet_years` counts
-    each facet's values by the anchor year and `_facet_values` over all the families, with a document
-    (`doc`, as `u`) to read each value from: the anchor's for a source_ field, those found again for a
-    target_ one, the alignments' ranges for a passage length. Document 0, with no values, stands for an
+    values) and of the anchor's (`anchor_<field>`), masks of the length ranges of the alignments it
+    ends (`source_lengths`, `target_lengths`, bit n for range n of LENGTH_RANGES), and how many times the
+    document reuses the passage (`places`: its places in `_family_places`, which load_places_table makes,
+    or 1 without them). `_facet_years` counts each facet's values by the anchor year and `_facet_values`
+    over all the families, with a document (`doc`, as `u`) to read each value from: the families anchored
+    in a document with a source_ field's value, the reuses in documents with a target_ one's, the families
+    with an alignment in a passage length's range. Document 0, with no values, stands for an
     anchor in neither documents table. False, and nothing made, where `_family_rank` has no anchors
     (add_family_anchors) or there is nothing to count. Safe to repeat.
     """
@@ -1201,6 +1203,24 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
     )
     cursor.execute("ALTER TABLE pg_temp.facet_documents ADD PRIMARY KEY (u)")
 
+    # How many times each document found again reuses each family's passage, from its places
+    places = f"{table}_family_places"
+    cursor.execute("DROP TABLE IF EXISTS pg_temp.facet_places")
+    if relation_columns(cursor, places):
+        cursor.execute(
+            f"""CREATE TEMP TABLE facet_places AS SELECT f.rank AS r, d.u, COUNT(*)::int AS n FROM {places} p
+            JOIN {rank} f USING (group_id)
+            JOIN (SELECT DISTINCT source_filename AS filename, source_doc_id AS doc FROM {table}
+                  UNION SELECT DISTINCT target_filename, target_doc_id FROM {table}) files USING (filename)
+            JOIN (SELECT id AS u, source_doc_id AS doc FROM {table}_source_meta
+                  UNION ALL SELECT ft.u, t.target_doc_id FROM {table}_target_meta t
+                  JOIN pg_temp.facet_targets ft ON ft.t = t.id WHERE ft.u < 0) d USING (doc)
+            GROUP BY 1, 2"""
+        )
+    else:
+        cursor.execute("CREATE TEMP TABLE facet_places (r int, u int, n int)")
+    cursor.execute("ALTER TABLE pg_temp.facet_places ADD PRIMARY KEY (r, u)")
+
     # The anchor of each family, as `u`
     cursor.execute(
         f"""CREATE TEMP TABLE facet_anchors AS SELECT f.rank AS r{", g.source_year" if by_year else ""},
@@ -1227,13 +1247,15 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
         *(f"d.v_{name}" for name in fields),
         *(f"ad.v_{name} AS anchor_{name}" for name in fields),
         *(f"e.{side}_lengths" for side in sides),
+        "COALESCE(pl.n, 1) AS places",
     ]
     cursor.execute(
         f"""CREATE TABLE {found} AS SELECT {", ".join(columns)}
         FROM (SELECT r, u{"".join(f", bit_or({side}_lengths) AS {side}_lengths" for side in sides)} FROM ({ends}) ends
               GROUP BY r, u) e
         JOIN pg_temp.facet_documents d USING (u) JOIN pg_temp.facet_anchors a USING (r)
-        JOIN pg_temp.facet_documents ad ON ad.u = a.u ORDER BY e.r, e.u"""
+        JOIN pg_temp.facet_documents ad ON ad.u = a.u LEFT JOIN pg_temp.facet_places pl ON pl.r = e.r AND pl.u = e.u
+        ORDER BY e.r, e.u"""
     )
     cursor.execute(f"ALTER TABLE {found} ADD PRIMARY KEY (r, u)")
     # ANALYZE samples a tenth of the families and documents, so plans would expect too many rows for a few
@@ -1247,7 +1269,8 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
     kept = ", ".join(column.split()[-1].split(".")[-1] for column in columns if column not in ("e.u", "a.source_year"))
     cursor.execute(f"CREATE INDEX u_{found}_idx ON {found}(u{', source_year' if by_year else ''}) INCLUDE ({kept})")
 
-    # The families anchored in a document with each value, found again in one, or with an alignment in each range
+    # The families anchored in a document with each value, the reuses in one, or the families with an alignment
+    # in each range
     def counts(year: str) -> str:
         by = f"{year}, " if year else ""
         statements = []
@@ -1257,8 +1280,7 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
                 f"FROM pg_temp.facet_anchors a JOIN pg_temp.facet_documents d USING (u) GROUP BY {by}d.v_{name}"
             )
             statements.append(
-                f"SELECT 'target_{name}', {by}v_{name}, COUNT(*)::int "
-                f"FROM (SELECT DISTINCT r, {by}v_{name} FROM {found}) p GROUP BY {by}v_{name}"
+                f"SELECT 'target_{name}', {by}v_{name}, SUM(places)::int FROM {found} GROUP BY {by}v_{name}"
             )
         for side in sides:
             length = f"{side}_passage_length"
@@ -1288,7 +1310,9 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
     cursor.execute(f"ALTER TABLE {table}_facet_values ADD PRIMARY KEY (facet, v)")
     cursor.execute(f"VACUUM (ANALYZE) {found}")
     cursor.execute(f"VACUUM (ANALYZE) {table}_facet_values")
-    cursor.execute("DROP TABLE pg_temp.facet_targets, pg_temp.facet_documents, pg_temp.facet_anchors")
+    cursor.execute(
+        "DROP TABLE pg_temp.facet_targets, pg_temp.facet_documents, pg_temp.facet_anchors, pg_temp.facet_places"
+    )
     return True
 
 
@@ -1542,11 +1566,12 @@ def create_web_app(
             network_fields(web_config.searchable_fields(), fields_in_table),
             load_workers(textpair_params),
         )
-        load_family_filter_tables(table, web_config.searchable_fields(), load_workers(textpair_params))
-        load_collection_counts(table)
+        # before the family filter tables, whose facet tables count the reuses by the places
         places_file = os.path.join(os.path.dirname(groups_file), "passage_group_places.jsonl")
         if os.path.exists(places_file):
             load_places_table(places_file, table)
+        load_family_filter_tables(table, web_config.searchable_fields(), load_workers(textpair_params))
+        load_collection_counts(table)
 
     if load_only_db is False:
         print("\n### Setting up Web Application ###", flush=True)

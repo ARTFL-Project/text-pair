@@ -6,7 +6,8 @@
             {{ noun }} across all documents
         </div>
         <div v-else>
-            <strong class="result-count">{{ counts }}</strong> {{ noun }} across all documents
+            <strong class="result-count">{{ counts }}</strong> {{ noun }}<template v-if="reuses">, <strong
+                    class="result-count">{{ reuses }}</strong> {{ reusesNoun }}</template> across all documents
         </div>
         <slot name="note"></slot>
     </div>
@@ -19,7 +20,8 @@
                 {{ noun }}{{ queryTail }}
             </span>
             <span v-else>
-                <strong class="result-count">{{ counts }}</strong> {{ noun }}{{ queryTail }}
+                <strong class="result-count">{{ counts }}</strong> {{ noun }}<template v-if="reuses">, <strong
+                        class="result-count">{{ reuses }}</strong> {{ reusesNoun }}</template>{{ queryTail }}
             </span>
             <slot v-if="origin" name="note"></slot>
         </div>
@@ -88,6 +90,9 @@ const counts = ref("...");
 const single = ref(false);
 const nouns = { shared: ["shared passage", "shared passages"], reused: ["reused passage", "reused passages"] };
 const noun = computed(() => nouns[props.unit][single.value ? 0 : 1]);
+// How many reuses of the reused passages the search counts, as the timeline and the facets count them
+const reuses = ref("");
+const reusesNoun = computed(() => (reuses.value === "1" ? "reuse" : "reuses"));
 const searchParams = ref([
     { direction: globalConfig.sourceLabel, params: null },
     { direction: globalConfig.targetLabel, params: null },
@@ -99,6 +104,7 @@ const scope = ref(null);
 function update(params) {
     counts.value = params.counts.toLocaleString();
     single.value = Number(params.counts) === 1;
+    reuses.value = params.reuses == null ? "" : params.reuses.toLocaleString();
     scope.value = params.scope || null;
     searchParams.value = processParams(params.searchParams);
     if ("banality" in params.searchParams && params.searchParams.banality.length > 0) {
@@ -107,7 +113,7 @@ function update(params) {
         banality.value = false;
     }
     if (params.counts !== "") {
-        emitter.emit("announce", `${counts.value} ${noun.value}`);
+        emitter.emit("announce", `${counts.value} ${noun.value}${reuses.value ? `, ${reuses.value} ${reusesNoun.value}` : ""}`);
     }
 }
 emitter.on("searchArgsUpdate", update);

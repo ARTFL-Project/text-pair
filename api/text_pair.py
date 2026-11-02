@@ -1335,7 +1335,8 @@ def get_sorted_results(request: Request):
     text's as those of another occurrence. A search this database's tables cannot read so is answered by any
     match of the passage, and the response says so with `scope`. Earliest first is by the anchor's year,
     undated last, then most reused; a sort that is not one of the two is the default, and `sort` says which
-    was applied.
+    was applied. `reuses` is how many reuses of the families the search counts, as the timeline and the facets
+    do, or null where it cannot say.
     """
     with pg_connection() as conn:
         conditions, other_args, _ = parse_conditions(request, conn)
@@ -1399,6 +1400,12 @@ def get_sorted_results(request: Request):
                 (*params, SORTED_PAGE_SIZE, start_position),
             )
         groups = [dict(row) for row in cursor]
+        reuses = None
+        found = found_again_columns(cursor, table)
+        if rows := reuse_rows(cursor, table, served, found):
+            cte, picked, params = rows
+            cursor.execute(f"{'WITH ' + cte if cte else ''} SELECT SUM({reuse_places(found)}) FROM {picked}", params)
+            reuses = cursor.fetchone()[0] or 0
         if ranked is not None:
             groups.sort(key=lambda group: place[group["family_rank"]])  # the earliest first is not in rank order
             for group in groups:
@@ -1412,6 +1419,7 @@ def get_sorted_results(request: Request):
             "start_position": start_position,
             "total_count": total,
             "max_count": max_count or 0,
+            "reuses": reuses,
             "scope": served.applied,
             "sort": sort,
         }
@@ -1488,11 +1496,14 @@ def anchor_facet(table: str, name: str, restrict: bool) -> str:
         LEFT JOIN {quote_ident(f"{table}_target_meta")} tm ON tm.id = a.anchor_t) q GROUP BY v"""
 
 
-def found_again_facet(cursor, table: str, parts: OriginParts, name: str, restrict: bool) -> tuple[str, str, list]:
-    """A statement that counts families once for each value of a document field among the documents found again.
+def found_again_facet(
+    cursor, table: str, parts: OriginParts, name: str, restrict: bool, found: set[str]
+) -> tuple[str, str, list]:
+    """A statement that counts the reuses of the families by the values of a document field of the documents found again.
 
     These are the family's documents other than the anchor's, on either side of the alignments, that meet the
-    later-side conditions, and the ones at an end of an alignment meeting the alignment conditions.
+    later-side conditions, and the ones at an end of an alignment meeting the alignment conditions, each once,
+    as many times as it reuses the passage.
     """
     rank = quote_ident(f"{table}_family_rank")
     a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
@@ -1503,15 +1514,17 @@ def found_again_facet(cursor, table: str, parts: OriginParts, name: str, restric
         match = f" AND x.{column} = ANY(%s)" if parts.target else ""
         joined = "ca ON ca.r = x.r" if restrict else f"{rank} ca ON ca.rank = x.r"
         branches.append(
-            f"SELECT x.r, (SELECT a FROM v{column})[x.{column}] AS vid FROM {rows} x JOIN {joined} "
+            f"SELECT x.r, m.{quote_ident(f'{side}_doc_id')} AS d, (SELECT a FROM v{column})[x.{column}] AS vid "
+            f"FROM {rows} x JOIN {joined} JOIN {quote_ident(f'{table}_{side}_meta')} m ON m.id = x.{column} "
             f"WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
         )
         if parts.target:
             params.append(matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target]))
         params += a_params
     return (
-        f"{facet_values(table, name)}, p AS ({' UNION ALL '.join(branches)})",
-        """SELECT d.v, g.n FROM (SELECT vid, COUNT(*)::bigint AS n FROM (SELECT DISTINCT r, vid FROM p) q GROUP BY vid) g
+        f"{facet_values(table, name)}, {found_places(table, found)}, p AS ({' UNION ALL '.join(branches)})",
+        """SELECT d.v, g.n FROM (SELECT vid, SUM(COALESCE(fp.n, 1))::bigint AS n
+            FROM (SELECT DISTINCT r, d, vid FROM p) q LEFT JOIN fp USING (r, d) GROUP BY vid) g
         JOIN (SELECT DISTINCT vid, v FROM vals) d USING (vid)""",
         params,
     )
@@ -1552,7 +1565,8 @@ def stored_facet(
 
     A search with no filters reads the counts of all the families, and one on the anchor's year alone those by
     year. One on the later side counts the rows of the documents found again that it matches, which hold their
-    anchor's values too, and another the rows of the families it leaves, for a later-side field.
+    anchor's values too, and another the rows of the families it leaves, for a later-side field. A later-side
+    field's values count the reuses, an earlier-side one's the families.
     """
     side, _, name = facet.partition("_")
     length = name == "passage_length"
@@ -1583,15 +1597,19 @@ def stored_facet(
             ranges = ", ".join(f"({1 << n}, '{label}')" for n, label in enumerate(LENGTH_LABELS))
             counted = f"""SELECT l.v, COUNT(*)::bigint AS n FROM p
                 JOIN (VALUES {ranges}) l(bit, v) ON p.m & l.bit <> 0 GROUP BY l.v"""
-        else:
+        elif anchored:
             cte += f"p AS MATERIALIZED (SELECT DISTINCT x.r, x.{column} AS v FROM {rows})"
             families = "SELECT COUNT(*)::bigint FROM (SELECT DISTINCT r FROM p) q"
             counted = "SELECT v, COUNT(*)::bigint AS n FROM p GROUP BY v"
+        else:  # each document found again once, as its reuses
+            cte += f"p AS MATERIALIZED (SELECT x.r, x.{column} AS v, {reuse_places(found)} AS w FROM {rows})"
+            families = "SELECT COUNT(*)::bigint FROM (SELECT DISTINCT r FROM p) q"
+            counted = "SELECT v, SUM(w)::bigint AS n FROM p GROUP BY v"
     elif not length and not anchored:
         cte, params = facet_ranks(cursor, table, served)
         families = "SELECT COUNT(*)::bigint FROM ca"
-        counted = f"""SELECT v, COUNT(*)::bigint AS n FROM (SELECT DISTINCT x.r, x.{column} AS v
-            FROM ca JOIN {quote_ident(f"{table}_found_again")} x ON x.r = ca.r) q GROUP BY v"""
+        counted = f"""SELECT x.{column} AS v, SUM({reuse_places(found)})::bigint AS n
+            FROM ca JOIN {quote_ident(f"{table}_found_again")} x ON x.r = ca.r GROUP BY 1"""
     else:
         return None
     value, reads, read_params = "g.v", "", []
@@ -1617,7 +1635,7 @@ def passage_facets(request: Request):
     """Count passage families by the values of a field, as /facets/ counts alignments, under the sorted view's rule.
 
     A source_ field is the family's anchor's, where the passage was first found, so each family counts once.
-    A target_ field is that of the documents it was found again in, and a family counts once for each value.
+    A target_ field is that of the documents it was found again in, and each of its reuses counts (`unit`).
     The passage length of a side is counted over the family's alignments, in the ranges of the pairs' facets.
     The text of a passage is not a facet: every passage is its own value. A database whose tables cannot
     read the later side, or a search they cannot answer, is counted by any match of the passage for the
@@ -1666,7 +1684,7 @@ def passage_facets(request: Request):
                 elif side == "source":
                     ctes, counted, counted_params = "", anchor_facet(table, name, restrict), []
                 else:
-                    ctes, counted, counted_params = found_again_facet(cursor, table, parts, name, restrict)
+                    ctes, counted, counted_params = found_again_facet(cursor, table, parts, name, restrict, found)
                 families = "ca" if restrict else quote_ident(f"{table}_family_rank")
                 ctes = ", ".join(cte for cte in (ranks, ctes) if cte)
                 statement = f"""{"WITH " + ctes if ctes else ""} SELECT t.families, g.v, g.n, g.total, g.kinds FROM
@@ -1701,8 +1719,38 @@ def passage_facets(request: Request):
             "families": rows[0][0] or 0 if rows else 0,
             "values": rows[0][4] or 0 if rows else 0,
             "counted_once": side == "source" and not length,
+            "unit": "reuses" if side == "target" and not length else "passages",
             "scope": applied,
         }
+
+
+def reuse_rows(cursor, table: str, served: OriginFamilies, found: set[str]) -> tuple[str, str, list] | None:
+    """CTEs, or none, and a FROM clause for `x`, the rows of `_found_again` whose reuses a search counts: the
+    documents found again of the families it leaves, those meeting its later-side conditions, each with how many
+    times it reuses the passage (`places`). None where the search was not read by where passages were first
+    found, or has alignment conditions, which those rows cannot answer."""
+    parts = served.parts
+    if served.applied != "origin" or not found or parts is not None and parts.aligned:
+        return None
+    if parts is not None and parts.target:
+        return found_again_rows(cursor, table, parts, found)
+    ranks, params = facet_ranks(cursor, table, served)
+    rows = quote_ident(f"{table}_found_again")
+    return (ranks, f"ca JOIN {rows} x ON x.r = ca.r", params) if ranks else ("", f"{rows} x", [])
+
+
+def reuse_places(found: set[str]) -> str:
+    """How many reuses a row of `_found_again` stands for: its places, or one where the table has none"""
+    return "x.places" if "places" in found else "1"
+
+
+def found_places(table: str, found: set[str]) -> str:
+    """A CTE making `fp`, each family's documents found again, by their id, with their reuses"""
+    places = reuse_places(found)
+    return f"""fp AS MATERIALIZED (SELECT x.r, COALESCE(sm.source_doc_id, tm.target_doc_id) AS d, {places} AS n
+        FROM {quote_ident(f"{table}_found_again")} x
+        LEFT JOIN {quote_ident(f"{table}_source_meta")} sm ON sm.id = x.u
+        LEFT JOIN {quote_ident(f"{table}_target_meta")} tm ON tm.id = -x.u)"""
 
 
 @app.post("/family_time_series/")
@@ -1713,10 +1761,11 @@ def family_time_series(request: Request):
     """Count passage families along time, as /generate_time_series/ counts alignments, under the sorted view's rule.
 
     The source side counts each family once, by its anchor's year, when the passage was first written; the target
-    side counts its reuses, each document it was found again in once, by that document's year, the documents
+    side counts its reuses, as many as the group page shows, by the year of the documents found again, those
     meeting the later-side conditions as for the facets. A database whose tables cannot read the later side, or a
     search they cannot answer, is counted by any match of the passage for the source side (`scope` is "any"), and
-    is an error for the target side. `families` is how many families the search leaves, dated or not.
+    is an error for the target side. `families` is how many families the search leaves, `reuses` how many reuses
+    the target side counts, both dated or not.
     """
     with pg_connection() as conn:
         conditions, other_args, _ = parse_conditions(request, conn)
@@ -1730,6 +1779,7 @@ def family_time_series(request: Request):
         columns = family_filter_columns(cursor, table) if has_family_anchors(cursor, table) else None
         ranked = columns is not None and served.applied == "origin"
         groups, rank = quote_ident(f"{table}_groups"), quote_ident(f"{table}_family_rank")
+        bin_of = f"floor({{}} / {step}) * {step}"  # step is an int
         if ranked:
             cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
             cursor.execute("SET LOCAL work_mem = '256MB'")
@@ -1739,32 +1789,42 @@ def family_time_series(request: Request):
             total = cursor.fetchone()[0]
             if side == "source":
                 picked = f"ca JOIN {rank} f ON f.rank = ca.r" if ranks else f"{rank} f"
-                statement = f"""{"WITH " + ranks if ranks else ""} SELECT floor(g.source_year / %s) * %s AS year, COUNT(*)
+                statement = f"""{"WITH " + ranks if ranks else ""} SELECT {bin_of.format("g.source_year")} AS year, COUNT(*)
                     FROM {picked} JOIN {groups} g ON g.group_id = f.group_id GROUP BY 1 ORDER BY 1"""
             else:
                 if not all(f"{other}_year" in columns[other] for other in ("source", "target")):
                     raise HTTPException(400, "The family tables do not have the years of this database's documents")
-                parts = served.parts or OriginParts([], [], [], columns)
-                a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
-                branches = []
-                for other in ("target", "source"):
-                    column = other[0]
-                    rows = quote_ident(f"{table}_family_alignments" if parts.aligned else f"{table}_{other}_families")
-                    match = f" AND x.{column} = ANY(%s)" if parts.target else ""
-                    joined = "ca ON ca.r = x.r" if ranks else f"{rank} ca ON ca.rank = x.r"
-                    branches.append(
-                        f"SELECT x.r, m.{quote_ident(f'{other}_doc_id')} AS d, m.{quote_ident(f'{other}_year')} AS y "
-                        f"FROM {rows} x JOIN {joined} JOIN {quote_ident(f'{table}_{other}_meta')} m ON m.id = x.{column} "
-                        f"WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
-                    )
-                    if parts.target:
-                        params.append(matching_ids(cursor, table, other, [on_side(c, other) for c in parts.target]))
-                    params += a_params
-                # a document on both sides of a family's alignments is found again once
-                statement = f"""WITH {ranks + ", " if ranks else ""}p AS ({" UNION ALL ".join(branches)})
-                    SELECT floor(y / %s) * %s AS year, COUNT(*) FROM (SELECT r, d, MIN(y) AS y FROM p GROUP BY r, d) q
-                    GROUP BY 1 ORDER BY 1"""
-            params = [*params, step, step]
+                found = found_again_columns(cursor, table)
+                source_meta, target_meta = quote_ident(f"{table}_source_meta"), quote_ident(f"{table}_target_meta")
+                if rows := reuse_rows(cursor, table, served, found):
+                    cte, picked, params = rows
+                    statement = f"""{"WITH " + cte if cte else ""} SELECT {bin_of.format("y")} AS year, SUM(n) FROM (
+                        SELECT CASE WHEN d.u > 0 THEN sm.source_year ELSE tm.target_year END AS y, d.n
+                        FROM (SELECT x.u, {reuse_places(found)} AS n FROM {picked}) d
+                        LEFT JOIN {source_meta} sm ON sm.id = d.u LEFT JOIN {target_meta} tm ON tm.id = -d.u) q
+                        GROUP BY 1 ORDER BY 1"""
+                else:  # alignment conditions: the documents at an end of the alignments that meet them
+                    parts = served.parts or OriginParts([], [], [], columns)
+                    a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
+                    branches = []
+                    for other in ("target", "source"):
+                        column = other[0]
+                        alignments = quote_ident(f"{table}_family_alignments")
+                        match = f" AND x.{column} = ANY(%s)" if parts.target else ""
+                        joined = "ca ON ca.r = x.r" if ranks else f"{rank} ca ON ca.rank = x.r"
+                        branches.append(
+                            f"SELECT x.r, m.{quote_ident(f'{other}_doc_id')} AS d, m.{quote_ident(f'{other}_year')} AS y "
+                            f"FROM {alignments} x JOIN {joined} JOIN {quote_ident(f'{table}_{other}_meta')} m "
+                            f"ON m.id = x.{column} WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
+                        )
+                        if parts.target:
+                            params.append(matching_ids(cursor, table, other, [on_side(c, other) for c in parts.target]))
+                        params += a_params
+                    # a document on both sides of a family's alignments is found again once
+                    statement = f"""WITH {ranks + ", " if ranks else ""}{found_places(table, found)},
+                        p AS ({" UNION ALL ".join(branches)})
+                        SELECT {bin_of.format("q.y")} AS year, SUM(COALESCE(fp.n, 1)) FROM
+                        (SELECT r, d, MIN(y) AS y FROM p GROUP BY r, d) q LEFT JOIN fp USING (r, d) GROUP BY 1 ORDER BY 1"""
             applied = "origin"
         else:
             if side == "target":
@@ -1775,12 +1835,12 @@ def family_time_series(request: Request):
                 where, params = served.where or ("", [])
             cursor.execute(f"SELECT COUNT(*) FROM {groups} {where}", params)
             total = cursor.fetchone()[0]
-            statement = f"SELECT floor(source_year / %s) * %s AS year, COUNT(*) FROM {groups} {where} GROUP BY 1 ORDER BY 1"
-            params = [step, step, *params]
+            statement = f"SELECT {bin_of.format('source_year')} AS year, COUNT(*) FROM {groups} {where} GROUP BY 1 ORDER BY 1"
             applied = served.applied
         cursor.execute(statement, params)
-        results, counted, next_year = [], 0, None
+        results, counted, everything, next_year = [], 0, 0, None
         for year, count in cursor:
+            everything += count
             if year is None:
                 continue
             year = int(year)
@@ -1790,7 +1850,10 @@ def family_time_series(request: Request):
             results.append({"year": year, "count": count})
             next_year = year + step
             counted += count
-    return {"counts": counted, "results": results, "families": total, "scope": applied}
+    response = {"counts": counted, "results": results, "families": total, "scope": applied}
+    if side == "target":
+        response["reuses"] = everything
+    return response
 
 
 def merge_passages(rows: list, direction: str) -> list[dict]:

@@ -46,7 +46,8 @@
             <button type="button" class="corner-btn destroy right" aria-label="Close counts"
                 @click="closeFacetResults()"><span aria-hidden="true">&times;</span></button>
             <h4 id="facet-results-title" ref="facetResultsTitle" class="card-header facet-results-title" tabindex="-1">
-                <template v-if="passages">Reused passages by {{ resultsField.toLowerCase() }}, {{ resultsSide.lead.toLowerCase() }}</template>
+                <template v-if="passages">{{ facetResults.unit == "reuses" ? "Reuses" : "Reused passages" }} by {{
+                    resultsField.toLowerCase() }}, {{ resultsSide.lead.toLowerCase() }}</template>
                 <template v-else>
                     Frequency by
                     <span v-html="resultsSide.label"></span>&nbsp;
@@ -112,7 +113,7 @@ const resultsField = computed(() => {
 const severalValues = computed(() =>
     facetResults.value.facet.endsWith("passage_length")
         ? "A passage counts under every length it has."
-        : "A passage counts under every value it was found again in."
+        : "Every reuse counts: a passage counts each time it was found again."
 );
 
 // The counts of a broad search take seconds: only the latest request is read, and a new search drops it

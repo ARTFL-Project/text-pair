@@ -412,7 +412,12 @@ function fetchData() {
         });
         const data = outcomes.map((outcome) => (outcome.status === "fulfilled" ? outcome.value.data : null));
         if (families) {
-            emitter.emit("searchArgsUpdate", { counts: data[0].families, searchParams: params, scope: data[0].scope });
+            emitter.emit("searchArgsUpdate", {
+                counts: data[0].families,
+                reuses: data[1] ? data[1].reuses : null,
+                searchParams: params,
+                scope: data[0].scope,
+            });
         }
         setBins(data);
         loading.value = false;

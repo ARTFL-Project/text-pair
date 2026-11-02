@@ -45,8 +45,8 @@ const views = [
     {
         name: "timeSeries",
         path: "/time/",
-        prefix: "View passages in ",
-        label: "timeline",
+        prefix: "View reused passages ",
+        label: "over time",
         icon: "M2 14h12M4 14V9M7 14V4M10 14V7M13 14v-3",
     },
     globalConfig.showNetworkGraph && {

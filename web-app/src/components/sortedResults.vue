@@ -184,6 +184,7 @@ function fetchData() {
             loading.value = false;
             emitter.emit("searchArgsUpdate", {
                 counts: response.data.total_count,
+                reuses: response.data.reuses,
                 searchParams: params,
                 scope: response.data.scope || "any",
             });
