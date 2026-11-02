@@ -66,6 +66,14 @@ BLOCKS = [
         ],
     ),
     (
+        "Fields of the two sides that mean the same but are named otherwise, as\n"
+        '{ source = "source_author", target = "target_kafauth" }. A passage family has texts of\n'
+        "both sides where it was first found and where it was found again, and each text is searched,\n"
+        "counted and cited by its own side's fields. Fields named alike after source_ and target_\n"
+        "go together anyway.",
+        [Option("paired_fields", ("pairedFields",), [], {"source": "source", "target": "target"})],
+    ),
+    (
         'Fields of the citation above each passage, in order. "style" takes CSS properties,\n'
         'as in style = { font-style = "italic" }, and may be left out.',
         [

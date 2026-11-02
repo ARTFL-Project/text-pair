@@ -29,8 +29,8 @@ from psycopg2 import sql
 from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
-from textpair.web_loader import FACET_TABLES, LENGTH_RANGES, OPEN_LENGTH_RANGE, relation_columns
-from textpair.web_settings import SettingsError, load_app_config
+from textpair.web_loader import FACET_TABLES, LENGTH_RANGES, OPEN_LENGTH_RANGE, PASSAGE_FIELD_SUFFIXES, relation_columns
+from textpair.web_settings import SETTINGS_FILE, SettingsError, load_app_config
 
 from textpair.shared_text import differences, reuse_depth
 
@@ -523,7 +523,7 @@ def facing(row, side: str) -> dict:
     return flipped
 
 
-def occurrences(rows, group: dict, places: dict | None = None) -> list[dict]:
+def occurrences(rows, group: dict, places: dict | None = None, collections: bool = False) -> list[dict]:
     """Every place the group's passage is reused, once each, as an alignment facing it.
 
     Both sides of every alignment count, except the anchor's own document. Overlapping
@@ -532,7 +532,8 @@ def occurrences(rows, group: dict, places: dict | None = None) -> list[dict]:
     passage itself, else one with another document reusing it, else one with another
     passage of the anchor's document. Where the build projected the passage onto the
     place (`places`: {(filename, start, end): row}), the reuse is the passage as the place
-    has it, facing the group's passage itself.
+    has it, facing the group's passage itself. Where the two sides of the alignments are two collections
+    (`collections`), each says which its document is of (`source__collection`, `target__collection`).
     """
     anchor_doc = group["source_doc_id"]
     start, end = group["source_start_byte"], group["source_end_byte"]
@@ -556,6 +557,9 @@ def occurrences(rows, group: dict, places: dict | None = None) -> list[dict]:
             if place and (item is None or item[0] >= reach):
                 best = min(place, key=lambda candidate: candidate[2])
                 reuse = facing(best[3], best[4])
+                if collections:
+                    reuse["target__collection"] = best[4]
+                    reuse["source__collection"] = "source" if best[4] == "target" else "target"
                 projected = (places or {}).get((reuse["target_filename"], place[0][0], reach))
                 found.append(as_projected(reuse, projected, group) if projected and projected["shared"] > 0 else reuse)
                 place, reach = [], -1
@@ -875,7 +879,7 @@ def metadata(request: Request):
 def get_passage_group(request: Request, group_id: int):
     """Retrieve a passage group"""
     with pg_connection() as conn:
-        alignment_table = request.query_params.get("db_table", "")
+        alignment_table = table = request.query_params.get("db_table", "")
         field_types = get_pg_type(conn, alignment_table)
         if not field_types:
             raise HTTPException(404, "No such database")
@@ -907,7 +911,19 @@ def get_passage_group(request: Request, group_id: int):
             cursor.execute(f"SELECT * FROM {quote_ident(places_table)} WHERE group_id = %s", (group_id,))
             places = {(p["filename"], p["start_byte"], p["end_byte"]): p for p in cursor.fetchall()}
 
-    reuses = occurrences(rows, original_passage, places)
+    collections = two_collections(table)
+    if collections:
+        # the anchor's own document, on the side of the alignments its file is on, the source side first
+        file = original_passage["source_filename"]
+        in_target = not any(row["source_filename"] == file and row["source_doc_id"] == anchor_doc for row in rows)
+        own = next((row for row in rows if row["target_filename"] == file), None) if in_target else None
+        if own is not None:
+            original_passage.update(
+                {f"source_{key[7:]}": value for key, value in own.items()
+                 if key.startswith("target_") and not key.endswith(PASSAGE_FIELD_SUFFIXES)}
+            )
+        original_passage["source__collection"] = "target" if in_target else "source"
+    reuses = occurrences(rows, original_passage, places, collections)
     projected = defaultdict(list)
     for place in places.values():
         projected[place["filename"]].append(place["passage"])
@@ -1109,20 +1125,71 @@ def ranked_page(cursor, statement: str, params: list, page: int) -> tuple[int, l
 class OriginParts(NamedTuple):
     """A search split by what it asks of a passage family, with the columns the family filter tables have"""
 
-    source: list[Condition]  # the earlier text: the anchor
+    source: list[Condition]  # the earlier text: the anchor, as the groups table has it
     target: list[Condition]  # the later text
     aligned: list[Condition]  # the alignment, such as its passage length
     columns: dict[str, set[str]]
+    anchor: list[Condition] | tuple = ()  # the earlier text by a field paired otherwise, read from the anchor's document
+    pairs: dict[str, str] | None = None  # paired_fields
 
 
-def field_on_side(field: str, side: str) -> str:
-    """The same field of the other side, or of this one: target_year on the source side is source_year"""
-    return f"{side}_{field.split('_', 1)[1]}"
+# Each database's app config, by its directory, with the modification times of its two files
+APP_CONFIGS: dict[str, tuple[tuple, dict]] = {}
 
 
-def on_side(condition: Condition, side: str) -> Condition:
-    """A condition on a source_ or target_ field, made to apply to the same field of `side`"""
-    field = field_on_side(condition.field, side)
+def app_config(table: str) -> dict:
+    """A database's app config (load_app_config), or none where it has no web app or its settings are broken"""
+    try:
+        db_dir = db_directory(table)
+    except HTTPException:
+        return {}
+    files = (os.path.join(db_dir, "appConfig.json"), os.path.join(db_dir, SETTINGS_FILE))
+    stamp = tuple(os.path.getmtime(path) if os.path.exists(path) else None for path in files)
+    cached = APP_CONFIGS.get(db_dir)
+    if cached is None or cached[0] != stamp:
+        try:
+            config = load_app_config(db_dir)
+        except (OSError, ValueError):  # a SettingsError, or appConfig.json broken
+            config = {}
+        cached = APP_CONFIGS[db_dir] = (stamp, config)
+    return cached[1]
+
+
+def paired_fields(table: str) -> dict[str, str]:
+    """The fields the settings pair with one of the other side, each way: target_kafauth -> source_author"""
+    pairs = {}
+    for pair in app_config(table).get("pairedFields", []):
+        source, target = str(pair.get("source") or ""), str(pair.get("target") or "")
+        if source.startswith("source_") and target.startswith("target_"):
+            pairs[source], pairs[target] = target, source
+    return pairs
+
+
+def two_collections(table: str) -> bool:
+    """Whether the two sides of the alignments are texts of two collections, so a family's texts are of either"""
+    try:
+        db_dir = db_directory(table)
+    except HTTPException:
+        return False
+    config = app_config(table)
+    paths = []
+    for side in ("source", "target"):
+        path = text_data_path(db_dir, config, side) or config.get(f"{side}PhiloDBPath", "")
+        paths.append(os.path.realpath(path) if path else "")
+    return all(paths) and paths[0] != paths[1]
+
+
+def field_on_side(field: str, side: str, pairs: dict[str, str] | None = None) -> str:
+    """The field of `side` that goes with `field`: itself on its own side, the one the settings pair it with
+    (paired_fields), or the one named alike: target_year on the source side is source_year"""
+    if field.startswith(f"{side}_"):
+        return field
+    return (pairs or {}).get(field) or f"{side}_{field.split('_', 1)[1]}"
+
+
+def on_side(condition: Condition, side: str, pairs: dict[str, str] | None = None) -> Condition:
+    """A condition on a source_ or target_ field, made to apply to the field of `side` that goes with it"""
+    field = field_on_side(condition.field, side, pairs)
     return Condition(field, condition.sql.replace(quote_ident(condition.field), quote_ident(field)), condition.values)
 
 
@@ -1139,26 +1206,47 @@ def has_family_anchors(cursor, table: str) -> bool:
 def origin_parts(cursor, table: str, conditions: list[Condition], groups_columns) -> OriginParts | None:
     """The conditions sorted by what they ask of a family, or None if the family filter tables cannot answer them.
 
-    The source side filters the anchor as the groups table has it, so passage text counts too, and the target
-    side has to be found on both sides of the alignments, as a later occurrence is.
+    The source side filters the anchor as the groups table has it, so passage text counts too, but by the
+    document itself for a field the settings pair otherwise, and the target side has to be found on both sides
+    of the alignments, as a later occurrence is, by the field of each side that goes with it.
     """
     columns = family_filter_columns(cursor, table)
     if columns is None or not has_family_anchors(cursor, table):
         return None
-    parts = OriginParts([], [], [], columns)
+    pairs = paired_fields(table)
+    parts = OriginParts([], [], [], columns, [], pairs)
     for condition in conditions:
         field = condition.field
         if field in columns["alignments"]:
             parts.aligned.append(condition)
+        elif field.startswith("source_") and field in pairs:
+            if field not in columns["source"] or pairs[field] not in columns["target"]:
+                return None
+            parts.anchor.append(condition)
         elif field.startswith("source_") and field in groups_columns:
             parts.source.append(condition)
         elif field.startswith("target_") and field in columns["target"]:
-            if field_on_side(field, "source") not in columns["source"]:
+            if field_on_side(field, "source", pairs) not in columns["source"]:
                 return None
             parts.target.append(condition)
         else:
             return None
     return parts
+
+
+def anchor_where(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
+    """The earlier-side conditions as a WHERE clause on a family's groups row and its rank, `f`: those on a field
+    paired otherwise read from the anchor's document, on the side of the alignments it has an id on."""
+    clauses, params = [], []
+    if parts.source:
+        where, source_params = join_conditions(parts.source)
+        clauses.append(where)
+        params += source_params
+    for condition in parts.anchor:
+        clauses.append("(f.anchor_s = ANY(%s) OR f.anchor_t = ANY(%s))")
+        params.append(matching_ids(cursor, table, "source", [condition]))
+        params.append(matching_ids(cursor, table, "target", [on_side(condition, "target", parts.pairs)]))
+    return " AND ".join(clauses), params
 
 
 def matching_ids(cursor, table: str, side: str, conditions: list[Condition]) -> list[int]:
@@ -1181,13 +1269,14 @@ def found_again_rows(cursor, table: str, parts: OriginParts, found: set[str]) ->
     the earlier-side ones. Conditions on the anchor's year alone are read from the rows, others from the groups.
     """
     rows = quote_ident(f"{table}_found_again")
-    source = matching_ids(cursor, table, "source", [on_side(c, "source") for c in parts.target])
+    source = matching_ids(cursor, table, "source", [on_side(c, "source", parts.pairs) for c in parts.target])
     ids = source + [-target for target in matching_ids(cursor, table, "target", parts.target)]
-    if not parts.source:
+    if not parts.source and not parts.anchor:
         return "", f"{rows} x WHERE x.u = ANY(%s)", [ids]
-    where, params = join_conditions(parts.source)
-    if "source_year" in found and all(c.field == "source_year" for c in parts.source):
+    if "source_year" in found and not parts.anchor and all(c.field == "source_year" for c in parts.source):
+        where, params = join_conditions(parts.source)
         return "", f"{rows} x WHERE x.u = ANY(%s) AND {where}", [ids, *params]
+    where, params = anchor_where(cursor, table, parts)
     groups, rank = quote_ident(f"{table}_groups"), quote_ident(f"{table}_family_rank")
     return (
         f"s AS MATERIALIZED (SELECT f.rank AS r FROM {groups} g JOIN {rank} f USING (group_id) WHERE {where})",
@@ -1213,8 +1302,8 @@ def origin_ranks(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
     params: list = []
     # The families that meet the source conditions come first, and only their later occurrences are looked up
     anchored, anchor = "{rows} x JOIN " + rank_table + " f ON f.rank = x.r", "f"
-    if parts.source:
-        where, params = join_conditions(parts.source)
+    if parts.source or parts.anchor:
+        where, params = anchor_where(cursor, table, parts)
         groups_table = quote_ident(f"{table}_groups")
         prefix = (
             f"s AS MATERIALIZED (SELECT f.rank AS r, f.anchor_s, f.anchor_t FROM {groups_table} g "
@@ -1224,7 +1313,7 @@ def origin_ranks(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
     if parts.target:
         branches = []
         for side in ("target", "source"):
-            ids = matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target])
+            ids = matching_ids(cursor, table, side, [on_side(c, side, parts.pairs) for c in parts.target])
             column = side[0]
             rows = alignments if parts.aligned else quote_ident(f"{table}_{side}_families")
             branches.append(
@@ -1254,32 +1343,27 @@ def found_again(cursor, table: str, parts: OriginParts, ranks: list[int]) -> dic
     """
     if not parts.target or not ranks:
         return {}
-    columns = parts.columns
-    fields = sorted(columns["target"] - {"id", "n"})
     rank_table = quote_ident(f"{table}_family_rank")
     alignments = quote_ident(f"{table}_family_alignments")
     a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
-    branches, params = [], []
+    collections = two_collections(table)
+    documents: dict[int, dict[tuple, dict]] = defaultdict(dict)
     for side in ("target", "source"):
         column = side[0]
-        meta = quote_ident(f"{table}_{side}_meta")
-        select = ", ".join(
-            f"m.{quote_ident(field_on_side(field, side))} AS {quote_ident(field)}"
-            if field_on_side(field, side) in columns[side]
-            else f"NULL AS {quote_ident(field)}"
-            for field in fields
-        )
         rows = alignments if parts.aligned else quote_ident(f"{table}_{side}_families")
-        branches.append(
-            f"SELECT x.r, {select} FROM {rows} x JOIN {rank_table} f ON f.rank = x.r "
-            f"JOIN {meta} m ON m.id = x.{column} WHERE x.r = ANY(%s) AND x.{column} = ANY(%s) "
-            f"AND x.{column} IS DISTINCT FROM f.anchor_{column} AND {a_where}"
+        cursor.execute(
+            f"SELECT x.r, m.* FROM {rows} x JOIN {rank_table} f ON f.rank = x.r "
+            f"JOIN {quote_ident(f'{table}_{side}_meta')} m ON m.id = x.{column} WHERE x.r = ANY(%s) "
+            f"AND x.{column} = ANY(%s) AND x.{column} IS DISTINCT FROM f.anchor_{column} AND {a_where}",
+            [ranks, matching_ids(cursor, table, side, [on_side(c, side, parts.pairs) for c in parts.target]), *a_params],
         )
-        params += [ranks, matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target]), *a_params]
-    cursor.execute(" UNION ALL ".join(branches), params)
-    documents: dict[int, dict[str, dict]] = defaultdict(dict)
-    for row in cursor:
-        documents[row["r"]][row["target_doc_id"]] = {field: row[field] for field in fields}
+        for row in cursor:
+            # its own side's fields, named as the later text's, as the card cites it
+            document = {f"target_{key[len(side) + 1:]}": value for key, value in row.items() if key.startswith(f"{side}_")}
+            if collections:
+                document["target__collection"] = side
+            key = (document.get("target_doc_id"), document.get("target_filename"))
+            documents[row["r"]].setdefault(key, document)
 
     def earliest(document: dict):
         year = document.get("target_year")
@@ -1292,12 +1376,13 @@ def found_again(cursor, table: str, parts: OriginParts, ranks: list[int]) -> dic
     }
 
 
-def origin_groups_where(conditions: list[Condition], groups_columns) -> tuple[str, list] | None:
+def origin_groups_where(conditions: list[Condition], groups_columns, pairs: dict[str, str]) -> tuple[str, list] | None:
     """A WHERE clause on the groups table for a search made only of conditions on the earlier text, or None.
 
-    These are conditions on the anchor, which the groups table holds, so no family tables are needed.
+    These are conditions on the anchor, which the groups table holds, so no family tables are needed, unless a
+    field is paired otherwise (paired_fields): the anchor's document is then read from those tables.
     """
-    if all(c.field.startswith("source_") and c.field in groups_columns for c in conditions):
+    if all(c.field.startswith("source_") and c.field in groups_columns and c.field not in pairs for c in conditions):
         where, params = join_conditions(conditions)
         return f"WHERE {where}", params
     return None
@@ -1317,7 +1402,7 @@ def origin_families(
     cursor, table: str, conditions: list[Condition], groups_columns, order: RankOrder = RankOrder("reuse")
 ) -> OriginFamilies:
     """Pick the families by where they were first found, or by any match if this database's tables cannot say"""
-    if where := origin_groups_where(conditions, groups_columns):
+    if where := origin_groups_where(conditions, groups_columns, paired_fields(table)):
         return OriginFamilies("origin", where=where, selective=True)
     if parts := origin_parts(cursor, table, conditions, groups_columns):
         # Parallel plans of these statements sometimes never finish
@@ -1400,6 +1485,7 @@ def get_sorted_results(request: Request):
                 (*params, SORTED_PAGE_SIZE, start_position),
             )
         groups = [dict(row) for row in cursor]
+        anchor_documents(cursor, table, groups)
         reuses = None
         found = found_again_columns(cursor, table)
         if rows := reuse_rows(cursor, table, served, found):
@@ -1424,6 +1510,29 @@ def get_sorted_results(request: Request):
             "sort": sort,
         }
     return results
+
+
+def anchor_documents(cursor, table: str, groups: list[dict]):
+    """Give each family its anchor's collection, `source__collection`, where the two sides of the alignments are two
+    (two_collections): an anchor in the target one has the fields of its own document, named as the earlier text's."""
+    if not groups or not two_collections(table) or not has_family_anchors(cursor, table):
+        return
+    cursor.execute(
+        f"SELECT group_id, anchor_s, anchor_t FROM {quote_ident(f'{table}_family_rank')} WHERE group_id = ANY(%s)",
+        ([group["group_id"] for group in groups],),
+    )
+    anchors = {row[0]: (row[1], row[2]) for row in cursor}
+    targets = [t for s, t in anchors.values() if s is None and t is not None]
+    fields: dict[int, dict] = {}
+    if targets:
+        cursor.execute(f"SELECT * FROM {quote_ident(f'{table}_target_meta')} WHERE id = ANY(%s)", (targets,))
+        for row in cursor:
+            fields[row["id"]] = {f"source_{key[7:]}": value for key, value in row.items() if key.startswith("target_")}
+    for group in groups:
+        s, t = anchors.get(group["group_id"], (None, None))
+        in_target = s is None and t is not None
+        group.update(fields.get(t, {}) if in_target else {})
+        group["source__collection"] = "target" if in_target else "source"
 
 
 FACET_VALUES = 100  # values a facet returns unless `limit` says otherwise, as many as the panel shows
@@ -1470,25 +1579,28 @@ def facet_ranks(cursor, table: str, served: OriginFamilies) -> tuple[str, list]:
     )
 
 
-def facet_values(table: str, name: str) -> str:
+def facet_values(table: str, fields: dict[str, str]) -> str:
     """CTEs that number the distinct values of a document field, as arrays by the id of the documents of each side.
 
-    The families are counted by these numbers, which are small integers, and named at the end.
+    `fields` is the field on each side (field_on_side). The families are counted by these numbers, which are
+    small integers, and named at the end.
     """
+    source, target = quote_ident(fields["source"]), quote_ident(fields["target"])
     return f"""vals AS MATERIALIZED (SELECT side, id, v, (DENSE_RANK() OVER (ORDER BY v))::int AS vid FROM (
-            SELECT 's' AS side, id, {quote_ident(f"source_{name}")} AS v FROM {quote_ident(f"{table}_source_meta")}
-            UNION ALL SELECT 't', id, {quote_ident(f"target_{name}")} FROM {quote_ident(f"{table}_target_meta")}) d),
+            SELECT 's' AS side, id, {source} AS v FROM {quote_ident(f"{table}_source_meta")}
+            UNION ALL SELECT 't', id, {target} FROM {quote_ident(f"{table}_target_meta")}) d),
         vs AS MATERIALIZED (SELECT array_agg(vid ORDER BY id) AS a FROM vals WHERE side = 's'),
         vt AS MATERIALIZED (SELECT array_agg(vid ORDER BY id) AS a FROM vals WHERE side = 't')"""
 
 
-def anchor_facet(table: str, name: str, restrict: bool) -> str:
+def anchor_facet(table: str, fields: dict[str, str], restrict: bool) -> str:
     """A statement that counts families by a document field of their anchor, as the family tables hold it.
 
-    An anchor on the source side of the alignments has its field in the source documents, or else in the target ones.
+    An anchor on the source side of the alignments has its field in the source documents, or else in the target
+    ones: `fields` is the field on each side (field_on_side).
     """
     rank = quote_ident(f"{table}_family_rank")
-    source, target = quote_ident(f"source_{name}"), quote_ident(f"target_{name}")
+    source, target = quote_ident(fields["source"]), quote_ident(fields["target"])
     return f"""SELECT v, SUM(n)::bigint AS n FROM (
         SELECT CASE WHEN a.anchor_s IS NOT NULL THEN sm.{source} ELSE tm.{target} END AS v, a.n
         FROM (SELECT anchor_s, anchor_t, COUNT(*) AS n FROM {"ca" if restrict else rank} GROUP BY 1, 2) a
@@ -1497,13 +1609,13 @@ def anchor_facet(table: str, name: str, restrict: bool) -> str:
 
 
 def found_again_facet(
-    cursor, table: str, parts: OriginParts, name: str, restrict: bool, found: set[str]
+    cursor, table: str, parts: OriginParts, fields: dict[str, str], restrict: bool, found: set[str]
 ) -> tuple[str, str, list]:
     """A statement that counts the reuses of the families by the values of a document field of the documents found again.
 
     These are the family's documents other than the anchor's, on either side of the alignments, that meet the
     later-side conditions, and the ones at an end of an alignment meeting the alignment conditions, each once,
-    as many times as it reuses the passage.
+    as many times as it reuses the passage. `fields` is the field on each side (field_on_side).
     """
     rank = quote_ident(f"{table}_family_rank")
     a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
@@ -1519,10 +1631,10 @@ def found_again_facet(
             f"WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
         )
         if parts.target:
-            params.append(matching_ids(cursor, table, side, [on_side(c, side) for c in parts.target]))
+            params.append(matching_ids(cursor, table, side, [on_side(c, side, parts.pairs) for c in parts.target]))
         params += a_params
     return (
-        f"{facet_values(table, name)}, {found_places(table, found)}, p AS ({' UNION ALL '.join(branches)})",
+        f"{facet_values(table, fields)}, {found_places(table, found)}, p AS ({' UNION ALL '.join(branches)})",
         """SELECT d.v, g.n FROM (SELECT vid, SUM(COALESCE(fp.n, 1))::bigint AS n
             FROM (SELECT DISTINCT r, d, vid FROM p) q LEFT JOIN fp USING (r, d) GROUP BY vid) g
         JOIN (SELECT DISTINCT vid, v FROM vals) d USING (vid)""",
@@ -1545,7 +1657,7 @@ def passage_length_facet(cursor, table: str, parts: OriginParts, side: str, rest
             "OR x.s = ANY(%s) AND x.s IS DISTINCT FROM ca.anchor_s)"
         )
         for other in ("target", "source"):
-            found_params.append(matching_ids(cursor, table, other, [on_side(c, other) for c in parts.target]))
+            found_params.append(matching_ids(cursor, table, other, [on_side(c, other, parts.pairs) for c in parts.target]))
     rank = quote_ident(f"{table}_family_rank")
     joined = "ca ON ca.r = x.r" if restrict else f"{rank} ca ON ca.rank = x.r"
     return (
@@ -1663,7 +1775,10 @@ def passage_facets(request: Request):
         columns = family_filter_columns(cursor, table) if has_family_anchors(cursor, table) else None
         length = name == "passage_length"
         ranked = columns is not None and served.applied == "origin"
-        if ranked and not length and not all(f"{other}_{name}" in columns[other] for other in ("source", "target")):
+        # each document's value is read from the field of its own side that goes with this one
+        pairs = paired_fields(table)
+        fields = {other: field_on_side(facet, other, pairs) for other in ("source", "target")}
+        if ranked and not length and not all(fields[other] in columns[other] for other in fields):
             raise facet_error(facet, "it is not a field of the documents of both sides")
         if ranked and length and f"{side}_passage_length" not in columns["alignments"]:
             raise facet_error(facet, "the family tables do not have the lengths of this database's passages")
@@ -1672,19 +1787,21 @@ def passage_facets(request: Request):
             cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
             cursor.execute("SET LOCAL work_mem = '256MB'")  # the counts are hashed in memory, millions of rows of them
             found = found_again_columns(cursor, table)
-            stored = stored_facet(cursor, table, conditions, served, facet, found, values)
+            # the stored counts pair the fields named alike
+            named_alike = length or all(fields[other] == f"{other}_{name}" for other in fields)
+            stored = stored_facet(cursor, table, conditions, served, facet, found, values) if named_alike else None
             if stored is not None:
                 statement, params = stored
             else:
                 ranks, params = facet_ranks(cursor, table, served)
                 restrict = bool(ranks)
-                parts = served.parts or OriginParts([], [], [], columns)
+                parts = served.parts or OriginParts([], [], [], columns, [], pairs)
                 if length:
                     ctes, counted, counted_params = passage_length_facet(cursor, table, parts, side, restrict)
                 elif side == "source":
-                    ctes, counted, counted_params = "", anchor_facet(table, name, restrict), []
+                    ctes, counted, counted_params = "", anchor_facet(table, fields, restrict), []
                 else:
-                    ctes, counted, counted_params = found_again_facet(cursor, table, parts, name, restrict, found)
+                    ctes, counted, counted_params = found_again_facet(cursor, table, parts, fields, restrict, found)
                 families = "ca" if restrict else quote_ident(f"{table}_family_rank")
                 ctes = ", ".join(cte for cte in (ranks, ctes) if cte)
                 statement = f"""{"WITH " + ctes if ctes else ""} SELECT t.families, g.v, g.n, g.total, g.kinds FROM
@@ -1804,7 +1921,7 @@ def family_time_series(request: Request):
                         LEFT JOIN {source_meta} sm ON sm.id = d.u LEFT JOIN {target_meta} tm ON tm.id = -d.u) q
                         GROUP BY 1 ORDER BY 1"""
                 else:  # alignment conditions: the documents at an end of the alignments that meet them
-                    parts = served.parts or OriginParts([], [], [], columns)
+                    parts = served.parts or OriginParts([], [], [], columns, [], paired_fields(table))
                     a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
                     branches = []
                     for other in ("target", "source"):
@@ -1818,7 +1935,7 @@ def family_time_series(request: Request):
                             f"ON m.id = x.{column} WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
                         )
                         if parts.target:
-                            params.append(matching_ids(cursor, table, other, [on_side(c, other) for c in parts.target]))
+                            params.append(matching_ids(cursor, table, other, [on_side(c, other, parts.pairs) for c in parts.target]))
                         params += a_params
                     # a document on both sides of a family's alignments is found again once
                     statement = f"""WITH {ranks + ", " if ranks else ""}{found_places(table, found)},

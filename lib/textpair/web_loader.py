@@ -1029,6 +1029,28 @@ def family_filter_fields(searchable_fields: list[str], fields_in_table: set[str]
     ]
 
 
+# What a side's fields hold of the passage rather than of its document
+PASSAGE_FIELD_SUFFIXES = (
+    "passage", "passage_length", "passage_with_matches", "start_byte", "end_byte",
+    "start_position", "end_position", "context_before", "context_after",
+)
+DOCUMENT_FIELD_TYPES = {"text", "character varying", "integer", "bigint", "smallint", "numeric", "real", "double precision"}
+
+
+def document_fields(columns: dict[str, str], direction: str, kept: list[str]) -> list[str]:
+    """The other fields of one side's documents, beyond `kept`: those the settings may name at any time,
+    to search, count or cite each document by, whichever side of a family it is found on."""
+    return [
+        field
+        for field, kind in columns.items()
+        if field.startswith(f"{direction}_")
+        and field not in kept
+        and field != f"{direction}_doc_id"
+        and not field.endswith(PASSAGE_FIELD_SUFFIXES)
+        and kind in DOCUMENT_FIELD_TYPES
+    ]
+
+
 def family_rank_indexes(alignments_table: str, chrono: bool = True) -> list[str]:
     """Statements that index each side's documents, and the alignments, by family, as they are otherwise indexed by document.
 
@@ -1067,14 +1089,22 @@ def add_family_anchors(cursor, alignments_table: str) -> bool:
         if cursor.fetchone()[0]:
             return False
     rank = f"{alignments_table}_family_rank"
+    # and by file where the tables have it, as two collections may number their documents alike
+    same_file = {
+        side: f" AND {side[0]}.{side}_filename = g.source_filename"
+        if f"{side}_filename" in relation_columns(cursor, f"{alignments_table}_{side}_meta")
+        and "source_filename" in relation_columns(cursor, f"{alignments_table}_groups")
+        else ""
+        for side in ("source", "target")
+    }
     cursor.execute("BEGIN")
     try:
         cursor.execute(f"ALTER TABLE {rank} ADD COLUMN IF NOT EXISTS anchor_s int, ADD COLUMN IF NOT EXISTS anchor_t int")
         cursor.execute(
             f"""UPDATE {rank} f SET anchor_s = s.id, anchor_t = t.id
             FROM {alignments_table}_groups g
-            LEFT JOIN {alignments_table}_source_meta s ON s.source_doc_id = g.source_doc_id
-            LEFT JOIN {alignments_table}_target_meta t ON t.target_doc_id = g.source_doc_id
+            LEFT JOIN {alignments_table}_source_meta s ON s.source_doc_id = g.source_doc_id{same_file["source"]}
+            LEFT JOIN {alignments_table}_target_meta t ON t.target_doc_id = g.source_doc_id{same_file["target"]}
             WHERE g.group_id = f.group_id"""
         )
         cursor.execute("COMMIT")
@@ -1148,7 +1178,7 @@ def relation_columns(cursor, table: str) -> list[str]:
     return [name for (name,) in cursor]
 
 
-def load_facet_tables(cursor, alignments_table: str) -> bool:
+def load_facet_tables(cursor, alignments_table: str, names: list[str] | None = None) -> bool:
     """Tables that count passage families by where they were found again, for the sorted view's facets.
 
     `_found_again` has a row per family and document it was found again in: one of its documents other
@@ -1163,7 +1193,8 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
     over all the families, with a document (`doc`, as `u`) to read each value from: the families anchored
     in a document with a source_ field's value, the reuses in documents with a target_ one's, the families
     with an alignment in a passage length's range. Document 0, with no values, stands for an
-    anchor in neither documents table. False, and nothing made, where `_family_rank` has no anchors
+    anchor in neither documents table. The fields counted are `names`, after source_ and target_, or else every
+    one both documents tables have. False, and nothing made, where `_family_rank` has no anchors
     (add_family_anchors) or there is nothing to count. Safe to repeat.
     """
     table = alignments_table
@@ -1173,11 +1204,12 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
     if not {"anchor_s", "anchor_t"} <= set(relation_columns(cursor, rank)):
         return False
     target_columns = set(relation_columns(cursor, f"{table}_target_meta"))
-    names = [
+    common = [
         column[len("source_") :]
         for column in relation_columns(cursor, f"{table}_source_meta")
         if column.startswith("source_") and f"target_{column[len('source_'):]}" in target_columns
     ]
+    names = common if names is None else [name for name in common if name in names]
     fields = [name for name in names if name != "doc_id"]
     alignment_columns = relation_columns(cursor, f"{table}_family_alignments")
     sides = [side for side in ("source", "target") if f"{side}_passage_length" in alignment_columns]
@@ -1185,8 +1217,9 @@ def load_facet_tables(cursor, alignments_table: str) -> bool:
     if not fields and not sides:
         return False
 
-    # A target document with the same id and fields as a source one is that one, so a search matches both or neither
-    same = "".join(f" AND s.source_{name} IS NOT DISTINCT FROM t.target_{name}" for name in fields)
+    # A target document with the same id, file and fields as a source one is that one, so a search matches both or neither
+    alike = [*fields, *(["filename"] if "filename" in common else [])]
+    same = "".join(f" AND s.source_{name} IS NOT DISTINCT FROM t.target_{name}" for name in alike)
     cursor.execute("DROP TABLE IF EXISTS pg_temp.facet_targets, pg_temp.facet_documents, pg_temp.facet_anchors")
     cursor.execute(
         f"""CREATE TEMP TABLE facet_targets AS SELECT t.id AS t, COALESCE(s.id, -t.id) AS u
@@ -1357,10 +1390,19 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     fields = {side: family_filter_fields(searchable_fields, set(columns), side) for side in ("source", "target")}
     for side in fields:
         select = ", ".join([f"{side}_doc_id", *fields[side]])
+        # the document's other fields, one value each, beside those it is told apart by
+        others = document_fields(columns, side, fields[side])
+        joined = ""
+        if others:
+            joined = (
+                f" LEFT JOIN (SELECT {side}_doc_id AS other_doc{''.join(f', MIN({field}) AS {field}' for field in others)}"
+                f" FROM {alignments_table} GROUP BY 1) others ON others.other_doc = documents.{side}_doc_id"
+            )
         cursor.execute(
             f"""CREATE TABLE {alignments_table}_{side}_meta AS
-            SELECT (ROW_NUMBER() OVER (ORDER BY {side}_doc_id))::int AS id, * FROM
-            (SELECT DISTINCT {select} FROM {alignments_table}) documents"""
+            SELECT (ROW_NUMBER() OVER (ORDER BY documents.{side}_doc_id))::int AS id, documents.*
+            {''.join(f', others.{field}' for field in others)} FROM
+            (SELECT DISTINCT {select} FROM {alignments_table}) documents{joined}"""
         )
         cursor.execute(f"ANALYZE {alignments_table}_{side}_meta")
     cursor.execute(
@@ -1436,7 +1478,8 @@ def load_family_filter_tables(alignments_table: str, searchable_fields: list[str
     # Index-only scans need the visibility map, which only a vacuum fills in
     for name in built:
         cursor.execute(f"VACUUM (ANALYZE) {alignments_table}_{name}")
-    load_facet_tables(cursor, alignments_table)
+    # the fields searched by at load, not every one the documents tables hold
+    load_facet_tables(cursor, alignments_table, [field[len("source_") :] for field in fields["source"]])
     cursor.execute(
         f"CREATE TABLE {alignments_table}_family_filters AS "
         f"SELECT COUNT(*)::int AS families FROM {alignments_table}_family_rank"

@@ -43,3 +43,9 @@ export function fieldPhrase(label, value) {
 
 // What a document is called when its citation fields are all empty.
 export const UNATTRIBUTED = "Unattributed text";
+
+// The collection of the document on a side of an alignment: its own, unless a passage family put a
+// document of the other collection there, which the API marks (two underscores: no field is named so).
+export function documentCollection(alignment, side) {
+    return alignment[`${side}__collection`] || side;
+}

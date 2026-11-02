@@ -7,8 +7,7 @@
                     <span class="side-mark source" aria-hidden="true"></span>
                     <span class="side-label-text" v-html="globalConfig.sourceLabel"></span>
                 </component>
-                <citations class="side-citation" :citation="globalConfig.sourceCitation" :alignment="alignment"
-                    :link-to-doc="globalConfig.sourceLinkToDocMetadata"></citations>
+                <citations class="side-citation" side="source" linked :alignment="alignment"></citations>
                 <p class="passage-text" :lang="globalConfig.sourceLanguage || undefined">
                     {{ alignment.source_context_before }}
                     <span class="source-passage" v-if="sourceHtml === null">{{ alignment.source_passage }}</span>
@@ -16,7 +15,7 @@
                     {{ alignment.source_context_after }}
                 </p>
                 <div class="side-actions">
-                    <button type="button" class="context-btn" v-if="globalConfig.sourceTextAvailable"
+                    <button type="button" class="context-btn" v-if="textAvailable('source')"
                         @click="goToContext(alignment, 'source')">
                         View passage in context<span class="visually-hidden">: {{ sourceLabel }}</span>
                     </button>
@@ -54,8 +53,7 @@
                     <span class="side-mark target" aria-hidden="true"></span>
                     <span class="side-label-text" v-html="globalConfig.targetLabel"></span>
                 </component>
-                <citations class="side-citation" :citation="globalConfig.targetCitation" :alignment="alignment"
-                    :link-to-doc="globalConfig.targetLinkToDocMetadata"></citations>
+                <citations class="side-citation" side="target" linked :alignment="alignment"></citations>
                 <div class="classification-tags"
                     v-if="alignment.target_first_class || alignment.target_second_class || alignment.target_third_class">
                     <span v-if="alignment.target_first_class" class="classification-tag tag-primary">
@@ -75,7 +73,7 @@
                     {{ alignment.target_context_after }}
                 </p>
                 <div class="side-actions">
-                    <button type="button" class="context-btn" v-if="globalConfig.targetTextAvailable"
+                    <button type="button" class="context-btn" v-if="textAvailable('target')"
                         @click="goToContext(alignment, 'target')">
                         View passage in context<span class="visually-hidden">: {{ targetLabel }}</span>
                     </button>
@@ -137,7 +135,7 @@ import emitter from "tiny-emitter/instance";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { plainText } from "../utils.js";
+import { documentCollection, plainText } from "../utils.js";
 import citations from "./citations";
 
 const props = defineProps({
@@ -279,15 +277,20 @@ function showMatches() {
     emitter.emit("announce", "Matching words shown");
 }
 
-function goToContext(alignment, direction) {
+// The text of the document on a side is its collection's
+function textAvailable(side) {
+    return globalConfig[`${documentCollection(props.alignment, side)}TextAvailable`];
+}
+
+function goToContext(alignment, side) {
     router.push({
         path: "/text-view/",
         query: {
             db_table: globalConfig.databaseName,
-            doc_id: alignment[`${direction}_doc_id`],
-            start_byte: alignment[`${direction}_start_byte`],
-            end_byte: alignment[`${direction}_end_byte`],
-            directionSelected: direction,
+            doc_id: alignment[`${side}_doc_id`],
+            start_byte: alignment[`${side}_start_byte`],
+            end_byte: alignment[`${side}_end_byte`],
+            directionSelected: documentCollection(alignment, side),
         },
     });
 }

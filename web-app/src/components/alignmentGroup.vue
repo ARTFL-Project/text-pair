@@ -9,7 +9,7 @@
             </blockquote>
             <figcaption class="epigraph-source">
                 <span class="epigraph-dash" aria-hidden="true">&mdash;</span>
-                <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage" tag="span"></citations>
+                <citations side="source" :alignment="sourcePassage" tag="span"></citations>
             </figcaption>
         </figure>
         <p class="reuse-key" v-if="shading">
@@ -62,7 +62,7 @@
                                     :aria-expanded="String(isOpen(index, reuseIndex))"
                                     :aria-controls="`reuse-${index}-${reuseIndex}`"
                                     @click="togglePassage(index, reuseIndex)">
-                                    <citations :citation="globalConfig[`${reuse.direction}Citation`]" :alignment="reuse"
+                                    <citations :side="reuse.direction" :alignment="reuse"
                                         tag="span"></citations>
                                     <span class="toggle-chevron" aria-hidden="true"></span>
                                 </button>

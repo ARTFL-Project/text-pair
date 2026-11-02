@@ -6,8 +6,9 @@
 Each case is a few alignments around a group anchored in document A at bytes 100-400:
 spans overlapping in one document making one place, the anchor's own document left out,
 an alignment with the passage itself preferred, then one with another reusing document,
-and last one with another passage of the anchor's document; and a place the build projected
-the passage onto shown as it has the passage, facing the passage itself.
+and last one with another passage of the anchor's document; a place the build projected
+the passage onto shown as it has the passage, facing the passage itself; and, where the two sides
+are two collections, each document said to be of the one its end of the alignment is.
 """
 import os
 import sys
@@ -71,6 +72,20 @@ def main():
     check("... facing the group's passage itself", c["source_doc_id"] == "A" and c["source_passage"] == "the passage")
     check("... and a place sharing none of it in order keeps its alignment",
           found["D"]["rowid"] == 3 and found["D"]["source_doc_id"] == "C" and "shared" not in found["D"])
+
+    # C reuses the passage through B only, at the source end of their alignment
+    rows = [align(1, "A", 100, 400, "B", 0, 300), align(2, "C", 0, 300, "B", 0, 300)]
+    group = {**GROUP, "source__collection": "source"}
+    found = {p["target_doc_id"]: p for p in occurrences(rows, group, None, True)}
+    check("with two collections, each reuse says which its documents are of, as their ends of the alignment",
+          (found["B"]["source__collection"], found["B"]["target__collection"]) == ("source", "target")
+          and (found["C"]["source__collection"], found["C"]["target__collection"]) == ("target", "source"))
+    projected = {("C.xml", 0, 300): {"passage_start_byte": 0, "passage_end_byte": 200, "shared": 0.5, "passage": "part",
+                                     "context_before": "", "context_after": ""}}
+    found = {p["target_doc_id"]: p for p in occurrences(rows, group, projected, True)}
+    check("... one facing the group's passage itself the anchor's on its earlier side",
+          (found["C"]["source__collection"], found["C"]["target__collection"]) == ("source", "source"))
+    check("... and with one collection, none says", all("target__collection" not in p for p in occurrences(rows, GROUP)))
 
     if FAILURES:
         print(f"{len(FAILURES)} check(s) failed: {', '.join(FAILURES)}")

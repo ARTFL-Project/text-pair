@@ -47,8 +47,7 @@
                             <h3 class="family-citation">
                                 <span class="visually-hidden">{{ results.start_position + index + 1 }}. </span>
                                 <span class="family-origin">First found here in:</span>
-                                <citations :citation="globalConfig.sourceCitation" :alignment="sourcePassage"
-                                    :link-to-doc="globalConfig.sourceLinkToDocMetadata" tag="span"></citations>
+                                <citations side="source" linked :alignment="sourcePassage" tag="span"></citations>
                             </h3>
                             <span class="family-count" v-if="reuses(sourcePassage)">This passage is reused, in whole or
                                 in part, in <strong>{{ reuses(sourcePassage).toLocaleString() }}</strong> other
@@ -105,7 +104,7 @@ import Velocity from "velocity-animate";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { fieldPhrase, paramsToUrl, prefersReducedMotion, UNATTRIBUTED } from "../utils.js";
+import { documentCollection, fieldPhrase, paramsToUrl, prefersReducedMotion, UNATTRIBUTED } from "../utils.js";
 import citations from "./citations";
 import facetPanel from "./facetPanel";
 import reportSwitcher from "./reportSwitcher";
@@ -138,11 +137,12 @@ const foundLead = computed(() => {
     return `Found again in ${phrases.join(" and ")}`;
 });
 
-// A document of the later side as its citation fields give it: author, title (year)
+// A document of the later side as its own collection's citation fields give it: author, title (year)
 function citationText(occurrence) {
-    const parts = (globalConfig.targetCitation || [])
-        .filter((cite) => occurrence[cite.field])
-        .map((cite) => (/year$/.test(cite.field) ? `(${occurrence[cite.field]})` : occurrence[cite.field]));
+    const value = (cite) => occurrence[`target_${cite.field.replace(/^(source|target)_/, "")}`];
+    const parts = (globalConfig[`${documentCollection(occurrence, "target")}Citation`] || [])
+        .filter((cite) => value(cite))
+        .map((cite) => (/year$/.test(cite.field) ? `(${value(cite)})` : value(cite)));
     return parts.join(", ").replace(", (", " (") || UNATTRIBUTED;
 }
 

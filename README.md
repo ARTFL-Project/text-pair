@@ -164,7 +164,8 @@ The settings of `app_settings.toml` are:
 -   `branding`: links in the header, each as `{ label = "...", link = "..." }`.
 -   `source_search_fields` and `target_search_fields`: the fields of the search form, in order, each as `{ field = "source_author", label = "Author" }`, where `field` is the name of the metadata field in the SQL database.
 -   `source_facets` and `target_facets`: the fields of the faceted browser, in the same format.
--   `source_citation` and `target_citation`: the fields of the citation shown with each passage, in order, each as `{ field = "source_title", style = { font-style = "italic" } }`. The style may be left out.
+-   `source_citation` and `target_citation`: the fields of the citation shown with each passage, in order, each as `{ field = "source_title", style = { font-style = "italic" } }`. The style may be left out. Where the source and target texts are two collections, each text is cited by its own collection's citation, on whichever side of a passage family it is.
+-   `paired_fields`: fields the two sides name otherwise but that mean the same, each as `{ source = "source_author", target = "target_kafauth" }`. A passage family can hold texts of both collections where its passage was first found and where it was found again, and each text is searched and counted by the field of its own collection: a later-side search or facet on `target_kafauth` reads `source_author` for the source texts found again. Fields named alike after `source_` and `target_` go together without being listed. Databases loaded before these settings existed need their family tables rebuilt to search and count by fields their search form did not have at load: `extras/add_family_filter_tables.py --force --tables database_name`.
 -   `time_series_intervals`: the intervals available in the timeline, each as `{ label = "Decade", years = 10 }`.
 
 Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
