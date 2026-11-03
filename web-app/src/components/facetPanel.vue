@@ -78,7 +78,7 @@ import emitter from "tiny-emitter/instance";
 import { computed, nextTick, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { paramsToUrl } from "../utils.js";
+import { paramsToUrl, reusedFields } from "../utils.js";
 
 // The counts of passage pairs, or of reused passages (families, as first found or found again)
 const props = defineProps({ mode: { type: String, default: "pairs" } });
@@ -92,8 +92,8 @@ const sides = computed(() => [
     { name: "target", color: "side-target-color", lead: "Found again", label: globalConfig.targetLabel },
 ]);
 // Every passage is its own value of its text, so the reused passages are not counted by it
-const fields = (side) =>
-    globalConfig.facetsFields[side].filter((field) => !(passages.value && field.value.endsWith("_passage")));
+const sideFields = (side) => (passages.value ? reusedFields("facets", side) : globalConfig.facetsFields[side]);
+const fields = (side) => sideFields(side).filter((field) => !(passages.value && field.value.endsWith("_passage")));
 const facetResults = ref(null);
 const facetLoading = ref(false);
 const facetError = ref("");
@@ -105,7 +105,7 @@ const facetMax = computed(() => Math.max(1, ...facetResults.value.results.slice(
 const resultsSide = computed(() => sides.value[facetResults.value.facet.startsWith("target_") ? 1 : 0]);
 const resultsField = computed(() => {
     const { facet } = facetResults.value;
-    const field = globalConfig.facetsFields[resultsSide.value.name].find((field) => field.value == facet);
+    const field = sideFields(resultsSide.value.name).find((field) => field.value == facet);
     return field ? field.label : facet.split("_").slice(1).join(" ");
 });
 

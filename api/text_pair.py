@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 from textpair.web_loader import FACET_TABLES, LENGTH_RANGES, OPEN_LENGTH_RANGE, PASSAGE_FIELD_SUFFIXES, relation_columns
-from textpair.web_settings import SETTINGS_FILE, SettingsError, load_app_config
+from textpair.web_settings import SETTINGS_FILE, SettingsError, load_app_config, reused_fields
 
 from textpair.shared_text import differences, reuse_depth
 
@@ -277,14 +277,23 @@ def parse_request(request, conn):
 
 
 def parse_conditions(request, conn):
-    """Parse URL args into the filter conditions, the other args and the table's field types"""
+    """Parse URL args into the filter conditions, the other args and the field types, with those of the names the
+    reused passages read a field by (reused_names)"""
     query_args, other_args, metadata_field_types = parse_request(request, conn)
-    return build_conditions(query_args, other_args, metadata_field_types), other_args, metadata_field_types
+    field_types = {**name_types(reused_names(other_args.db_table), metadata_field_types), **metadata_field_types}
+    return build_conditions(query_args, other_args, field_types), other_args, field_types
 
 
 def parse_args(request, conn):
-    """Parse URL args"""
-    conditions, other_args, metadata_field_types = parse_conditions(request, conn)
+    """Parse URL args for a search of the passage pairs, where each side is a collection: a name of the reused
+    passages for a field the collection has none of matches nothing"""
+    query_args, other_args, metadata_field_types = parse_request(request, conn)
+    names = reused_names(other_args.db_table)
+    field_types = {**name_types(names, metadata_field_types), **metadata_field_types}
+    conditions = [
+        Condition(c.field, "FALSE", []) if c.field in names and names[c.field][c.field.split("_", 1)[0]] is None else c
+        for c in build_conditions(query_args, other_args, field_types)
+    ]
     sql_fields, sql_values = join_conditions(conditions)
     return sql_fields, sql_values, other_args, list(metadata_field_types.keys())
 
@@ -1129,8 +1138,8 @@ class OriginParts(NamedTuple):
     target: list[Condition]  # the later text
     aligned: list[Condition]  # the alignment, such as its passage length
     columns: dict[str, set[str]]
-    anchor: list[Condition] | tuple = ()  # the earlier text by a field paired otherwise, read from the anchor's document
-    pairs: dict[str, str] | None = None  # paired_fields
+    anchor: list[Condition] | tuple = ()  # the earlier text by a field read otherwise, from the anchor's document
+    pairs: dict[str, dict] | None = None  # reused_names
 
 
 # Each database's app config, by its directory, with the modification times of its two files
@@ -1155,14 +1164,20 @@ def app_config(table: str) -> dict:
     return cached[1]
 
 
-def paired_fields(table: str) -> dict[str, str]:
-    """The fields the settings pair with one of the other side, each way: target_kafauth -> source_author"""
-    pairs = {}
-    for pair in app_config(table).get("pairedFields", []):
-        source, target = str(pair.get("source") or ""), str(pair.get("target") or "")
-        if source.startswith("source_") and target.startswith("target_"):
-            pairs[source], pairs[target] = target, source
-    return pairs
+def reused_names(table: str) -> dict[str, dict[str, str | None]]:
+    """The field of each collection that a name of the reused passages' fields reads, where it is not the one
+    named alike (reused_fields): target_head -> {"source": "source_title", "target": "target_head"}"""
+    return reused_fields(app_config(table))
+
+
+def name_types(names: dict[str, dict], field_types: dict[str, str]) -> dict[str, str]:
+    """The type of each name of the reused passages' fields (reused_names), as that of a field it reads"""
+    types = {}
+    for name, read in names.items():
+        field = read["source"] or read["target"]
+        if field in field_types:
+            types[name] = field_types[field]
+    return types
 
 
 def two_collections(table: str) -> bool:
@@ -1179,18 +1194,31 @@ def two_collections(table: str) -> bool:
     return all(paths) and paths[0] != paths[1]
 
 
-def field_on_side(field: str, side: str, pairs: dict[str, str] | None = None) -> str:
-    """The field of `side` that goes with `field`: itself on its own side, the one the settings pair it with
-    (paired_fields), or the one named alike: target_year on the source side is source_year"""
+def field_on_side(field: str, side: str, pairs: dict[str, dict] | None = None) -> str | None:
+    """The field of `side` that goes with `field`: the one the settings name for that collection (reused_names),
+    none if they name none, or else itself on its own side and the one named alike on the other: target_year on
+    the source side is source_year"""
+    if field in (pairs or {}):
+        return pairs[field][side]
     if field.startswith(f"{side}_"):
         return field
-    return (pairs or {}).get(field) or f"{side}_{field.split('_', 1)[1]}"
+    return f"{side}_{field.split('_', 1)[1]}"
 
 
-def on_side(condition: Condition, side: str, pairs: dict[str, str] | None = None) -> Condition:
-    """A condition on a source_ or target_ field, made to apply to the field of `side` that goes with it"""
+def on_side(condition: Condition, side: str, pairs: dict[str, dict] | None = None) -> Condition | None:
+    """A condition on a source_ or target_ field, made to apply to the field of `side` that goes with it, or
+    none where that side has none"""
     field = field_on_side(condition.field, side, pairs)
+    if field is None:
+        return None
     return Condition(field, condition.sql.replace(quote_ident(condition.field), quote_ident(field)), condition.values)
+
+
+def side_ids(cursor, table: str, side: str, conditions: list[Condition], pairs: dict[str, dict] | None) -> list[int]:
+    """The ids of the documents on a side of the alignments that meet conditions of either side (on_side), or
+    none if one is on a field that side has none of"""
+    sided = [on_side(condition, side, pairs) for condition in conditions]
+    return [] if None in sided else matching_ids(cursor, table, side, sided)
 
 
 def has_family_anchors(cursor, table: str) -> bool:
@@ -1207,26 +1235,30 @@ def origin_parts(cursor, table: str, conditions: list[Condition], groups_columns
     """The conditions sorted by what they ask of a family, or None if the family filter tables cannot answer them.
 
     The source side filters the anchor as the groups table has it, so passage text counts too, but by the
-    document itself for a field the settings pair otherwise, and the target side has to be found on both sides
-    of the alignments, as a later occurrence is, by the field of each side that goes with it.
+    document itself for a field the settings name otherwise (reused_names), and the target side has to be found
+    on both sides of the alignments, as a later occurrence is, by the field of each side that goes with it.
     """
     columns = family_filter_columns(cursor, table)
     if columns is None or not has_family_anchors(cursor, table):
         return None
-    pairs = paired_fields(table)
+    pairs = reused_names(table)
     parts = OriginParts([], [], [], columns, [], pairs)
+
+    def readable(field: str) -> bool:  # every side that has a field for it has it in its documents
+        return all(field_on_side(field, side, pairs) in (None, *columns[side]) for side in ("source", "target"))
+
     for condition in conditions:
         field = condition.field
         if field in columns["alignments"]:
             parts.aligned.append(condition)
         elif field.startswith("source_") and field in pairs:
-            if field not in columns["source"] or pairs[field] not in columns["target"]:
+            if not readable(field):
                 return None
             parts.anchor.append(condition)
         elif field.startswith("source_") and field in groups_columns:
             parts.source.append(condition)
-        elif field.startswith("target_") and field in columns["target"]:
-            if field_on_side(field, "source", pairs) not in columns["source"]:
+        elif field.startswith("target_") and (field in pairs or field in columns["target"]):
+            if not readable(field):
                 return None
             parts.target.append(condition)
         else:
@@ -1236,7 +1268,7 @@ def origin_parts(cursor, table: str, conditions: list[Condition], groups_columns
 
 def anchor_where(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
     """The earlier-side conditions as a WHERE clause on a family's groups row and its rank, `f`: those on a field
-    paired otherwise read from the anchor's document, on the side of the alignments it has an id on."""
+    named otherwise read from the anchor's document, on the side of the alignments it has an id on."""
     clauses, params = [], []
     if parts.source:
         where, source_params = join_conditions(parts.source)
@@ -1244,8 +1276,8 @@ def anchor_where(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
         params += source_params
     for condition in parts.anchor:
         clauses.append("(f.anchor_s = ANY(%s) OR f.anchor_t = ANY(%s))")
-        params.append(matching_ids(cursor, table, "source", [condition]))
-        params.append(matching_ids(cursor, table, "target", [on_side(condition, "target", parts.pairs)]))
+        params.append(side_ids(cursor, table, "source", [condition], parts.pairs))
+        params.append(side_ids(cursor, table, "target", [condition], parts.pairs))
     return " AND ".join(clauses), params
 
 
@@ -1269,8 +1301,8 @@ def found_again_rows(cursor, table: str, parts: OriginParts, found: set[str]) ->
     the earlier-side ones. Conditions on the anchor's year alone are read from the rows, others from the groups.
     """
     rows = quote_ident(f"{table}_found_again")
-    source = matching_ids(cursor, table, "source", [on_side(c, "source", parts.pairs) for c in parts.target])
-    ids = source + [-target for target in matching_ids(cursor, table, "target", parts.target)]
+    source = side_ids(cursor, table, "source", parts.target, parts.pairs)
+    ids = source + [-target for target in side_ids(cursor, table, "target", parts.target, parts.pairs)]
     if not parts.source and not parts.anchor:
         return "", f"{rows} x WHERE x.u = ANY(%s)", [ids]
     if "source_year" in found and not parts.anchor and all(c.field == "source_year" for c in parts.source):
@@ -1313,7 +1345,7 @@ def origin_ranks(cursor, table: str, parts: OriginParts) -> tuple[str, list]:
     if parts.target:
         branches = []
         for side in ("target", "source"):
-            ids = matching_ids(cursor, table, side, [on_side(c, side, parts.pairs) for c in parts.target])
+            ids = side_ids(cursor, table, side, parts.target, parts.pairs)
             column = side[0]
             rows = alignments if parts.aligned else quote_ident(f"{table}_{side}_families")
             branches.append(
@@ -1355,7 +1387,7 @@ def found_again(cursor, table: str, parts: OriginParts, ranks: list[int]) -> dic
             f"SELECT x.r, m.* FROM {rows} x JOIN {rank_table} f ON f.rank = x.r "
             f"JOIN {quote_ident(f'{table}_{side}_meta')} m ON m.id = x.{column} WHERE x.r = ANY(%s) "
             f"AND x.{column} = ANY(%s) AND x.{column} IS DISTINCT FROM f.anchor_{column} AND {a_where}",
-            [ranks, matching_ids(cursor, table, side, [on_side(c, side, parts.pairs) for c in parts.target]), *a_params],
+            [ranks, side_ids(cursor, table, side, parts.target, parts.pairs), *a_params],
         )
         for row in cursor:
             # its own side's fields, named as the later text's, as the card cites it
@@ -1376,11 +1408,11 @@ def found_again(cursor, table: str, parts: OriginParts, ranks: list[int]) -> dic
     }
 
 
-def origin_groups_where(conditions: list[Condition], groups_columns, pairs: dict[str, str]) -> tuple[str, list] | None:
+def origin_groups_where(conditions: list[Condition], groups_columns, pairs: dict[str, dict]) -> tuple[str, list] | None:
     """A WHERE clause on the groups table for a search made only of conditions on the earlier text, or None.
 
     These are conditions on the anchor, which the groups table holds, so no family tables are needed, unless a
-    field is paired otherwise (paired_fields): the anchor's document is then read from those tables.
+    field is named otherwise (reused_names): the anchor's document is then read from those tables.
     """
     if all(c.field.startswith("source_") and c.field in groups_columns and c.field not in pairs for c in conditions):
         where, params = join_conditions(conditions)
@@ -1402,7 +1434,7 @@ def origin_families(
     cursor, table: str, conditions: list[Condition], groups_columns, order: RankOrder = RankOrder("reuse")
 ) -> OriginFamilies:
     """Pick the families by where they were first found, or by any match if this database's tables cannot say"""
-    if where := origin_groups_where(conditions, groups_columns, paired_fields(table)):
+    if where := origin_groups_where(conditions, groups_columns, reused_names(table)):
         return OriginFamilies("origin", where=where, selective=True)
     if parts := origin_parts(cursor, table, conditions, groups_columns):
         # Parallel plans of these statements sometimes never finish
@@ -1582,10 +1614,10 @@ def facet_ranks(cursor, table: str, served: OriginFamilies) -> tuple[str, list]:
 def facet_values(table: str, fields: dict[str, str]) -> str:
     """CTEs that number the distinct values of a document field, as arrays by the id of the documents of each side.
 
-    `fields` is the field on each side (field_on_side). The families are counted by these numbers, which are
-    small integers, and named at the end.
+    `fields` is the field on each side (field_on_side), none for a side that has none. The families are counted
+    by these numbers, which are small integers, and named at the end.
     """
-    source, target = quote_ident(fields["source"]), quote_ident(fields["target"])
+    source, target = (quote_ident(fields[side]) if fields[side] else "NULL" for side in ("source", "target"))
     return f"""vals AS MATERIALIZED (SELECT side, id, v, (DENSE_RANK() OVER (ORDER BY v))::int AS vid FROM (
             SELECT 's' AS side, id, {source} AS v FROM {quote_ident(f"{table}_source_meta")}
             UNION ALL SELECT 't', id, {target} FROM {quote_ident(f"{table}_target_meta")}) d),
@@ -1597,12 +1629,14 @@ def anchor_facet(table: str, fields: dict[str, str], restrict: bool) -> str:
     """A statement that counts families by a document field of their anchor, as the family tables hold it.
 
     An anchor on the source side of the alignments has its field in the source documents, or else in the target
-    ones: `fields` is the field on each side (field_on_side).
+    ones: `fields` is the field on each side (field_on_side), none for a side that has none.
     """
     rank = quote_ident(f"{table}_family_rank")
-    source, target = quote_ident(fields["source"]), quote_ident(fields["target"])
+    source, target = (
+        f"{meta}.{quote_ident(fields[side])}" if fields[side] else "NULL" for meta, side in (("sm", "source"), ("tm", "target"))
+    )
     return f"""SELECT v, SUM(n)::bigint AS n FROM (
-        SELECT CASE WHEN a.anchor_s IS NOT NULL THEN sm.{source} ELSE tm.{target} END AS v, a.n
+        SELECT CASE WHEN a.anchor_s IS NOT NULL THEN {source} ELSE {target} END AS v, a.n
         FROM (SELECT anchor_s, anchor_t, COUNT(*) AS n FROM {"ca" if restrict else rank} GROUP BY 1, 2) a
         LEFT JOIN {quote_ident(f"{table}_source_meta")} sm ON sm.id = a.anchor_s
         LEFT JOIN {quote_ident(f"{table}_target_meta")} tm ON tm.id = a.anchor_t) q GROUP BY v"""
@@ -1631,7 +1665,7 @@ def found_again_facet(
             f"WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
         )
         if parts.target:
-            params.append(matching_ids(cursor, table, side, [on_side(c, side, parts.pairs) for c in parts.target]))
+            params.append(side_ids(cursor, table, side, parts.target, parts.pairs))
         params += a_params
     return (
         f"{facet_values(table, fields)}, {found_places(table, found)}, p AS ({' UNION ALL '.join(branches)})",
@@ -1657,7 +1691,7 @@ def passage_length_facet(cursor, table: str, parts: OriginParts, side: str, rest
             "OR x.s = ANY(%s) AND x.s IS DISTINCT FROM ca.anchor_s)"
         )
         for other in ("target", "source"):
-            found_params.append(matching_ids(cursor, table, other, [on_side(c, other, parts.pairs) for c in parts.target]))
+            found_params.append(side_ids(cursor, table, other, parts.target, parts.pairs))
     rank = quote_ident(f"{table}_family_rank")
     joined = "ca ON ca.r = x.r" if restrict else f"{rank} ca ON ca.rank = x.r"
     return (
@@ -1776,9 +1810,9 @@ def passage_facets(request: Request):
         length = name == "passage_length"
         ranked = columns is not None and served.applied == "origin"
         # each document's value is read from the field of its own side that goes with this one
-        pairs = paired_fields(table)
+        pairs = reused_names(table)
         fields = {other: field_on_side(facet, other, pairs) for other in ("source", "target")}
-        if ranked and not length and not all(fields[other] in columns[other] for other in fields):
+        if ranked and not length and not all(fields[other] in (None, *columns[other]) for other in fields):
             raise facet_error(facet, "it is not a field of the documents of both sides")
         if ranked and length and f"{side}_passage_length" not in columns["alignments"]:
             raise facet_error(facet, "the family tables do not have the lengths of this database's passages")
@@ -1921,7 +1955,7 @@ def family_time_series(request: Request):
                         LEFT JOIN {source_meta} sm ON sm.id = d.u LEFT JOIN {target_meta} tm ON tm.id = -d.u) q
                         GROUP BY 1 ORDER BY 1"""
                 else:  # alignment conditions: the documents at an end of the alignments that meet them
-                    parts = served.parts or OriginParts([], [], [], columns, [], paired_fields(table))
+                    parts = served.parts or OriginParts([], [], [], columns, [], reused_names(table))
                     a_where, a_params = join_conditions(parts.aligned) if parts.aligned else ("TRUE", [])
                     branches = []
                     for other in ("target", "source"):
@@ -1935,7 +1969,7 @@ def family_time_series(request: Request):
                             f"ON m.id = x.{column} WHERE x.{column} IS DISTINCT FROM ca.anchor_{column}{match} AND {a_where}"
                         )
                         if parts.target:
-                            params.append(matching_ids(cursor, table, other, [on_side(c, other, parts.pairs) for c in parts.target]))
+                            params.append(side_ids(cursor, table, other, parts.target, parts.pairs))
                         params += a_params
                     # a document on both sides of a family's alignments is found again once
                     statement = f"""WITH {ranks + ", " if ranks else ""}{found_places(table, found)},

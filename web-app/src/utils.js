@@ -1,3 +1,5 @@
+import globalConfig from "./config.js";
+
 // Query string from params, skipping empty values; arrays repeat the key.
 export function paramsToUrl(params) {
     const urlParams = [];
@@ -48,4 +50,16 @@ export const UNATTRIBUTED = "Unattributed text";
 // document of the other collection there, which the API marks (two underscores: no field is named so).
 export function documentCollection(alignment, side) {
     return alignment[`${side}__collection`] || side;
+}
+
+// The search fields ("search") or facets of reused passages where they were first found (side "source") or
+// found again ("target"), as { value, label }: each goes by the field of that collection, or one named after
+// the other's (web_settings.role_key). An API that serves none has the passage pairs' instead.
+export function reusedFields(kind, side) {
+    const fields = globalConfig[kind == "search" ? "reusedSearchFields" : "reusedFacets"];
+    if (!fields || !fields.length) return globalConfig[kind == "search" ? "metadataFields" : "facetsFields"][side];
+    return fields.map((field) => ({
+        value: field.fields.find((name) => name.startsWith(`${side}_`)) || `${side}_${field.fields[0].split("_").slice(1).join("_")}`,
+        label: field.label,
+    }));
 }

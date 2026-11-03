@@ -79,7 +79,7 @@ import emitter from "tiny-emitter/instance";
 import { computed, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { paramsToUrl, plainText, unquote } from "../utils.js";
+import { paramsToUrl, plainText, reusedFields, unquote } from "../utils.js";
 
 // What the view counts: passage pairs, or reused passages, the families
 const props = defineProps({ unit: { type: String, default: "shared" } });
@@ -134,12 +134,18 @@ const hasLength = computed(() =>
     searchParams.value.flatMap((group) => group.params || []).some((metadata) => metadata.fieldName.endsWith("passage_length"))
 );
 
+// A field is named as this view names it, or else as the other one does: reused passages by their own fields
 function processParams(params) {
     const processed = [];
     for (const direction of ["source", "target"]) {
         const paramGroup = [];
-        for (const metadata of globalConfig.metadataFields[direction]) {
-            if (metadata.value in params && params[metadata.value].length > 0) {
+        const reused = globalConfig.hasPassageFamilies ? reusedFields("search", direction) : [];
+        const pairs = globalConfig.metadataFields[direction];
+        const lists = props.unit == "reused" ? [reused, pairs] : [pairs, reused];
+        const named = new Set();
+        for (const metadata of lists.flat()) {
+            if (!named.has(metadata.value) && metadata.value in params && params[metadata.value].length > 0) {
+                named.add(metadata.value);
                 paramGroup.push({ label: metadata.label, fieldName: metadata.value, value: params[metadata.value] });
             }
         }

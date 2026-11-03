@@ -20,7 +20,7 @@ from pgvector.psycopg2 import register_vector
 from tqdm import tqdm
 
 from .parse_config import read_global_config
-from .web_settings import SETTINGS_FILE, SETTINGS_KEYS, show_view, write_app_settings
+from .web_settings import SETTINGS_FILE, SETTINGS_KEYS, show_view, with_reused_fields, write_app_settings
 
 DEFAULT_FIELDS = {
     "rowid",
@@ -265,6 +265,9 @@ class WebAppConfig:
                 target_fields.append(field)
         self.options["sourceCitation"] = source_fields
         self.options["targetCitation"] = target_fields
+        # a field one collection has none of is the other's alone
+        reused = with_reused_fields(self.options, available_fields)
+        self.options["reusedSearchFields"], self.options["reusedFacets"] = reused["reusedSearchFields"], reused["reusedFacets"]
 
 
 def copy_data(params, direction):

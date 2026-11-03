@@ -104,7 +104,7 @@ import Velocity from "velocity-animate";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { documentCollection, fieldPhrase, paramsToUrl, prefersReducedMotion, UNATTRIBUTED } from "../utils.js";
+import { documentCollection, fieldPhrase, paramsToUrl, prefersReducedMotion, reusedFields, UNATTRIBUTED } from "../utils.js";
 import citations from "./citations";
 import facetPanel from "./facetPanel";
 import reportSwitcher from "./reportSwitcher";
@@ -131,7 +131,7 @@ const sort = computed(() => results.value.sort || (route.query.sort == "earliest
 
 // What the cards that show where a passage was found again say it was found in, from the later side's fields
 const foundLead = computed(() => {
-    const phrases = globalConfig.metadataFields.target
+    const phrases = reusedFields("search", "target")
         .filter((field) => route.query[field.value] && !field.value.endsWith("passage_length"))
         .map((field) => fieldPhrase(field.label, route.query[field.value]));
     return `Found again in ${phrases.join(" and ")}`;

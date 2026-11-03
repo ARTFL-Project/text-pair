@@ -22,8 +22,7 @@
                     <fieldset class="form-side side-source-color">
                         <legend class="section-title"><span class="side-mark source" aria-hidden="true"></span><span
                                 v-html="globalConfig.sourceLabel"></span></legend>
-                        <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.source"
-                            :key="field.label">
+                        <div class="input-group pb-3" v-for="field in formFields.source" :key="field.value">
                             <label class="input-group-text" :for="`search-${field.value}`">{{ field.label
                             }}</label>
                             <input type="text" class="form-control" :id="`search-${field.value}`"
@@ -34,8 +33,7 @@
                     <fieldset class="form-side side-target-color">
                         <legend class="section-title"><span class="side-mark target" aria-hidden="true"></span><span
                                 v-html="globalConfig.targetLabel"></span></legend>
-                        <div class="input-group pb-3" v-for="field in globalConfig.metadataFields.target"
-                            :key="field.label">
+                        <div class="input-group pb-3" v-for="field in formFields.target" :key="field.value">
                             <label class="input-group-text" :for="`search-${field.value}`">{{ field.label
                             }}</label>
                             <input type="text" class="form-control" :id="`search-${field.value}`"
@@ -123,13 +121,20 @@ import Velocity from "velocity-animate";
 import { nextTick, onUnmounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import globalConfig from "../config.js";
-import { prefersReducedMotion } from "../utils.js";
+import { prefersReducedMotion, reusedFields } from "../utils.js";
 
 const route = useRoute();
 const router = useRouter();
 const form = ref(null);
 const showFormButton = ref(null);
 const formOpen = ref(true);
+// A search lands on the reused passages where there are families, so it asks by their fields
+const formFields = Object.fromEntries(
+    ["source", "target"].map((side) => [
+        side,
+        globalConfig.hasPassageFamilies ? reusedFields("search", side) : globalConfig.metadataFields[side],
+    ])
+);
 const banalitiesStored = globalConfig.banalitiesStored;
 const formBanalityValues = [
     { label: "Don't filter banalities", value: "" },
@@ -168,7 +173,7 @@ if (route.path != "/") {
 function populateSearchForm() {
     const values = {};
     for (const direction of ["source", "target"]) {
-        for (const key of globalConfig.metadataFields[direction]) {
+        for (const key of formFields[direction]) {
             values[key.value] = key.value in route.query ? route.query[key.value] : "";
         }
     }
