@@ -1249,7 +1249,8 @@ def origin_parts(cursor, table: str, conditions: list[Condition], groups_columns
 
     for condition in conditions:
         field = condition.field
-        if field in columns["alignments"]:
+        # the earlier passage's length is the family's own where the groups table has it, as the cards show it
+        if field in columns["alignments"] and not (field.startswith("source_") and field in groups_columns):
             parts.aligned.append(condition)
         elif field.startswith("source_") and field in pairs:
             if not readable(field):
@@ -1704,28 +1705,49 @@ def passage_length_facet(cursor, table: str, parts: OriginParts, side: str, rest
     )
 
 
+def family_length_facet(table: str, restrict: bool) -> str:
+    """A statement that counts families by the length range of their own passage, as the groups table has it"""
+    groups = quote_ident(f"{table}_groups")
+    rows = f"ca JOIN {quote_ident(f'{table}_family_rank')} f ON f.rank = ca.r JOIN {groups} g USING (group_id)"
+    return f"""SELECT {length_range("g.source_passage_length")} AS v, COUNT(*)::bigint AS n
+        FROM {rows if restrict else f"{groups} g"} WHERE g.source_passage_length IS NOT NULL GROUP BY 1"""
+
+
 def stored_facet(
-    cursor, table: str, conditions: list[Condition], served: OriginFamilies, facet: str, found: set[str], limit: int
+    cursor, table: str, conditions: list[Condition], served: OriginFamilies, facet: str, found: set[str], limit: int,
+    own_length: bool = False,
 ) -> tuple[str, list] | None:
     """A statement like passage_facets' that counts from the facet tables (load_facet_tables), or None.
 
     A search with no filters reads the counts of all the families, and one on the anchor's year alone those by
     year. One on the later side counts the rows of the documents found again that it matches, which hold their
     anchor's values too, and another the rows of the families it leaves, for a later-side field. A later-side
-    field's values count the reuses, an earlier-side one's the families.
+    field's values count the reuses, an earlier-side one's the families. `own_length` counts the families by their
+    own passage's length, for a search on the later side only.
     """
     side, _, name = facet.partition("_")
     length = name == "passage_length"
     anchored = side == "source" and not length
     column = f"{side}_lengths" if length else f"anchor_{name}" if anchored else f"v_{name}"
     parts = served.parts
-    if column not in found or (parts is not None and (parts.aligned or not parts.target)):
+    if own_length:
+        if not found or parts is None or parts.aligned or not parts.target:
+            return None
+    elif column not in found or (parts is not None and (parts.aligned or not parts.target)):
         return None
     by_year = served.where is not None and "source_year" in found and all(c.field == "source_year" for c in conditions)
     values, years = quote_ident(f"{table}_facet_values"), quote_ident(f"{table}_facet_years")
     named = length_label("v") if length else "v"
     cte, params, counted_params = "", [], []
-    if served.where is None and parts is None:
+    if own_length and parts is not None:
+        cte, rows, params = found_again_rows(cursor, table, parts, found)
+        cte = f"{cte + ', ' if cte else ''}p AS MATERIALIZED (SELECT DISTINCT x.r FROM {rows})"
+        families = "SELECT COUNT(*)::bigint FROM p"
+        counted = f"""SELECT {length_range("g.source_passage_length")} AS v, COUNT(*)::bigint AS n
+            FROM p JOIN {quote_ident(f"{table}_family_rank")} f ON f.rank = p.r
+            JOIN {quote_ident(f"{table}_groups")} g USING (group_id)
+            WHERE g.source_passage_length IS NOT NULL GROUP BY 1"""
+    elif served.where is None and parts is None:
         families = f"SELECT families::bigint FROM {quote_ident(f'{table}_family_filters')}"
         counted, counted_params = f"SELECT {named} AS v, n::bigint AS n FROM {values} WHERE facet = %s", [facet]
     elif by_year:
@@ -1782,7 +1804,8 @@ def passage_facets(request: Request):
 
     A source_ field is the family's anchor's, where the passage was first found, so each family counts once.
     A target_ field is that of the documents it was found again in, and each of its reuses counts (`unit`).
-    The passage length of a side is counted over the family's alignments, in the ranges of the pairs' facets.
+    Passage lengths are counted in the ranges of the pairs' facets: the earlier side's is the family's own passage's,
+    where the groups table has it, and otherwise each side's is counted over the family's alignments.
     The text of a passage is not a facet: every passage is its own value. A database whose tables cannot
     read the later side, or a search they cannot answer, is counted by any match of the passage for the
     source_ fields (`scope` is "any"), and is an error for the others.
@@ -1808,13 +1831,14 @@ def passage_facets(request: Request):
         served = origin_families(cursor, table, conditions, groups_columns) if conditions else OriginFamilies("origin")
         columns = family_filter_columns(cursor, table) if has_family_anchors(cursor, table) else None
         length = name == "passage_length"
+        own_length = length and side == "source" and facet in groups_columns
         ranked = columns is not None and served.applied == "origin"
         # each document's value is read from the field of its own side that goes with this one
         pairs = reused_names(table)
         fields = {other: field_on_side(facet, other, pairs) for other in ("source", "target")}
         if ranked and not length and not all(fields[other] in (None, *columns[other]) for other in fields):
             raise facet_error(facet, "it is not a field of the documents of both sides")
-        if ranked and length and f"{side}_passage_length" not in columns["alignments"]:
+        if ranked and length and not own_length and f"{side}_passage_length" not in columns["alignments"]:
             raise facet_error(facet, "the family tables do not have the lengths of this database's passages")
 
         if ranked:
@@ -1823,14 +1847,18 @@ def passage_facets(request: Request):
             found = found_again_columns(cursor, table)
             # the stored counts pair the fields named alike
             named_alike = length or all(fields[other] == f"{other}_{name}" for other in fields)
-            stored = stored_facet(cursor, table, conditions, served, facet, found, values) if named_alike else None
+            stored = None
+            if named_alike:
+                stored = stored_facet(cursor, table, conditions, served, facet, found, values, own_length)
             if stored is not None:
                 statement, params = stored
             else:
                 ranks, params = facet_ranks(cursor, table, served)
                 restrict = bool(ranks)
                 parts = served.parts or OriginParts([], [], [], columns, [], pairs)
-                if length:
+                if own_length:
+                    ctes, counted, counted_params = "", family_length_facet(table, restrict), []
+                elif length:
                     ctes, counted, counted_params = passage_length_facet(cursor, table, parts, side, restrict)
                 elif side == "source":
                     ctes, counted, counted_params = "", anchor_facet(table, fields, restrict), []
@@ -1847,15 +1875,16 @@ def passage_facets(request: Request):
             rows = cursor.fetchall()
             applied = "origin"
         else:
-            if side == "target" or length or facet not in groups_columns:
+            if side == "target" or length and not own_length or facet not in groups_columns:
                 raise facet_error(facet, "this search or database cannot say where passages were found again")
+            value = length_range(quote_ident(facet)) if own_length else quote_ident(facet)
             if served.applied == "any":
                 where, params = family_candidates(cursor, table, *join_conditions(conditions))
             else:
                 where, params = served.where or ("", [])
             cursor.execute(
                 f"""SELECT SUM(n) OVER ()::bigint, v, n, SUM(n) OVER ()::bigint, COUNT(*) OVER ()::bigint
-                FROM (SELECT {quote_ident(facet)} AS v, COUNT(*)::bigint AS n
+                FROM (SELECT {value} AS v, COUNT(*)::bigint AS n
                       FROM {quote_ident(f"{table}_groups")} {where} GROUP BY 1) q
                 ORDER BY n DESC, v LIMIT %s""",
                 [*params, values],

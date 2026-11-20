@@ -875,6 +875,14 @@ def groups_year_index(groups_table: str) -> str:
     )
 
 
+def groups_length_index(groups_table: str) -> str:
+    """The statement that indexes each family's passage length by its group_id, for the length facets."""
+    return (
+        f"CREATE INDEX IF NOT EXISTS group_id_length_{groups_table}_idx "
+        f"ON {groups_table} USING BTREE(group_id) INCLUDE (source_passage_length)"
+    )
+
+
 def load_groups_file(groups_file: str, alignments_table: str, searchable_fields: list[str], workers: int = 1):
     """Load the groups file into the database."""
     config = read_global_config()
@@ -884,6 +892,10 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
         line = input_file.readline()
         field_names = orjson.loads(line).keys()
         field_names = [f for f in field_names if f not in FILTERED_FIELDS]
+        # The family's own passage, as the sorted results show it and filter it by
+        counted = "source_passage" in field_names and "source_passage_length" not in field_names
+        if counted:
+            field_names.append("source_passage_length")
         row_count = 1 + sum(1 for _ in input_file)
     fields_in_table = [f"{f} {DEFAULT_FIELD_TYPES.get(f, 'TEXT')}" for f in field_names if f != "group_id"]
     fields_in_table.append("group_id INTEGER PRIMARY KEY")
@@ -906,7 +918,10 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
 
         def group_rows():
             for line in tqdm(input_file, total=row_count, desc="Storing alignment groups...", leave=False):
-                yield validate(orjson.loads(line))
+                row = orjson.loads(line)
+                if counted:
+                    row["source_passage_length"] = len(TOKENIZER.findall(row["source_passage"] or ""))
+                yield validate(row)
 
         copy_into(cursor, table_name, field_names, group_rows())
 
@@ -932,6 +947,8 @@ def load_groups_file(groups_file: str, alignments_table: str, searchable_fields:
         f'CREATE INDEX count_group_id_{table_name}_idx ON {table_name} USING BTREE("count" DESC, group_id)'
     )
     statements.append(f"CREATE INDEX group_id_{table_name}_idx ON {table_name} USING HASH(group_id)")
+    if "source_passage_length" in field_names:  # the family length facets read it by group_id alone
+        statements.append(groups_length_index(table_name))
     if "source_year" in field_names:
         statements.append(groups_year_index(table_name))
 
