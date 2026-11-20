@@ -11,6 +11,11 @@ word ("Le suffrage par le sort, dit Montesquieu, est de la nature...") leaves th
 documents no ngram to share otherwise. Chained onto the passage, as many of them as a
 passage needs ngrams, less one, move its end.
 
+A run counts towards min_matching, and earns flex_gap's wider gap, by the distinct ngrams
+it matches: one ngram repeated ("Ha, ha, ha ! ... ha, ha, ha !") is one, however many times
+both documents repeat it. `match_keys` numbers each match's ngram within the pair, and
+`stamp` and `clock` mark the ones a run has already counted.
+
 Every kernel is symmetric: comparing a pair of documents the other way round gives the
 mirrored passages. `MATCHER_SYMMETRY.md` measures the asymmetric matcher the chains
 replaced, which agreed with itself on 52% of frantext passages when the document order
@@ -428,9 +433,9 @@ def _order_by_target(packed_indices, n, order, spare, keys):
 
 
 @njit(nogil=True, cache=True)
-def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, used,
-                   skip, start_bytes, end_bytes, window_size, max_gap, flex_gap,
-                   min_matching, min_in_window, out, n_alignments):
+def _anchored_scan(packed_indices, packed_positions, match_keys, n, order, mirrored, best,
+                   used, skip, start_bytes, end_bytes, window_size, max_gap, flex_gap,
+                   min_matching, min_in_window, out, n_alignments, stamp, clock):
     """The Go aligner's walk: through one document in order, each run anchored at a
     match's first partner in the other. `mirrored` walks the target, through `order`,
     the matches by (target, source). It pairs repeated material differently from the
@@ -510,6 +515,10 @@ def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, u
         in_run = True
         in_alignment = 1
         in_window = 1
+        clock[0] += 1
+        run = clock[0]
+        stamp[match_keys[anchor]] = run
+        distinct = 1
         gap = max_gap
         window = window_size
         for rank in range(anchor_rank + 1, n):
@@ -546,15 +555,18 @@ def _anchored_scan(packed_indices, packed_positions, n, order, mirrored, best, u
             previous_walked = w
             in_window += 1
             in_alignment += 1
-            if flex_gap:
-                if in_alignment == min_matching:
-                    gap += min_matching
-                    window += min_matching
-                elif in_alignment > min_matching and gap < window_size:
-                    gap += 1
-                    window += 1
+            if stamp[match_keys[entry]] != run:
+                stamp[match_keys[entry]] = run
+                distinct += 1
+                if flex_gap:
+                    if distinct == min_matching:
+                        gap += min_matching
+                        window += min_matching
+                    elif distinct > min_matching and gap < window_size:
+                        gap += 1
+                        window += 1
             last = entry
-        if in_alignment >= min_matching:
+        if distinct >= min_matching:
             out, n_alignments = _emit(out, n_alignments, packed_indices, packed_positions,
                                       anchor, last, in_alignment, start_bytes, end_bytes)
         resume = last_walked + 1 if not in_run else last_walked
@@ -752,9 +764,10 @@ def _coalesce(out, n):
 
 
 @njit(nogil=True, cache=True)
-def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
-                  window_size, max_gap, flex_gap, min_matching, min_in_window,
-                  source_first, best, parent, used, chain, key, order, spans, out):
+def match_passage(packed_indices, packed_positions, match_keys, n, n_blocks, start_bytes,
+                  end_bytes, window_size, max_gap, flex_gap, min_matching, min_in_window,
+                  source_first, best, parent, used, chain, key, order, spans, out, stamp,
+                  clock):
     """Matches must be sorted by (source index, target index). `n_blocks` is how many
     distinct source indices they hold, which picks the predecessor scan. `source_first`
     says whether the source is the first of the pair by document identity, which is what
@@ -776,8 +789,8 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
     what makes the count about n+m, every occurrence on both sides reported once.
 
     Every buffer is the caller's: best, parent, used, chain, order sized for n matches,
-    key for n + 1, and spans and out grown here and handed back so the next pair reuses
-    them. Returns (out, n_alignments, spans, longest), longest being the longest chain.
+    key for n + 1, stamp for the pair's distinct ngrams (match_keys), and spans and out
+    grown here and handed back so the next pair reuses them. Returns (out, n_alignments, spans, longest), longest being the longest chain.
     """
     n_alignments = 0
     if n == 0:
@@ -845,7 +858,10 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
         segment_start = 0
         anchor = 0
         in_window = 1
-        in_segment = 1
+        clock[0] += 1
+        run = clock[0]
+        stamp[match_keys[chain[0]]] = run
+        distinct = 1
         gap_allowance = max_gap
         window = window_size
         for t in range(1, length + 1):
@@ -869,7 +885,7 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
                             in_window = 0
             if cut:
                 count = t - segment_start
-                if count >= min_matching:
+                if distinct >= min_matching:
                     out, n_alignments, spans = _keep(
                         out, n_alignments, spans, packed_indices, packed_positions,
                         chain, segment_start, t - 1, count, start_bytes, end_bytes)
@@ -878,19 +894,24 @@ def match_passage(packed_indices, packed_positions, n, n_blocks, start_bytes, en
                 segment_start = t
                 anchor = t
                 in_window = 1
-                in_segment = 1
+                clock[0] += 1
+                run = clock[0]
+                stamp[match_keys[chain[t]]] = run
+                distinct = 1
                 gap_allowance = max_gap
                 window = window_size
                 continue
             in_window += 1
-            in_segment += 1
-            if flex_gap:
-                if in_segment == min_matching:
-                    gap_allowance += min_matching
-                    window += min_matching
-                elif in_segment > min_matching and gap_allowance < window_size:
-                    gap_allowance += 1
-                    window += 1
+            if stamp[match_keys[chain[t]]] != run:
+                stamp[match_keys[chain[t]]] = run
+                distinct += 1
+                if flex_gap:
+                    if distinct == min_matching:
+                        gap_allowance += min_matching
+                        window += min_matching
+                    elif distinct > min_matching and gap_allowance < window_size:
+                        gap_allowance += 1
+                        window += 1
     out, n_alignments = _sort_rows(out, n_alignments)
     return out, n_alignments, spans, longest
 
@@ -989,11 +1010,12 @@ def _merged(rows, n, merging, merge_byte, merge_ngram, window_size, multiplier):
 
 
 @njit(nogil=True, cache=True)
-def align_pair(packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
-               window_size, max_gap, flex_gap, min_matching, min_in_window,
+def align_pair(packed_indices, packed_positions, match_keys, n, n_blocks, start_bytes,
+               end_bytes, window_size, max_gap, flex_gap, min_matching, min_in_window,
                merge_byte, merge_ngram, multiplier, source_first,
                source_words, target_words, source_at, target_at, at_start_bytes,
-               at_end_bytes, best, parent, used, chain, key, order, spans, out):
+               at_end_bytes, best, parent, used, chain, key, order, spans, out, stamp,
+               clock):
     """One pair's passages: the chains, and the anchored scan walking each document,
     each set re-seeded and merged on its own and then coalesced.
 
@@ -1007,24 +1029,25 @@ def align_pair(packed_indices, packed_positions, n, n_blocks, start_bytes, end_b
     pair.
     """
     out, n_chains, spans, longest = match_passage(
-        packed_indices, packed_positions, n, n_blocks, start_bytes, end_bytes,
+        packed_indices, packed_positions, match_keys, n, n_blocks, start_bytes, end_bytes,
         window_size, max_gap, flex_gap, min_matching, min_in_window, source_first,
-        best, parent, used, chain, key, order, spans, out)
+        best, parent, used, chain, key, order, spans, out, stamp, clock)
     # A scan's run either is a chain or reaches its first step past the gap with
     # min_in_window matches linked normally, so below both nothing here can pass.
     if longest < min_matching and longest < min_in_window:
         return out[:0], 0, spans, out
     forward = np.empty((64, NCOL), np.int32)
     forward, n_forward = _anchored_scan(
-        packed_indices, packed_positions, n, order, False, best, used, key, start_bytes,
-        end_bytes,
-        window_size, max_gap, flex_gap, min_matching, min_in_window, forward, 0)
+        packed_indices, packed_positions, match_keys, n, order, False, best, used, key,
+        start_bytes, end_bytes,
+        window_size, max_gap, flex_gap, min_matching, min_in_window, forward, 0, stamp, clock)
     by_target = _order_by_target(packed_indices, n, order, chain, parent)
     backward = np.empty((64, NCOL), np.int32)
     backward, n_backward = _anchored_scan(
-        packed_indices, packed_positions, n, by_target, True, best, used, key,
+        packed_indices, packed_positions, match_keys, n, by_target, True, best, used, key,
         start_bytes, end_bytes,
-        window_size, max_gap, flex_gap, min_matching, min_in_window, backward, 0)
+        window_size, max_gap, flex_gap, min_matching, min_in_window, backward, 0, stamp,
+        clock)
     if source_words.shape[0] and target_words.shape[0]:
         # every passage of the pair, whichever set found it, is one an end may come near
         found = n_chains + n_forward + n_backward

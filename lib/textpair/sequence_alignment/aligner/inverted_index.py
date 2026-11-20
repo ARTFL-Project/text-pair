@@ -349,12 +349,18 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
     source_indices = np.empty(position_capacity, np.int32)
     target_block_starts = np.empty(position_capacity, np.int32)
     target_block_ends = np.empty(position_capacity, np.int32)
+    source_keys = np.empty(position_capacity, np.int32)
     order_buffer = np.empty(position_capacity, np.int32)
     order_spare = np.empty(position_capacity, np.int32)
     digit_counts = np.empty(256, np.int64)
     match_capacity = 256
     packed_indices = np.empty(match_capacity, np.int64)
     packed_positions = np.empty(match_capacity, np.int64)
+    match_keys = np.empty(match_capacity, np.int32)
+    # Which run last counted each of a pair's shared ngrams: runs are numbered by `clock`
+    # across the whole range, so no pair has to clear what the one before it left.
+    key_stamp = np.full(256, -1, np.int64)
+    clock = np.zeros(1, np.int64)
     # match_passage's chaining buffers, kept across this range's targets for the same
     # reason the match arrays are. `chain_spans` and `chain_out` grow inside the kernel
     # and come back out, so a later pair inherits whatever size an earlier one needed.
@@ -428,8 +434,11 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
             source_indices = np.empty(position_capacity, np.int32)
             target_block_starts = np.empty(position_capacity, np.int32)
             target_block_ends = np.empty(position_capacity, np.int32)
+            source_keys = np.empty(position_capacity, np.int32)
             order_buffer = np.empty(position_capacity, np.int32)
             order_spare = np.empty(position_capacity, np.int32)
+        if count > key_stamp.shape[0]:
+            key_stamp = np.full(count * 2, -1, np.int64)
         j = 0
         max_source_index = 0
         for k in range(q, r):
@@ -446,6 +455,7 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
                     max_source_index = index
                 target_block_starts[j] = block_start   # the shared key's target positions
                 target_block_ends[j] = block_end
+                source_keys[j] = k - q                 # which of the pair's shared keys
                 j += 1
         if n_positions < 64:
             order = sort_insertion(source_indices, n_positions, order_buffer)
@@ -456,6 +466,7 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
             match_capacity = n_matches * 2
             packed_indices = np.empty(match_capacity, np.int64)
             packed_positions = np.empty(match_capacity, np.int64)
+            match_keys = np.empty(match_capacity, np.int32)
             chain_best = np.empty(match_capacity, np.int32)
             chain_parent = np.empty(match_capacity, np.int32)
             chain_used = np.empty(match_capacity, np.uint8)
@@ -471,13 +482,15 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
             # match_passage reaches them through packed_positions.
             source_index_half = np.int64(source_indices[entry]) << 32
             source_position_half = np.int64(at) << 32
+            shared_key = source_keys[entry]
             for target_at in range(target_block_starts[entry], target_block_ends[entry]):
                 packed_indices[written] = (source_index_half
                                            | np.int64(ngram_indices[target_at]))
                 packed_positions[written] = source_position_half | np.int64(target_at)
+                match_keys[written] = shared_key
                 written += 1
         alignments, n_alignments, chain_spans, chain_out = align_pair(
-            packed_indices, packed_positions, n_matches, n_positions,
+            packed_indices, packed_positions, match_keys, n_matches, n_positions,
             start_bytes, end_bytes,
             window_size, max_gap, flex_gap, min_matching, min_in_window,
             merge_byte, merge_ngram, multiplier, document_rank[s] < document_rank[t],
@@ -485,7 +498,7 @@ def align_targets(s, t_lo, t_hi, key_offsets, target_offsets, source_slots, targ
             index_at[position_offsets[key_offsets[t] + t]:position_offsets[key_offsets[t + 1] + t]],
             start_bytes, end_bytes,
             chain_best, chain_parent, chain_used, chain_members, chain_key,
-            chain_order, chain_spans, chain_out)
+            chain_order, chain_spans, chain_out, key_stamp, clock)
         if n_alignments > 0:
             while n_rows + n_alignments > out.shape[0]:
                 new = np.empty((out.shape[0] * 2, NCOL + 2), np.int32)

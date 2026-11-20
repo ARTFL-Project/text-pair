@@ -33,7 +33,7 @@ END_GAP = 1             # the step to the next match is beyond the gap allowance
 END_WINDOW_SPARSE = 2   # past a window boundary with too few matches in the window
 END_OF_CHAIN = 4        # no further match could extend the chain
 TRUNCATED = 8           # the chain stopped at a match an earlier passage had taken
-DROP_SHORT = 16         # fewer than minimum_matching_ngrams matches
+DROP_SHORT = 16         # fewer than minimum_matching_ngrams distinct ngrams
 DROP_COVERED = 32       # both stretches already covered by a passage that was kept
 ANCHORED_SOURCE = 64    # found by the anchored scan walking the source
 ANCHORED_TARGET = 128   # found by the anchored scan walking the target
@@ -42,7 +42,7 @@ _END_NAMES = (
     (END_WINDOW_SPARSE, "past the window boundary with too few matches in window"),
     (END_OF_CHAIN, "the chain could not be extended"),
     (TRUNCATED, "the chain ran into matches an earlier passage had taken"),
-    (DROP_SHORT, "fewer than minimum_matching_ngrams matches"),
+    (DROP_SHORT, "fewer than minimum_matching_ngrams distinct ngrams"),
     (DROP_COVERED, "both stretches are already covered by a passage that was kept"),
     (ANCHORED_SOURCE, "found by the anchored scan walking the source"),
     (ANCHORED_TARGET, "found by the anchored scan walking the target"),
@@ -272,7 +272,7 @@ def _walk(match, n, params, floor, source_first=True):
         segment_start = 0
         anchor = 0
         in_window = 1
-        in_segment = 1
+        seen = {match_keys[chain[0]]}
         gap_allowance = max_gap
         window = window_size
         for t in range(1, len(chain) + 1):
@@ -296,7 +296,7 @@ def _walk(match, n, params, floor, source_first=True):
             if cut:
                 count = t - segment_start
                 keys = [match_keys[i] for i in chain[segment_start:t]]
-                if count >= min_matching:
+                if len(seen) >= min_matching:
                     record(chain[segment_start], chain[t - 1], keys, reason)
                 elif len(keys) >= floor:
                     first, last = chain[segment_start], chain[t - 1]
@@ -314,19 +314,20 @@ def _walk(match, n, params, floor, source_first=True):
                 segment_start = t
                 anchor = t
                 in_window = 1
-                in_segment = 1
+                seen = {match_keys[chain[t]]}
                 gap_allowance = max_gap
                 window = window_size
                 continue
             in_window += 1
-            in_segment += 1
-            if flex_gap:
-                if in_segment == min_matching:
-                    gap_allowance += min_matching
-                    window += min_matching
-                elif in_segment > min_matching and gap_allowance < window_size:
-                    gap_allowance += 1
-                    window += 1
+            if match_keys[chain[t]] not in seen:
+                seen.add(match_keys[chain[t]])
+                if flex_gap:
+                    if len(seen) == min_matching:
+                        gap_allowance += min_matching
+                        window += min_matching
+                    elif len(seen) > min_matching and gap_allowance < window_size:
+                        gap_allowance += 1
+                        window += 1
     # The kernel hands its rows back in source order; passages are found longest-first,
     # which is not that order. `blocks` stays in the order the matcher produced them,
     # since that is what the trace is for.
@@ -351,7 +352,7 @@ def pair_rows(match, n, params, floor, source_first=True, reseeding=None):
     sets = [rows]
     for mirrored in (False, True):
         runs = []
-        for members in _anchored_scan(source_indices, target_indices, n, params,
+        for members in _anchored_scan(source_indices, target_indices, match_keys, n, params,
                                       mirrored):
             first, last = members[0], members[-1]
             runs.append((int(source_start_bytes[first]), int(source_end_bytes[last]),
@@ -395,7 +396,7 @@ def pair_rows(match, n, params, floor, source_first=True, reseeding=None):
     return rows, blocks, hidden, merged_away, len(combined) - len(rows), reseeded
 
 
-def _anchored_scan(source_indices, target_indices, n, params, mirrored):
+def _anchored_scan(source_indices, target_indices, match_keys, n, params, mirrored):
     """Mirror of matching._anchored_scan. Yields each run's matches, in order."""
     window_size = params["matching_window_size"]
     max_gap = params["max_gap"]
@@ -421,6 +422,7 @@ def _anchored_scan(source_indices, target_indices, n, params, mirrored):
         walked_limit, other_limit = walked + max_gap, other + max_gap
         previous_walked = walked
         members = [anchor_rank]
+        seen = {match_keys[order[anchor_rank]]}
         in_run = True
         in_alignment = in_window = 1
         gap, window = max_gap, window_size
@@ -449,15 +451,17 @@ def _anchored_scan(source_indices, target_indices, n, params, mirrored):
             previous_walked = w
             in_window += 1
             in_alignment += 1
-            if flex_gap:
-                if in_alignment == min_matching:
-                    gap += min_matching
-                    window += min_matching
-                elif in_alignment > min_matching and gap < window_size:
-                    gap += 1
-                    window += 1
+            if match_keys[order[rank]] not in seen:
+                seen.add(match_keys[order[rank]])
+                if flex_gap:
+                    if len(seen) == min_matching:
+                        gap += min_matching
+                        window += min_matching
+                    elif len(seen) > min_matching and gap < window_size:
+                        gap += 1
+                        window += 1
             members.append(rank)
-        if in_alignment >= min_matching:
+        if len(seen) >= min_matching:
             yield [order[r] for r in members]
         resume = last_walked + 1 if not in_run else last_walked
 

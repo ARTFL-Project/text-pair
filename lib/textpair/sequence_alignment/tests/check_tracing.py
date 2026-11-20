@@ -83,20 +83,23 @@ def compare_kernels(source_files, source_metadata, params, threads, max_matches)
         start_bytes = np.concatenate([np.asarray(s_sb, np.int32), np.asarray(t_sb, np.int32)])
         end_bytes = np.concatenate([np.asarray(s_eb, np.int32), np.asarray(t_eb, np.int32)])
         n_blocks = int(np.unique(np.asarray(s_idx)).shape[0])
+        distinct, match_keys = np.unique(np.asarray(_keys), return_inverse=True)
+        match_keys = match_keys.astype(np.int32)
 
         def buffers():
             return (np.empty(n, np.int32), np.empty(n, np.int32), np.empty(n, np.uint8),
                     np.empty(n, np.int32), np.empty(n + 1, np.int32),
                     np.empty(n, np.int32),
-                    np.empty((64, 4), np.int32), np.empty((64, matching.NCOL), np.int32))
+                    np.empty((64, 4), np.int32), np.empty((64, matching.NCOL), np.int32),
+                    np.full(distinct.shape[0], -1, np.int64), np.zeros(1, np.int64))
         common = (params["matching_window_size"], params["max_gap"], params["flex_gap"],
                   params["minimum_matching_ngrams"],
                   params["minimum_matching_ngrams_in_window"])
         out, cnt, _spans, _longest = matching.match_passage(
-            pair, pos, n, n_blocks, start_bytes, end_bytes, *common, source_first,
+            pair, pos, match_keys, n, n_blocks, start_bytes, end_bytes, *common, source_first,
             *buffers())
         final, final_cnt, _spans, _out = matching.align_pair(
-            pair, pos, n, n_blocks, start_bytes, end_bytes, *common,
+            pair, pos, match_keys, n, n_blocks, start_bytes, end_bytes, *common,
             params["merge_passages_on_byte_distance"],
             params["merge_passages_on_ngram_distance"],
             params["passage_distance_multiplier"], source_first, *reseeding, *buffers())
