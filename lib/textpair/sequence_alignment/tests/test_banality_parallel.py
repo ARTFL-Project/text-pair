@@ -325,6 +325,24 @@ def check_scoring(root):
           score.is_banal(Passage("half.bin", "everywhere.bin"))
           == score.is_banal(Passage("everywhere.bin", "half.bin")))
 
+    # Common on the source, rare on the target: 0.5 whether the source span holds two
+    # n-grams or four, where pooling them would give 2/6 against 4/8.
+    shorter = Passage("everywhere.bin", "rare.bin")
+    shorter.source_end_byte = 20
+    halves = bf.banality_score(os.path.join(work, "document_frequencies.bin"), order, 0.45)
+    check("scoring: each side weighs the same, however long its span",
+          halves.is_banal(shorter) and halves.is_banal(Passage("everywhere.bin", "rare.bin")))
+
+    # Trigrams: of the five starting in the span, the last two run past the passage.
+    write_ngram_doc(os.path.join(order, "overhang.bin"), 5, np.array([21, 1, 22, 2, 3]))
+    overhang = Passage("overhang.bin", "overhang.bin")
+    overhang.source_end_byte = overhang.target_end_byte = 50
+    by_span = bf.banality_score(os.path.join(work, "document_frequencies.bin"), order, 0.5)
+    inside = bf.banality_score(os.path.join(work, "document_frequencies.bin"), order, 0.5,
+                               ngram=3)
+    check("scoring: n-grams running past the passage do not count",
+          inside.is_banal(overhang) and not by_span.is_banal(overhang))
+
 
 def check_repetition(root):
     """Keys the documents holding them repeat score as common, whether the corpus

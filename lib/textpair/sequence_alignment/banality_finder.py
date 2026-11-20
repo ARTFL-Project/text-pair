@@ -226,6 +226,18 @@ class NgramDoc:
             np.array((start_byte, end_byte), dtype=np.int32), "left")
         return int(bounds[0]), int(bounds[1])
 
+    def inside(self, low: int, high: int, ngram: int) -> int:
+        """End of the n-grams of span(...) that also end in it: those starting at its
+        last ngram - 1 word positions run past it. The first position is always kept."""
+        if ngram < 2 or high - low < 2:
+            return high
+        starts = self.start_bytes[low:high]
+        # Positions rather than n-grams: with a gap, several n-grams share a start.
+        positions = np.flatnonzero(np.concatenate(([True], starts[1:] != starts[:-1])))
+        if positions.size < ngram:
+            return low + int(positions[1]) if positions.size > 1 else high
+        return low + int(positions[-(ngram - 1)])
+
     def get_ngrams(self, start_byte, end_byte) -> list[int]:
         """The keys of every n-gram starting in [start_byte, end_byte)."""
         low, high = self.span(start_byte, end_byte)
@@ -334,9 +346,12 @@ def _capitalized_share(text: str) -> float:
 
 
 class BanalityScore:
-    """The automatic verdict. A passage is banal when the mean commonness of the
-    n-grams on both sides of it reaches `threshold`; scoring both sides keeps the
-    verdict from depending on which document is the source.
+    """The automatic verdict. A passage is banal when the mean commonness of its
+    n-grams, taken on each side and averaged over the two, reaches `threshold`.
+    Both sides weigh the same, so the verdict does not depend on which document is
+    the source, nor on how many unmatched words either side's span takes in. Only the
+    n-grams wholly inside the passage count: on a short match, those running past its
+    end would otherwise dilute the mean.
 
     Three rules on the passages themselves catch what n-gram counts miss: a short
     passage mostly inside TEI paratext on both sides, a short passage of numbers, Arabic
@@ -345,9 +360,11 @@ class BanalityScore:
     capitalize every noun."""
 
     def __init__(self, source: Commonness, source_orders: str, target: Commonness,
-                 target_orders: str, threshold: float, languages: tuple[str, str] = ("", "")):
+                 target_orders: str, threshold: float, languages: tuple[str, str] = ("", ""),
+                 ngram: int = 1):
         self.sides = ((source, source_orders), (target, target_orders))
         self.threshold = threshold
+        self.ngram = ngram
         self.documents: dict[str, NgramDoc] = {}
         self.files: dict[str, Optional[SourceFile]] = {}
         self.names_rule = not any((language or "").lower() in NOUN_CAPITALIZING
@@ -375,16 +392,17 @@ class BanalityScore:
         return source_file
 
     def is_banal(self, passage) -> bool:
-        total = 0.0
-        count = 0
+        means = []
         spans = ((passage.source_ngrams, passage.source_start_byte, passage.source_end_byte),
                  (passage.target_ngrams, passage.target_start_byte, passage.target_end_byte))
         for (commonness, directory), (name, start_byte, end_byte) in zip(self.sides, spans):
             document = self._document(directory, name)
             low, high = document.span(int(start_byte), int(end_byte))
-            total += commonness.total(document.keys[low:high], *document.counts())
-            count += high - low
-        if count > 0 and total / count >= self.threshold:
+            high = document.inside(low, high, self.ngram)
+            if high > low:
+                means.append(commonness.total(document.keys[low:high], *document.counts())
+                             / (high - low))
+        if means and sum(means) / len(means) >= self.threshold:
             return True
         return self._by_rules(passage)
 
@@ -425,10 +443,10 @@ class BanalityScore:
 
 def banality_score(frequencies: Union[str, tuple[str, str]],
                    orders: Union[str, tuple[str, str]], threshold: float,
-                   languages: Optional[tuple[str, str]] = None) -> BanalityScore:
+                   languages: Optional[tuple[str, str]] = None, ngram: int = 1) -> BanalityScore:
     """The verdict for a run, from each side's document_frequencies.bin and
     ngrams_in_order directory; one path serves both sides of a self-comparison.
-    `languages` are the two sides' corpus languages."""
+    `languages` are the two sides' corpus languages, `ngram` the run's n-gram size."""
     source_frequencies, target_frequencies = (
         (frequencies, frequencies) if isinstance(frequencies, str) else frequencies)
     source_orders, target_orders = (orders, orders) if isinstance(orders, str) else orders
@@ -436,7 +454,7 @@ def banality_score(frequencies: Union[str, tuple[str, str]],
     target = (source if os.path.abspath(target_frequencies) == os.path.abspath(source_frequencies)
               else load_commonness(target_frequencies))
     return BanalityScore(source, source_orders, target, target_orders, threshold,
-                         languages or ("", ""))
+                         languages or ("", ""), ngram)
 
 
 class _Passage(msgspec.Struct):
@@ -853,13 +871,14 @@ def banality_auto_detect(
     threshold: float,
     workers: int = 1,
     languages: Optional[tuple[str, str]] = None,
+    ngram: int = 1,
 ):
     """Flag passages made of n-grams common across the corpus. `frequencies` and
     `orders` are each side's document_frequencies.bin and ngrams_in_order directory,
     or one path for both."""
     _, banalities_found = _detect_pass(
         filepath, count, workers, "Running banality auto-detection...",
-        score=banality_score(frequencies, orders, threshold, languages))
+        score=banality_score(frequencies, orders, threshold, languages, ngram))
     return banalities_found
 
 
@@ -898,6 +917,7 @@ def filter_and_flag(
     threshold: float,
     workers: int = 1,
     languages: Optional[tuple[str, str]] = None,
+    ngram: int = 1,
 ) -> tuple[int, int]:
     """Phrase filtering and automatic banality detection in one pass.
 
@@ -909,7 +929,7 @@ def filter_and_flag(
     return _detect_pass(
         filepath, count, workers, "Filtering passages and detecting banalities...",
         matcher=_phrase_tree(banality_phrases_path),
-        score=banality_score(frequencies, orders, threshold, languages))
+        score=banality_score(frequencies, orders, threshold, languages, ngram))
 
 
 def _separate_records(lines, output_file, banal_output_file, progress=None) -> int:
