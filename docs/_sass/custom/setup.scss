@@ -19,6 +19,17 @@ $tp-font-ui: "Open Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
 
 $body-font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
 $header-height: 4.5rem;
+
+// A column of about 100 characters; the theme derives these from its own width before this file loads
+$content-width: 55rem;
+$search-results-width: $content-width - $nav-width;
+$media-queries: (
+  xs: 20rem,
+  sm: 31.25rem,
+  md: $content-width,
+  lg: $content-width + $nav-width,
+  xl: 87.5rem,
+);
 $border-radius: 3px;
 
 // Callout color named in _config.yml: the later side's Prussian blue

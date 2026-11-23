@@ -15,6 +15,25 @@
   text-transform: uppercase;
 }
 
+// Type and layout grow together on wide screens, so lines keep their length in characters
+@media (min-width: 80rem) {
+  html {
+    font-size: 1.0625rem !important;
+  }
+}
+
+@media (min-width: 90rem) {
+  html {
+    font-size: 1.125rem !important;
+  }
+}
+
+@media (min-width: 120rem) {
+  html {
+    font-size: 1.25rem !important;
+  }
+}
+
 // The band runs the full width, behind the sidebar's title and the search bar
 body,
 .side-bar {
@@ -166,7 +185,7 @@ body {
   box-shadow: $tp-lift;
 
   @include mq(md) {
-    padding: $sp-7 $sp-8;
+    padding: $sp-6 $sp-7;
   }
 }
 
