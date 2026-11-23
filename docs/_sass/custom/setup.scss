@@ -1,0 +1,26 @@
+// Tokens of the web app's theme (web-app/src/assets/theme.module.scss)
+$tp-header: rgb(95, 2, 2);
+$tp-header-edge: #420101;
+$tp-button: rgb(173, 66, 66);
+$tp-link: rgb(142, 50, 50);
+$tp-source-tint: #f7ebe8;
+$tp-target: #1e5487;
+$tp-target-tint: #e9f0f6;
+$tp-paper: #f9f6f1;
+$tp-paper-2: #fbf9f6;
+$tp-ink: #2a2522;
+$tp-ink-2: #4a433e;
+$tp-muted: #6a6058;
+$tp-rule: #e4dcd1;
+$tp-lift: 0 1px 2px rgba(64, 40, 24, 0.06), 0 6px 18px -6px rgba(64, 40, 24, 0.2);
+
+$tp-font-display: "Bodoni Moda", Didot, "Bodoni 72", serif;
+$tp-font-ui: "Open Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+$body-font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+$header-height: 4.5rem;
+$border-radius: 3px;
+
+// Callout color named in _config.yml: the later side's Prussian blue
+$prussian-000: #d5e3ef;
+$prussian-300: $tp-target;

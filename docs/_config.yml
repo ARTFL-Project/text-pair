@@ -4,6 +4,7 @@ url: https://artfl-project.github.io
 baseurl: /text-pair
 
 remote_theme: just-the-docs/just-the-docs@v0.12.0
+color_scheme: textpair
 plugins:
   - jekyll-remote-theme
   - jekyll-seo-tag
@@ -14,6 +15,7 @@ aux_links:
 aux_links_new_tab: true
 
 gh_edit_link: true
+gh_edit_link_text: Edit this page on GitHub
 gh_edit_repository: https://github.com/ARTFL-Project/text-pair
 gh_edit_branch: master
 gh_edit_source: docs
@@ -21,11 +23,9 @@ gh_edit_view_mode: tree
 
 heading_anchors: true
 back_to_top: true
+back_to_top_text: Back to top
 
 callouts:
   note:
     title: Note
-    color: blue
-  warning:
-    title: Warning
-    color: yellow
+    color: prussian

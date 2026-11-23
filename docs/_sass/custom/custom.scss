@@ -1,0 +1,284 @@
+// The web app's look: a maroon band, white cards on paper, Didone titles
+
+@mixin tp-display {
+  font-family: $tp-font-display;
+  font-variation-settings: "opsz" 11;
+  font-variant-numeric: lining-nums;
+}
+
+@mixin tp-kicker {
+  font-family: $tp-font-ui;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+// The band runs the full width, behind the sidebar's title and the search bar
+body,
+.side-bar {
+  background-image: linear-gradient($tp-header, $tp-header);
+  background-repeat: no-repeat;
+  background-size: 100% $header-height;
+}
+
+body {
+  font-optical-sizing: auto;
+}
+
+// The box-shadow covers the sidebar's border, which would cut the band
+.side-bar .site-header {
+  background-color: $tp-header;
+  border-bottom-color: $tp-header-edge;
+  box-shadow: 1px 0 0 $tp-header;
+}
+
+// On small screens the search bar opens under the menu, on paper
+.side-bar + .main .main-header {
+  @include mq(md) {
+    background-color: $tp-header;
+    border-bottom-color: $tp-header-edge;
+  }
+}
+
+.site-title {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  color: #fff;
+}
+
+.site-title:hover,
+.side-bar .site-button:hover {
+  background-image: none;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.site-title-text {
+  @include tp-display;
+  font-size: 1.75rem;
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.site-thread {
+  display: block;
+  width: 6.5rem;
+  height: 0.55rem;
+  margin-top: 0.35rem;
+}
+
+.site-header .icon {
+  color: #fff;
+}
+
+.side-bar .site-header :focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+
+// Project links in the band, as in the web app's header
+.aux-nav .site-button {
+  @include tp-kicker;
+  font-size: 0.66rem;
+  color: $tp-link;
+}
+
+@include mq(md) {
+  .main-header :focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: -2px;
+  }
+
+  .aux-nav .site-button {
+    color: rgba(255, 255, 255, 0.86);
+  }
+
+  .aux-nav .site-button:hover,
+  .aux-nav .site-button:focus {
+    color: #fff;
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+// Search: a white field inside the band
+.search-input,
+.search-results {
+  font-family: $tp-font-ui;
+}
+
+.search-label .search-icon {
+  color: $tp-muted;
+}
+
+@include mq(md) {
+  .search-input-wrap {
+    top: #{($header-height - 2.4rem) * 0.5};
+    left: $gutter-spacing;
+    width: calc(100% - #{$gutter-spacing});
+    height: 2.4rem !important;
+    border-radius: $border-radius;
+  }
+
+  .search-input {
+    padding-left: 2.3rem;
+    background-color: #fff;
+  }
+
+  .search-label {
+    padding-left: 0.7rem;
+  }
+
+  .search-results {
+    left: $gutter-spacing;
+  }
+}
+
+// Sidebar
+.site-nav,
+.site-footer,
+.breadcrumb-nav {
+  font-family: $tp-font-ui;
+}
+
+.nav-list .nav-list-item .nav-list-link {
+  color: $tp-ink-2;
+}
+
+.nav-list .nav-list-item .nav-list-link:hover,
+.nav-list .nav-list-item .nav-list-link.active {
+  color: $tp-link;
+}
+
+.site-footer {
+  color: $tp-muted;
+}
+
+// The page as a white card on paper
+.main-content {
+  padding: $sp-5 $sp-4;
+  background-color: #fff;
+  border: 1px solid $tp-rule;
+  border-radius: $border-radius;
+  box-shadow: $tp-lift;
+
+  @include mq(md) {
+    padding: $sp-7 $sp-8;
+  }
+}
+
+.main-content h1,
+.main-content h2 {
+  @include tp-display;
+  font-weight: 500;
+}
+
+.main-content h1 {
+  color: $tp-header;
+}
+
+.main-content h3 {
+  font-weight: 600;
+}
+
+.main-content h4 {
+  @include tp-kicker;
+  color: $tp-muted;
+}
+
+.main-content footer {
+  font-family: $tp-font-ui;
+  font-size: 0.8rem;
+  color: $tp-muted;
+}
+
+// Links as in PhiloLogic5: no underline, a tint on hover and focus; weight sets them apart from the text
+a:not([class]) {
+  text-decoration: none;
+}
+
+.main-content main a:not([class]) {
+  font-weight: 600;
+}
+
+.main-content a:not([class]),
+.main-content footer a {
+  border-radius: 2px;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.main-content a:not([class]):hover,
+.main-content a:not([class]):focus,
+.main-content footer a:hover,
+.main-content footer a:focus {
+  background-color: rgba($tp-link, 0.08);
+  box-shadow: 0 0 0 3px rgba($tp-link, 0.1);
+}
+
+:focus-visible {
+  outline: 2px solid $tp-link;
+  outline-offset: 2px;
+}
+
+blockquote {
+  padding-left: 1.1rem;
+  font-style: italic;
+  color: $tp-ink-2;
+  border-left: 2px solid $tp-link;
+}
+
+blockquote em {
+  font-style: normal;
+}
+
+// Tables and code as hairline cards
+.table-wrapper {
+  border: 1px solid $tp-rule;
+  box-shadow: none;
+}
+
+th,
+td {
+  font-size: 0.875rem;
+}
+
+thead th {
+  @include tp-kicker;
+  color: $tp-muted;
+  background-color: $tp-paper-2;
+}
+
+div.highlighter-rouge div.highlight,
+figure.highlight pre {
+  border-color: $tp-rule;
+}
+
+// Callouts in the later side's ink
+p.note {
+  background-color: $tp-target-tint;
+  box-shadow: none;
+}
+
+p.note::before {
+  font-family: $tp-font-ui;
+  letter-spacing: 0.09em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}
+
+// Code in headings without its chip
+.main-content h1 code,
+.main-content h2 code,
+.main-content h3 code {
+  padding: 0;
+  font-size: 0.85em;
+  background-color: transparent;
+  border: 0;
+}
