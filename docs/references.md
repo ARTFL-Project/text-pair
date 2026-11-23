@@ -1,9 +1,14 @@
-# PAPERS AND REFERENCES
+---
+title: Papers and talks
+nav_order: 7
+---
+
+# Papers and talks
 
 TextPAIR is the result of years of work. Here are some articles and talks we've given
 on TextPAIR (and its direct ancestor PhiloLine) over the years:
 
-## PAPERS
+## Papers
 
 -   Charles Cooney and Clovis Gladstone, ["Opening New Paths for Scholarship: Algorithms to Track Text Reuse in ECCO"](https://drive.google.com/file/d/1I9O0JNw2jOP3p-uQwnd0fMNnAojbpfe6/view?usp=sharing), Digitizing Enlightenment: Digital Humanities and the Transformation of Eighteenth-Century Studies, Simon Burrows & Glenn Roe ed., Oxford University Studies in the Enlightenment, Voltaire Foundation in association with Liverpool University Press, July 2020
 -   Alfie Abdul-Rahman, Glenn Roe, Mark Olsen, Clovis Gladstone, Robert Morrissey, Nicholas Cronk and Min Chen, “Constructive Visual Analytics for Text Similarity Detection,” Computer Graphics Forum (February 2016). [doi:10.1111/cgf.12798](http://onlinelibrary.wiley.com/doi/10.1111/cgf.12798)
@@ -11,7 +16,7 @@ on TextPAIR (and its direct ancestor PhiloLine) over the years:
 -   Russell Horton, Mark Olsen, and Glenn Roe, ["Something Borrowed: Sequence Alignment and the Identification of Similar Passages in Large Text Collections"](https://www.digitalstudies.org/articles/10.16995/dscn.258/), Digital Studies / Le Champ numérique Volume 2, Number 1 (2010)
 -   Timothy Allen, Charles Cooney, Stéphane Douard, Russell Horton, Robert Morrissey, Mark Olsen, Glenn Roe, and Robert Voyer, ["Plundering Philosophers: Identifying Sources of the Encyclopédie"](http://hdl.handle.net/2027/spo.3310410.0013.107), Journal of the Association for History and Computing, May 2010, Volume 13, Number 1
 
-## TALKS
+## Talks
 
 -   ["The TextPAIR Viewer (TPV): An Interactive Visual Toolkit for Exploring Large-Scale Networks of Textual Alignments and Text Reuses"](https://docs.google.com/presentation/d/e/2PACX-1vSl5mcP92u96bbIFrGGHj3UFYB7f_N4xer4sl0eTd51qkQ9z6URskvUMA5WuuLvTJoLgJjKWssANLZq/pub?start=false&loop=false&delayms=3000), with Jeffrey Tharsen, The Association for Computers and the Humanities Conference 2021, Virtual Conference, July 2021
 -   Clovis Gladstone and Mark Olsen, ["Text Reuse: The Curious Case of Robespierre and Rousseau"](https://docs.google.com/presentation/d/e/2PACX-1vQGzugIlqk0S2EILMK6QGAIw-H6F2omNf7EL76YmLfGP7cd3dqWDgvzUd5ANTqN3xqbwea6RK3P-Yf8/pub?start=false&loop=false&delayms=3000), Digitizing Enlightenment IV, International Society for Eighteenth Century Studies (ISECS) Conference, Edinburgh, July 2019

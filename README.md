@@ -1,181 +1,32 @@
-"Nous ne faisons que nous entregloser" Montaigne wrote famously in his <i>Essais</i>... Since all we do is gloss over what's already been written, we may as well build a tool to detect these intertextual relationships...
-
-
 # TextPAIR (Pairwise Alignment for Intertextual Relations)
 
-TextPAIR is a scalable and high-performance sequence aligner for humanities text analysis designed to identify "similar passages" in large collections of texts. These may include direct quotations, plagiarism and other forms of borrowings, commonplace expressions and the like. It is a complete rewrite and rethink of the <a href="https://code.google.com/archive/p/text-pair/">original implementation</a> released in 2009.
+> "Nous ne faisons que nous entregloser" Montaigne wrote famously in his *Essais*... Since all we do is gloss over what's already been written, we may as well build a tool to detect these intertextual relationships...
 
-While TextPAIR was developed in response to the fairly specific phenomenon of similar passages across literary works, the sequence analysis techniques employed in TextPAIR were developed in widely disparate fields, such as bioinformatics and computer science, with applications ranging from genome sequencing to plagiarism detection. TextPAIR generates a set of overlapping word sequence shingles for every text in a corpus, then stores and indexes that information to be analyzed against shingles from other texts. For example, the opening declaration from Rousseau's Du Contrat Social,
+TextPAIR is a scalable and high-performance sequence aligner for humanities text analysis designed to identify "similar passages" in large collections of texts. These may include direct quotations, plagiarism and other forms of borrowings, commonplace expressions and the like. It compares texts by their shared word-sequence shingles, then loads the similar passages into a web application to search and browse them.
 
-`"L'homme est né libre, est partout il est dans les fers. Tel se croit le maître des autres, qui ne laisse pas d'être plus esclave qu'eux,"`
+![Two similar passages side by side in the TextPAIR web application](docs/assets/images/example.png)
 
-would be rendered in trigram shingles (with lemmatization, accents flattened and function words removed) as:
+## Documentation
 
-`homme_libre_partout, libre_partout_fer, partout_fer_croire, fer_croire_maitre, croire_maitre_laisser, maitre_laisser_esclave`
+**<https://artfl-project.github.io/text-pair/>**
 
-Common shingles across texts indicate many different types of textual borrowings, from direct citations to more ambiguous and unattributed usages of a passage. Using a simple search form, the user can quickly identify similar passages shared between different texts in one database, or even across databases, such as in the example below.
-
-![alt text](example.png)
-
-## Installation
-
-The recommended install is to build your own Docker image and run TextPAIR inside a container.
-
-### Docker container method
-
--   Go to the docker folder and build a docker image: `docker build -t textpair .`
--   Start a new container: `docker run -td -p 80:80 --name textpair artfl/textpair init_textpair_db`
-    Note that you may want to customize the `run` command according to your needs (e.g. to mount a volume for your data)
-    You will need to copy your texts to the container, and then follow the normal procedure described below once inside the container.
-
-If you do run into the issue where the web server does not respond, restart the web server with the following command:
-`/var/lib/text-pair/api_server/web_server.sh &`
-
-### macOS bare-metal installation (experimental)
-
-TextPAIR officially supports 64-bit Linux; the Docker method above is the recommended path for production use. For local development and research runs on a Mac (Apple Silicon or Intel), an opt-in installer sets up the full sequence-alignment pipeline natively, without Docker:
-
-```console
-./install_bare_metal_mac.sh
-```
-
-**Prerequisite:** [Homebrew](https://brew.sh). The script stops with instructions if it is missing. Everything else is handled automatically:
-
--   installs `pyenv` and `lz4` via Homebrew if absent, then installs Python via pyenv (the newest 3.11.x by default; pass `-p 3.12` or an exact `-p 3.12.4` to choose another, anything 3.11 or later) and creates the environment TextPAIR runs in
--   installs the TextPAIR Python package into that environment
--   patches the installed PhiloLogic dependency's `line_count.py` (its non-lz4 code path is broken, and BSD `wc` output differs from GNU)
--   seeds `~/.text-pair/global_settings.ini` and a starter `my_config.ini` (copied from `config/sa_config.ini`) if you do not already have them
-
-Then edit `my_config.ini` (at minimum, set `source_file_path` to your corpus directory) and run:
-
-```console
-textpair --config=my_config.ini --skip_web_app --output_path=/tmp/textpair-out --workers=8 my_run_name
-```
-
-Known limitations of the macOS path:
-
--   Avoid corpus and output paths containing spaces (a PhiloLogic limitation; note that iCloud-synced folders live under a path with spaces — copy corpora to `/tmp` or similar first).
--   The PostgreSQL credentials in `~/.text-pair/global_settings.ini` are only needed if you drop `--skip_web_app` to build the web application.
-
-This mode was developed for the corpus-scale alignment runs in Tarah Wheeler's (2026) DPhil thesis at the University of Oxford.
-
-### Manual installation
-
-If you wish to install TextPAIR on a host machine, note that TextPair will only run on 64 bit Linux, see below.
-
-#### Dependencies
-
--   Python 3.11 and up
--   Node and NPM
--   PostgreSQL: you will need to create a dedicated database and create a user with read/write permissions on that database. You will also need to create the pg_trgm extension on that database by running the following command in the PostgreSQL shell: `CREATE EXTENSION pg_trgm;` run as a superuser.
-
-#### Install script
-
-See <a href="docs/ubuntu_installation.md">Ubuntu install instructions</a>
-
--   Run `install.sh` script. This should install all needed components
--   Make sure you include `/etc/text-pair/apache_wsgi.conf` in your main Apache configuration file to enable searching
--   Edit `/etc/text-pair/global_settings.ini` to provide your PostgreSQL user, database, and password.
+- [Installation](https://artfl-project.github.io/text-pair/installation.html): Docker, Linux, or macOS
+- [Running an alignment](https://artfl-project.github.io/text-pair/running.html)
+- [Configuring the alignment](https://artfl-project.github.io/text-pair/configuration.html)
+- [The web application](https://artfl-project.github.io/text-pair/web-app.html)
+- [Output files](https://artfl-project.github.io/text-pair/output.html)
+- [Papers and talks](https://artfl-project.github.io/text-pair/references.html)
 
 ## Quick start
 
-Before running any alignment, make sure you edit your copy of `config.ini`. See [below](#configuring-the-alignment) for details
-
-#### NOTE: source designates the source database from which reuses are deemed to originate, and target is the collection borrowing from source. In practice, the number of alignments won't vary significantly if you swap source and target
-
-The sequence aligner is executed via the `textpair` command. The basic command is:
-`textpair --config=/path/to/config [OPTIONS] [database_name]`
-
-`textpair` takes the following command-line arguments:
-
--   `--config`: This argument is required. It defines the path to the configuration file where preprocessing, matching, and web application settings are set
--   `--is_philo_db`: Define if files are from a PhiloLogic database. If set to `True` metadata will be fetched using the PhiloLogic metadata index. Set to False by default.
--   `--output_path`: path to results
--   `--debug`: turn on debugging
--   `--workers`: Set number of workers/threads to use for parsing, ngram generation, and alignment. This is the total the run will use; alignment divides it between matching and writing itself.
--   `--update_db`: update database without rebuilding web_app. Should be used in conjunction with the --file argument
--   `--file`: alignment results file to load into database. Only used with the --update_db argument.
--   `--source_metadata`: source metadata needed for loading database. Used only with the --update_db and --file argument.
--   `--target_metadata`: target metadata needed for loading database. Used only with the --update_db and --file argument.
--   `--only_align`: Run alignment based on preprocessed text data from a previous alignment.
--   `--load_only_web_app`: Define whether to load results into a database viewable via a web application. Set to True by default.
--   `--skip_web_app`: define whether to load results into a database and build a corresponding web app
-
-## Configuring the alignment
-
-When running an alignment, you need to provide a configuration file to the `textpair` command.
-You can find a generic copy of the file in `/var/lib/text-pair/config/config.ini`.
-You should copy this file to the directory from which you are starting the alignment.
-Then you can start editing this file. Note that all parameters have comments explaining their role.
-
-While most values are reasonable defaults and don't require any edits, here are the most important settings you will want to checkout:
-
-#### In the TEXT_SOURCES section
-
-This is where you should define the paths for your source and target files. Note that if you define no target, files from source will be compared to one another. In this case, files will be compared only when the source file is older or of the same year as the target file. This is to avoid considering a source a document which was written after the target.
-To leverage a PhiloLogic database to extract text and relevant metadata, point to the directory of the PhiloLogic DB used. You should then use the `--is_philo_db` flag.
-
-#### In the TEXT_PARSING section
-
--   `parse_source_files`, and `parse_target_files`: both of these setting determine whether you want textPAIR to parse your TEI files or not.
-    Set to `yes` by default. If you are relying on parsed output from PhiloLogic, you will want to set this to `no` or `false`.
--   `source_file_type` and `target_file_type`: defines the type of text file: either TEI or plain text. If using plain text, you will need to supply a metadata file in the TEXT_SOURCES section
--   `source_words_to_keep` and `target_words_to_keep`: defines files containing lists of words (separated by a newline) which the parser should keep.
-    Other words are discarded.
-
-#### In the Preprocessing section
-
--   `source_text_object_level` and `target_text_object_level`: Define the individual text object from which to compare other texts with.
-    Possible values are `doc`, `div1`, `div2`, `div3`, `para`, `sent`. This is only used when relying on a PhiloLogic database.
--   `ngram`: Size of your ngram. The default is 3, which seems to work well in most cases. A lower number tends to produce more uninteresting short matches.
--   `language`: This determines the language used by the Porter Stemmer as well as by Spacy (if using more advanced POS filtering features, lemmatization, or NER).
-    Note that you should use language codes from the <a href="https://spacy.io/models/">Spacy
-    documentation</a>.
-    Note that there is a section on Vector Space Alignment preprocessing. These options are for the `vsa` matcher (see next section) only. It is not recommended that you use these at this time.
-
-#### In the Matching section
-
-Note that there are two different types of matching algorithms, with different parameters. The current recommended one is `sa` (for sequence alignment). The `vsa` algorith is HIGHLY experimental, still under heavy development, and is not guaranteed to work.
-
-## Run comparison between preprocessed files manually
-
-It is possible to run a comparison between documents without having to regenerate ngrams. In this case you need to use the
-`--only_align` argument with the `textpair` command.
-
-Example:
-
 ```console
-textpair --config=config.ini--only_align --workers=10 my_database_name
+./install.sh                                          # see the installation guide for PostgreSQL setup
+cp /var/lib/text-pair/config/sa_config.ini my_config.ini   # set source_file_path, and target_file_path to compare two collections
+textpair --config=my_config.ini --workers=8 my_database
 ```
 
-## Configuring the Web Application
+## License
 
-The `textpair` script automatically generates a Web Application in the directory where it lives, typically `/var/www/html/text-pair/database_name`, from the defaults in `/var/lib/text-pair/config/appConfig.json`. Its settings are in two files in that directory:
-
--   `app_settings.toml` holds the settings you can edit, each with a comment on what it does. Changes apply when the page is reloaded, without rebuilding the Web Application. If the file has a mistake, the page says which and where.
--   `appConfig.json` holds the settings `textpair` sets when it loads the database, such as the database name, the matching algorithm, and the application path. These should not be edited.
-
-#### Note on metadata naming: metadata fields extracted for the text files are prepended by `source_` for source texts and `target_` for target texts.
-
-The settings of `app_settings.toml` are:
-
--   `database_label`, `source_label` and `target_label`: the title of the database, and the names of the source and target texts. Labels support HTML tags. The source and target start as "Earlier occurrence" and "Later occurrence". When the texts come from PhiloLogic databases, the title starts as the `dbname` of their `web_config.cfg`, as "source vs target" when the two databases differ.
--   `network_graph` and `semantic_graph`: show or hide these two views (`true` or `false`). The network graph is hidden anyway when passages were not grouped into families. `semantic_graph` is set to `true` when a graph is built, with `build_graph = true` in `[GRAPH]` or with `--graph_only`; if it is `true` without a graph, the view says so.
--   `branding`: links in the header, each as `{ label = "...", link = "..." }`.
--   `source_search_fields` and `target_search_fields`: the fields of the search for passage pairs, in order, each as `{ field = "source_author", label = "Author" }`, where `field` is the name of the metadata field in the SQL database: `source_` fields are those of the source collection, `target_` ones those of the target collection. Where passages were grouped into families, the search form has the reused passages' fields instead.
--   `source_facets` and `target_facets`: the fields of the faceted browser of passage pairs, in the same format.
--   `reused_search_fields` and `reused_facets`: the fields of the search form and of the faceted browser of reused passages, in order, each as `{ label = "Title", fields = ["source_title", "target_head"] }`. They are the same for where a passage was first found and where it was found again, since both can hold texts of either collection, and `fields` names the field of each collection, so that each text is searched and counted by its own: a search for a title reads `source_title` for the source collection's texts and `target_head` for the target collection's. With one field, as `fields = ["target_head"]`, the other collection's texts have none. Left empty, the fields of the passage pairs go together by name, `source_year` with `target_year`; when `textpair` loads a database, it lists them so, with a field the other collection has none of on its own. Databases loaded before these settings existed need their family tables rebuilt to search and count by fields their search form did not have at load: `extras/add_family_filter_tables.py --force --tables database_name`.
--   `source_citation` and `target_citation`: the fields of the citation shown with each passage, in order, each as `{ field = "source_title", style = { font-style = "italic" } }`. The style may be left out. Where the source and target texts are two collections, each text is cited by its own collection's citation, on whichever side of a passage family it is.
--   `time_series_intervals`: the intervals available in the timeline, each as `{ label = "Decade", years = 10 }`.
+TextPAIR is released under the [GNU General Public License v3](LICENSE).
 
 Built with support from the Mellon Foundation and the Fondation de la Maison des Sciences de l'Homme.
-
-## Post processing alignment results
-
-TextPAIR produces two (or three if passage filtering is enabled) different files (found in the `output/results/` directory) as a result of each alignment task:
-
--   The `alignments.jsonl` file: this contains all alignments which were found by TextPAIR. Each line is formatted as an individual JSON string.
--   The `duplicate_files.csv` file: this contains a list of potential duplicate files TextPAIR identified between the source and target databases.
--   The `filtered_passages` file: shows source_passages which were filtered out based on phrase matching. Only generated if a file containing passages to filter has been provided.
-
-These files are designed to be used for further inspection of the alignments, and potential post processing tasks such as alignment filtering or clustering.

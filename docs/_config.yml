@@ -1,0 +1,31 @@
+title: TextPAIR
+description: Pairwise Alignment for Intertextual Relations
+url: https://artfl-project.github.io
+baseurl: /text-pair
+
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag
+  - jekyll-include-cache
+
+aux_links:
+  GitHub: https://github.com/ARTFL-Project/text-pair
+aux_links_new_tab: true
+
+gh_edit_link: true
+gh_edit_repository: https://github.com/ARTFL-Project/text-pair
+gh_edit_branch: master
+gh_edit_source: docs
+gh_edit_view_mode: tree
+
+heading_anchors: true
+back_to_top: true
+
+callouts:
+  note:
+    title: Note
+    color: blue
+  warning:
+    title: Warning
+    color: yellow

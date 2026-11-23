@@ -54,7 +54,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/ARTFL-Project/text-pair"
 Repository = "https://github.com/ARTFL-Project/text-pair"
-Documentation = "https://github.com/ARTFL-Project/text-pair#readme"
+Documentation = "https://artfl-project.github.io/text-pair/"
 "Bug Tracker" = "https://github.com/ARTFL-Project/text-pair/issues"
 
 [project.scripts]
